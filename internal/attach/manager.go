@@ -3,6 +3,7 @@ package attach
 import (
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -29,7 +30,11 @@ func (m *Manager) AttachProgram(prog *ebpf.Program, opts Options) (link.Link, er
 	case "kretprobe":
 		return link.Kretprobe(opts.AttachTo, prog, nil)
 	case "tracepoint":
-		return link.Tracepoint(opts.AttachTo, prog, nil)
+		category, name, err := splitTracepoint(opts.AttachTo)
+		if err != nil {
+			return nil, err
+		}
+		return link.Tracepoint(category, name, prog, nil)
 	case "raw_tracepoint":
 		return link.AttachRawTracepoint(link.RawTracepointOptions{
 			Name:    opts.AttachTo,
@@ -91,4 +96,12 @@ func (m *Manager) attachCgroup(prog *ebpf.Program, path string) (link.Link, erro
 
 func (m *Manager) Detach(link link.Link) error {
 	return link.Close()
+}
+
+func splitTracepoint(identifier string) (string, string, error) {
+	parts := strings.SplitN(identifier, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("tracepoint must be in category/name form, got %q", identifier)
+	}
+	return parts[0], parts[1], nil
 }

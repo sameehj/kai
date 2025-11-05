@@ -195,7 +195,7 @@ func callMCPTool(endpoint, tool string, params interface{}) ([]byte, error) {
 		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 			return nil, fmt.Errorf("status %s", resp.Status)
 		}
-		return nil, fmt.Errorf(payload.Error)
+		return nil, fmt.Errorf("%s", payload.Error)
 	}
 
 	var payload responsePayload

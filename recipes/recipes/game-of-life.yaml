@@ -1,0 +1,14 @@
+apiVersion: kai.recipe/v1
+name: game-of-life
+version: 1.0.0
+upstream:
+  repo: https://github.com/isovalent/game-of-life.git
+  ref: main
+
+build:
+  commands:
+    # The upstream repo uses Makefile in the root.
+    - make
+outputs:
+  programs:
+    - path: life.bpf.o

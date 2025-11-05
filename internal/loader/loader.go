@@ -112,7 +112,7 @@ func (l *Loader) loadProgram(basePath string, def types.ProgramDef) (*ebpf.Progr
 		progSpec = candidate
 	} else {
 		for name, candidate := range spec.Programs {
-			if name == def.Section || candidate.Section == def.Section {
+			if name == def.Section || candidate.SectionName == def.Section {
 				progSpec = candidate
 				break
 			}
