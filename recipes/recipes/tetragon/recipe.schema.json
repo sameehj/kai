@@ -1,0 +1,52 @@
+# kai-recipes/recipes/tetragon/process-monitor.yaml
+apiVersion: kai.recipe/v1
+name: tetragon-process-monitor
+version: 1.0.0
+upstream:
+  repo: https://github.com/cilium/tetragon.git
+  ref: 6e8d0b7   # exact commit or tag v1.1.0
+license: Apache-2.0
+builder:
+  image: ghcr.io/kai/build-ebpf:llvm16-ubuntu22.04
+  env:
+    - BTFGEN=1
+  commands:
+    - make -C bpf process/execve.o  # upstream’s native build
+outputs:
+  programs:
+    - id: process_exec
+      path: bpf/objs/execve.o
+      section: tracepoint/sched/sched_process_exec
+      type: tracepoint
+  maps:
+    - name: tetragon_events
+      type: ringbuf
+packages:
+  kaiManifestTemplate: |
+    apiVersion: ebpf.pkg/v1
+    kind: Package
+    metadata:
+      name: tetragon-process-monitor
+      version: 1.0.0
+      upstream: cilium/tetragon
+    requirements:
+      kernel:
+        min_version: "5.10"
+        features: [BTF]
+    programs:
+      - id: process_exec
+        file: programs/execve.o
+        section: tracepoint/sched/sched_process_exec
+        type: tracepoint
+    maps:
+      - name: tetragon_events
+        type: ringbuf
+        pin: /sys/fs/bpf/kai/tetragon/events
+    chain:
+      entry: process_exec
+    exports:
+      - type: otel
+        endpoint: ${OTEL_ENDPOINT:-http://localhost:4318/v1/logs}
+attest:
+  sbom: spdx-json
+  provenance: slsa-level1

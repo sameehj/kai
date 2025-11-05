@@ -1,0 +1,9 @@
+storage:
+  path: /var/lib/kai
+
+mcp:
+  listen_addr: 127.0.0.1:8181
+  tools_path: /mnt/kai
+
+policy:
+  file: configs/policy.yaml
