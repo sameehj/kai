@@ -34,7 +34,6 @@ __pycache__/
 *.bpf.*
 *.elf
 *.ko
-*.mod
 *.dSYM/
 
 # --- Dependencies (future-proof) ---
