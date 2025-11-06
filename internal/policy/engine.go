@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/yourusername/kai/pkg/types"
+	"github.com/sameehj/kai/pkg/types"
 	"gopkg.in/yaml.v3"
 )
 

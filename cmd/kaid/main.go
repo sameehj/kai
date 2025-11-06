@@ -9,9 +9,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sameehj/kai/pkg/mcp"
+	"github.com/sameehj/kai/pkg/runtime"
 	"github.com/sirupsen/logrus"
-	"github.com/yourusername/kai/pkg/mcp"
-	"github.com/yourusername/kai/pkg/runtime"
 	"gopkg.in/yaml.v3"
 )
 

@@ -9,4 +9,4 @@ policy:
   file: configs/policy.yaml
 
 recipes:
-  index_url: https://raw.githubusercontent.com/your-org/kai-recipes/main/recipes/recipes/index.yaml
+  index_url: https://raw.githubusercontent.com/sameehj/kai-recipes/main/recipes/recipes/index.yaml

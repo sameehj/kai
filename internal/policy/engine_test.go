@@ -3,7 +3,7 @@ package policy
 import (
 	"testing"
 
-	"github.com/yourusername/kai/pkg/types"
+	"github.com/sameehj/kai/pkg/types"
 )
 
 func TestMatchPattern(t *testing.T) {

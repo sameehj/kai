@@ -1,4 +1,4 @@
-module github.com/yourusername/kai
+module github.com/sameehj/kai
 
 go 1.24.0
 

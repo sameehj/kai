@@ -14,7 +14,7 @@ import (
 
 const (
 	defaultServerEndpoint = "http://127.0.0.1:8181/tool"
-	defaultIndexURL       = "https://raw.githubusercontent.com/your-org/kai-recipes/main/recipes/recipes/index.yaml"
+	defaultIndexURL       = "https://raw.githubusercontent.com/sameehj/kai-recipes/main/recipes/recipes/index.yaml"
 )
 
 type responsePayload struct {

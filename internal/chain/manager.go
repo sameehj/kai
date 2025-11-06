@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/cilium/ebpf"
-	"github.com/yourusername/kai/pkg/types"
+	"github.com/sameehj/kai/pkg/types"
 )
 
 // Manager wires tail-call chains between programs.

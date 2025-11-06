@@ -26,7 +26,7 @@ make test        # Run the Go test suite
 ```
 
 All eBPF recipes are maintained in the companion repository
-[`kai-recipes`](https://github.com/your-org/kai-recipes), which publishes
+[`kai-recipes`](https://github.com/sameehj/kai-recipes), which publishes
 object files as OCI artifacts.
 
 ## Installing Packages
@@ -34,7 +34,7 @@ object files as OCI artifacts.
 1. Browse the remote catalog:
    ```bash
    kaictl list-remote \
-     --index https://raw.githubusercontent.com/your-org/kai-recipes/main/recipes/recipes/index.yaml
+    --index https://raw.githubusercontent.com/sameehj/kai-recipes/main/recipes/recipes/index.yaml
    ```
 2. Install an OCI artifact into the local storage directory (default:
    `~/.local/share/kai/packages`):

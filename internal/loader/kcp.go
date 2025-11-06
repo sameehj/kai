@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/yourusername/kai/pkg/types"
+	"github.com/sameehj/kai/pkg/types"
 )
 
 // KernelProfile captures basic kernel capabilities detected at runtime.
