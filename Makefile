@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 GO ?= go
 
-.PHONY: all build test install recipe recipes docker-build clean
+.PHONY: all build test install docker-build clean
 
 all: build
 
@@ -17,16 +17,8 @@ install: build
 	sudo install -Dm755 bin/kaid /usr/local/bin/kaid
 	sudo install -Dm755 bin/kaictl /usr/local/bin/kaictl
 
-recipe:
-	./recipes/scripts/build_recipe.sh $(RECIPE)
-
-recipes:
-	@for r in $$(yq -r '.packages[].recipe' recipes/recipes/index.yaml); do \
-		./recipes/scripts/build_recipe.sh $$r || exit 1; \
-	done
-
 docker-build:
 	docker build -t kai:dev .
 
 clean:
-	rm -rf bin/ recipes/build/ recipes/dist/
+	rm -rf bin/

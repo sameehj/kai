@@ -8,7 +8,8 @@
   ],
   "capabilities": {
     "tools": [
-      "kai__list_packages",
+      "kai__list_remote",
+      "kai__list_local",
       "kai__install_package",
       "kai__remove_package",
       "kai__load_program",

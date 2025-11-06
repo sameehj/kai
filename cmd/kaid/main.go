@@ -37,6 +37,7 @@ func main() {
 	rt, err := runtime.NewRuntime(&runtime.Config{
 		StoragePath: cfg.Storage.Path,
 		PolicyPath:  cfg.Policy.File,
+		IndexURL:    cfg.Recipes.IndexURL,
 	})
 	if err != nil {
 		log.Fatalf("initialise runtime: %v", err)
@@ -94,6 +95,9 @@ type Config struct {
 	Policy struct {
 		File string `yaml:"file"`
 	} `yaml:"policy"`
+	Recipes struct {
+		IndexURL string `yaml:"index_url"`
+	} `yaml:"recipes"`
 }
 
 func loadConfig(path string) (*Config, error) {

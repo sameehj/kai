@@ -3,19 +3,19 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 )
 
-const defaultServerEndpoint = "http://127.0.0.1:8181/tool"
+const (
+	defaultServerEndpoint = "http://127.0.0.1:8181/tool"
+	defaultIndexURL       = "https://raw.githubusercontent.com/your-org/kai-recipes/main/recipes/recipes/index.yaml"
+)
 
 type responsePayload struct {
 	Result json.RawMessage `json:"result"`
@@ -33,15 +33,16 @@ func main() {
 	}
 
 	rootCmd.PersistentFlags().String("server", defaultServerEndpoint, "MCP server endpoint")
+	rootCmd.PersistentFlags().String("index", defaultIndexURL, "Recipe index URL (YAML)")
 
 	rootCmd.AddCommand(
-		buildCmd(),
 		installCmd(),
+		listRemoteCmd(),
+		listLocalCmd(),
 		removeCmd(),
 		loadCmd(),
 		attachCmd(),
 		streamCmd(),
-		listCmd(),
 		unloadCmd(),
 	)
 
@@ -51,53 +52,69 @@ func main() {
 	}
 }
 
-func buildCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "build <recipe>",
-		Short: "Build a package from recipe",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			recipe := args[0]
-			if !filepath.IsAbs(recipe) {
-				recipe = filepath.Join("recipes", "recipes", recipe)
-			}
-			return executeScript(filepath.Join("recipes", "scripts", "build_recipe.sh"), recipe)
-		},
-	}
-}
-
 func installCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "install <package>",
-		Short: "Install a built package into runtime storage",
+		Short: "Install an OCI artifact into local storage",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			server := cmd.Flag("server").Value.String()
-			packageID := args[0]
+			indexURL := cmd.Flag("index").Value.String()
 
-			name, version, err := splitPackageID(packageID)
+			name, version, err := splitPackageID(args[0])
 			if err != nil {
 				return err
 			}
 
-			sourceDir := filepath.Join("recipes", "dist", name, version)
-			if _, err := os.Stat(sourceDir); err != nil {
-				if errors.Is(err, os.ErrNotExist) {
-					return fmt.Errorf("built artifacts not found at %s", sourceDir)
-				}
-				return fmt.Errorf("stat source directory: %w", err)
-			}
-
 			payload := map[string]interface{}{
-				"package":     packageID,
-				"source_path": sourceDir,
+				"name":    name,
+				"version": version,
+				"index":   indexURL,
 			}
 
 			if _, err := callMCPTool(server, "kai__install_package", payload); err != nil {
 				return err
 			}
 
-			fmt.Printf("Installed %s from %s\n", packageID, sourceDir)
+			fmt.Printf("Installed %s@%s\n", name, version)
+			return nil
+		},
+	}
+}
+
+func listRemoteCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list-remote",
+		Short: "List packages available in the remote catalog",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			server := cmd.Flag("server").Value.String()
+			indexURL := cmd.Flag("index").Value.String()
+
+			payload := map[string]interface{}{
+				"index": indexURL,
+			}
+
+			result, err := callMCPTool(server, "kai__list_remote", payload)
+			if err != nil {
+				return err
+			}
+			fmt.Println(string(result))
+			return nil
+		},
+	}
+}
+
+func listLocalCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list-local",
+		Short: "List packages installed in local storage",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			server := cmd.Flag("server").Value.String()
+			result, err := callMCPTool(server, "kai__list_local", map[string]interface{}{})
+			if err != nil {
+				return err
+			}
+			fmt.Println(string(result))
 			return nil
 		},
 	}
@@ -195,22 +212,6 @@ func streamCmd() *cobra.Command {
 	return cmd
 }
 
-func listCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "list",
-		Short: "List installed packages",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			server := cmd.Flag("server").Value.String()
-			result, err := callMCPTool(server, "kai__list_packages", map[string]interface{}{})
-			if err != nil {
-				return err
-			}
-			fmt.Println(string(result))
-			return nil
-		},
-	}
-}
-
 func unloadCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "unload <package>",
@@ -258,13 +259,6 @@ func callMCPTool(endpoint, tool string, params interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	return payload.Result, nil
-}
-
-func executeScript(script string, args ...string) error {
-	cmd := exec.Command(script, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
 }
 
 func splitPackageID(id string) (string, string, error) {

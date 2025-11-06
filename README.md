@@ -13,10 +13,9 @@ cmd/kaid          # Daemon exposing the MCP server
 cmd/kaictl        # CLI for building, installing, and operating packages
 pkg/runtime       # Runtime coordination, package lifecycle, and storage
 pkg/mcp           # MCP server implementation
-pkg/registry      # Recipe index helpers
 pkg/types         # Shared manifests and runtime types
-recipes/          # Build recipes, artifacts, and builder tooling
 configs/          # Runtime configuration and policy defaults
+kai-recipes/      # (companion repo) published recipes and CI scripts
 ```
 
 ## Building
@@ -24,29 +23,33 @@ configs/          # Runtime configuration and policy defaults
 ```bash
 make build       # Build kaid and kaictl into ./bin
 make test        # Run the Go test suite
-make recipes     # Build every recipe in recipes/recipes/index.yaml
 ```
 
-Artifacts are written to `recipes/dist/<recipe-name>/`.
+All eBPF recipes are maintained in the companion repository
+[`kai-recipes`](https://github.com/your-org/kai-recipes), which publishes
+object files as OCI artifacts.
 
 ## Installing Packages
 
-1. Build recipes with `make recipes` or an individual recipe with:
+1. Browse the remote catalog:
    ```bash
-   make recipe RECIPE=recipes/recipes/falco-syscalls.yaml
+   kaictl list-remote \
+     --index https://raw.githubusercontent.com/your-org/kai-recipes/main/recipes/recipes/index.yaml
    ```
-2. Install the resulting artifact into the runtime storage directory (artifacts land in `recipes/dist/<name>/<version>`):
+2. Install an OCI artifact into the local storage directory (default:
+   `~/.local/share/kai/packages`):
    ```bash
    kaictl install falco-syscalls@0.37.0
    ```
-   By default the CLI looks for artifacts in `recipes/dist/`.
+   > Requires the [`oras`](https://oras.land) CLI to be available in `$PATH`.
 
 ## Runtime Usage
 
 ```bash
 kaid --config configs/kai-config.yaml --debug     # start daemon
 
-kaictl list                                       # list installed & loaded packages
+kaictl list-local                                 # list packages staged locally
+kaictl list-remote                                # list packages from the remote index
 kaictl load falco-syscalls@0.37.0                 # load package metadata
 kaictl attach falco-syscalls@0.37.0               # attach the entry program
 kaictl stream falco-syscalls@0.37.0               # stream events from default buffer
@@ -66,9 +69,9 @@ agent framework it is common to start the daemon in stdio mode:
 `mcp.json` advertises the daemon as an MCP stdio server. The published tool
 names are:
 
-- `kai__list_packages`
+- `kai__list_remote`
 - `kai__install_package`
-- `kai__remove_package`
+- `kai__list_local`
 - `kai__load_program`
 - `kai__attach_program`
 - `kai__unload_program`
@@ -77,21 +80,9 @@ names are:
 
 These tools map directly to runtime operations exposed through `pkg/mcp`.
 
-## Included Recipes
-
-| Package                 | Version  | Upstream                                   |
-| ----------------------- | -------- | ------------------------------------------ |
-| falco-syscalls          | 0.37.0   | https://github.com/falcosecurity/falco     |
-| tracee-syscalls         | 0.15.1   | https://github.com/aquasecurity/tracee     |
-| bcc-runqlat             | 0.30.0   | https://github.com/iovisor/bcc             |
-| bcc-biolatency          | 0.30.0   | https://github.com/iovisor/bcc             |
-| hubble-netflow          | 1.15.0   | https://github.com/cilium/hubble           |
-| bpftool-inspector       | 7.4.0    | https://github.com/libbpf/bpftool          |
-| game-of-life            | 1.0.0    | https://github.com/isovalent/game-of-life |
-| tetragon-process-monitor| 1.0.0    | https://github.com/cilium/tetragon         |
-
 ## Licensing
 
 KAI itself is distributed under the MIT license (see `LICENSE`). Upstream
 projects retain their respective licenses; a summary is maintained under
-`THIRD_PARTY_LICENSES/`.
+`THIRD_PARTY_LICENSES/`. GPL-licensed packages are distributed as recipes only
+and must be built locally to satisfy license obligations.
