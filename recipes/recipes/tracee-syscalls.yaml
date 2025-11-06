@@ -1,0 +1,13 @@
+apiVersion: kai.recipe/v1
+name: tracee-syscalls
+version: 0.15.1
+upstream:
+  repo: https://github.com/aquasecurity/tracee.git
+  ref: v0.15.1
+license: Apache-2.0
+build:
+  commands:
+    - make -C tracee-ebpf
+outputs:
+  programs:
+    - path: tracee-ebpf/dist/tracee.bpf.o

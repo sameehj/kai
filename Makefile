@@ -1,46 +1,32 @@
-# ----------- Kai Runtime Makefile -----------
+SHELL := /usr/bin/env bash
+GO ?= go
 
-BINDIR ?= $(PWD)/dist
-GO     ?= go
-PREFIX ?= /usr/local
-CONFIGDIR ?= /etc/kai
-VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.0.0")
+.PHONY: all build test install recipe recipes docker-build clean
 
-# Default target
 all: build
 
-# Compile binaries
 build:
-	@echo "[*] Building kai runtime..."
-	$(GO) build -ldflags "-s -w -X main.version=$(VERSION)" -o $(BINDIR)/kaid ./cmd/kaid
-	$(GO) build -ldflags "-s -w -X main.version=$(VERSION)" -o $(BINDIR)/kaictl ./cmd/kaictl
-	@echo "[✓] Binaries in $(BINDIR)"
+	$(GO) mod tidy
+	$(GO) build -o bin/kaid ./cmd/kaid
+	$(GO) build -o bin/kaictl ./cmd/kaictl
 
-# Run local tests
 test:
-	GOCACHE=$(PWD)/.gocache $(GO) test ./...
+	GOCACHE=$(PWD)/.gocache $(GO) test ./... -count=1 -v
 
-# Install to system
-install:
-	@echo "[*] Installing binaries to $(PREFIX)/bin"
-	install -d $(PREFIX)/bin
-	install -m 0755 $(BINDIR)/kaid $(PREFIX)/bin/kaid
-	install -m 0755 $(BINDIR)/kaictl $(PREFIX)/bin/kaictl
+install: build
+	sudo install -Dm755 bin/kaid /usr/local/bin/kaid
+	sudo install -Dm755 bin/kaictl /usr/local/bin/kaictl
 
-	@echo "[*] Installing configs to $(CONFIGDIR)"
-	install -d $(CONFIGDIR)
-	install -m 0644 configs/kai-config.yaml $(CONFIGDIR)/config.yaml
-	install -m 0644 configs/policy.yaml $(CONFIGDIR)/policy.yaml
+recipe:
+	./recipes/scripts/build_recipe.sh $(RECIPE)
 
-	@echo "[✓] Kai installed at $(PREFIX)/bin"
+recipes:
+	@for r in $$(yq -r '.packages[].recipe' recipes/recipes/index.yaml); do \
+		./recipes/scripts/build_recipe.sh $$r || exit 1; \
+	done
 
-# Clean up build artifacts
+docker-build:
+	docker build -t kai:dev .
+
 clean:
-	rm -rf $(BINDIR) .gocache
-
-# Package into tar.gz
-package: build
-	tar -czf kai-$(VERSION).tar.gz -C $(BINDIR) kaid kaictl
-	@echo "[✓] Created kai-$(VERSION).tar.gz"
-
-.PHONY: all build install clean test package
+	rm -rf bin/ recipes/build/ recipes/dist/

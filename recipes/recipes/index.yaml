@@ -1,0 +1,25 @@
+packages:
+  - name: falco-syscalls
+    version: 0.37.0
+    recipe: recipes/recipes/falco-syscalls.yaml
+  - name: tracee-syscalls
+    version: 0.15.1
+    recipe: recipes/recipes/tracee-syscalls.yaml
+  - name: bcc-runqlat
+    version: 0.30.0
+    recipe: recipes/recipes/bcc-runqlat.yaml
+  - name: bcc-biolatency
+    version: 0.30.0
+    recipe: recipes/recipes/bcc-biolatency.yaml
+  - name: hubble-netflow
+    version: 1.15.0
+    recipe: recipes/recipes/hubble-netflow.yaml
+  - name: bpftool-inspector
+    version: 7.4.0
+    recipe: recipes/recipes/bpftool-inspector.yaml
+  - name: game-of-life
+    version: 1.0.0
+    recipe: recipes/recipes/game-of-life.yaml
+  - name: tetragon-process-monitor
+    version: 1.0.0
+    recipe: recipes/recipes/tetragon-process-monitor.yaml

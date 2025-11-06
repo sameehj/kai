@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -18,6 +20,10 @@ const defaultServerEndpoint = "http://127.0.0.1:8181/tool"
 type responsePayload struct {
 	Result json.RawMessage `json:"result"`
 	Error  string          `json:"error"`
+}
+
+var httpClientFactory = func() *http.Client {
+	return &http.Client{Timeout: 5 * time.Second}
 }
 
 func main() {
@@ -31,6 +37,7 @@ func main() {
 	rootCmd.AddCommand(
 		buildCmd(),
 		installCmd(),
+		removeCmd(),
 		loadCmd(),
 		attachCmd(),
 		streamCmd(),
@@ -61,11 +68,59 @@ func buildCmd() *cobra.Command {
 
 func installCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "install <artifact>",
-		Short: "Install a built artifact into runtime storage",
+		Use:   "install <package>",
+		Short: "Install a built package into runtime storage",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Printf("Install command is not yet implemented (requested artifact: %s)\n", args[0])
+			server := cmd.Flag("server").Value.String()
+			packageID := args[0]
+
+			name, version, err := splitPackageID(packageID)
+			if err != nil {
+				return err
+			}
+
+			sourceDir := filepath.Join("recipes", "dist", name, version)
+			if _, err := os.Stat(sourceDir); err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf("built artifacts not found at %s", sourceDir)
+				}
+				return fmt.Errorf("stat source directory: %w", err)
+			}
+
+			payload := map[string]interface{}{
+				"package":     packageID,
+				"source_path": sourceDir,
+			}
+
+			if _, err := callMCPTool(server, "kai__install_package", payload); err != nil {
+				return err
+			}
+
+			fmt.Printf("Installed %s from %s\n", packageID, sourceDir)
+			return nil
+		},
+	}
+}
+
+func removeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove <package>",
+		Short: "Remove an installed package from runtime storage",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			server := cmd.Flag("server").Value.String()
+			packageID := args[0]
+
+			payload := map[string]interface{}{
+				"package": packageID,
+			}
+
+			if _, err := callMCPTool(server, "kai__remove_package", payload); err != nil {
+				return err
+			}
+
+			fmt.Printf("Removed %s\n", packageID)
 			return nil
 		},
 	}
@@ -143,10 +198,10 @@ func streamCmd() *cobra.Command {
 func listCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List loaded packages",
+		Short: "List installed packages",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			server := cmd.Flag("server").Value.String()
-			result, err := callMCPTool(server, "kai__inspect_state", map[string]interface{}{})
+			result, err := callMCPTool(server, "kai__list_packages", map[string]interface{}{})
 			if err != nil {
 				return err
 			}
@@ -183,8 +238,8 @@ func callMCPTool(endpoint, tool string, params interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpClient := &http.Client{Timeout: 5 * time.Second}
-	resp, err := httpClient.Post(endpoint, "application/json", bytes.NewReader(body))
+	client := httpClientFactory()
+	resp, err := client.Post(endpoint, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("call MCP tool: %w", err)
 	}
@@ -210,4 +265,12 @@ func executeScript(script string, args ...string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func splitPackageID(id string) (string, string, error) {
+	parts := strings.SplitN(id, "@", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("invalid package identifier %q", id)
+	}
+	return parts[0], parts[1], nil
 }

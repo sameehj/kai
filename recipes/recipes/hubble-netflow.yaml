@@ -1,0 +1,13 @@
+apiVersion: kai.recipe/v1
+name: hubble-netflow
+version: 1.15.0
+upstream:
+  repo: https://github.com/cilium/hubble.git
+  ref: v1.15.0
+license: Apache-2.0
+build:
+  commands:
+    - make -C bpf
+outputs:
+  programs:
+    - path: bpf/netmonitor.o

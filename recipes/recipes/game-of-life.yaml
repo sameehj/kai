@@ -4,10 +4,9 @@ version: 1.0.0
 upstream:
   repo: https://github.com/isovalent/game-of-life.git
   ref: main
-
+license: MIT
 build:
   commands:
-    # The upstream repo uses Makefile in the root.
     - make
 outputs:
   programs:

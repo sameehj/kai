@@ -18,6 +18,7 @@ import (
 var (
 	configPath = flag.String("config", "configs/kai-config.yaml", "Path to runtime configuration file")
 	debug      = flag.Bool("debug", false, "Enable debug logging")
+	mcpStdio   = flag.Bool("mcp-stdio", false, "Serve MCP over stdio")
 )
 
 func main() {
@@ -49,18 +50,35 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go func() {
-		log.Infof("MCP server listening on %s", cfg.MCP.ListenAddr)
-		if err := server.Serve(ctx, cfg.MCP.ListenAddr); err != nil {
-			log.Fatalf("mcp server error: %v", err)
-		}
-	}()
+	errorCh := make(chan error, 1)
+
+	if *mcpStdio {
+		go func() {
+			log.Info("MCP server running in stdio mode")
+			if err := server.ServeSTDIO(ctx, os.Stdin, os.Stdout); err != nil {
+				errorCh <- fmt.Errorf("stdio server error: %w", err)
+			}
+		}()
+	} else {
+		go func() {
+			log.Infof("MCP server listening on %s", cfg.MCP.ListenAddr)
+			if err := server.Serve(ctx, cfg.MCP.ListenAddr); err != nil {
+				errorCh <- fmt.Errorf("http server error: %w", err)
+			}
+		}()
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	log.Info("kaid started")
-	<-sigCh
-	log.Info("shutdown signal received")
+	select {
+	case <-sigCh:
+		log.Info("shutdown signal received")
+	case err := <-errorCh:
+		if err != nil {
+			log.WithError(err).Error("mcp server exited")
+		}
+	}
 	cancel()
 	time.Sleep(500 * time.Millisecond)
 }
