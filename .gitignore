@@ -25,7 +25,6 @@ __pycache__/
 
 # --- Go build cache (if used later) ---
 /bin/
-/pkg/
 
 # --- eBPF / LLVM outputs ---
 *.o
