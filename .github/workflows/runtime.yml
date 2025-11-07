@@ -33,7 +33,10 @@ jobs:
 
       - name: Validate MCP handshake
         run: |
-          echo '{}' | ./bin/kaid --mcp-stdio || true
+          mkdir -p /tmp/kai
+          tmp_config=$(mktemp)
+          sed 's#/mnt/kai#/tmp/kai#g' configs/kai-config.yaml > "$tmp_config"
+          echo '{}' | ./bin/kaid --config "$tmp_config" --mcp-stdio || true
 
   cross-build:
     runs-on: ubuntu-latest
