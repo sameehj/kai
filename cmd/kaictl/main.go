@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/sameehj/kai/pkg/version"
 )
 
 const (
@@ -28,9 +30,11 @@ var httpClientFactory = func() *http.Client {
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "kaictl",
-		Short: "Control plane for the KAI runtime",
+		Use:     "kaictl",
+		Short:   "Control plane for the KAI runtime",
+		Version: version.String(),
 	}
+	rootCmd.SetVersionTemplate("kaictl {{.Version}}\n")
 
 	rootCmd.PersistentFlags().String("server", defaultServerEndpoint, "MCP server endpoint")
 	rootCmd.PersistentFlags().String("index", defaultIndexURL, "Recipe index URL (YAML)")
