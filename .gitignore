@@ -5,7 +5,7 @@
 /out/
 /logs/
 *.log
-
+.gocache
 # --- OS / Editor junk ---
 .DS_Store
 Thumbs.db
