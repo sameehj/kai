@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -20,6 +21,8 @@ var (
 	dataRoot   = flag.String("data-root", "", "Path to runtime data directory (overrides config or KAI_ROOT)")
 	debug      = flag.Bool("debug", false, "Enable debug logging")
 	mcpStdio   = flag.Bool("mcp-stdio", false, "Serve MCP over stdio")
+	mcpSocket  = flag.String("mcp-socket", "", "Serve MCP over TCP socket (e.g. 0.0.0.0:7010)")
+	mcpHTTP    = flag.String("mcp-http", "", "Serve MCP over HTTP + SSE at address (e.g. :7010)")
 )
 
 func main() {
@@ -30,9 +33,17 @@ func main() {
 		log.SetLevel(logrus.DebugLevel)
 	}
 
-	cfg, err := loadConfig(*configPath)
-	if err != nil {
-		log.Fatalf("load config: %v", err)
+	var (
+		cfg *Config
+		err error
+	)
+	if *configPath == "" {
+		cfg = &Config{}
+	} else {
+		cfg, err = loadConfig(*configPath)
+		if err != nil {
+			log.Fatalf("load config: %v", err)
+		}
 	}
 
 	rootPath := resolveDataRoot(cfg, *dataRoot)
@@ -40,6 +51,9 @@ func main() {
 		log.Fatalf("prepare data root %s: %v", rootPath, err)
 	}
 	cfg.Storage.Path = rootPath
+	if *dataRoot != "" || cfg.MCP.ToolsPath == "" {
+		cfg.MCP.ToolsPath = rootPath
+	}
 
 	rt, err := runtime.NewRuntime(&runtime.Config{
 		StoragePath: rootPath,
@@ -58,16 +72,65 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	errorCh := make(chan error, 1)
+	errorCh := make(chan error, 3)
+	transports := 0
 
 	if *mcpStdio {
+		transports++
 		go func() {
 			log.Info("MCP server running in stdio mode")
 			if err := server.ServeSTDIO(ctx, os.Stdin, os.Stdout); err != nil {
 				errorCh <- fmt.Errorf("stdio server error: %w", err)
 			}
 		}()
-	} else {
+	}
+
+	if *mcpSocket != "" {
+		listener, err := net.Listen("tcp", *mcpSocket)
+		if err != nil {
+			log.Fatalf("failed to listen on %s: %v", *mcpSocket, err)
+		}
+		transports++
+		go func() {
+			log.Infof("MCP server listening on TCP %s", listener.Addr().String())
+			defer listener.Close()
+			go func() {
+				<-ctx.Done()
+				_ = listener.Close()
+			}()
+			for {
+				conn, err := listener.Accept()
+				if err != nil {
+					select {
+					case <-ctx.Done():
+						return
+					default:
+					}
+					errorCh <- fmt.Errorf("tcp listener error: %w", err)
+					return
+				}
+
+				go func(c net.Conn) {
+					defer c.Close()
+					if err := server.ServeSTDIO(ctx, c, c); err != nil {
+						log.WithError(err).Warn("tcp client session ended with error")
+					}
+				}(conn)
+			}
+		}()
+	}
+
+	if *mcpHTTP != "" {
+		transports++
+		go func() {
+			log.Infof("MCP server listening over HTTP on %s", *mcpHTTP)
+			if err := mcp.ServeHTTPMCP(ctx, server, *mcpHTTP); err != nil {
+				errorCh <- fmt.Errorf("http transport error: %w", err)
+			}
+		}()
+	}
+
+	if transports == 0 {
 		go func() {
 			log.Infof("MCP server listening on %s", cfg.MCP.ListenAddr)
 			if err := server.Serve(ctx, cfg.MCP.ListenAddr); err != nil {
