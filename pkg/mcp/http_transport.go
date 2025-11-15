@@ -11,7 +11,10 @@ import (
 	"github.com/sameehj/kai/pkg/version"
 )
 
-const httpShutdownTimeout = 5 * time.Second
+const (
+	httpShutdownTimeout = 5 * time.Second
+	mcpProtocolVersion  = "2024-11-05"
+)
 
 // ServeHTTPMCP exposes the MCP server over HTTP using SSE for streaming responses.
 func ServeHTTPMCP(ctx context.Context, server *Server, addr string) error {
@@ -124,17 +127,34 @@ func (h *httpTransport) handleJSONRPC(w http.ResponseWriter, r *http.Request) {
 		resp.Result = map[string]string{"message": "pong"}
 	case "initialize":
 		resp.Result = map[string]interface{}{
+			"protocolVersion": mcpProtocolVersion,
 			"serverInfo": map[string]string{
 				"name":    "kaid",
 				"version": version.String(),
 			},
 			"capabilities": map[string]interface{}{
-				"experimental": map[string]interface{}{},
+				"elicitation": true,
+				"prompts":     map[string]interface{}{},
+				"resources":   map[string]interface{}{},
+				"roots":       map[string]interface{}{},
+				"tools":       map[string]interface{}{},
 			},
 		}
 	case "tools/list":
 		resp.Result = map[string]interface{}{
 			"tools": toolDescriptors,
+		}
+	case "prompts/list":
+		resp.Result = map[string]interface{}{
+			"prompts": []interface{}{},
+		}
+	case "resources/list":
+		resp.Result = map[string]interface{}{
+			"resources": []interface{}{},
+		}
+	case "roots/list":
+		resp.Result = map[string]interface{}{
+			"roots": []interface{}{},
 		}
 	case "tools/call":
 		result, err := h.handleToolCall(r.Context(), req.Params)
@@ -270,7 +290,7 @@ type toolCallParams struct {
 type ToolDescriptor struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	InputSchema json.RawMessage `json:"inputSchema"`
 }
 
 var toolDescriptors = []ToolDescriptor{

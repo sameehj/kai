@@ -38,6 +38,8 @@ type toolCallParams struct {
 }
 
 // MCPHTTPServer exposes the MCP server over Cursor's HTTP/SSE protocol.
+const mcpProtocolVersion = "2024-11-05"
+
 type MCPHTTPServer struct {
 	rt         *runtime.Runtime
 	mcpServer  *mcp.Server
@@ -118,7 +120,7 @@ func (s *MCPHTTPServer) handleJSONRPC(w http.ResponseWriter, r *http.Request) {
 	switch req.Method {
 	case "initialize":
 		s.writeJSONRPC(w, req.ID, map[string]interface{}{
-			"protocolVersion": "1.0",
+			"protocolVersion": mcpProtocolVersion,
 			"serverInfo": map[string]string{
 				"name":    "kaid",
 				"version": "dev",
@@ -134,6 +136,18 @@ func (s *MCPHTTPServer) handleJSONRPC(w http.ResponseWriter, r *http.Request) {
 	case "tools/list":
 		s.writeJSONRPC(w, req.ID, map[string]interface{}{
 			"tools": s.listTools(),
+		})
+	case "prompts/list":
+		s.writeJSONRPC(w, req.ID, map[string]interface{}{
+			"prompts": []interface{}{},
+		})
+	case "resources/list":
+		s.writeJSONRPC(w, req.ID, map[string]interface{}{
+			"resources": []interface{}{},
+		})
+	case "roots/list":
+		s.writeJSONRPC(w, req.ID, map[string]interface{}{
+			"roots": []interface{}{},
 		})
 	case "tools/call":
 		result, err := s.handleToolCall(r.Context(), req.Params)
