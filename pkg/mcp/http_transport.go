@@ -413,3 +413,10 @@ func newToolDescriptor(name, description string, schema map[string]interface{}) 
 		InputSchema: data,
 	}
 }
+
+// ToolDescriptors returns the list of tool descriptors advertised by the MCP server.
+func ToolDescriptors() []ToolDescriptor {
+	descriptors := make([]ToolDescriptor, len(toolDescriptors))
+	copy(descriptors, toolDescriptors)
+	return descriptors
+}

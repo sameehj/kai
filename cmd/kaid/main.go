@@ -12,6 +12,7 @@ import (
 
 	"github.com/sameehj/kai/pkg/mcp"
 	"github.com/sameehj/kai/pkg/runtime"
+	"github.com/sameehj/kai/server"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
@@ -22,7 +23,7 @@ var (
 	debug      = flag.Bool("debug", false, "Enable debug logging")
 	mcpStdio   = flag.Bool("mcp-stdio", false, "Serve MCP over stdio")
 	mcpSocket  = flag.String("mcp-socket", "", "Serve MCP over TCP socket (e.g. 0.0.0.0:7010)")
-	mcpHTTP    = flag.String("mcp-http", "", "Serve MCP over HTTP + SSE at address (e.g. :7010)")
+	mcpHTTP    = flag.String("mcp-http", "", "Serve MCP over HTTP (SSE/JSON-RPC) on host:port")
 )
 
 func main() {
@@ -64,7 +65,7 @@ func main() {
 		log.Fatalf("initialise runtime: %v", err)
 	}
 
-	server, err := mcp.NewServer(rt, cfg.MCP.ToolsPath)
+	mcpServer, err := mcp.NewServer(rt, cfg.MCP.ToolsPath)
 	if err != nil {
 		log.Fatalf("initialise MCP server: %v", err)
 	}
@@ -79,7 +80,7 @@ func main() {
 		transports++
 		go func() {
 			log.Info("MCP server running in stdio mode")
-			if err := server.ServeSTDIO(ctx, os.Stdin, os.Stdout); err != nil {
+			if err := mcpServer.ServeSTDIO(ctx, os.Stdin, os.Stdout); err != nil {
 				errorCh <- fmt.Errorf("stdio server error: %w", err)
 			}
 		}()
@@ -112,7 +113,7 @@ func main() {
 
 				go func(c net.Conn) {
 					defer c.Close()
-					if err := server.ServeSTDIO(ctx, c, c); err != nil {
+					if err := mcpServer.ServeSTDIO(ctx, c, c); err != nil {
 						log.WithError(err).Warn("tcp client session ended with error")
 					}
 				}(conn)
@@ -124,7 +125,7 @@ func main() {
 		transports++
 		go func() {
 			log.Infof("MCP server listening over HTTP on %s", *mcpHTTP)
-			if err := mcp.ServeHTTPMCP(ctx, server, *mcpHTTP); err != nil {
+			if err := server.StartMCPHTTP(ctx, rt, mcpServer, *mcpHTTP); err != nil {
 				errorCh <- fmt.Errorf("http transport error: %w", err)
 			}
 		}()
@@ -133,7 +134,7 @@ func main() {
 	if transports == 0 {
 		go func() {
 			log.Infof("MCP server listening on %s", cfg.MCP.ListenAddr)
-			if err := server.Serve(ctx, cfg.MCP.ListenAddr); err != nil {
+			if err := mcpServer.Serve(ctx, cfg.MCP.ListenAddr); err != nil {
 				errorCh <- fmt.Errorf("http server error: %w", err)
 			}
 		}()
