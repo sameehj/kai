@@ -17,6 +17,7 @@ import (
 
 var (
 	configPath = flag.String("config", "configs/kai-config.yaml", "Path to runtime configuration file")
+	dataRoot   = flag.String("data-root", "", "Path to runtime data directory (overrides config or KAI_ROOT)")
 	debug      = flag.Bool("debug", false, "Enable debug logging")
 	mcpStdio   = flag.Bool("mcp-stdio", false, "Serve MCP over stdio")
 )
@@ -34,8 +35,14 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
+	rootPath := resolveDataRoot(cfg, *dataRoot)
+	if err := os.MkdirAll(rootPath, 0o755); err != nil {
+		log.Fatalf("prepare data root %s: %v", rootPath, err)
+	}
+	cfg.Storage.Path = rootPath
+
 	rt, err := runtime.NewRuntime(&runtime.Config{
-		StoragePath: cfg.Storage.Path,
+		StoragePath: rootPath,
 		PolicyPath:  cfg.Policy.File,
 		IndexURL:    cfg.Recipes.IndexURL,
 	})
@@ -111,4 +118,17 @@ func loadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	return &cfg, nil
+}
+
+func resolveDataRoot(cfg *Config, override string) string {
+	if override != "" {
+		return override
+	}
+	if env := os.Getenv("KAI_ROOT"); env != "" {
+		return env
+	}
+	if cfg != nil && cfg.Storage.Path != "" {
+		return cfg.Storage.Path
+	}
+	return "/tmp/kai"
 }

@@ -1,5 +1,9 @@
 allowed_packages:
   - tetragon-process-monitor
+denied_packages: []
+
+allowed_capabilities: []
+denied_capabilities: []
 
 allowed_attach_points:
   - kprobe
@@ -17,6 +21,7 @@ limits:
   max_programs_per_chain: 10
   max_map_memory_mb: 512
   max_events_per_sec: 50000
+  max_program_size_bytes: 1048576
 
 namespace_enforcement:
   require_cgroup_filter: true
@@ -25,3 +30,8 @@ namespace_enforcement:
 signature_verification:
   enabled: false
   trusted_keys: []
+
+sandbox:
+  enabled: true
+  require_uid_namespace: true
+  require_isolated_bpffs: true

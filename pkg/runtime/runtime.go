@@ -18,7 +18,8 @@ import (
 	"github.com/sameehj/kai/internal/attach"
 	"github.com/sameehj/kai/internal/chain"
 	"github.com/sameehj/kai/internal/loader"
-	"github.com/sameehj/kai/internal/policy"
+	"github.com/sameehj/kai/pkg/kcp"
+	"github.com/sameehj/kai/pkg/policy"
 	"github.com/sameehj/kai/pkg/types"
 	"gopkg.in/yaml.v3"
 )
@@ -31,6 +32,9 @@ type Runtime struct {
 	chain      chainManager
 	attach     attacher
 	execRunner func(string, ...string) *exec.Cmd
+	policy     *policy.Engine
+	sandboxes  *sandboxManager
+	kernel     *kcp.Profile
 
 	mu       sync.RWMutex
 	packages map[string]*types.LoadedPackage
@@ -38,6 +42,7 @@ type Runtime struct {
 
 type packageLoader interface {
 	LoadPackage(string) (*types.LoadedPackage, error)
+	Profile() *kcp.Profile
 }
 
 type chainManager interface {
@@ -54,6 +59,16 @@ type Config struct {
 	StoragePath string
 	PolicyPath  string
 	IndexURL    string
+}
+
+func defaultStoragePath(cfg *Config) string {
+	if cfg != nil && cfg.StoragePath != "" {
+		return cfg.StoragePath
+	}
+	if env := os.Getenv("KAI_ROOT"); env != "" {
+		return env
+	}
+	return "/tmp/kai"
 }
 
 // InstalledPackage describes a package residing in runtime storage.
@@ -79,19 +94,26 @@ type RemotePackage struct {
 	} `json:"oci"`
 }
 
+// ValidationInput describes a policy validation request.
+type ValidationInput struct {
+	PackageID    string
+	ManifestPath string
+}
+
+// ValidationResult captures findings from policy evaluation.
+type ValidationResult struct {
+	Package    string   `json:"package"`
+	Passed     bool     `json:"passed"`
+	Violations []string `json:"violations"`
+}
+
 func NewRuntime(cfg *Config) (*Runtime, error) {
 	var (
 		policyEngine *policy.Engine
 		err          error
 	)
 
-	if cfg.StoragePath == "" {
-		if home, herr := os.UserHomeDir(); herr == nil {
-			cfg.StoragePath = filepath.Join(home, ".local", "share", "kai")
-		} else {
-			cfg.StoragePath = "/var/lib/kai"
-		}
-	}
+	cfg.StoragePath = defaultStoragePath(cfg)
 
 	if cfg.PolicyPath != "" {
 		policyEngine, err = policy.NewEngine(cfg.PolicyPath)
@@ -112,6 +134,9 @@ func NewRuntime(cfg *Config) (*Runtime, error) {
 		attach:     attach.NewManager(),
 		packages:   make(map[string]*types.LoadedPackage),
 		execRunner: exec.Command,
+		policy:     policyEngine,
+		sandboxes:  newSandboxManager(cfg.StoragePath),
+		kernel:     pkgLoader.Profile(),
 	}
 
 	return rt, nil
@@ -140,6 +165,11 @@ func (rt *Runtime) LoadPackage(name, version string) (*types.LoadedPackage, erro
 		return nil, fmt.Errorf("load package %s: %w", packageID, err)
 	}
 
+	if err := rt.ensureSandbox(packageID, pkg); err != nil {
+		rt.releasePackageResources(pkg)
+		return nil, fmt.Errorf("prepare sandbox: %w", err)
+	}
+
 	rt.packages[packageID] = pkg
 	return pkg, nil
 }
@@ -164,6 +194,19 @@ func (rt *Runtime) AttachPackage(packageID string, opts AttachOptions) error {
 	manifest := pkg.Manifest
 	if manifest == nil {
 		return fmt.Errorf("package manifest not available")
+	}
+
+	if rt.policy != nil {
+		req := policy.AttachRequest{
+			PackageID:  packageID,
+			Package:    manifest,
+			CgroupPath: opts.CgroupPath,
+			Interface:  opts.Interface,
+			Sandbox:    pkg.Sandbox,
+		}
+		if err := rt.policy.ValidateAttach(req); err != nil {
+			return fmt.Errorf("policy attach: %w", err)
+		}
 	}
 
 	if manifest.Interface.Chain.Entry != "" {
@@ -275,6 +318,9 @@ func (rt *Runtime) UnloadPackage(packageID string) error {
 	}
 	delete(rt.packages, packageID)
 	pkg.Status = types.StatusStopped
+	if rt.sandboxes != nil {
+		rt.sandboxes.Remove(packageID)
+	}
 	return nil
 }
 
@@ -408,6 +454,58 @@ func (rt *Runtime) ListRemotePackages(indexURL string) ([]RemotePackage, error) 
 	return results, nil
 }
 
+// ValidatePackage evaluates a manifest against the configured policy engine.
+func (rt *Runtime) ValidatePackage(input ValidationInput) (*ValidationResult, error) {
+	if rt.policy == nil {
+		return nil, fmt.Errorf("policy engine not configured")
+	}
+
+	manifestPath := input.ManifestPath
+	if manifestPath == "" {
+		if input.PackageID == "" {
+			return nil, fmt.Errorf("package identifier or manifest path required")
+		}
+		name, version, err := splitPackageID(input.PackageID)
+		if err != nil {
+			return nil, err
+		}
+		manifestPath = filepath.Join(rt.packagePath(name, version), "manifest.yaml")
+	}
+
+	manifest, err := parseManifest(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+
+	packagePath := filepath.Dir(manifestPath)
+	report := rt.policy.ReportPackage(packagePath, manifest)
+	return &ValidationResult{
+		Package:    report.Package,
+		Passed:     report.Passed,
+		Violations: report.Violations,
+	}, nil
+}
+
+// InspectKernel returns the cached kernel profile or refreshes it if unavailable.
+func (rt *Runtime) InspectKernel() (*kcp.Profile, error) {
+	rt.mu.RLock()
+	if rt.kernel != nil {
+		defer rt.mu.RUnlock()
+		return rt.kernel, nil
+	}
+	rt.mu.RUnlock()
+
+	profile, err := kcp.Detect()
+	if err != nil {
+		return nil, fmt.Errorf("detect kernel: %w", err)
+	}
+
+	rt.mu.Lock()
+	rt.kernel = profile
+	rt.mu.Unlock()
+	return profile, nil
+}
+
 // InstallFromRemote fetches an artifact referenced in the recipe index and stores it locally.
 func (rt *Runtime) InstallFromRemote(indexURL, name, version string) error {
 	if indexURL == "" {
@@ -512,6 +610,45 @@ func splitPackageID(id string) (string, string, error) {
 		return "", "", fmt.Errorf("invalid package identifier %q", id)
 	}
 	return parts[0], parts[1], nil
+}
+
+func (rt *Runtime) ensureSandbox(packageID string, pkg *types.LoadedPackage) error {
+	if rt.sandboxes == nil || pkg == nil {
+		return nil
+	}
+	info, err := rt.sandboxes.Ensure(packageID)
+	if err != nil {
+		return err
+	}
+	pkg.Sandbox = info
+	return nil
+}
+
+func (rt *Runtime) releasePackageResources(pkg *types.LoadedPackage) {
+	if pkg == nil {
+		return
+	}
+	for _, link := range pkg.Links {
+		_ = rt.attach.Detach(link)
+	}
+	for _, prog := range pkg.Programs {
+		prog.Close()
+	}
+	for _, m := range pkg.Maps {
+		m.Close()
+	}
+}
+
+func parseManifest(path string) (*types.Package, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read manifest: %w", err)
+	}
+	var pkg types.Package
+	if err := yaml.Unmarshal(data, &pkg); err != nil {
+		return nil, fmt.Errorf("parse manifest: %w", err)
+	}
+	return &pkg, nil
 }
 
 func copyDir(src, dst string) error {

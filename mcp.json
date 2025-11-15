@@ -16,7 +16,9 @@
       "kai__attach_program",
       "kai__unload_program",
       "kai__stream_events",
-      "kai__inspect_state"
+      "kai__inspect_state",
+      "kai__inspect_kernel",
+      "kai__validate_package"
     ]
   }
 }

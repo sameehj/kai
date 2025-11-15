@@ -1,6 +1,10 @@
-package loader
+package kcp
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/sameehj/kai/pkg/types"
+)
 
 func TestParseVersion(t *testing.T) {
 	t.Parallel()
@@ -46,5 +50,36 @@ func TestKernelVersionGTE(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("kernelVersionGTE(%q, %q) = %v, want %v", tc.current, tc.required, got, tc.want)
 		}
+	}
+}
+
+func TestProfileVerify(t *testing.T) {
+	t.Parallel()
+
+	profile := &Profile{
+		Version: "5.10.0",
+		Features: map[string]Feature{
+			"ringbuf": {Name: "ringbuf", Supported: true},
+		},
+		Helpers: map[string]bool{
+			"bpf_ringbuf_reserve": true,
+		},
+	}
+
+	req := types.Requirements{
+		Kernel: types.KernelRequirements{
+			MinVersion: "5.8.0",
+			Features:   []string{"ringbuf"},
+			Helpers:    []string{"bpf_ringbuf_reserve"},
+		},
+	}
+
+	if err := profile.Verify(req); err != nil {
+		t.Fatalf("expected verify success, got %v", err)
+	}
+
+	req.Kernel.Features = []string{"btf"}
+	if err := profile.Verify(req); err == nil {
+		t.Fatalf("expected verify to fail for missing feature")
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/sameehj/kai/pkg/kcp"
+	"github.com/sameehj/kai/pkg/policy"
 	"github.com/sameehj/kai/pkg/types"
 )
 
@@ -167,5 +169,97 @@ build:
 	destArtifact := filepath.Join(storagePath, "packages", "demo@1.0.0", "demo.o")
 	if _, err := os.Stat(destArtifact); err != nil {
 		t.Fatalf("expected artifact at %s: %v", destArtifact, err)
+	}
+}
+
+func TestNewRuntimeDataRootFallback(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("KAI_ROOT", root)
+
+	cfg := &Config{}
+	if path := defaultStoragePath(cfg); path != root {
+		t.Fatalf("expected storage path %s, got %s", root, path)
+	}
+}
+
+func TestRuntimeValidatePackage(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	policyPath := filepath.Join(tempDir, "policy.yaml")
+	policyContent := `allowed_packages:
+  - demo
+limits:
+  max_programs_per_chain: 2
+namespace_enforcement:
+  require_cgroup_filter: false
+`
+	if err := os.WriteFile(policyPath, []byte(policyContent), 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+
+	engine, err := policy.NewEngine(policyPath)
+	if err != nil {
+		t.Fatalf("policy engine: %v", err)
+	}
+	rt := &Runtime{
+		config: &Config{StoragePath: tempDir},
+		policy: engine,
+	}
+
+	manifestDir := filepath.Join(tempDir, "manifests")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatalf("mkdir manifest dir: %v", err)
+	}
+	manifestPath := filepath.Join(manifestDir, "manifest.yaml")
+
+	writeManifest := func(programCount int) {
+		programs := ""
+		for i := 0; i < programCount; i++ {
+			programs += fmt.Sprintf("  - name: prog%d\n    id: prog%d\n    file: prog%d.o\n    section: prog%d\n    type: kprobe\n", i, i, i, i)
+		}
+		content := fmt.Sprintf(`apiVersion: kai.package/v1
+kind: Package
+metadata:
+  name: demo
+  version: 1.0.0
+interface:
+  programs:
+%s`, programs)
+		if err := os.WriteFile(manifestPath, []byte(content), 0o644); err != nil {
+			t.Fatalf("write manifest: %v", err)
+		}
+	}
+
+	writeManifest(1)
+	result, err := rt.ValidatePackage(ValidationInput{ManifestPath: manifestPath})
+	if err != nil {
+		t.Fatalf("validate package: %v", err)
+	}
+	if !result.Passed {
+		t.Fatalf("expected manifest to pass, violations: %v", result.Violations)
+	}
+
+	writeManifest(3)
+	result, err = rt.ValidatePackage(ValidationInput{ManifestPath: manifestPath})
+	if err == nil && result.Passed {
+		t.Fatalf("expected manifest with too many programs to fail")
+	}
+}
+
+func TestInspectKernelUsesCache(t *testing.T) {
+	t.Parallel()
+
+	expected := &kcp.Profile{Version: "5.10.0"}
+	rt := &Runtime{
+		kernel: expected,
+	}
+
+	profile, err := rt.InspectKernel()
+	if err != nil {
+		t.Fatalf("inspect kernel: %v", err)
+	}
+	if profile != expected {
+		t.Fatalf("expected cached profile instance")
 	}
 }

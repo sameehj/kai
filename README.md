@@ -35,7 +35,7 @@ make test        # Run the Go test suite
 ```bash
 # 1. Build and start daemon
 make build
-./bin/kaid --mcp-stdio &
+KAI_ROOT=~/kai-data ./bin/kaid --mcp-stdio --data-root ~/kai-data &
 
 # 2. Interact via CLI
 kaictl list-remote \
@@ -53,7 +53,8 @@ kaictl attach falco-syscalls@0.37.0
 ## Operating the Runtime
 
 ```bash
-kaid --config configs/kai-config.yaml --debug
+KAI_ROOT=/var/lib/kai \
+kaid --config configs/kai-config.yaml --data-root /var/lib/kai --debug
 kaictl list-local
 kaictl stream falco-syscalls@0.37.0
 kaictl unload falco-syscalls@0.37.0
@@ -75,6 +76,8 @@ Available tools:
 * `kai__unload_program`
 * `kai__stream_events`
 * `kai__inspect_state`
+* `kai__inspect_kernel`
+* `kai__validate_package`
 
 See [AGENTS.md](./AGENTS.md) for detailed integration examples.
 

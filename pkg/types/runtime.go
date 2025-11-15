@@ -16,6 +16,7 @@ type LoadedPackage struct {
 	ChainID  string
 	LoadedAt time.Time
 	Status   PackageStatus
+	Sandbox  *SandboxInfo
 }
 
 type PackageStatus string
@@ -42,4 +43,13 @@ type ChainStage struct {
 	Index   uint32
 	Program *ebpf.Program
 	Next    *ChainStage
+}
+
+// SandboxInfo captures the isolation context prepared for a package.
+type SandboxInfo struct {
+	PackageID    string    `json:"package_id"`
+	Root         string    `json:"root"`
+	BPFFSPath    string    `json:"bpffs_path"`
+	UIDNamespace bool      `json:"uid_namespace"`
+	CreatedAt    time.Time `json:"created_at"`
 }

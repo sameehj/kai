@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cilium/ebpf"
+	"github.com/sameehj/kai/pkg/kcp"
 	"github.com/sameehj/kai/pkg/types"
 	"gopkg.in/yaml.v3"
 )
@@ -17,25 +18,31 @@ import (
 // PolicyValidator describes the minimal contract the loader needs from the policy engine.
 type PolicyValidator interface {
 	ValidatePackage(*types.Package) error
+	ValidateArtifacts(string, *types.Package) error
 }
 
 // Loader encapsulates manifest parsing and eBPF resource creation.
 type Loader struct {
-	kcp    *KernelProfile
+	kcp    *kcp.Profile
 	policy PolicyValidator
 }
 
 // NewLoader creates a Loader with kernel capability detection performed up-front.
 func NewLoader(policy PolicyValidator) (*Loader, error) {
-	kcp, err := DetectKernelProfile()
+	profile, err := kcp.Detect()
 	if err != nil {
 		return nil, fmt.Errorf("detect kernel profile: %w", err)
 	}
 
 	return &Loader{
-		kcp:    kcp,
+		kcp:    profile,
 		policy: policy,
 	}, nil
+}
+
+// Profile returns the detected kernel profile.
+func (l *Loader) Profile() *kcp.Profile {
+	return l.kcp
 }
 
 // LoadPackage reads a manifest and materialises its programs and maps.
@@ -53,6 +60,9 @@ func (l *Loader) LoadPackage(packagePath string) (*types.LoadedPackage, error) {
 	if l.policy != nil {
 		if err := l.policy.ValidatePackage(manifest); err != nil {
 			return nil, fmt.Errorf("policy validation: %w", err)
+		}
+		if err := l.policy.ValidateArtifacts(packagePath, manifest); err != nil {
+			return nil, fmt.Errorf("artifact policy: %w", err)
 		}
 	}
 

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sameehj/kai/pkg/kcp"
 	"github.com/sameehj/kai/pkg/runtime"
 	"github.com/sameehj/kai/pkg/types"
 )
@@ -36,6 +37,8 @@ type ToolRuntime interface {
 	RemovePackage(packageID string) error
 	ListInstalledPackages() ([]runtime.InstalledPackage, error)
 	ListRemotePackages(indexURL string) ([]runtime.RemotePackage, error)
+	ValidatePackage(runtime.ValidationInput) (*runtime.ValidationResult, error)
+	InspectKernel() (*kcp.Profile, error)
 }
 
 type requestPayload struct {
@@ -193,8 +196,12 @@ func (s *Server) HandleToolCall(ctx context.Context, toolName string, params jso
 		return s.handleStreamEvents(ctx, params)
 	case "kai__inspect_state":
 		return s.handleInspectState(ctx, params)
+	case "kai__inspect_kernel":
+		return s.handleInspectKernel(ctx, params)
 	case "kai__unload_program":
 		return s.handleUnloadProgram(ctx, params)
+	case "kai__validate_package":
+		return s.handleValidatePackage(ctx, params)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", toolName)
 	}
@@ -278,6 +285,14 @@ func (s *Server) handleInspectState(_ context.Context, _ json.RawMessage) (json.
 	return json.Marshal(response)
 }
 
+func (s *Server) handleInspectKernel(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+	profile, err := s.runtime.InspectKernel()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(profile)
+}
+
 func (s *Server) handleUnloadProgram(_ context.Context, params json.RawMessage) (json.RawMessage, error) {
 	var input struct {
 		PackageID string `json:"package_id"`
@@ -293,6 +308,28 @@ func (s *Server) handleUnloadProgram(_ context.Context, params json.RawMessage) 
 	return json.Marshal(map[string]string{
 		"status": "unloaded",
 	})
+}
+
+func (s *Server) handleValidatePackage(_ context.Context, params json.RawMessage) (json.RawMessage, error) {
+	var input struct {
+		PackageID    string `json:"package"`
+		ManifestPath string `json:"manifest"`
+	}
+	if err := json.Unmarshal(params, &input); err != nil {
+		return nil, err
+	}
+	if input.PackageID == "" && input.ManifestPath == "" {
+		return nil, fmt.Errorf("package or manifest path required")
+	}
+
+	result, err := s.runtime.ValidatePackage(runtime.ValidationInput{
+		PackageID:    input.PackageID,
+		ManifestPath: input.ManifestPath,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
 }
 
 func (s *Server) handleInstallPackage(_ context.Context, params json.RawMessage) (json.RawMessage, error) {
@@ -414,15 +451,17 @@ func (s *Server) generateToolFilesystem() error {
 	}
 
 	files := map[string]string{
-		"list_remote.ts":     typescriptListRemote,
-		"list_local.ts":      typescriptListLocal,
-		"install_package.ts": typescriptInstallPackage,
-		"remove_package.ts":  typescriptRemovePackage,
-		"load_program.ts":    typescriptLoadProgram,
-		"attach_program.ts":  typescriptAttachProgram,
-		"stream_events.ts":   typescriptStreamEvents,
-		"inspect_state.ts":   typescriptInspectState,
-		"unload_program.ts":  typescriptUnloadProgram,
+		"list_remote.ts":      typescriptListRemote,
+		"list_local.ts":       typescriptListLocal,
+		"install_package.ts":  typescriptInstallPackage,
+		"remove_package.ts":   typescriptRemovePackage,
+		"load_program.ts":     typescriptLoadProgram,
+		"attach_program.ts":   typescriptAttachProgram,
+		"stream_events.ts":    typescriptStreamEvents,
+		"inspect_state.ts":    typescriptInspectState,
+		"inspect_kernel.ts":   typescriptInspectKernel,
+		"unload_program.ts":   typescriptUnloadProgram,
+		"validate_package.ts": typescriptValidatePackage,
 	}
 
 	for name, contents := range files {
@@ -576,6 +615,28 @@ export async function inspect_state(): Promise<any> {
 }
 `
 
+	typescriptInspectKernel = `
+import { callMCPTool } from "../../client.js";
+
+export interface KernelFeature {
+  name: string;
+  supported: boolean;
+  details?: string;
+}
+
+export interface KernelProfile {
+  version: string;
+  features: Record<string, KernelFeature>;
+  helpers: Record<string, boolean>;
+  btf_paths?: string[];
+  unprivileged_bpf?: boolean;
+}
+
+export async function inspect_kernel(): Promise<KernelProfile> {
+  return callMCPTool<KernelProfile>('kai__inspect_kernel', {});
+}
+`
+
 	typescriptUnloadProgram = `
 import { callMCPTool } from "../../client.js";
 
@@ -587,6 +648,27 @@ export async function unload_program(
   input: UnloadProgramInput
 ): Promise<void> {
   return callMCPTool('kai__unload_program', input);
+}
+`
+
+	typescriptValidatePackage = `
+import { callMCPTool } from "../../client.js";
+
+interface ValidatePackageInput {
+  package?: string;
+  manifest?: string;
+}
+
+export interface ValidatePackageResult {
+  package: string;
+  passed: boolean;
+  violations: string[];
+}
+
+export async function validate_package(
+  input: ValidatePackageInput
+): Promise<ValidatePackageResult> {
+  return callMCPTool<ValidatePackageResult>('kai__validate_package', input);
 }
 `
 )
