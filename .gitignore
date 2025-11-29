@@ -8,6 +8,7 @@
 .gocache
 .cache/*
 .gomodcache/*
+./vmlinux.h
 
 # --- OS / Editor junk ---
 .DS_Store
