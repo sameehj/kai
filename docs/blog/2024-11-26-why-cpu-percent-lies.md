@@ -89,18 +89,14 @@ some avg10=45.20 avg60=38.50 avg300=35.10 total=...
 
 ## How KAI Solves This
 
-Instead of alerting on `CPU > 80%`, KAI uses:
+`flow.cpu_saturation_detector` runs three sensors (PSI snapshots, CPU stats, top processes) and hands the combined output to Claude. The agent prompt encodes heuristics equivalent to:
 ```yaml
-condition: |
-  (cpu_percent < 70 AND psi_cpu_some_avg10 > 20.0)
-  OR
-  (cpu_percent > 50 AND psi_cpu_some_avg10 > 40.0)
+(cpu_percent < 70 AND psi_cpu_some_avg10 > 20.0)
+OR
+(cpu_percent > 50 AND psi_cpu_some_avg10 > 40.0)
 ```
 
-**This detects:**
-- ✅ Low CPU% with high contention (the 50% mystery)
-- ✅ High CPU% with extreme contention
-- ❌ Ignores: High CPU% with low contention (legitimate load)
+Engine-level conditionals land in v0.2, but even today the agent flags low-CPU/high-PSI incidents automatically and provides remediation guidance.
 
 ---
 
@@ -110,7 +106,7 @@ condition: |
 cat /proc/pressure/cpu
 
 # Run KAI's PSI-based detector
-kai run-flow flow.cpu_saturation_detector
+sudo -E ./bin/kaictl run flow.cpu_saturation_detector
 
 # Example output:
 🚨 CPU Saturation Detected
@@ -178,8 +174,8 @@ Add PSI to your monitoring:
 
 **Resources:**
 - [PSI Documentation](https://www.kernel.org/doc/html/latest/accounting/psi.html)
-- [KAI Flow: cpu_saturation_detector](https://github.com/sameehj/kai/tree/main/recipes/flows/cpu_saturation_detector)
-- [Install KAI](https://github.com/sameehj/kai#installation)
+- [KAI Flow: cpu_saturation_detector](https://github.com/yourusername/kai/tree/main/recipes/flows/cpu_saturation_detector)
+- [Install KAI](https://github.com/yourusername/kai#quick-start)
 
 ---
 

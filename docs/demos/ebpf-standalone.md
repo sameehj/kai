@@ -1,22 +1,22 @@
 # Standalone eBPF Demo Recipes
 
-These recipes showcase how KAI pairs production-ready eBPF tooling with Claude analysis for unforgettable demos. Each sensor shells out to the standard BCC tools (`tcpconnect-bpfcc`, `opensnoop-bpfcc`, `execsnoop-bpfcc`) so they work on any modern Ubuntu system.
+These recipes showcase how KAI combines prebuilt **CO-RE eBPF** programs with Claude analysis for compelling demos. The sensors in `recipes/sensors/ebpf/` ship as `.bpf.c` + `.o` pairs, load through the eBPF backend, and work anywhere with Linux 5.8+ and BTF.
 
 ## Prerequisites
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y bpfcc-tools linux-headers-$(uname -r) linux-tools-$(uname -r)
-sudo tcpconnect-bpfcc --help
+sudo -E ./scripts/check_ebpf_env.sh   # optional helper when available
+which bpftool || sudo apt install -y bpftool
+sudo mount bpffs /sys/fs/bpf || true
 ```
 
 ## Sensors
 
-| Sensor ID           | Tool                | Description                              |
-|---------------------|---------------------|------------------------------------------|
-| `ebpf.tcp_tracer`   | `tcpconnect-bpfcc`  | Streams every TCP connection in real time |
-| `ebpf.file_tracer`  | `opensnoop-bpfcc`   | Shows file open activity                  |
-| `ebpf.exec_tracer`  | `execsnoop-bpfcc`   | Captures every `execve()` invocation      |
+| Sensor ID           | Description                                            |
+|---------------------|--------------------------------------------------------|
+| `ebpf.tcp_tracer`   | Hooks TCP connect/accept and streams tuple metadata    |
+| `ebpf.dns_tracer`   | Observes UDP/53 traffic, latency, and failing lookups  |
+| `ebpf.lock_contention` | Captures mutex wait time to surface hot locks    |
 
 ## Flows
 
@@ -39,7 +39,7 @@ ssh localhost &
 Terminal 2 (run the flow):
 
 ```bash
-ANTHROPIC_API_KEY="sk-ant-..." ./bin/kaictl run-flow flow.live_network_tracer
+sudo -E ANTHROPIC_API_KEY="sk-ant-..." ./bin/kaictl run flow.live_network_tracer
 ```
 
 Expected output includes raw tcp trace data followed by Claude’s summary (process mix, destinations, success rate, anomalies).
@@ -57,7 +57,7 @@ sudo cat /etc/shadow
 Run the flow:
 
 ```bash
-ANTHROPIC_API_KEY="sk-ant-..." ./bin/kaictl run-flow flow.security_monitor
+sudo -E ANTHROPIC_API_KEY="sk-ant-..." ./bin/kaictl run flow.security_monitor
 ```
 
 Claude reports sensitive file access, risk rating, and recommendations.
@@ -65,7 +65,7 @@ Claude reports sensitive file access, risk rating, and recommendations.
 ### Process Monitor
 
 ```bash
-ANTHROPIC_API_KEY="sk-ant-..." ./bin/kaictl run-flow flow.process_monitor
+sudo -E ANTHROPIC_API_KEY="sk-ant-..." ./bin/kaictl run flow.process_monitor
 ```
 
 Claude highlights automation, suspicious commands, and overall workload footprint drawn from `execsnoop` output.

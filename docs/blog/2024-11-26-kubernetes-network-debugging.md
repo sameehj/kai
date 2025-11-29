@@ -41,7 +41,7 @@ Kubernetes networking has **7 layers of abstraction**:
 
 ## The KAI Solution
 ```bash
-kai run-flow flow.k8s_network_debug \
+sudo -E ./bin/kaictl run flow.k8s_network_debug \
   --pod api-server-abc123 \
   --namespace production
 ```
@@ -180,13 +180,12 @@ helm install cilium cilium/cilium \
 
 ### Run KAI Flow
 ```bash
-# Install KAI
-curl -fsSL https://get.kai.sh | sh
-
-# Debug network issue
-kai run-flow flow.k8s_network_debug \
-  --pod  \
-  --namespace
+git clone https://github.com/yourusername/kai.git
+cd kai
+make build
+sudo -E ./bin/kaictl run flow.k8s_network_debug \
+  --pod api-server-abc123 \
+  --namespace production
 ```
 
 ---
@@ -240,7 +239,7 @@ Network debugging doesn't have to take hours.
 - ✅ Actionable recommendations
 - ✅ 30-second diagnosis
 
-**Try it:** [Install KAI](https://github.com/sameehj/kai)
+**Try it:** [Install KAI](https://github.com/yourusername/kai#quick-start)
 
 ---
 

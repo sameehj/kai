@@ -13,26 +13,36 @@ The worst incidents are the slow ones. Resident memory climbs a little every hou
 
 KAI's `flow.memory_leak_detector` automates the human loop:
 
-1. **Collect PSI memory pressure** — `kernel.psi_memory` highlights compaction and reclaim stalls even when RSS still looks fine.
-2. **Grab cgroup stats** — the `memory.cgroup_usage` sensor (ships separately) reads `memory.current`, `memory.high`, and cache breakdowns.
-3. **Sample allocators** — BPF-based heap samples surface which binaries keep allocating.
-4. **Agent reasoning** — Claude compares allocation deltas with PSI totals to determine if the leak is heap pressure, page cache, or IO backpressure.
+1. **Collect `/proc/meminfo` snapshots** — the `memory.meminfo` sensor runs twice with a 60-second delay to capture deltas.
+2. **List top RSS processes** — `memory.top_rss` pinpoints binaries consuming the most resident memory.
+3. **Agent reasoning** — Claude compares before/after memory stats with RSS leaders to determine whether the drift is heap growth, page cache churn, or normal workload variance.
+
+Future versions will add PSI + cgroup pressure sensors, but even today the flow can answer "who is leaking?" without manual shell work.
 
 ---
 
 ## Example Output
 
 ```
-Root Cause: Go HTTP worker pool leaking TLS buffers
+Root Cause: Node exporter leaking goroutines
 Evidence:
-- PSI memory: full avg10=7.2 (critical)
-- Cgroup cache grew 2.3 GiB without request volume changes
-- Heap profiles show 1.8 GiB in crypto/tls.(*Conn).Read
-Recommendation: Upgrade service to Go 1.20.11 or enable HTTP/2 flow control
-Confidence: 0.91
+- MemAvailable dropped 420 MiB over 60s while workload stayed flat
+- Swap unchanged (healthy)
+- Top RSS shows node_exporter +420 MiB delta, next process +12 MiB
+Recommendation: Recycle node_exporter pod or roll to v1.7.0
+Confidence: 0.89
 ```
 
 No graphs, no midnight kubectl loops. Just actionable guidance.
+
+Run it locally:
+
+```bash
+git clone https://github.com/yourusername/kai.git
+cd kai
+make build
+sudo -E ./bin/kaictl run flow.memory_leak_detector
+```
 
 ---
 

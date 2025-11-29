@@ -9,7 +9,7 @@ solution: "Stream Tetragon events into KAI flows and auto-summarize findings"
 
 # Tetragon-Powered Security Investigations in Minutes
 
-Tetragon already collects the gold-standard telemetry for Linux security, but analysts rarely have time to sift through raw JSON. KAI uses a lightweight backend that shells out to `tetra getevents`, parses each line, and exposes the structured data to any flow.
+Tetragon already collects the gold-standard telemetry for Linux security, but analysts rarely have time to sift through raw JSON. KAI uses a lightweight (v0.1, read-only) backend that shells out to `tetra getevents`, parses each line, and exposes the structured data to any flow.
 
 Paired with the `flow.security_forensics` recipe, you can answer:
 

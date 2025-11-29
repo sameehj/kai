@@ -5,7 +5,7 @@ title: KAI Blog
 
 # KAI Blog
 
-Real-world infrastructure debugging problems solved with eBPF + AI.
+Real-world investigations powered by Kernel Agentic Intelligence (eBPF + AI flows).
 
 ## Latest Posts
 
@@ -26,6 +26,6 @@ Real-world infrastructure debugging problems solved with eBPF + AI.
 
 ## About KAI
 
-KAI (Kubernetes AI Investigator) is an autonomous debugging agent that orchestrates the eBPF ecosystem (Cilium, Hubble, Tetragon, Parca) with Claude AI to solve production issues in seconds.
+KAI (Kernel Agentic Intelligence) is an autonomous debugging agent that orchestrates CO-RE eBPF sensors, system telemetry, and Claude AI to surface root causes in seconds.
 
-[GitHub](https://github.com/sameehj/kai) | [Documentation](/) | [Install](/#installation)
+[GitHub](https://github.com/yourusername/kai) | [Documentation](/kai/) | [Install](https://github.com/yourusername/kai#quick-start)

@@ -9,7 +9,7 @@ solution: "Continuously ingest Tetragon events and let AI summarize suspicious a
 
 # Security Incident Response with Tetragon + KAI
 
-Modern clusters already run Tetragon, but most teams only open it when the pager rings. KAI consumes `tetra getevents` continuously, stores structured events, and lets Claude rank-risks in seconds.
+Modern clusters already run Tetragon, but most teams only open it when the pager rings. KAI shells out to `tetra getevents` whenever a flow runs, parses structured events, and lets Claude rank risks in seconds. Wire it into a cron or alert hook for near-real-time coverage.
 
 ---
 
@@ -18,7 +18,7 @@ Modern clusters already run Tetragon, but most teams only open it when the pager
 1. **Sensor** – `tetragon.syscall_history` streams the last hour of process exec/exit events.
 2. **Sensor** – `net.tcp_stats` cross-checks suspicious processes with outbound socket churn.
 3. **Agent** – classifies behavior: reverse shells, curl | bash chains, crypto miners, etc.
-4. **Action** – optional Slack escalation with recommended containment steps.
+4. **Action** – currently logs a Slack-style alert message (real Slack delivery lands with the v0.2 action backend).
 
 ---
 
@@ -45,3 +45,13 @@ Because Tetragon feeds actual syscall context, the agent can distinguish between
 - Feed the response straight into your SOAR or PagerDuty notes.
 
 You end up with Slack messages like "Suspicious exec on payments pod, recommended action: cordon node + rotate DB creds" instead of log snippets nobody reads.
+Run it:
+
+```bash
+git clone https://github.com/yourusername/kai.git
+cd kai
+make build
+sudo -E ./bin/kaictl run flow.security_forensics
+```
+
+The final step prints the Slack payload so you can copy/paste into the channel while the write-enabled backend is still under construction.
