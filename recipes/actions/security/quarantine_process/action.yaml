@@ -1,0 +1,20 @@
+kind: Action
+apiVersion: kai.v1
+metadata:
+  id: security.quarantine_process
+  name: "Quarantine process"
+  description: "Isolates or kills a suspicious process"
+  tags: ["security", "response"]
+spec:
+  backend: system
+  operation: quarantine_process
+  params:
+    pid:
+      type: string
+      required: true
+    reason:
+      type: string
+  safety:
+    mode: write
+    risk: high
+    requiresApproval: true

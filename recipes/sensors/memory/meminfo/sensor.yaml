@@ -1,0 +1,16 @@
+kind: Sensor
+apiVersion: kai.v1
+metadata:
+  id: memory.meminfo
+  name: "Memory info snapshot"
+  description: "Reads /proc/meminfo"
+spec:
+  backend: system
+  type: cli
+  command: ["cat", "/proc/meminfo"]
+  timeoutSeconds: 1
+  output:
+    format: raw_text
+  safety:
+    mode: read_only
+    risk: low

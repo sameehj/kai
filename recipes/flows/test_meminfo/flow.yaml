@@ -1,0 +1,14 @@
+kind: Flow
+apiVersion: kai.v1
+metadata:
+  id: flow.test_meminfo
+  name: "Test Memory Info"
+  description: "Simple test to read /proc/meminfo"
+  tags: ["test"]
+spec:
+  steps:
+    - id: read_meminfo
+      type: sensor
+      ref: memory.meminfo
+      output:
+        saveAs: meminfo_output

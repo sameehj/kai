@@ -1,0 +1,24 @@
+kind: Sensor
+apiVersion: kai.v1
+metadata:
+  id: tetragon.syscall_history
+  name: "Tetragon Syscall History"
+  description: "Historical syscall trace using Cilium Tetragon (eBPF)"
+  tags: ["security", "tetragon", "ebpf", "cilium"]
+spec:
+  backend: tetragon
+  type: api
+  operation: get_events
+  params:
+    pod:
+      type: string
+      description: "Pod to investigate"
+    lookback:
+      type: string
+      default: "30m"
+      description: "How far back to look"
+  output:
+    format: structured
+  safety:
+    mode: read_only
+    risk: low

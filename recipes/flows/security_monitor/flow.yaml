@@ -1,0 +1,49 @@
+kind: Flow
+apiVersion: kai.v1
+metadata:
+  id: flow.security_monitor
+  name: Security Monitor (eBPF)
+  description: Monitors file access activity and detects suspicious behavior
+  tags: ["ebpf", "security", "demo"]
+spec:
+  steps:
+    - id: trace_file_access
+      type: sensor
+      ref: ebpf.file_tracer
+      with:
+        duration: 10
+      output:
+        saveAs: file_trace
+
+    - id: analyze_security
+      type: agent
+      agentType: analysis
+      input:
+        - fromStep: file_trace
+      prompt: |
+        You are a security analyst reviewing file access captured with eBPF.
+
+        File Access Log (last 10 seconds):
+        {{ file_trace.stdout }}
+
+        Look for:
+        1. Access to sensitive files (/etc/passwd, /etc/shadow, SSH keys)
+        2. Unusual processes reading configuration/auth files
+        3. Reconnaissance patterns
+        4. Suspicious timing or frequency
+
+        Provide:
+        - Overall risk level (low/medium/high)
+        - Suspicious activities (if any)
+        - Recommended actions
+        - Confidence level
+      output:
+        saveAs: security_analysis
+
+    - id: alert
+      type: action
+      ref: system.log_alert
+      condition: "{{ security_analysis.confidence > 0.7 }}"
+      with:
+        severity: warning
+        message: "🔒 Security Alert: {{ security_analysis.root_cause }}"

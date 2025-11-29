@@ -1,0 +1,18 @@
+kind: Action
+apiVersion: kai.v1
+metadata:
+  id: k8s.cordon_node
+  name: "Cordon node"
+  description: "Prevents new pods from scheduling on a node"
+  tags: ["kubernetes", "safety"]
+spec:
+  backend: k8s
+  operation: cordon_node
+  params:
+    node:
+      type: string
+      required: true
+  safety:
+    mode: write
+    risk: medium
+    requiresApproval: true

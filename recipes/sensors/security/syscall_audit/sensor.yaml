@@ -1,0 +1,21 @@
+kind: Sensor
+apiVersion: kai.v1
+metadata:
+  id: security.syscall_audit
+  name: "Syscall audit trace"
+  description: "Captures syscall activity for anomaly detection"
+  tags: ["security", "syscall"]
+spec:
+  backend: system
+  type: cli
+  command: ["bash", "-lc", "sudo timeout {{duration}}s perf trace || true"]
+  timeoutSeconds: 120
+  params:
+    duration:
+      type: int
+      default: 60
+  output:
+    format: raw_text
+  safety:
+    mode: read_only
+    risk: medium

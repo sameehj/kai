@@ -1,0 +1,63 @@
+id: flow.live_network_tracer
+name: Live Network Activity Monitor (eBPF)
+description: >
+  Real-time analysis of TCP connection behavior using native CO-RE eBPF tracing.
+  Combines kernel-level telemetry with system TCP statistics and generates an
+  AI-assisted performance and anomaly diagnosis.
+steps:
+  - id: trace_tcp_connections
+    type: sensor
+    sensor: ebpf.tcp_tracer
+    duration: 10s
+    capture: events
+    description: Capture realtime TCP connect() attempts from the kernel.
+
+  - id: get_network_stats
+    type: sensor
+    sensor: net.tcp_stats
+    description: Collect TCP statistics from the OS.
+
+  - id: analyze_patterns
+    type: agent
+    agent: kai.default
+    input:
+      tcp_events: "{{ trace_tcp_connections.events }}"
+      tcp_stats: "{{ get_network_stats.stdout }}"
+    prompt: |
+      You are an expert Linux kernel and networking performance engineer.
+      Analyze the following data:
+
+      1. Real-time TCP connection events from eBPF (connect attempts):
+         {{ trace_tcp_connections.events | tojson }}
+
+      2. System TCP statistics (netstat -s):
+         {{ get_network_stats.stdout }}
+
+      Your goals:
+      - Detect abnormal TCP behavior (high failure rate, unusual ports, bursts).
+      - Identify slow servers, repeated timeouts, SYN retransmissions, misconfigs.
+      - Determine root cause categories:
+        * Application issue
+        * Kernel network stack
+        * Firewall / packet filter
+        * DNS trouble
+        * Latency / congestion
+        * Misconfigured service
+      - Suggest the next recommended action.
+
+      Provide output as:
+      {
+        "root_cause": "...",
+        "affected_component": "...",
+        "recommended_action": "...",
+        "confidence": number (0-1),
+        "reasoning": "short justification"
+      }
+
+  - id: report
+    type: action
+    action: system.log_alert
+    params:
+      severity: info
+      message: "{{ analyze_patterns.root_cause }}"
+    description: Generate a summary alert based on the AI analysis.

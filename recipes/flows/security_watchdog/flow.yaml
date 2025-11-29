@@ -1,0 +1,33 @@
+kind: Flow
+apiVersion: kai.v1
+metadata:
+  id: flow.security_watchdog
+  name: "Node Security Watchdog"
+  description: "Detects unusual syscalls and potential intrusions"
+  tags: ["security", "syscalls"]
+spec:
+  triggers:
+    - type: schedule
+      cron: "*/5 * * * *"
+  steps:
+    - id: trace_syscalls
+      type: sensor
+      ref: security.syscall_audit
+      with:
+        duration: 60
+      output:
+        saveAs: syscall_data
+    - id: analyze_anomalies
+      type: agent
+      agentType: analysis
+      input:
+        - fromStep: syscall_data
+      output:
+        saveAs: security_analysis
+    - id: quarantine
+      type: action
+      ref: security.quarantine_process
+      condition: "{{ security_analysis.confidence > 0.9 && security_analysis.recommended_action == 'quarantine' }}"
+      with:
+        pid: "{{ security_analysis.affected_component }}"
+        reason: "{{ security_analysis.root_cause }}"

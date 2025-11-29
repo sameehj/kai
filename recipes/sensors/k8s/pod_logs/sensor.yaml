@@ -1,0 +1,26 @@
+kind: Sensor
+apiVersion: kai.v1
+metadata:
+  id: k8s.pod_logs
+  name: "Kubernetes pod logs"
+  description: "Fetches logs from a Kubernetes pod"
+  tags: ["k8s", "logs"]
+spec:
+  backend: k8s
+  type: api
+  operation: get_pod_logs
+  params:
+    namespace:
+      type: string
+      required: true
+    pod:
+      type: string
+      required: true
+    tail:
+      type: int
+      default: 100
+  output:
+    format: structured
+  safety:
+    mode: read_only
+    risk: low

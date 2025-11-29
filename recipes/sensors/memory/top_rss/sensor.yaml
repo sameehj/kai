@@ -1,0 +1,17 @@
+kind: Sensor
+apiVersion: kai.v1
+metadata:
+  id: memory.top_rss
+  name: "Top processes by RSS"
+  description: "Lists processes with the highest memory usage"
+  tags: ["memory", "rss", "process"]
+spec:
+  backend: system
+  type: cli
+  command: ["bash", "-lc", "ps aux --sort=-rss | head -n 20"]
+  timeoutSeconds: 5
+  output:
+    format: raw_text
+  safety:
+    mode: read_only
+    risk: low

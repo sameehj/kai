@@ -1,31 +1,42 @@
-SHELL := /usr/bin/env bash
-GO ?= go
-GOENV := GOCACHE=$(PWD)/.gocache
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
-LDFLAGS := -X github.com/sameehj/kai/pkg/version.Version=$(VERSION)
-LDFLAGS += -X github.com/sameehj/kai/pkg/version.GitCommit=$(GIT_COMMIT)
-LDFLAGS += -X github.com/sameehj/kai/pkg/version.BuildDate=$(BUILD_DATE)
+.PHONY: build test clean install lint run-daemon run-flow validate-recipes
 
-.PHONY: all build test install docker-build clean
-
-all: build
-
+# Build binaries
 build:
-	$(GOENV) $(GO) mod tidy
-	$(GOENV) $(GO) build -ldflags "$(LDFLAGS)" -o bin/kaid ./cmd/kaid
-	$(GOENV) $(GO) build -ldflags "$(LDFLAGS)" -o bin/kaictl ./cmd/kaictl
+	@echo "Building kaid..."
+	go build -o bin/kaid ./cmd/kaid
+	@echo "Building kaictl..."
+	go build -o bin/kaictl ./cmd/kaictl
 
+# Install binaries to $$GOPATH/bin
+install:
+	go install ./cmd/kaid
+	go install ./cmd/kaictl
+
+# Run tests
 test:
-	$(GOENV) $(GO) test ./... -count=1 -v
+	go test -v ./...
 
-install: build
-	sudo install -Dm755 bin/kaid /usr/local/bin/kaid
-	sudo install -Dm755 bin/kaictl /usr/local/bin/kaictl
+# Run linter
+lint:
+	golangci-lint run
 
-docker-build:
-	docker build -t kai:dev .
-
+# Clean build artifacts
 clean:
 	rm -rf bin/
+	rm -f *.log
+
+# Run kaid daemon
+run-daemon:
+	go run ./cmd/kaid
+
+# Example: run a flow
+run-flow:
+	go run ./cmd/kaictl run-flow flow.cpu_spike_investigator
+
+# Validate all recipes
+validate-recipes:
+	@echo "Validating recipes..."
+	@for f in recipes/flows/**/flow.yaml; do \
+		echo "Checking $$f"; \
+		go run ./cmd/kaictl validate-flow $$f || exit 1; \
+	done

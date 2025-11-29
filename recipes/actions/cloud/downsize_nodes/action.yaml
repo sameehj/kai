@@ -1,0 +1,20 @@
+kind: Action
+apiVersion: kai.v1
+metadata:
+  id: cloud.downsize_nodes
+  name: "Downsize idle nodes"
+  description: "Shuts down or downsizes idle cloud nodes"
+  tags: ["cloud", "cost"]
+spec:
+  backend: cloud
+  operation: downsize_nodes
+  params:
+    node_ids:
+      type: list
+      required: true
+    reason:
+      type: string
+  safety:
+    mode: write
+    risk: medium
+    requiresApproval: true

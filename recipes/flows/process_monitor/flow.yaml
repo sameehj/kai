@@ -1,0 +1,41 @@
+kind: Flow
+apiVersion: kai.v1
+metadata:
+  id: flow.process_monitor
+  name: Process Activity Monitor (eBPF)
+  description: Traces process executions and summarizes activity with AI
+  tags: ["ebpf", "security", "demo"]
+spec:
+  steps:
+    - id: trace_processes
+      type: sensor
+      ref: ebpf.exec_tracer
+      with:
+        duration: 10
+      output:
+        saveAs: exec_trace
+
+    - id: analyze_processes
+      type: agent
+      agentType: analysis
+      input:
+        - fromStep: exec_trace
+      prompt: |
+        Analyze process execution patterns captured with eBPF:
+
+        {{ exec_trace.stdout }}
+
+        Identify:
+        1. What workloads are running?
+        2. Any automation/scripts?
+        3. Suspicious commands (shells, network tools, crypto)?
+        4. Process hierarchies or bursts?
+        5. Security concerns?
+
+        Provide:
+        - Summary of system activity
+        - Notable patterns
+        - Suspicious findings if any
+        - Confidence level
+      output:
+        saveAs: process_analysis

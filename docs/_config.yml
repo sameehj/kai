@@ -1,0 +1,26 @@
+title: KAI Blog
+description: Autonomous Infrastructure Debugging with eBPF + AI
+theme: jekyll-theme-minimal
+baseurl: /kai
+
+plugins:
+  - jekyll-feed
+  - jekyll-seo-tag
+
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+
+collections:
+  posts:
+    output: true
+    permalink: /blog/:year/:month/:day/:title/
+
+defaults:
+  - scope:
+      path: ""
+      type: "posts"
+    values:
+      layout: "post"
+      author: "KAI Team"

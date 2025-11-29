@@ -1,0 +1,17 @@
+kind: Sensor
+apiVersion: kai.v1
+metadata:
+  id: net.packet_drops
+  name: "Network packet drops"
+  description: "Reports per-interface packet errors and drops"
+  tags: ["network", "packets"]
+spec:
+  backend: system
+  type: cli
+  command: ["ip", "-s", "link"]
+  timeoutSeconds: 5
+  output:
+    format: raw_text
+  safety:
+    mode: read_only
+    risk: low

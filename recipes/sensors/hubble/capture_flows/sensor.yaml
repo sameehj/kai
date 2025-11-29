@@ -1,0 +1,27 @@
+kind: Sensor
+apiVersion: kai.v1
+metadata:
+  id: hubble.capture_flows
+  name: "Hubble Network Flow Capture"
+  description: "Captures network flows using Cilium Hubble (eBPF-based)"
+  tags: ["network", "hubble", "ebpf", "cilium"]
+spec:
+  backend: hubble
+  type: api
+  operation: capture_flows
+  params:
+    namespace:
+      type: string
+      description: "Kubernetes namespace to filter"
+    pod:
+      type: string
+      description: "Pod name to filter"
+    duration:
+      type: int
+      default: 10
+      description: "Capture duration in seconds"
+  output:
+    format: structured
+  safety:
+    mode: read_only
+    risk: low

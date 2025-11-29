@@ -1,0 +1,24 @@
+kind: Sensor
+apiVersion: kai.v1
+metadata:
+  id: disk.iostat
+  name: "Disk IO statistics"
+  description: "Collects disk IO metrics using iostat"
+  tags: ["disk", "io", "performance"]
+spec:
+  backend: system
+  type: cli
+  command: ["iostat", "-x", "{{interval}}", "{{count}}"]
+  timeoutSeconds: 30
+  params:
+    interval:
+      type: int
+      default: 1
+    count:
+      type: int
+      default: 10
+  output:
+    format: raw_text
+  safety:
+    mode: read_only
+    risk: low

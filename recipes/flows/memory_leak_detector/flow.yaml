@@ -1,0 +1,50 @@
+kind: Flow
+apiVersion: kai.v1
+metadata:
+  id: flow.memory_leak_detector
+  name: "Memory Leak Detector"
+  description: "Detects processes with growing RSS and identifies leak sources"
+  tags: ["memory", "leak", "performance"]
+spec:
+  triggers:
+    - type: metric_threshold
+      source: prometheus
+      metric: node_memory_rss_growth_rate
+      condition: "value > 0.01"
+      window: "5m"
+  steps:
+    - id: snapshot_memory
+      type: sensor
+      ref: memory.meminfo
+      output:
+        saveAs: mem_before
+    - id: wait
+      type: sensor
+      ref: system.sleep
+      with:
+        duration: 60
+    - id: snapshot_memory_after
+      type: sensor
+      ref: memory.meminfo
+      output:
+        saveAs: mem_after
+    - id: identify_processes
+      type: sensor
+      ref: memory.top_rss
+      output:
+        saveAs: top_processes
+    - id: analyze_leak
+      type: agent
+      agentType: analysis
+      input:
+        - fromStep: mem_before
+        - fromStep: mem_after
+        - fromStep: top_processes
+      output:
+        saveAs: leak_analysis
+    - id: alert
+      type: action
+      ref: system.log_alert
+      with:
+        severity: warning
+        message: "{{ leak_analysis.root_cause }}"

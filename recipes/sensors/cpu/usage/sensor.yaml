@@ -1,0 +1,17 @@
+kind: Sensor
+apiVersion: kai.v1
+metadata:
+  id: cpu.usage
+  name: "CPU Usage"
+  description: "Traditional CPU usage and load average"
+  tags: ["cpu", "usage"]
+spec:
+  backend: system
+  type: cli
+  command: ["bash", "-c", "top -bn1 | grep 'Cpu(s)' && uptime"]
+  timeoutSeconds: 5
+  output:
+    format: text
+  safety:
+    mode: read_only
+    risk: low

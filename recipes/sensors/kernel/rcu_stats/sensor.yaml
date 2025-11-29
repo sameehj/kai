@@ -1,0 +1,17 @@
+kind: Sensor
+apiVersion: kai.v1
+metadata:
+  id: kernel.rcu_stats
+  name: "RCU statistics"
+  description: "Reads kernel RCU latency and stall indicators"
+  tags: ["kernel", "rcu"]
+spec:
+  backend: system
+  type: cli
+  command: ["bash", "-lc", "cat /sys/kernel/debug/rcu/rcudata 2>/dev/null || cat /sys/kernel/debug/rcu/rcu_pending 2>/dev/null || echo 'rcu stats unavailable'"]
+  timeoutSeconds: 5
+  output:
+    format: raw_text
+  safety:
+    mode: read_only
+    risk: low

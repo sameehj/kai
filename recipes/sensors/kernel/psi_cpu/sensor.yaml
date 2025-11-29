@@ -1,0 +1,17 @@
+kind: Sensor
+apiVersion: kai.v1
+metadata:
+  id: kernel.psi_cpu
+  name: "PSI CPU Pressure"
+  description: "CPU pressure stall information (Linux 4.20+)"
+  tags: ["cpu", "psi", "pressure", "performance"]
+spec:
+  backend: system
+  type: cli
+  command: ["cat", "/proc/pressure/cpu"]
+  timeoutSeconds: 5
+  output:
+    format: text
+  safety:
+    mode: read_only
+    risk: low

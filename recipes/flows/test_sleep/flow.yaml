@@ -1,0 +1,16 @@
+kind: Flow
+apiVersion: kai.v1
+metadata:
+  id: flow.test_sleep
+  name: "Test Sleep Sensor"
+  description: "Test parameter templating"
+  tags: ["test"]
+spec:
+  steps:
+    - id: short_sleep
+      type: sensor
+      ref: system.sleep
+      with:
+        duration: 2
+      output:
+        saveAs: sleep_output

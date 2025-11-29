@@ -1,0 +1,48 @@
+kind: Flow
+apiVersion: kai.v1
+metadata:
+  id: flow.k8s_network_debug
+  name: "Kubernetes Network Troubleshooter"
+  description: "Autonomous network debugging using Hubble + system tools"
+  tags: ["kubernetes", "network", "hubble", "ebpf"]
+spec:
+  steps:
+    - id: capture_hubble_flows
+      type: sensor
+      ref: hubble.capture_flows
+      with:
+        namespace: "default"
+        duration: 10
+      output:
+        saveAs: hubble_data
+
+    - id: check_conntrack
+      type: sensor
+      ref: net.conntrack_usage
+      output:
+        saveAs: conntrack_data
+
+    - id: check_dns
+      type: sensor
+      ref: system.sleep
+      with:
+        duration: 1
+      output:
+        saveAs: dns_data
+
+    - id: diagnose_network
+      type: agent
+      agentType: correlation
+      input:
+        - fromStep: hubble_data
+        - fromStep: conntrack_data
+        - fromStep: dns_data
+      output:
+        saveAs: network_diagnosis
+
+    - id: report
+      type: action
+      ref: system.log_alert
+      with:
+        severity: warning
+        message: "{{ network_diagnosis.root_cause }}"

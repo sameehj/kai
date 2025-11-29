@@ -1,0 +1,74 @@
+kind: Flow
+apiVersion: kai.v1
+metadata:
+  id: flow.complete_network_debug
+  name: "Complete Network Debug (Hubble + eBPF + System)"
+  description: "Production-grade network debugging using full eBPF ecosystem"
+spec:
+  steps:
+    - id: hubble_flows
+      type: sensor
+      ref: hubble.capture_flows
+      with:
+        namespace: "production"
+        duration: 10
+      output:
+        saveAs: hubble_data
+
+    - id: tcp_stats
+      type: sensor
+      ref: net.tcp_stats
+      output:
+        saveAs: tcp_data
+
+    - id: conntrack
+      type: sensor
+      ref: net.conntrack_usage
+      output:
+        saveAs: conntrack_data
+
+    - id: dns_trace
+      type: sensor
+      ref: ebpf.dns_tracer
+      with:
+        duration: 10
+      output:
+        saveAs: dns_data
+
+    - id: security_events
+      type: sensor
+      ref: tetragon.syscall_history
+      with:
+        lookback: "10m"
+      output:
+        saveAs: security_data
+
+    - id: comprehensive_analysis
+      type: agent
+      agentType: correlation
+      input:
+        - fromStep: hubble_data
+        - fromStep: tcp_data
+        - fromStep: conntrack_data
+        - fromStep: dns_data
+        - fromStep: security_data
+      output:
+        saveAs: final_diagnosis
+
+    - id: report
+      type: action
+      ref: slack.notify
+      with:
+        channel: "#sre-alerts"
+        message: |
+          🔍 Network Debug Complete
+
+          Root Cause: {{ final_diagnosis.root_cause }}
+          Confidence: {{ final_diagnosis.confidence }}
+
+          Evidence:
+          - Hubble: {{ hubble_data.total_flows }} flows, {{ hubble_data.dropped_flows }} dropped
+          - TCP: {{ tcp_data.retransmits }} retransmits
+          - Security: {{ security_data.suspicious }} suspicious events
+
+          Recommendation: {{ final_diagnosis.recommended_action }}

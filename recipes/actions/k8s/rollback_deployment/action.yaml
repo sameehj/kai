@@ -1,0 +1,21 @@
+kind: Action
+apiVersion: kai.v1
+metadata:
+  id: k8s.rollback_deployment
+  name: "Rollback Kubernetes deployment"
+  description: "Rolls back a deployment to the previous revision"
+  tags: ["kubernetes", "deployment", "rollback"]
+spec:
+  backend: k8s
+  operation: rollback_deployment
+  params:
+    namespace:
+      type: string
+      required: true
+    deployment:
+      type: string
+      required: true
+  safety:
+    mode: write
+    risk: medium
+    requiresApproval: false

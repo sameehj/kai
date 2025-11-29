@@ -1,0 +1,36 @@
+kind: Flow
+apiVersion: kai.v1
+metadata:
+  id: flow.disk_io_bottleneck
+  name: "Disk IO Bottleneck Mapper"
+  description: "Identifies slow disks and IO-heavy processes"
+  tags: ["disk", "io", "performance"]
+spec:
+  triggers:
+    - type: metric_threshold
+      metric: node_disk_io_time_weighted_seconds
+      condition: "value > 0.5"
+      window: "10s"
+  steps:
+    - id: check_iostat
+      type: sensor
+      ref: disk.iostat
+      with:
+        interval: 1
+        count: 10
+      output:
+        saveAs: iostat_data
+    - id: identify_slow_disks
+      type: agent
+      agentType: analysis
+      input:
+        - fromStep: iostat_data
+      output:
+        saveAs: slow_disk_analysis
+    - id: alert
+      type: action
+      ref: slack.notify
+      condition: "{{ slow_disk_analysis.confidence > 0.8 }}"
+      with:
+        channel: "#sre-alerts"
+        message: "Slow disk detected: {{ slow_disk_analysis.affected_component }}"

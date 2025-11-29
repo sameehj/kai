@@ -1,0 +1,36 @@
+kind: Flow
+apiVersion: kai.v1
+metadata:
+  id: flow.cpu_spike_investigator
+  name: "CPU Spike Investigator"
+  description: "Autonomous investigation when CPU usage is too high"
+  tags: ["cpu", "performance", "investigation"]
+spec:
+  triggers:
+    - type: metric_threshold
+      source: prometheus
+      metric: node_cpu_utilization
+      condition: "value > 0.9"
+      window: "10s"
+  steps:
+    - id: sample_cpu
+      type: sensor
+      ref: cpu.perf_oncpu
+      with:
+        duration: 10
+      output:
+        saveAs: cpu_sample
+    - id: analyze
+      type: agent
+      agentType: analysis
+      input:
+        - fromStep: sample_cpu
+      output:
+        saveAs: analysis_result
+    - id: maybe_rollback
+      type: action
+      ref: k8s.rollback_deployment
+      condition: "{{ analysis_result.recommended_action == 'rollback' }}"
+      with:
+        namespace: "default"
+        deployment: "api-server"

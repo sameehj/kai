@@ -1,0 +1,21 @@
+kind: Sensor
+apiVersion: kai.v1
+metadata:
+  id: cpu.perf_oncpu
+  name: "CPU on-CPU flamegraph"
+  description: "Samples on-CPU stack traces for all processes using perf"
+  tags: ["cpu", "perf", "flamegraph"]
+spec:
+  backend: system
+  type: cli
+  command: ["perf", "record", "-F", "99", "-a", "-g", "--", "sleep", "{{duration}}"]
+  timeoutSeconds: 30
+  params:
+    duration:
+      type: int
+      default: 10
+  output:
+    format: perf_record
+  safety:
+    mode: read_only
+    risk: low

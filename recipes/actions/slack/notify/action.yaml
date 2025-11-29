@@ -1,0 +1,21 @@
+kind: Action
+apiVersion: kai.v1
+metadata:
+  id: slack.notify
+  name: "Slack notification"
+  description: "Sends a message to a Slack channel"
+  tags: ["slack", "alert"]
+spec:
+  backend: slack
+  operation: send_message
+  params:
+    channel:
+      type: string
+      required: true
+    message:
+      type: string
+      required: true
+  safety:
+    mode: write
+    risk: low
+    requiresApproval: false

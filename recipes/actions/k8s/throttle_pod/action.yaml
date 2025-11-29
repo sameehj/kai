@@ -1,0 +1,24 @@
+kind: Action
+apiVersion: kai.v1
+metadata:
+  id: k8s.throttle_pod
+  name: "Throttle Kubernetes pod"
+  description: "Reduces CPU limits for a noisy pod"
+  tags: ["kubernetes", "resource"]
+spec:
+  backend: k8s
+  operation: throttle_pod
+  params:
+    namespace:
+      type: string
+      required: true
+    pod:
+      type: string
+      required: true
+    cpu_limit:
+      type: string
+      required: true
+  safety:
+    mode: write
+    risk: medium
+    requiresApproval: true

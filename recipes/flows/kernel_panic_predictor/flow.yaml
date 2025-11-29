@@ -1,0 +1,38 @@
+kind: Flow
+apiVersion: kai.v1
+metadata:
+  id: flow.kernel_panic_predictor
+  name: "Kernel Panic Predictor"
+  description: "Predicts kernel panics before they happen"
+  tags: ["kernel", "prediction"]
+spec:
+  triggers:
+    - type: metric_threshold
+      metric: kernel_rcu_stalls_per_minute
+      condition: "value > 5"
+      window: "1m"
+  steps:
+    - id: check_rcu_stats
+      type: sensor
+      ref: kernel.rcu_stats
+      output:
+        saveAs: rcu_data
+    - id: check_memory_pressure
+      type: sensor
+      ref: kernel.memory_pressure
+      output:
+        saveAs: memory_data
+    - id: predict_panic
+      type: agent
+      agentType: analysis
+      input:
+        - fromStep: rcu_data
+        - fromStep: memory_data
+      output:
+        saveAs: panic_prediction
+    - id: drain_node
+      type: action
+      ref: k8s.cordon_node
+      condition: "{{ panic_prediction.confidence > 0.85 && panic_prediction.recommended_action == 'drain' }}"
+      with:
+        node: "{{ panic_prediction.affected_component }}"

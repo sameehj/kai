@@ -1,0 +1,24 @@
+kind: Sensor
+apiVersion: kai.v1
+metadata:
+  id: ebpf.lock_contention
+  name: "Lock Contention Tracer"
+  description: "Traces mutex lock contention using custom eBPF"
+  tags: ["performance", "locks", "ebpf"]
+spec:
+  backend: ebpf
+  type: ebpf
+  with:
+    bytecode: "recipes/sensors/ebpf/lock_contention/lock_contention.o"
+    section: "kprobe/mutex_lock"
+    attach_type: "kprobe"
+    symbol: "mutex_lock"
+  params:
+    duration:
+      type: int
+      default: 10
+  output:
+    format: event_stream
+  safety:
+    mode: read_only
+    risk: medium
