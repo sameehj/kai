@@ -4,14 +4,26 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 // Config defines runtime settings for KAI.
 type Config struct {
-	RecipesPath string `yaml:"recipesPath"`
-	LogLevel    string `yaml:"logLevel"`
+	RecipesPath string      `yaml:"recipesPath"`
+	LogLevel    string      `yaml:"logLevel"`
+	Agent       AgentConfig `yaml:"agent"`
+}
+
+// AgentConfig contains AI backend configuration.
+type AgentConfig struct {
+	Auto        bool   `yaml:"auto"`
+	Type        string `yaml:"type"`
+	ClaudeModel string `yaml:"claude_model"`
+	OpenAIModel string `yaml:"openai_model"`
+	GeminiModel string `yaml:"gemini_model"`
+	OllamaModel string `yaml:"ollama_model"`
 }
 
 // LoadConfig loads configuration from a YAML file and environment overrides.
@@ -19,6 +31,10 @@ func LoadConfig(path string) (*Config, error) {
 	cfg := &Config{
 		RecipesPath: "./recipes",
 		LogLevel:    "info",
+		Agent: AgentConfig{
+			Auto: true,
+			Type: "",
+		},
 	}
 
 	if path != "" {
@@ -37,6 +53,24 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if logLevel := os.Getenv("KAI_LOG_LEVEL"); logLevel != "" {
 		cfg.LogLevel = logLevel
+	}
+	if agentType := os.Getenv("KAI_AGENT_TYPE"); agentType != "" {
+		cfg.Agent.Type = agentType
+	}
+	if auto := os.Getenv("KAI_AGENT_AUTO"); auto != "" {
+		cfg.Agent.Auto = strings.ToLower(auto) != "false"
+	}
+	if model := os.Getenv("KAI_CLAUDE_MODEL"); model != "" {
+		cfg.Agent.ClaudeModel = model
+	}
+	if model := os.Getenv("KAI_OPENAI_MODEL"); model != "" {
+		cfg.Agent.OpenAIModel = model
+	}
+	if model := os.Getenv("KAI_GEMINI_MODEL"); model != "" {
+		cfg.Agent.GeminiModel = model
+	}
+	if model := os.Getenv("KAI_OLLAMA_MODEL"); model != "" {
+		cfg.Agent.OllamaModel = model
 	}
 
 	if _, err := os.Stat(cfg.RecipesPath); os.IsNotExist(err) {

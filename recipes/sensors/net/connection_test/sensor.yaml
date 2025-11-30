@@ -1,0 +1,34 @@
+kind: Sensor
+apiVersion: kai.v1
+metadata:
+  id: net.connection_test
+  name: "Connection Test with DNS vs IP"
+  description: "Tests domain vs direct IP to isolate DNS issues"
+  tags: ["network", "dns", "debug"]
+spec:
+  backend: system
+  type: cli
+  command:
+    - "bash"
+    - "-c"
+    - |
+      echo "=== Connection Diagnostic ==="
+      echo ""
+      echo "Test 1: github.com (requires DNS)"
+      timeout 3 curl -v https://github.com 2>&1 | grep -E "Could not resolve|Connected" | head -3
+      
+      echo ""
+      echo "Test 2: 140.82.121.3 (GitHub IP - no DNS needed)"
+      timeout 3 curl -v -k https://140.82.121.3 2>&1 | grep -E "Could not resolve|Connected" | head -3
+      
+      echo ""
+      echo "Diagnostic Logic:"
+      echo "- If Test 1 fails 'Could not resolve' → DNS problem"
+      echo "- If Test 1 fails but Test 2 succeeds → DNS problem confirmed"
+      echo "- If both fail → Network/firewall problem"
+  timeoutSeconds: 15
+  output:
+    format: text
+  safety:
+    mode: read_only
+    risk: low

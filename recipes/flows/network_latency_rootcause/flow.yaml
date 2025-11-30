@@ -3,40 +3,67 @@ apiVersion: kai.v1
 metadata:
   id: flow.network_latency_rootcause
   name: "Network Latency Root Cause"
-  description: "Diagnoses packet loss, congestion, and routing issues"
-  tags: ["network", "latency", "performance"]
+  description: "Diagnoses network issues with DNS detection"
+  tags: ["network", "dns", "debug"]
 spec:
-  triggers:
-    - type: metric_threshold
-      metric: http_request_duration_p99
-      condition: "value > 0.2"
-      window: "10s"
   steps:
     - id: check_tcp_stats
       type: sensor
       ref: net.tcp_stats
       output:
         saveAs: tcp_data
+
     - id: check_packet_drops
       type: sensor
       ref: net.packet_drops
       output:
         saveAs: packet_data
-    - id: check_conntrack
+
+    - id: test_dns
       type: sensor
-      ref: net.conntrack_usage
+      ref: net.dns_test
       output:
-        saveAs: conntrack_data
+        saveAs: dns_data
+
+    - id: test_connections
+      type: sensor
+      ref: net.connection_test
+      output:
+        saveAs: connection_data
+
     - id: correlate
       type: agent
       agentType: correlation
       input:
         - fromStep: tcp_data
         - fromStep: packet_data
-        - fromStep: conntrack_data
+        - fromStep: dns_data
+        - fromStep: connection_data
+      prompt: |
+        Analyze this network connectivity issue.
+        
+        TCP Statistics:
+        {{ tcp_data.stdout }}
+        
+        Interface Status:
+        {{ packet_data.stdout }}
+        
+        DNS Test Results:
+        {{ dns_data.stdout }}
+        
+        Connection Tests:
+        {{ connection_data.stdout }}
+        
+        Determine the root cause. Key patterns:
+        - If DNS tests fail but interface is healthy → DNS problem
+        - If domain connections fail but IP connections work → DNS problem
+        - If /etc/resolv.conf shows unreachable servers → DNS misconfiguration
+        - If TCP failures match DNS timeout pattern → DNS issue
       output:
         saveAs: network_diagnosis
-    - id: maybe_flush_conntrack
+
+    - id: report
       type: action
-      ref: net.flush_conntrack
-      condition: "{{ network_diagnosis.recommended_action == 'flush_conntrack' }}"
+      ref: system.log_alert
+      with:
+        message: "{{ network_diagnosis.root_cause }}"

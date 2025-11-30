@@ -10,6 +10,9 @@
 
 An AI agent that autonomously investigates production issues by orchestrating eBPF programs, system tools, and observability data through multi-step workflows.
 
+> **Reality check (v0.1):**  
+> KAI currently targets a single Linux host. It runs on bare-metal or VM Linux machines (kernel 5.8+, sudo required) and does **not** require Kubernetes, CNI plugins, or any cluster control plane. References to Kubernetes flows/backends below are roadmap items rather than prerequisites.
+
 ---
 
 ## 🔥 The Problem
@@ -446,6 +449,7 @@ $ sudo -E kaictl run flow.dns_debug
 - **Go 1.22+**
 - **sudo access** (for eBPF programs)
 - **Anthropic API key** (optional - uses mock agent without it)
+- **No Kubernetes required** (runs directly on Linux hosts; Kubernetes integrations are optional roadmap items)
 
 ### Installation
 
@@ -499,6 +503,72 @@ sudo -E ./bin/kaictl run flow.network_latency_rootcause --json
 # Debug mode
 sudo -E ./bin/kaictl run flow.network_latency_rootcause --debug
 ```
+
+---
+
+## 🤖 AI Model Support
+
+KAI ships with multiple AI backends so you can use hosted or local models depending on your environment.
+
+| Provider | Model | API Key Required | Local |
+|----------|-------|------------------|-------|
+| **Anthropic** | Claude Sonnet 4 | `ANTHROPIC_API_KEY` | ❌ |
+| **OpenAI** | GPT-4 Turbo | `OPENAI_API_KEY` | ❌ |
+| **Google** | Gemini Pro | `GOOGLE_API_KEY` | ❌ |
+| **Ollama** | Llama 3, Mistral | None | ✅ |
+| **Mock** | Testing | None | ✅ |
+
+### Auto-Detection
+
+By default, KAI auto-detects the first available backend:
+1. Claude (`ANTHROPIC_API_KEY`)
+2. OpenAI (`OPENAI_API_KEY`)
+3. Gemini (`GOOGLE_API_KEY`)
+4. Ollama (local `ollama` daemon)
+5. Mock agent (offline testing)
+
+### Usage Examples
+
+```bash
+# Use Claude (Anthropic)
+export ANTHROPIC_API_KEY="sk-ant-..."
+kaictl run flow.network_latency_rootcause
+
+# Use ChatGPT (OpenAI)
+export OPENAI_API_KEY="sk-..."
+kaictl run flow.network_latency_rootcause
+
+# Use Gemini (Google)
+export GOOGLE_API_KEY="..."
+kaictl run flow.network_latency_rootcause
+
+# Use local Llama (via Ollama)
+# Install: curl https://ollama.ai/install.sh | sh
+# Run: ollama run llama3
+export OLLAMA_HOST="http://localhost:11434"
+export OLLAMA_MODEL="llama3"
+kaictl run flow.network_latency_rootcause
+
+# Use mock (no API key needed)
+kaictl run flow.network_latency_rootcause
+```
+
+### Force Specific Model
+
+```bash
+# Via config (~/.kai/config.yaml)
+cat > ~/.kai/config.yaml <<'EOF'
+agent:
+  auto: false
+  type: openai
+  openai_model: gpt-4-turbo-preview
+EOF
+
+# Via flag (coming in v0.2)
+kaictl run flow.network_latency_rootcause --agent openai
+```
+
+See `config.example.yaml` for all supported options.
 
 ---
 
@@ -590,7 +660,7 @@ sudo -E ./bin/kaictl run flow.network_latency_rootcause --debug
 **We welcome contributions! Areas we need help:**
 
 - **eBPF Programs**: Lock contention, scheduler latency, heap profiling
-- **Backends**: Kubernetes API, cloud APIs (AWS/GCP/Azure), Prometheus
+- **Backends**: Kubernetes API, cloud APIs (AWS/GCP/Azure), Prometheus *(planned integrations; core flows already run without Kubernetes)*
 - **Flows**: Database debugging, cache analysis, security forensics
 - **Actions**: Slack notifications, PagerDuty alerts, Jira integration
 - **Memory System**: Vector DB for incident history

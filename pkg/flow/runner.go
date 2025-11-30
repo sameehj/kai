@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/sameehj/kai/pkg/backend/hubble"
 	"github.com/sameehj/kai/pkg/backend/system"
 	"github.com/sameehj/kai/pkg/backend/tetragon"
+	"github.com/sameehj/kai/pkg/config"
 	"github.com/sameehj/kai/pkg/tool"
 	"github.com/sameehj/kai/pkg/types"
 )
@@ -24,12 +26,24 @@ type Runner struct {
 	tetragonBackend *tetragon.Backend
 	ebpfBackend     *ebpf.Backend
 	agent           agent.Agent
+	cfg             *config.Config
 	debug           bool
 }
 
 // NewRunner constructs a Runner backed by a registry.
-func NewRunner(registry *tool.Registry, debug bool) *Runner {
-	ag, err := agent.NewAgent("anthropic")
+func NewRunner(registry *tool.Registry, cfg *config.Config, debug bool) *Runner {
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+
+	agent.SetModelOverrides(agent.ModelOverrides{
+		Claude: cfg.Agent.ClaudeModel,
+		OpenAI: cfg.Agent.OpenAIModel,
+		Gemini: cfg.Agent.GeminiModel,
+		Ollama: cfg.Agent.OllamaModel,
+	})
+
+	ag, err := selectDefaultAgent(cfg)
 	if err != nil {
 		fmt.Printf("⚠️  Agent unavailable (%v), using mock\n", err)
 		ag = agent.NewMockAgent()
@@ -41,6 +55,7 @@ func NewRunner(registry *tool.Registry, debug bool) *Runner {
 		tetragonBackend: tetragon.NewBackend(),
 		ebpfBackend:     ebpf.NewBackend(),
 		agent:           ag,
+		cfg:             cfg,
 		debug:           debug,
 	}
 
@@ -103,9 +118,11 @@ func (r *Runner) Run(ctx context.Context, flowID string, params map[string]inter
 	endTime := time.Now()
 	run.EndedAt = &endTime
 	run.State = types.FlowStateCompleted
-	run.Result.Summary = fmt.Sprintf("Flow completed successfully in %.2fs", endTime.Sub(run.StartedAt).Seconds())
+	totalDuration := endTime.Sub(run.StartedAt)
+	run.Result.Summary = fmt.Sprintf("Flow completed successfully in %.2fs", totalDuration.Seconds())
 
-	fmt.Printf("✅ Flow completed: %s (total: %.2fs)\n", flow.Metadata.Name, endTime.Sub(run.StartedAt).Seconds())
+	fmt.Printf("✅ Flow completed: %s (total: %.2fs)\n", flow.Metadata.Name, totalDuration.Seconds())
+	r.printConclusion(run, totalDuration)
 
 	return run, nil
 }
@@ -166,24 +183,7 @@ func (r *Runner) executeSensor(ctx context.Context, step *types.FlowStep) (inter
 }
 
 func (r *Runner) executeAgent(ctx context.Context, step *types.FlowStep, previousOutputs map[string]interface{}) (interface{}, error) {
-	var inputs []agent.StepOutput
-	for _, input := range step.Input {
-		if data, ok := previousOutputs[input.FromStep]; ok {
-			inputs = append(inputs, agent.StepOutput{
-				StepID: input.FromStep,
-				Data:   data,
-			})
-		}
-	}
-
-	agentType := agent.AgentTypeAnalysis
-	if step.AgentType != "" {
-		agentType = agent.AgentType(step.AgentType)
-	} else if step.With != nil {
-		if t, ok := step.With["agentType"].(string); ok && t != "" {
-			agentType = agent.AgentType(t)
-		}
-	}
+	contextInputs := r.collectContext(step, previousOutputs)
 
 	var prompt string
 	if step.With != nil {
@@ -192,10 +192,26 @@ func (r *Runner) executeAgent(ctx context.Context, step *types.FlowStep, previou
 		}
 	}
 
-	resp, err := r.agent.Analyze(ctx, agent.AnalysisRequest{
-		Type:   agentType,
-		Inputs: inputs,
-		Prompt: prompt,
+	analysisType, backendOverride := r.resolveAgentStepSettings(step)
+
+	agentInstance := r.agent
+	cleanup := func() {}
+	if backendOverride != "" {
+		override, err := agent.NewAgentByType(agent.AgentType(backendOverride))
+		if err != nil {
+			return nil, fmt.Errorf("create agent backend %s: %w", backendOverride, err)
+		}
+		agentInstance = override
+		cleanup = func() {
+			_ = override.Close()
+		}
+	}
+	defer cleanup()
+
+	resp, err := agentInstance.Analyze(ctx, agent.AnalysisRequest{
+		Type:    analysisType,
+		Context: contextInputs,
+		Prompt:  prompt,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("agent analysis failed: %w", err)
@@ -240,4 +256,149 @@ func (r *Runner) getHubbleBackend() (*hubble.Backend, error) {
 
 	r.hubbleBackend = hb
 	return hb, nil
+}
+
+func (r *Runner) printConclusion(run *types.FlowRun, totalDuration time.Duration) {
+	fmt.Println()
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println("       INVESTIGATION COMPLETE")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println()
+
+	if diag := r.extractDiagnosis(run.Result.Data["network_diagnosis"]); diag != nil {
+		fmt.Printf("Root Cause: %s\n", diag.RootCause)
+		fmt.Printf("Confidence: %.0f%%\n", diag.Confidence*100)
+		if diag.RecommendedAction != "" {
+			fmt.Printf("Recommendation: %s\n", diag.RecommendedAction)
+		}
+		fmt.Println()
+	}
+
+	fmt.Printf("⏱️  Total time: %.2fs\n", totalDuration.Seconds())
+	fmt.Println()
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+}
+
+func (r *Runner) extractDiagnosis(raw interface{}) *agent.AnalysisResponse {
+	switch v := raw.(type) {
+	case *agent.AnalysisResponse:
+		return v
+	case agent.AnalysisResponse:
+		return &v
+	case map[string]interface{}:
+		resp := &agent.AnalysisResponse{}
+		if root, ok := v["root_cause"].(string); ok {
+			resp.RootCause = root
+		}
+		if comp, ok := v["affected_component"].(string); ok {
+			resp.AffectedComponent = comp
+		}
+		if action, ok := v["recommended_action"].(string); ok {
+			resp.RecommendedAction = action
+		}
+		if conf, ok := v["confidence"].(float64); ok {
+			resp.Confidence = conf
+		}
+		if resp.RootCause == "" && resp.RecommendedAction == "" {
+			return nil
+		}
+		return resp
+	default:
+		return nil
+	}
+}
+
+func (r *Runner) collectContext(step *types.FlowStep, previousOutputs map[string]interface{}) []agent.StepOutput {
+	var inputs []agent.StepOutput
+	for _, input := range step.Input {
+		if data, ok := previousOutputs[input.FromStep]; ok {
+			inputs = append(inputs, agent.StepOutput{
+				StepID: input.FromStep,
+				Data:   normalizeStepData(data),
+			})
+		}
+	}
+	return inputs
+}
+
+func normalizeStepData(data interface{}) map[string]interface{} {
+	if data == nil {
+		return map[string]interface{}{}
+	}
+
+	if m, ok := data.(map[string]interface{}); ok {
+		return m
+	}
+
+	var asMap map[string]interface{}
+	if bytes, err := json.Marshal(data); err == nil {
+		if err := json.Unmarshal(bytes, &asMap); err == nil {
+			return asMap
+		}
+	}
+
+	return map[string]interface{}{
+		"value": data,
+	}
+}
+
+func (r *Runner) resolveAgentStepSettings(step *types.FlowStep) (string, string) {
+	analysisType := "analysis"
+	backend := ""
+
+	assignValue := func(value string) {
+		if value == "" {
+			return
+		}
+		if isBackendType(value) {
+			backend = value
+		} else {
+			analysisType = value
+		}
+	}
+
+	assignValue(step.AgentType)
+
+	if step.With != nil {
+		if v, ok := step.With["agentType"].(string); ok {
+			assignValue(v)
+		}
+		if v, ok := step.With["analysisType"].(string); ok {
+			analysisType = v
+		}
+		if v, ok := step.With["backend"].(string); ok {
+			backend = v
+		}
+	}
+
+	return analysisType, backend
+}
+
+func isBackendType(value string) bool {
+	switch agent.AgentType(value) {
+	case agent.AgentTypeClaude, agent.AgentTypeOpenAI, agent.AgentTypeGemini, agent.AgentTypeLlama, agent.AgentTypeMock:
+		return true
+	default:
+		return false
+	}
+}
+
+func selectDefaultAgent(cfg *config.Config) (agent.Agent, error) {
+	if cfg != nil {
+		if cfg.Agent.Type != "" {
+			ag, err := agent.NewAgentByType(agent.AgentType(cfg.Agent.Type))
+			if err == nil {
+				return ag, nil
+			}
+			fmt.Printf("⚠️  Failed to initialize %s agent (%v), falling back to auto-detect\n", cfg.Agent.Type, err)
+			if !cfg.Agent.Auto {
+				return nil, err
+			}
+		}
+		if !cfg.Agent.Auto {
+			return nil, fmt.Errorf("agent auto-detect disabled and type not configured")
+		}
+	}
+
+	return agent.NewAgent()
 }

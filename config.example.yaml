@@ -1,0 +1,12 @@
+agent:
+  # Auto-detect agent (Claude → OpenAI → Gemini → Ollama → Mock)
+  auto: true
+
+  # Override to force a specific backend
+  type: claude # claude, openai, gemini, llama, mock
+
+  # Model overrides (optional)
+  claude_model: claude-sonnet-4-20250514
+  openai_model: gpt-4-turbo-preview
+  gemini_model: gemini-1.5-pro
+  ollama_model: llama3

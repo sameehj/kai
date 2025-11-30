@@ -43,7 +43,11 @@ func listFlowsCmd() *cobra.Command {
 		Use:   "list-flows",
 		Short: "List all available flows",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			registry, err := loadRegistry()
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			registry, err := loadRegistry(cfg)
 			if err != nil {
 				return err
 			}
@@ -78,12 +82,17 @@ func runFlowCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flowID := args[0]
 
-			registry, err := loadRegistry()
+			cfg, err := loadConfig()
 			if err != nil {
 				return err
 			}
 
-			runner := flow.NewRunner(registry, debugMode)
+			registry, err := loadRegistry(cfg)
+			if err != nil {
+				return err
+			}
+
+			runner := flow.NewRunner(registry, cfg, debugMode)
 			ctx := context.Background()
 
 			run, err := runner.Run(ctx, flowID, nil)
@@ -122,7 +131,12 @@ func listSensorsCmd() *cobra.Command {
 		Use:   "list-sensors",
 		Short: "List all available sensors",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			registry, err := loadRegistry()
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+
+			registry, err := loadRegistry(cfg)
 			if err != nil {
 				return err
 			}
@@ -134,7 +148,15 @@ func listSensorsCmd() *cobra.Command {
 	}
 }
 
-func loadRegistry() (*tool.Registry, error) {
+func loadRegistry(cfg *config.Config) (*tool.Registry, error) {
+	registry := tool.NewRegistry()
+	if err := registry.LoadFromPath(cfg.RecipesPath); err != nil {
+		return nil, fmt.Errorf("load recipes: %w", err)
+	}
+	return registry, nil
+}
+
+func loadConfig() (*config.Config, error) {
 	cfg, err := config.LoadConfig(cfgFile)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
@@ -144,10 +166,5 @@ func loadRegistry() (*tool.Registry, error) {
 		cfg.RecipesPath = recipesPath
 	}
 
-	registry := tool.NewRegistry()
-	if err := registry.LoadFromPath(cfg.RecipesPath); err != nil {
-		return nil, fmt.Errorf("load recipes: %w", err)
-	}
-
-	return registry, nil
+	return cfg, nil
 }
