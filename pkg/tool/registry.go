@@ -1,155 +1,246 @@
 package tool
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/sameehj/kai/pkg/types"
+	"github.com/sameehj/kai/pkg/system"
 	"gopkg.in/yaml.v3"
 )
 
-// Registry holds loaded sensors, actions, and flows.
 type Registry struct {
-	sensors map[string]*types.Sensor
-	actions map[string]*types.Action
-	flows   map[string]*types.Flow
+	paths   []string
+	profile *system.Profile
+	tools   map[string]*Tool
 }
 
-// NewRegistry constructs an empty registry.
-func NewRegistry() *Registry {
-	return &Registry{
-		sensors: make(map[string]*types.Sensor),
-		actions: make(map[string]*types.Action),
-		flows:   make(map[string]*types.Flow),
+func NewRegistry(paths []string, profile *system.Profile) *Registry {
+	expanded := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		expanded = append(expanded, expandPath(p))
 	}
+	return &Registry{paths: expanded, profile: profile, tools: make(map[string]*Tool)}
 }
 
-// LoadFromPath loads all recipes under the provided folder.
-func (r *Registry) LoadFromPath(recipesPath string) error {
-	sensorsPath := filepath.Join(recipesPath, "sensors")
-	if err := r.loadSensors(sensorsPath); err != nil {
-		return fmt.Errorf("load sensors: %w", err)
+func (r *Registry) Load() error {
+	r.tools = make(map[string]*Tool)
+	for _, base := range r.paths {
+		if base == "" {
+			continue
+		}
+		if err := r.loadPath(base); err != nil {
+			return err
+		}
 	}
-
-	actionsPath := filepath.Join(recipesPath, "actions")
-	if err := r.loadActions(actionsPath); err != nil {
-		return fmt.Errorf("load actions: %w", err)
-	}
-
-	flowsPath := filepath.Join(recipesPath, "flows")
-	if err := r.loadFlows(flowsPath); err != nil {
-		return fmt.Errorf("load flows: %w", err)
-	}
-
 	return nil
 }
 
-func (r *Registry) loadSensors(path string) error {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil
-	}
-	return filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() || !strings.HasSuffix(p, "sensor.yaml") {
+func (r *Registry) loadPath(base string) error {
+	info, err := os.Stat(base)
+	if err != nil {
+		if os.IsNotExist(err) {
 			return nil
 		}
-
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-
-		var sensor types.Sensor
-		if err := yaml.Unmarshal(data, &sensor); err != nil {
-			return fmt.Errorf("parse %s: %w", p, err)
-		}
-
-		r.sensors[sensor.Metadata.ID] = &sensor
-		return nil
-	})
-}
-
-func (r *Registry) loadActions(path string) error {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil
+		return err
 	}
-	return filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() || !strings.HasSuffix(p, "action.yaml") {
-			return nil
-		}
-
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-
-		var action types.Action
-		if err := yaml.Unmarshal(data, &action); err != nil {
-			return fmt.Errorf("parse %s: %w", p, err)
-		}
-
-		r.actions[action.Metadata.ID] = &action
-		return nil
-	})
-}
-
-func (r *Registry) loadFlows(path string) error {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil
+	if !info.IsDir() {
+		return fmt.Errorf("tools path is not a directory: %s", base)
 	}
-	return filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() || !strings.HasSuffix(p, "flow.yaml") {
-			return nil
-		}
 
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-
-		var flow types.Flow
-		if err := yaml.Unmarshal(data, &flow); err != nil {
-			return fmt.Errorf("parse %s: %w", p, err)
-		}
-
-		r.flows[flow.Metadata.ID] = &flow
-		return nil
-	})
-}
-
-// GetSensor returns a sensor by id.
-func (r *Registry) GetSensor(id string) (*types.Sensor, bool) {
-	s, ok := r.sensors[id]
-	return s, ok
-}
-
-// GetAction returns an action by id.
-func (r *Registry) GetAction(id string) (*types.Action, bool) {
-	a, ok := r.actions[id]
-	return a, ok
-}
-
-// GetFlow returns a flow by id.
-func (r *Registry) GetFlow(id string) (*types.Flow, bool) {
-	f, ok := r.flows[id]
-	return f, ok
-}
-
-// ListFlows returns all flows.
-func (r *Registry) ListFlows() []*types.Flow {
-	flows := make([]*types.Flow, 0, len(r.flows))
-	for _, f := range r.flows {
-		flows = append(flows, f)
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return err
 	}
-	return flows
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		toolPath := filepath.Join(base, entry.Name())
+		tool, err := r.loadTool(toolPath)
+		if err != nil {
+			return err
+		}
+		if tool != nil {
+			r.tools[tool.Name] = tool
+		}
+	}
+	return nil
+}
+
+func (r *Registry) loadTool(path string) (*Tool, error) {
+	toolMDPath := filepath.Join(path, "TOOL.md")
+	content, err := os.ReadFile(toolMDPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	meta, desc, err := parseToolMarkdown(string(content))
+	if err != nil {
+		return nil, fmt.Errorf("parse TOOL.md in %s: %w", path, err)
+	}
+
+	name := meta.Name
+	if name == "" {
+		name = filepath.Base(path)
+	}
+	if desc == "" {
+		desc = meta.Description
+	}
+
+	tool := &Tool{
+		Name:        name,
+		Description: desc,
+		Path:        path,
+		Metadata:    meta,
+		Content:     string(content),
+	}
+
+	r.applyAvailability(tool)
+	return tool, nil
+}
+
+func (r *Registry) applyAvailability(tool *Tool) {
+	if r.profile == nil {
+		tool.Metadata.Available = true
+		return
+	}
+
+	if len(tool.Metadata.Metadata.Kai.OS) > 0 {
+		ok := false
+		for _, d := range tool.Metadata.Metadata.Kai.OS {
+			if strings.EqualFold(d, r.profile.Distro) || strings.EqualFold(d, r.profile.OS) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			tool.Metadata.Available = false
+			tool.Metadata.Reason = "os mismatch"
+			return
+		}
+	}
+
+	if len(tool.Metadata.Metadata.Kai.Requires.Bins) > 0 {
+		missing := r.profile.MissingBins(tool.Metadata.Metadata.Kai.Requires.Bins)
+		if len(missing) > 0 {
+			tool.Metadata.Available = false
+			tool.Metadata.Reason = "missing bins: " + strings.Join(missing, ", ")
+			return
+		}
+	}
+
+	tool.Metadata.Available = true
+}
+
+func (r *Registry) List() []*Tool {
+	tools := make([]*Tool, 0, len(r.tools))
+	for _, tool := range r.tools {
+		tools = append(tools, tool)
+	}
+	return tools
+}
+
+func (r *Registry) Get(name string) (*Tool, bool) {
+	tool, ok := r.tools[name]
+	return tool, ok
+}
+
+func (r *Registry) Create(name, content string) (*Tool, error) {
+	if name == "" {
+		return nil, errors.New("name is required")
+	}
+	if len(r.paths) == 0 {
+		return nil, errors.New("no tools path configured")
+	}
+
+	base := r.paths[len(r.paths)-1]
+	toolPath := filepath.Join(base, name)
+	if err := os.MkdirAll(toolPath, 0o755); err != nil {
+		return nil, err
+	}
+
+	toolMD := filepath.Join(toolPath, "TOOL.md")
+	if _, err := os.Stat(toolMD); err == nil {
+		return nil, fmt.Errorf("tool already exists: %s", name)
+	}
+
+	if content == "" {
+		content = defaultToolMarkdown(name)
+	}
+	if err := os.WriteFile(toolMD, []byte(content), 0o644); err != nil {
+		return nil, err
+	}
+
+	tool, err := r.loadTool(toolPath)
+	if err != nil {
+		return nil, err
+	}
+	if tool != nil {
+		r.tools[tool.Name] = tool
+	}
+	return tool, nil
+}
+
+func (r *Registry) ReloadTool(path string) error {
+	tool, err := r.loadTool(path)
+	if err != nil {
+		return err
+	}
+	if tool != nil {
+		r.tools[tool.Name] = tool
+	}
+	return nil
+}
+
+func parseToolMarkdown(content string) (ToolMetadata, string, error) {
+	meta := ToolMetadata{}
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmed, "---") {
+		parts := strings.SplitN(trimmed, "---", 3)
+		if len(parts) < 3 {
+			return meta, "", errors.New("invalid frontmatter")
+		}
+		front := strings.TrimSpace(parts[1])
+		body := strings.TrimSpace(parts[2])
+		if err := yaml.Unmarshal([]byte(front), &meta); err != nil {
+			return meta, "", err
+		}
+		desc := firstDescription(body)
+		return meta, desc, nil
+	}
+
+	return meta, firstDescription(content), nil
+}
+
+func firstDescription(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		return line
+	}
+	return ""
+}
+
+func defaultToolMarkdown(name string) string {
+	return fmt.Sprintf("# %s\n\nDescribe the tool here.\n", name)
+}
+
+func expandPath(path string) string {
+	if strings.HasPrefix(path, "~") {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, strings.TrimPrefix(path, "~"))
+	}
+	return path
 }

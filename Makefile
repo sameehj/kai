@@ -1,42 +1,26 @@
-.PHONY: build test clean install lint run-daemon run-flow validate-recipes
+.PHONY: build install clean test lint
 
-# Build binaries
+BINARIES = kai kai-mcp kai-gateway
+BUILD_DIR = ./build
+
 build:
-	@echo "Building kaid..."
-	go build -o bin/kaid ./cmd/kaid
-	@echo "Building kaictl..."
-	go build -o bin/kaictl ./cmd/kaictl
+	@mkdir -p $(BUILD_DIR)
+	go build -o $(BUILD_DIR)/kai ./cmd/kai
+	go build -o $(BUILD_DIR)/kai-mcp ./cmd/kai-mcp
+	go build -o $(BUILD_DIR)/kai-gateway ./cmd/kai-gateway
 
-# Install binaries to $$GOPATH/bin
-install:
-	go install ./cmd/kaid
-	go install ./cmd/kaictl
+install: build
+	install -m 755 $(BUILD_DIR)/kai /usr/local/bin/kai
+	install -m 755 $(BUILD_DIR)/kai-mcp /usr/local/bin/kai-mcp
+	install -m 755 $(BUILD_DIR)/kai-gateway /usr/local/bin/kai-gateway
+	mkdir -p /usr/local/share/kai/tools
+	cp -r tools/* /usr/local/share/kai/tools/
 
-# Run tests
-test:
-	go test -v ./...
-
-# Run linter
-lint:
-	golangci-lint run
-
-# Clean build artifacts
 clean:
-	rm -rf bin/
-	rm -f *.log
+	rm -rf $(BUILD_DIR)
 
-# Run kaid daemon
-run-daemon:
-	go run ./cmd/kaid
+test:
+	go test ./...
 
-# Example: run a flow
-run-flow:
-	go run ./cmd/kaictl run-flow flow.cpu_spike_investigator
-
-# Validate all recipes
-validate-recipes:
-	@echo "Validating recipes..."
-	@for f in recipes/flows/**/flow.yaml; do \
-		echo "Checking $$f"; \
-		go run ./cmd/kaictl validate-flow $$f || exit 1; \
-	done
+lint:
+	golangci-lint run ./...

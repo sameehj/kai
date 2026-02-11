@@ -1,0 +1,13 @@
+[Unit]
+Description=Kai Gateway
+After=network.target
+
+[Service]
+Type=simple
+Environment=KAI_CONFIG=/etc/kai/config.yaml
+ExecStart=/usr/local/bin/kai-gateway
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

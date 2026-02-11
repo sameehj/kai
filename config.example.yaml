@@ -1,12 +1,20 @@
-agent:
-  # Auto-detect agent (Claude → OpenAI → Gemini → Ollama → Mock)
-  auto: true
+logLevel: info
 
-  # Override to force a specific backend
-  type: claude # claude, openai, gemini, llama, mock
+tools:
+  paths:
+    - ~/.kai/tools
 
-  # Model overrides (optional)
-  claude_model: claude-sonnet-4-20250514
-  openai_model: gpt-4-turbo-preview
-  gemini_model: gemini-1.5-pro
-  ollama_model: llama3
+gateway:
+  address: 127.0.0.1:9910
+  allowedAddrs: []
+  maxSessions: 0
+
+exec:
+  timeout: 30s
+  maxOutput: 1048576
+  blocklist:
+    - rm
+    - dd
+    - mkfs
+    - shutdown
+    - reboot
