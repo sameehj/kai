@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os/exec"
 	"path/filepath"
@@ -25,12 +24,26 @@ type SafeExecutor struct {
 	Blocklist []string
 }
 
-func (e *SafeExecutor) Run(cmd string, args []string) (*Result, error) {
-	if cmd == "" {
+type OutputTruncatedError struct{}
+
+func (OutputTruncatedError) Error() string {
+	return "output truncated"
+}
+
+type BlockedCommandError struct {
+	Pattern string
+}
+
+func (e BlockedCommandError) Error() string {
+	return "command blocked"
+}
+
+func (e *SafeExecutor) Run(command string, workingDir string) (*Result, error) {
+	if command == "" {
 		return nil, errors.New("command is required")
 	}
-	if e.isBlocked(cmd) {
-		return nil, fmt.Errorf("command blocked: %s", cmd)
+	if blocked, pattern := e.isBlocked(command); blocked {
+		return nil, BlockedCommandError{Pattern: pattern}
 	}
 
 	ctx := context.Background()
@@ -40,23 +53,24 @@ func (e *SafeExecutor) Run(cmd string, args []string) (*Result, error) {
 		defer cancel()
 	}
 
-	var command *exec.Cmd
-	if len(args) == 0 {
-		command = ShellCommand(cmd)
-		command = exec.CommandContext(ctx, command.Path, command.Args[1:]...)
-	} else {
-		command = exec.CommandContext(ctx, cmd, args...)
+	cmd := ShellCommand(command)
+	cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
+	if workingDir != "" {
+		cmd.Dir = workingDir
 	}
 
 	stdoutBuf := &limitedBuffer{limit: e.MaxOutput}
 	stderrBuf := &limitedBuffer{limit: e.MaxOutput}
 
-	command.Stdout = stdoutBuf
-	command.Stderr = stderrBuf
+	cmd.Stdout = stdoutBuf
+	cmd.Stderr = stderrBuf
 
-	err := command.Run()
+	err := cmd.Run()
 	exitCode := 0
 	if err != nil {
+		if ctx.Err() != nil {
+			return &Result{Stdout: stdoutBuf.String(), Stderr: stderrBuf.String(), Code: exitCode}, ctx.Err()
+		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
@@ -66,7 +80,7 @@ func (e *SafeExecutor) Run(cmd string, args []string) (*Result, error) {
 	}
 
 	if stdoutBuf.truncated || stderrBuf.truncated {
-		return &Result{Stdout: stdoutBuf.String(), Stderr: stderrBuf.String(), Code: exitCode}, fmt.Errorf("output truncated")
+		return &Result{Stdout: stdoutBuf.String(), Stderr: stderrBuf.String(), Code: exitCode}, OutputTruncatedError{}
 	}
 
 	return &Result{Stdout: stdoutBuf.String(), Stderr: stderrBuf.String(), Code: exitCode}, nil
@@ -81,17 +95,19 @@ func ShellCommand(command string) *exec.Cmd {
 	}
 }
 
-func (e *SafeExecutor) isBlocked(cmd string) bool {
+func (e *SafeExecutor) isBlocked(command string) (bool, string) {
 	if len(e.Blocklist) == 0 {
-		return false
+		return false, ""
 	}
-	base := filepath.Base(cmd)
+	normalized := strings.ToLower(command)
+	base := strings.ToLower(filepath.Base(command))
 	for _, blocked := range e.Blocklist {
-		if strings.EqualFold(blocked, cmd) || strings.EqualFold(blocked, base) {
-			return true
+		pattern := strings.ToLower(blocked)
+		if strings.Contains(normalized, pattern) || strings.Contains(base, pattern) {
+			return true, blocked
 		}
 	}
-	return false
+	return false, ""
 }
 
 type limitedBuffer struct {

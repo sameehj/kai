@@ -2,141 +2,83 @@ package gateway
 
 import (
 	"context"
-	"fmt"
-	"net"
-	"sync"
+	"encoding/json"
+	"net/http"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/sameehj/kai/pkg/mcp"
-	"log/slog"
+	"github.com/gorilla/websocket"
+	"github.com/sameehj/kai/pkg/agent"
+	"github.com/sameehj/kai/pkg/session"
 )
 
 type Server struct {
-	addr        string
-	mcpServer   *mcp.Server
-	authorizer  Authorizer
-	maxSessions int
-	logger      *slog.Logger
-
-	mu       sync.Mutex
-	sessions map[string]*Session
+	addr    string
+	runtime *agent.Runtime
+	started time.Time
 }
 
-func NewServer(addr string, mcpServer *mcp.Server, authorizer Authorizer) *Server {
-	if authorizer == nil {
-		authorizer = NoopAuthorizer{}
-	}
-	return &Server{addr: addr, mcpServer: mcpServer, authorizer: authorizer, sessions: make(map[string]*Session)}
+type Message struct {
+	SessionID string `json:"session_id"`
+	Content   string `json:"content"`
 }
 
-func (s *Server) SetLogger(logger *slog.Logger) {
-	s.logger = logger
+type Response struct {
+	Content string `json:"content"`
+	Error   string `json:"error,omitempty"`
+}
+
+func NewServer(addr string, runtime *agent.Runtime) *Server {
+	return &Server{addr: addr, runtime: runtime}
 }
 
 func (s *Server) Start(ctx context.Context) error {
-	listener, err := net.Listen("tcp", s.addr)
-	if err != nil {
-		return err
+	s.started = time.Now()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", s.handleWebSocket)
+	mux.HandleFunc("/health", s.handleHealth)
+	server := &http.Server{Addr: s.addr, Handler: mux}
+
+	go func() {
+		<-ctx.Done()
+		_ = server.Shutdown(context.Background())
+	}()
+	return server.ListenAndServe()
+}
+
+func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
 	}
-	defer listener.Close()
-	s.logInfo("gateway_listening", "addr", s.addr)
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
 
 	for {
-		conn, err := listener.Accept()
+		var msg Message
+		if err := conn.ReadJSON(&msg); err != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+		resp, err := s.runtime.HandleMessage(ctx, session.SessionID(msg.SessionID), msg.Content)
+		cancel()
 		if err != nil {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-			s.logError("accept_failed", "error", err)
-			return err
-		}
-
-		if s.maxSessions > 0 && s.sessionCount() >= s.maxSessions {
-			s.logWarn("session_limit_reached", "remote", conn.RemoteAddr().String(), "limit", s.maxSessions)
-			_ = conn.Close()
+			_ = conn.WriteJSON(Response{Error: err.Error()})
 			continue
 		}
-
-		if err := s.authorizer.Allow(ctx, conn.RemoteAddr().String()); err != nil {
-			s.logWarn("session_denied", "remote", conn.RemoteAddr().String(), "error", err)
-			_ = conn.Close()
-			continue
-		}
-
-		session := &Session{
-			ID:         uuid.NewString(),
-			RemoteAddr: conn.RemoteAddr().String(),
-			StartedAt:  time.Now(),
-		}
-		s.register(session)
-
-		go func() {
-			defer s.unregister(session.ID)
-			s.logInfo("session_start", "id", session.ID, "remote", session.RemoteAddr)
-			_ = s.mcpServer.Serve(conn, conn)
-			s.logInfo("session_end", "id", session.ID, "remote", session.RemoteAddr)
-			_ = conn.Close()
-		}()
+		_ = conn.WriteJSON(Response{Content: resp})
 	}
 }
 
-func (s *Server) register(session *Session) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.sessions[session.ID] = session
-}
-
-func (s *Server) unregister(id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.sessions, id)
-}
-
-func (s *Server) SetMaxSessions(max int) {
-	s.maxSessions = max
-}
-
-func (s *Server) sessionCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.sessions)
-}
-
-func (s *Server) logInfo(msg string, args ...any) {
-	if s.logger != nil {
-		s.logger.Info(msg, args...)
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	resp := map[string]interface{}{
+		"status":         "ok",
+		"uptime_seconds": int(time.Since(s.started).Seconds()),
+		"version":        "0.1.0",
 	}
-}
-
-func (s *Server) logWarn(msg string, args ...any) {
-	if s.logger != nil {
-		s.logger.Warn(msg, args...)
-	}
-}
-
-func (s *Server) logError(msg string, args ...any) {
-	if s.logger != nil {
-		s.logger.Error(msg, args...)
-	}
-}
-
-func (s *Server) ListSessions() []*Session {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]*Session, 0, len(s.sessions))
-	for _, session := range s.sessions {
-		out = append(out, session)
-	}
-	return out
-}
-
-func (s *Server) Addr() string {
-	return s.addr
-}
-
-func (s *Server) String() string {
-	return fmt.Sprintf("gateway(%s)", s.addr)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }

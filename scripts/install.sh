@@ -26,12 +26,9 @@ esac
 
 echo "Installing KAI for $OS/$ARCH..."
 
-# Build from source (or download binary when releases exist)
 if command -v go >/dev/null 2>&1; then
     echo "Building from source..."
     go install github.com/sameehj/kai/cmd/kai@latest
-    go install github.com/sameehj/kai/cmd/kai-mcp@latest
-    go install github.com/sameehj/kai/cmd/kai-gateway@latest
 else
     echo "Go not found. Install Go from https://go.dev/dl/ and retry."
     exit 1
@@ -40,6 +37,6 @@ fi
 echo ""
 echo "KAI installed successfully."
 echo ""
-echo "Start the gateway:  kai gateway"
-echo "Check health:       kai doctor"
-echo "List tools:         kai tools list"
+echo "Initialize workspace:  kai init"
+echo "Start the gateway:     kai gateway"
+echo "Start chat:            kai chat"

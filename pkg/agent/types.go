@@ -2,56 +2,48 @@ package agent
 
 import "context"
 
-// AgentType defines which AI backend should be used.
-type AgentType string
-
-const (
-	AgentTypeClaude AgentType = "claude"
-	AgentTypeOpenAI AgentType = "openai"
-	AgentTypeGemini AgentType = "gemini"
-	AgentTypeLlama  AgentType = "llama"
-	AgentTypeMock   AgentType = "mock"
-)
-
-// Agent represents an AI backend that can analyze investigation data.
-type Agent interface {
-	Analyze(ctx context.Context, req AnalysisRequest) (*AnalysisResponse, error)
-	Close() error
+type LLMClient interface {
+	Complete(ctx context.Context, req CompletionRequest) (*CompletionResponse, error)
 }
 
-// AnalysisRequest is backend-agnostic.
-type AnalysisRequest struct {
-	Type    string       `json:"type"`    // analysis, correlation, decision
-	Context []StepOutput `json:"context"` // Previous step outputs
-	Prompt  string       `json:"prompt"`  // Custom prompt (optional)
+type CompletionRequest struct {
+	Prompt    string
+	Messages  []CompletionMessage
+	Tools     []ToolDefinition
+	MaxTokens int
 }
 
-// StepOutput represents data from previous steps.
-type StepOutput struct {
-	StepID string                 `json:"step_id"`
-	Data   map[string]interface{} `json:"data"`
+type CompletionMessage struct {
+	Role    string
+	Content []ContentBlock
 }
 
-// AnalysisResponse is standardized across all backends.
-type AnalysisResponse struct {
-	RootCause         string  `json:"root_cause"`
-	AffectedComponent string  `json:"affected_component"`
-	RecommendedAction string  `json:"recommended_action"`
-	Confidence        float64 `json:"confidence"`
-	Reasoning         string  `json:"reasoning"`
+type ContentBlock struct {
+	Type      string                 `json:"type"`
+	Text      string                 `json:"text,omitempty"`
+	ID        string                 `json:"id,omitempty"`
+	Name      string                 `json:"name,omitempty"`
+	Input     map[string]interface{} `json:"input,omitempty"`
+	ToolUseID string                 `json:"tool_use_id,omitempty"`
+	IsError   bool                   `json:"is_error,omitempty"`
+	Content   []ContentBlock         `json:"content,omitempty"`
 }
 
-// ModelOverrides allows callers to customize which model each backend should use.
-type ModelOverrides struct {
-	Claude string
-	OpenAI string
-	Gemini string
-	Ollama string
+type ToolDefinition struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	InputSchema map[string]interface{} `json:"input_schema"`
 }
 
-var modelOverrides ModelOverrides
+type CompletionResponse struct {
+	Content    string
+	Blocks     []ContentBlock
+	ToolCalls  []ToolCall
+	StopReason string
+}
 
-// SetModelOverrides configures package-wide model overrides.
-func SetModelOverrides(overrides ModelOverrides) {
-	modelOverrides = overrides
+type ToolCall struct {
+	ID    string
+	Name  string
+	Input map[string]interface{}
 }
