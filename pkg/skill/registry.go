@@ -59,5 +59,19 @@ func (r *Registry) Exists(name string) bool {
 }
 
 func Normalize(name string) string {
-	return strings.TrimSpace(strings.ToLower(name))
+	s := strings.ToLower(name)
+	var b strings.Builder
+	lastSpace := false
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastSpace = false
+			continue
+		}
+		if !lastSpace {
+			b.WriteByte(' ')
+			lastSpace = true
+		}
+	}
+	return strings.TrimSpace(b.String())
 }

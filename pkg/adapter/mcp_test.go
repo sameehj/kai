@@ -59,3 +59,21 @@ func TestWriteRPCResponse(t *testing.T) {
 		t.Fatalf("expected jsonrpc 2.0, got %q", resp.JSONRPC)
 	}
 }
+
+func TestWriteRPCResponsePlainJSON(t *testing.T) {
+	t.Logf("writeRPCResponse outputs plain JSON when KAI_MCP_PLAIN_JSON is set")
+	t.Setenv("KAI_MCP_PLAIN_JSON", "1")
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
+	if err := writeRPCResponse(w, 1, map[string]string{"ok": "true"}, nil); err != nil {
+		t.Fatalf("writeRPCResponse: %v", err)
+	}
+	out := strings.TrimSpace(buf.String())
+	if strings.HasPrefix(out, "Content-Length:") {
+		t.Fatalf("unexpected content-length header in plain JSON mode")
+	}
+	var resp rpcResponse
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatalf("invalid json body: %v", err)
+	}
+}

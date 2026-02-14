@@ -31,4 +31,7 @@ func TestNormalize(t *testing.T) {
 	if got := Normalize("  DoCkEr "); got != "docker" {
 		t.Fatalf("expected docker, got %q", got)
 	}
+	if got := Normalize("mailing-list"); got != "mailing list" {
+		t.Fatalf("expected mailing list, got %q", got)
+	}
 }

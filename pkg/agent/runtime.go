@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"log"
 	"os"
 	"strconv"
 	"time"
@@ -71,6 +72,9 @@ func (r *Runtime) executeLoop(ctx context.Context, sess *session.Session) (strin
 	messages := convertSessionMessages(sess.Messages)
 	tools := convertDefinitions(r.tools.Definitions())
 	for {
+		if debugEnabled() {
+			log.Printf("runtime: messages=%d tools=%d", len(messages), len(tools))
+		}
 		callCtx, cancel := context.WithTimeout(ctx, llmTimeout())
 		resp, err := r.llm.Complete(callCtx, CompletionRequest{
 			Prompt:    prompt,
@@ -82,6 +86,9 @@ func (r *Runtime) executeLoop(ctx context.Context, sess *session.Session) (strin
 		if err != nil {
 			return "", err
 		}
+		if debugEnabled() {
+			log.Printf("runtime: stop_reason=%s tool_calls=%d", resp.StopReason, len(resp.ToolCalls))
+		}
 		if resp.StopReason == "end_turn" || len(resp.ToolCalls) == 0 {
 			sess.Messages = append(sess.Messages, session.Message{Role: "assistant", Content: resp.Content, Timestamp: time.Now()})
 			return resp.Content, nil
@@ -91,6 +98,9 @@ func (r *Runtime) executeLoop(ctx context.Context, sess *session.Session) (strin
 		}
 		var results []ContentBlock
 		for _, call := range resp.ToolCalls {
+			if debugEnabled() {
+				log.Printf("runtime: tool_call name=%s", call.Name)
+			}
 			result, err := r.executeTool(ctx, sess, call)
 			// Anthropic requires a non-empty text field for text blocks.
 			if result == "" {
@@ -108,6 +118,9 @@ func (r *Runtime) executeLoop(ctx context.Context, sess *session.Session) (strin
 					errText = "(error with no message)"
 				}
 				block.Content = []ContentBlock{{Type: "text", Text: errText}}
+			}
+			if debugEnabled() {
+				log.Printf("runtime: tool_result name=%s bytes=%d error=%v", call.Name, len(result), err != nil)
 			}
 			results = append(results, block)
 			sess.Messages = append(sess.Messages, session.Message{
@@ -181,4 +194,8 @@ func llmTimeout() time.Duration {
 		}
 	}
 	return 90 * time.Second
+}
+
+func debugEnabled() bool {
+	return os.Getenv("KAI_DEBUG") != ""
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/sameehj/kai/pkg/session"
 )
 
@@ -27,6 +28,7 @@ How to work with KAI:
 type MCPAdapter struct {
 	gatewayAddr string
 	sessionID   session.SessionID
+	conn        *websocket.Conn
 }
 
 func NewMCPAdapter(gatewayAddr string) *MCPAdapter {
@@ -37,15 +39,14 @@ func NewMCPAdapter(gatewayAddr string) *MCPAdapter {
 }
 
 func (a *MCPAdapter) Start(ctx context.Context) error {
-	conn, err := dialWebSocket(a.gatewayAddr)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
 	reader := bufio.NewReader(os.Stdin)
 	writer := bufio.NewWriter(os.Stdout)
 	defer writer.Flush()
+	defer func() {
+		if a.conn != nil {
+			_ = a.conn.Close()
+		}
+	}()
 
 	for {
 		reqBytes, err := readRPCMessage(reader)
@@ -87,6 +88,11 @@ func (a *MCPAdapter) Start(ctx context.Context) error {
 					sid = session.SessionID(params.SessionID)
 				}
 				msg := Message{SessionID: string(sid), Content: params.Content}
+				conn, err := a.ensureConn()
+				if err != nil {
+					_ = writeRPCResponse(writer, req.ID, nil, &rpcError{-32000, err.Error()})
+					return
+				}
 				_ = conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
 				if err := writeWSMessage(conn, msg); err != nil {
 					_ = writeRPCResponse(writer, req.ID, nil, &rpcError{-32000, err.Error()})
@@ -108,6 +114,18 @@ func (a *MCPAdapter) Start(ctx context.Context) error {
 			}
 		}()
 	}
+}
+
+func (a *MCPAdapter) ensureConn() (*websocket.Conn, error) {
+	if a.conn != nil {
+		return a.conn, nil
+	}
+	conn, err := dialWebSocket(a.gatewayAddr)
+	if err != nil {
+		return nil, err
+	}
+	a.conn = conn
+	return conn, nil
 }
 
 type rpcRequest struct {
@@ -172,6 +190,12 @@ func writeRPCResponse(w *bufio.Writer, id interface{}, result interface{}, rpcEr
 	if err != nil {
 		return err
 	}
+	if mcpPlainJSON() {
+		if _, err := w.Write(append(b, '\n')); err != nil {
+			return err
+		}
+		return w.Flush()
+	}
 	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(b))
 	if _, err := w.WriteString(header); err != nil {
 		return err
@@ -180,4 +204,8 @@ func writeRPCResponse(w *bufio.Writer, id interface{}, result interface{}, rpcEr
 		return err
 	}
 	return w.Flush()
+}
+
+func mcpPlainJSON() bool {
+	return os.Getenv("KAI_MCP_PLAIN_JSON") != ""
 }

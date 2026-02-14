@@ -3,6 +3,9 @@ package tool
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
+	"strings"
 
 	"github.com/sameehj/kai/pkg/exec"
 )
@@ -39,9 +42,22 @@ func (t *ExecTool) Schema() map[string]interface{} {
 func (t *ExecTool) Execute(ctx context.Context, input map[string]interface{}) (string, error) {
 	cmd, _ := input["command"].(string)
 	cwd, _ := input["cwd"].(string)
+	if os.Getenv("KAI_DEBUG") != "" {
+		log.Printf("tool: exec command=%s cwd=%s", truncate(cmd, 200), cwd)
+	}
 	res, err := t.executor.Run(cmd, cwd)
 	if err != nil {
 		return fmt.Sprintf("Exit code %d\nStderr: %s\nStdout: %s", res.Code, res.Stderr, res.Stdout), nil
 	}
 	return res.Stdout, nil
+}
+
+func truncate(s string, limit int) string {
+	if limit <= 0 {
+		return s
+	}
+	if len(s) <= limit {
+		return s
+	}
+	return strings.TrimSpace(s[:limit]) + "..."
 }

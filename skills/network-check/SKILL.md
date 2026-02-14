@@ -19,4 +19,6 @@ requires:
 exec {"command": "nslookup example.com"}
 exec {"command": "ping -c 4 example.com"}
 exec {"command": "nc -zv example.com 443"}
+exec {"command": "curl -I https://example.com"}
+exec {"command": "curl -s https://lore.kernel.org/bpf/ | head -50"}
 ```
