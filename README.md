@@ -1,127 +1,136 @@
-# KAI - Kernel AI Assistant
+# 🚀 KAI — Kernel AI Assistant
 
-KAI is a Go implementation of the OpenClaw architecture, specialized for Linux kernel, infrastructure, and platform diagnostics workflows.
+**Kai is the AI assistant for Linux kernel and infrastructure debugging.**
 
-## Philosophy
+Built on proven OpenClaw-style architecture, Kai focuses on one thing: helping engineers solve deep system problems fast.
 
-KAI follows the OpenClaw model:
-- **Primitive tools** (exec, read, write, ls, search, replace)
-- **Skills as documentation** (SKILL.md files guide behavior)
-- **Runtime enforcement** (LLM suggests, runtime enforces)
-- **Session-based security** (main vs dm vs group)
-- **File-composed prompts** (AGENTS.md, SOUL.md, TOOLS.md)
+---
 
-The AI model provides intelligence; KAI provides the operating system.
+## 😵 The Problem
 
-## Quick Start
+Infra debugging today is painful:
 
-### Install
+- You juggle 10+ tools (`kubectl`, `bpftool`, `ss`, `perf`, `tcpdump`, `journalctl`, ...)
+- You waste time searching commands and distro-specific package names
+- eBPF is powerful, but hard to use under incident pressure
+- Issues span layers (app → container → network → kernel), but workflows are fragmented
+
+**Result:** slow incident response, high MTTR, and expert bottlenecks.
+
+---
+
+## ✅ The Solution
+
+Kai combines:
+
+- 🧠 **LLM reasoning**
+- 🛠️ **Primitive tools** (`exec`, `read`, `write`, `ls`, `search`, `replace`)
+- 📚 **Expert skills** (`SKILL.md`) for kernel, eBPF, Kubernetes, distro ops
+
+You describe the issue in plain language. Kai runs structured diagnostics and returns:
+
+1. probable root cause
+2. confidence level
+3. evidence from executed commands
+4. next safe actions
+
+---
+
+## 💎 Benefits
+
+### For SRE / DevOps / Platform teams
+- ⚡ **Faster troubleshooting** (minutes instead of hours)
+- 🧭 **Consistent workflows** across engineers
+- 🧪 **Cross-distro clarity** (Ubuntu/RHEL/Amazon Linux/Arch)
+- 🔬 **Optional eBPF deep dives** when basic checks aren’t enough
+
+### For organizations
+- 📉 Reduced MTTR
+- 📈 Better operational reliability
+- 🧷 Less dependency on a few kernel experts
+- 🗂️ Institutional knowledge captured in reusable skills
+
+---
+
+## 🏗️ Architecture (Simple + Powerful)
+
+```text
+User Input
+   ↓
+Gateway (CLI / MCP / future channels)
+   ↓
+Agent Runtime (reasoning + tool orchestration)
+   ↓
+Primitive Tools (exec/files/search)
+   ↓
+Skill System (domain workflows in SKILL.md)
+```
+
+**Same runtime foundation. Different moat: skill depth.**
+
+---
+
+## 🧰 Current Skill Domains
+
+- `skills/ebpf/` — kernel-level tracing and observability
+- `skills/kubernetes/` — pod/service/network/CNI diagnostics
+- `skills/kernel/` — patch/build/regression workflows
+- `skills/distro/` — cross-distro install and compatibility flows
+- `skills/embedded/` — Yocto/Buildroot/cross-compile (expanding)
+- `skills/xdp/` — high-performance packet path workflows (expanding)
+
+Flagship skill examples:
+- `skills/ebpf/network-debug/SKILL.md`
+- `skills/kernel/patch-check/SKILL.md`
+- `skills/kubernetes/pod-network-debug/SKILL.md`
+- `skills/distro/cross-distro-install/SKILL.md`
+
+---
+
+## ⚡ Quick Start
+
+### 1) Build
 ```bash
 go build -o ./build/kai ./cmd/kai
 sudo install -m 755 ./build/kai /usr/local/bin/kai
 ```
 
-### Initialize Workspace
+### 2) Initialize workspace
 ```bash
 cd ~/my-project
 kai init
 ```
 
-### Start Gateway
+### 3) Start gateway
 ```bash
 kai gateway
 ```
 
-### Chat
+### 4) Start chat
 ```bash
 kai chat
 ```
 
-## Architecture
-
-```
-kai gateway        # Persistent daemon (WebSocket server)
-  ↓
-Agent Runtime      # Execution loop
-  ↓
-Primitive Tools    # exec, read, write, ls, search, replace
-  ↓
-Skills             # SKILL.md documentation
-  ↓
-Session Storage    # Append-only persistence
-```
-
-## Workspace Structure
-
-```
-~/project/
-  AGENTS.md        # Core agent configuration
-  SOUL.md          # Personality (optional)
-  TOOLS.md         # Tool usage conventions (optional)
-  skills/          # Project-specific skills
-    my-skill/
-      SKILL.md
-
-~/.kai/
-  kai.json         # Configuration
-  sessions/        # Session storage
-  memory/          # Memory system
-  logs/            # Execution logs
-  artifacts/       # Build outputs
-```
-
-## Skills
-
-Skills are documentation that guides the agent:
-
-```markdown
----
-name: kernel-build
-description: Build Linux kernel safely
 ---
 
-# Linux Kernel Build
+## 🛡️ Principles
 
-## When to use
-Building kernel from source
+- Primitive tools only (no magic hidden engines)
+- Skills encode expert workflows transparently
+- Runtime enforces policy and safety constraints
+- Observation-first, reversible actions by default
 
-## How to use
-```bash
-exec {"command": "make menuconfig"}
-exec {"command": "make -j$(nproc)"}
-```
-```
+---
 
-## Configuration
+## 🤝 Relationship to OpenClaw
 
-Edit `~/.kai/kai.json`:
+Kai is a **specialized variant** in the same architectural family:
 
-```json
-{
-  "llm": {
-    "provider": "anthropic",
-    "model": "claude-sonnet-4-5",
-    "api_key_env": "ANTHROPIC_API_KEY"
-  },
-  "policy": {
-    "allow": ["exec", "read", "write", "ls", "search", "replace"],
-    "blocklist": ["rm -rf /", "dd if="]
-  }
-}
-```
+- OpenClaw: broad general automation
+- Kai: deep kernel + infrastructure diagnostics
 
-## Comparison to OpenClaw
+---
 
-| Feature | OpenClaw | KAI |
-|---------|----------|-----|
-| Language | TypeScript | Go |
-| Gateway | Node.js WebSocket | Go WebSocket |
-| Tools | Primitives | Primitives |
-| Skills | SKILL.md | SKILL.md |
-| Sessions | Append-only JSON | Append-only JSON |
-| Prompts | File-composed | File-composed |
-| Channels | Many (Telegram, WhatsApp, etc.) | CLI + MCP (more planned) |
-
-## License
+## 📜 License
 
 MIT
