@@ -1,6 +1,6 @@
-# KAI - Local AI Assistant
+# KAI - Kernel AI Assistant
 
-KAI is a Go implementation of the OpenClaw architecture, optimized for development workflows.
+KAI is a Go implementation of the OpenClaw architecture, specialized for Linux kernel, infrastructure, and platform diagnostics workflows.
 
 ## Philosophy
 
