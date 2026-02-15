@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/sameehj/kai/pkg/ebpf"
 	"github.com/sameehj/kai/pkg/policy"
 	"github.com/sameehj/kai/pkg/session"
 	"github.com/sameehj/kai/pkg/skill"
@@ -21,12 +22,13 @@ type Config struct {
 }
 
 type Runtime struct {
-	tools     *tool.Registry
-	skills    *skill.Registry
-	sessions  *session.Store
-	workspace string
-	policy    *policy.Policy
-	llm       LLMClient
+	tools       *tool.Registry
+	skills      *skill.Registry
+	sessions    *session.Store
+	workspace   string
+	policy      *policy.Policy
+	llm         LLMClient
+	ebpfManager *ebpf.Manager
 }
 
 func NewRuntime(cfg *Config) *Runtime {
@@ -34,13 +36,27 @@ func NewRuntime(cfg *Config) *Runtime {
 	if ws == "" {
 		ws = workspace.Resolve()
 	}
+
+	var ebpfManager *ebpf.Manager
+	if mgr, err := ebpf.NewManager(); err == nil {
+		ebpfManager = mgr
+		if mgr.Supported() {
+			if err := mgr.CheckRequirements(); err != nil {
+				log.Printf("runtime: eBPF unavailable: %v", err)
+			}
+		}
+	} else {
+		log.Printf("runtime: failed to initialize eBPF manager: %v", err)
+	}
+
 	return &Runtime{
-		tools:     tool.NewRegistry(),
-		skills:    skill.NewRegistry(ws),
-		sessions:  session.NewStore(workspace.HomeDir()),
-		workspace: ws,
-		policy:    policy.Default(),
-		llm:       cfg.LLM,
+		tools:       tool.NewRegistry(),
+		skills:      skill.NewRegistry(ws),
+		sessions:    session.NewStore(workspace.HomeDir()),
+		workspace:   ws,
+		policy:      policy.Default(),
+		llm:         cfg.LLM,
+		ebpfManager: ebpfManager,
 	}
 }
 

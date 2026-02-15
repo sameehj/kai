@@ -30,6 +30,7 @@ func NewRegistry() *Registry {
 	r.Register(&LsTool{})
 	r.Register(&SearchTool{})
 	r.Register(&ReplaceTool{})
+	r.Register(&EBPFTCPRetransmitTool{})
 
 	return r
 }
