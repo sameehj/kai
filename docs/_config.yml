@@ -1,7 +1,9 @@
-title: KAI Blog
-description: Autonomous Infrastructure Debugging with eBPF + AI
+title: KAI — Kernel AI Assistant
+description: Kernel-aware infrastructure diagnostics with skill-driven AI workflows.
 theme: jekyll-theme-minimal
 baseurl: /kai
+url: https://sameehj.github.io
+show_downloads: false
 
 plugins:
   - jekyll-feed
