@@ -3,15 +3,11 @@ layout: default
 title: KAI Docs
 ---
 
-# 🚀 KAI — Kernel AI Assistant
-
-Welcome to **KAI docs** — where Linux kernel diagnostics meets skill-driven AI workflows.
-
-> ⚡ Fast incident triage.  
-> 🔬 Kernel + eBPF depth.  
-> 🧠 Evidence-first troubleshooting.
-
----
+<div class="hero">
+  <h1>🚀 KAI — Kernel AI Assistant</h1>
+  <p><strong>Linux infra debugging with signal, not guesswork.</strong></p>
+  <p>⚡ Faster triage · 🔬 Kernel + eBPF depth · 🧠 Evidence-first workflows</p>
+</div>
 
 ## 🧭 Start Here
 
@@ -22,23 +18,19 @@ Welcome to **KAI docs** — where Linux kernel diagnostics meets skill-driven AI
 - 🧯 Troubleshooting: [troubleshooting.md](./troubleshooting.md)
 - 🧰 Examples: [examples.md](./examples.md)
 
----
-
 ## ✨ Featured Skills
 
-- `skills/ebpf/network-debug` — network drops & retransmit diagnostics
-- `skills/kernel/patch-check` — patch apply/build/regression checks
-- `skills/kubernetes/pod-network-debug` — CNI/policy/service triage
-- `skills/distro/cross-distro-install` — package/dependency normalization
-
----
+<div class="kai-grid">
+  <div class="kai-card"><strong>ebpf/network-debug</strong> Diagnose packet drops and TCP retransmits across layers.</div>
+  <div class="kai-card"><strong>kernel/patch-check</strong> Patch apply/build validation with risk-oriented reporting.</div>
+  <div class="kai-card"><strong>kubernetes/pod-network-debug</strong> Service/CNI/NetworkPolicy troubleshooting path.</div>
+  <div class="kai-card"><strong>distro/cross-distro-install</strong> Dependency normalization across major Linux distros.</div>
+</div>
 
 ## 📝 Blog
 
-Latest posts live under `/blog/`.
-
 - Start reading: [First post — KAI Kernel AI Assistant](./blog/2026/02/15/kai-kernel-ai-assistant/)
 
----
+> “The moat is skill quality: reproducible workflows encoded as practical diagnostics.”
 
-_Last updated: {{ site.time | date: "%Y-%m-%d" }}_
+<small>Last updated: {{ site.time | date: "%Y-%m-%d" }}</small>
