@@ -40,5 +40,8 @@ func platformLoadProgram(objPath string) (*loadedProgram, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating collection: %w", err)
 	}
-	return &loadedProgram{close: coll.Close}, nil
+	return &loadedProgram{close: func() error {
+		coll.Close()
+		return nil
+	}}, nil
 }
