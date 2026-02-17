@@ -40,6 +40,13 @@ func LoadPromptComponents(workspace string, skills []string) (*PromptComponents,
 		skillPath := filepath.Join(workspace, SkillsDir, skillName, "SKILL.md")
 		if content, err := os.ReadFile(skillPath); err == nil {
 			pc.Skills = append(pc.Skills, string(content))
+			continue
+		}
+		if home, err := os.UserHomeDir(); err == nil {
+			userPath := filepath.Join(home, ".kai", SkillsDir, skillName, "SKILL.md")
+			if content, err := os.ReadFile(userPath); err == nil {
+				pc.Skills = append(pc.Skills, string(content))
+			}
 		}
 	}
 

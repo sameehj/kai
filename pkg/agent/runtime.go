@@ -3,9 +3,11 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/sameehj/kai/pkg/ebpf"
@@ -85,11 +87,13 @@ func (r *Runtime) executeLoop(ctx context.Context, sess *session.Session) (strin
 	if err != nil {
 		return "", err
 	}
-	messages := convertSessionMessages(sess.Messages)
+	history := windowSessionMessages(sess.Messages)
+	messages := convertSessionMessages(history)
 	tools := convertDefinitions(r.tools.Definitions())
+	forcedLoreProbe := false
 	for {
 		if debugEnabled() {
-			log.Printf("runtime: messages=%d tools=%d", len(messages), len(tools))
+			log.Printf("runtime: messages=%d tools=%d history_total=%d", len(messages), len(tools), len(sess.Messages))
 		}
 		callCtx, cancel := context.WithTimeout(ctx, llmTimeout())
 		resp, err := r.llm.Complete(callCtx, CompletionRequest{
@@ -106,6 +110,34 @@ func (r *Runtime) executeLoop(ctx context.Context, sess *session.Session) (strin
 			log.Printf("runtime: stop_reason=%s tool_calls=%d", resp.StopReason, len(resp.ToolCalls))
 		}
 		if resp.StopReason == "end_turn" || len(resp.ToolCalls) == 0 {
+			lastUser := lastUserMessage(sess.Messages)
+			if !forcedLoreProbe && shouldForceLoreProbe(lastUser, resp.Content) {
+				probe, probeErr := r.executeTool(ctx, sess, ToolCall{
+					Name: "exec",
+					Input: map[string]interface{}{
+						"command": loreProbeCommand(),
+					},
+				})
+				if probeErr != nil {
+					probe = fmt.Sprintf("Auto web probe failed: %v", probeErr)
+				}
+				if strings.TrimSpace(probe) == "" {
+					probe = "(probe returned empty output)"
+				}
+				probeText := "Auto web probe result for LKML/Linus request:\n" + probe
+				messages = append(messages, CompletionMessage{
+					Role:    "user",
+					Content: []ContentBlock{{Type: "text", Text: probeText}},
+				})
+				sess.Messages = append(sess.Messages, session.Message{
+					Role:      "tool",
+					Content:   probeText,
+					Timestamp: time.Now(),
+					ToolCalls: []session.ToolCall{{Name: "exec", Input: map[string]interface{}{"command": loreProbeCommand()}, Result: probe}},
+				})
+				forcedLoreProbe = true
+				continue
+			}
 			sess.Messages = append(sess.Messages, session.Message{Role: "assistant", Content: resp.Content, Timestamp: time.Now()})
 			return resp.Content, nil
 		}
@@ -212,6 +244,69 @@ func llmTimeout() time.Duration {
 	return 90 * time.Second
 }
 
+func messageHistoryLimit() int {
+	if v := os.Getenv("KAI_HISTORY_MAX_MESSAGES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 30
+}
+
+func windowSessionMessages(msgs []session.Message) []session.Message {
+	limit := messageHistoryLimit()
+	if len(msgs) <= limit {
+		return msgs
+	}
+	return msgs[len(msgs)-limit:]
+}
+
 func debugEnabled() bool {
 	return os.Getenv("KAI_DEBUG") != ""
+}
+
+func lastUserMessage(msgs []session.Message) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" && strings.TrimSpace(msgs[i].Content) != "" {
+			return msgs[i].Content
+		}
+	}
+	return ""
+}
+
+func shouldForceLoreProbe(userMsg, assistantMsg string) bool {
+	u := strings.ToLower(userMsg)
+	if !strings.Contains(u, "linus") {
+		return false
+	}
+	if !(strings.Contains(u, "mailing list") || strings.Contains(u, "lkml") || strings.Contains(u, "lore.kernel.org")) {
+		return false
+	}
+	a := strings.ToLower(assistantMsg)
+	if strings.Contains(a, "http://") || strings.Contains(a, "https://") {
+		return false
+	}
+	phrases := []string{
+		"unable to retrieve",
+		"unable to provide",
+		"cannot retrieve",
+		"can't retrieve",
+		"cannot access",
+		"can't access",
+		"blocked",
+		"bot protection",
+		"server challenge",
+	}
+	for _, p := range phrases {
+		if strings.Contains(a, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func loreProbeCommand() string {
+	ua := `'Mozilla/5.0 (X11; Linux x86_64) KAI/1.0'`
+	return "(curl -fsSL --max-time 20 -A " + ua + " \"https://lore.kernel.org/lkml/?q=f:torvalds@linux-foundation.org+d:30d..\" | sed -n '1,80p') 2>&1 || " +
+		"(curl -I --max-time 20 -A " + ua + " \"https://lore.kernel.org/lkml/new.atom\" 2>&1 | sed -n '1,40p')"
 }

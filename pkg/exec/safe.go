@@ -89,8 +89,14 @@ func (e *SafeExecutor) Run(command string, workingDir string) (*Result, error) {
 func ShellCommand(command string) *exec.Cmd {
 	switch runtime.GOOS {
 	case "windows":
-		return exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", command)
+		if _, err := exec.LookPath("powershell"); err == nil {
+			return exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", command)
+		}
+		return exec.Command("cmd.exe", "/c", command)
 	default:
+		if _, err := exec.LookPath("bash"); err == nil {
+			return exec.Command("bash", "-c", command)
+		}
 		return exec.Command("sh", "-c", command)
 	}
 }

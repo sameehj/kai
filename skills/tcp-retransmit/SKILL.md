@@ -28,10 +28,12 @@ Monitors kernel TCP retransmit events and summarizes likely network issues.
 - Top destination connections
 - Suggested next action (pool size, RTT check, packet loss investigation)
 
-## Example tool invocation
+## Example command flow (primitive tools only)
 
-```text
-ebpf_tcp_retransmit {"duration":"30s"}
+```bash
+test -f /sys/kernel/btf/vmlinux && echo BTF_OK || echo BTF_MISSING
+mount | grep '/sys/fs/bpf' || echo BPF_FS_MISSING
+sudo timeout 30s bpftrace -e 'tracepoint:tcp:tcp_retransmit_skb { @[comm] = count(); }'
 ```
 
 ## Notes

@@ -24,7 +24,8 @@ func TestSelectLLMClientNone(t *testing.T) {
 	t.Setenv("KAI_PROVIDER", "")
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("HOME", t.TempDir())
 	if selectLLMClient() != nil {
-		t.Fatalf("expected nil client when no API keys are set")
+		t.Fatalf("expected nil client when no API keys or account-login tokens are set")
 	}
 }

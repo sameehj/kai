@@ -3,6 +3,7 @@ package skill
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -33,5 +34,33 @@ func TestNormalize(t *testing.T) {
 	}
 	if got := Normalize("mailing-list"); got != "mailing list" {
 		t.Fatalf("expected mailing list, got %q", got)
+	}
+}
+
+func TestSelectRelevantNestedSkillFromMetadata(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "skills", "kernel", "lore-search")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	content := `---
+name: linux-kernel-mailing-list-search
+description: Search and analyze Linux kernel mailing lists on lore.kernel.org.
+---
+`
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write skill: %v", err)
+	}
+
+	reg := NewRegistry(dir)
+	list := reg.List()
+	if !slices.Contains(list, "kernel/lore-search") {
+		t.Fatalf("expected nested skill listed, got %v", list)
+	}
+
+	msgs := []string{"can you check the linux kernel mailing list and latest linus comments?"}
+	out := reg.SelectRelevant(msgs)
+	if !slices.Contains(out, "kernel/lore-search") {
+		t.Fatalf("expected kernel/lore-search selected, got %v", out)
 	}
 }

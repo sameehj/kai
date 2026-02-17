@@ -14,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/sameehj/kai/pkg/session"
+	"github.com/sameehj/kai/pkg/tool"
 )
 
 const mcpInstructions = `You are connected to KAI, a local AI assistant gateway.
@@ -77,6 +78,13 @@ func (a *MCPAdapter) Start(ctx context.Context) error {
 					"instructions": mcpInstructions,
 				}
 				_ = writeRPCResponse(writer, req.ID, result, nil)
+			case "tools/list":
+				tools, err := a.handleToolsList()
+				if err != nil {
+					_ = writeRPCResponse(writer, req.ID, nil, &rpcError{-32000, err.Error()})
+					return
+				}
+				_ = writeRPCResponse(writer, req.ID, MCPToolsListResponse{Tools: tools}, nil)
 			case "message":
 				var params mcpMessageParams
 				if err := json.Unmarshal(req.Params, &params); err != nil {
@@ -126,6 +134,30 @@ func (a *MCPAdapter) ensureConn() (*websocket.Conn, error) {
 	}
 	a.conn = conn
 	return conn, nil
+}
+
+type MCPTool struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	InputSchema map[string]interface{} `json:"inputSchema"`
+}
+
+type MCPToolsListResponse struct {
+	Tools []MCPTool `json:"tools"`
+}
+
+func (a *MCPAdapter) handleToolsList() ([]MCPTool, error) {
+	registry := tool.NewRegistry()
+	tools := registry.List()
+	out := make([]MCPTool, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, MCPTool{
+			Name:        t.Name(),
+			Description: t.Description(),
+			InputSchema: t.Schema(),
+		})
+	}
+	return out, nil
 }
 
 type rpcRequest struct {

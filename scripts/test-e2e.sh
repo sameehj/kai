@@ -44,7 +44,7 @@ trap cleanup EXIT
 
 # Wait for gateway
 for i in {1..20}; do
-  if curl -s http://127.0.0.1:18789/health >/dev/null 2>&1; then
+  if curl -s http://127.0.0.1:18790/health >/dev/null 2>&1; then
     break
   fi
   sleep 0.2

@@ -1,6 +1,8 @@
 package llm
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/sameehj/kai/pkg/agent"
@@ -47,5 +49,18 @@ func TestConvertOpenAIMessagesToolUse(t *testing.T) {
 	}
 	if out[0].ToolCalls[0].Function.Name != "exec" {
 		t.Fatalf("expected exec tool, got %q", out[0].ToolCalls[0].Function.Name)
+	}
+}
+
+func TestOpenAIMessageMarshalAlwaysIncludesContent(t *testing.T) {
+	t.Logf("openai message should always include content field to avoid null/omitted content errors")
+	msg := openAIMessage{Role: "assistant"}
+	b, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(b)
+	if !strings.Contains(s, `"content":""`) {
+		t.Fatalf("expected empty string content field, got %s", s)
 	}
 }

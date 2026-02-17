@@ -46,10 +46,18 @@ func (t *ExecTool) Execute(ctx context.Context, input map[string]interface{}) (s
 		log.Printf("tool: exec command=%s cwd=%s", truncate(cmd, 200), cwd)
 	}
 	res, err := t.executor.Run(cmd, cwd)
-	if err != nil {
-		return fmt.Sprintf("Exit code %d\nStderr: %s\nStdout: %s", res.Code, res.Stderr, res.Stdout), nil
+	if res == nil {
+		// Input validation and blocked-command errors may return nil result.
+		if err != nil {
+			return fmt.Sprintf("Command failed before execution: %v", err), nil
+		}
+		return "Command produced no result.", nil
 	}
-	return res.Stdout, nil
+	out := formatExecResult(res.Code, res.Stdout, res.Stderr)
+	if err != nil {
+		out += fmt.Sprintf("\nNote: %v", err)
+	}
+	return out, nil
 }
 
 func truncate(s string, limit int) string {
@@ -60,4 +68,16 @@ func truncate(s string, limit int) string {
 		return s
 	}
 	return strings.TrimSpace(s[:limit]) + "..."
+}
+
+func formatExecResult(code int, stdout, stderr string) string {
+	stdout = strings.TrimSpace(stdout)
+	stderr = strings.TrimSpace(stderr)
+	if stdout == "" {
+		stdout = "(empty)"
+	}
+	if stderr == "" {
+		stderr = "(empty)"
+	}
+	return fmt.Sprintf("Exit code: %d\nStdout:\n%s\nStderr:\n%s", code, stdout, stderr)
 }

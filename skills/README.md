@@ -14,4 +14,8 @@ This repository organizes skills by domain:
 First flagship skill:
 - `skills/ebpf/network-debug/SKILL.md`
 
+Additional examples:
+- `skills/kernel/patch-check/SKILL.md`
+- `skills/kernel/lore-search/SKILL.md`
+
 This skill demonstrates the "fast-to-deep" diagnostic approach and serves as the baseline pattern for future skill authoring.

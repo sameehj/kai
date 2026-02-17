@@ -40,8 +40,13 @@ func NewOpenAIFromEnv() *OpenAIClient {
 }
 
 func (c *OpenAIClient) Complete(ctx context.Context, req agent.CompletionRequest) (*agent.CompletionResponse, error) {
-	if c.apiKey == "" {
-		return nil, errors.New("missing OPENAI_API_KEY")
+	bearer := strings.TrimSpace(c.apiKey)
+	if bearer == "" {
+		var err error
+		bearer, err = openAIBearerFromCodexAuth()
+		if err != nil || bearer == "" {
+			return nil, errors.New("missing OPENAI_API_KEY and no account-login token found (run `codex login` or set OPENAI_API_KEY)")
+		}
 	}
 	msgs := convertOpenAIMessages(req.Messages)
 	if req.Prompt != "" {
@@ -65,7 +70,7 @@ func (c *OpenAIClient) Complete(ctx context.Context, req agent.CompletionRequest
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	httpReq.Header.Set("Authorization", "Bearer "+bearer)
 
 	if openAIDebugEnabled() {
 		log.Printf("openai: model=%s messages=%d tools=%d", c.model, len(msgs), len(payload.Tools))
@@ -125,7 +130,7 @@ type openAIRequest struct {
 
 type openAIMessage struct {
 	Role       string           `json:"role"`
-	Content    string           `json:"content,omitempty"`
+	Content    string           `json:"content"`
 	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string           `json:"tool_call_id,omitempty"`
 }

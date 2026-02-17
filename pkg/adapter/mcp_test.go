@@ -77,3 +77,25 @@ func TestWriteRPCResponsePlainJSON(t *testing.T) {
 		t.Fatalf("invalid json body: %v", err)
 	}
 }
+
+func TestHandleToolsList(t *testing.T) {
+	t.Logf("handleToolsList returns registered tools")
+	a := NewMCPAdapter("ws://127.0.0.1:18790/ws")
+	tools, err := a.handleToolsList()
+	if err != nil {
+		t.Fatalf("handleToolsList: %v", err)
+	}
+	if len(tools) == 0 {
+		t.Fatalf("expected tools, got 0")
+	}
+	foundExec := false
+	for _, t := range tools {
+		if t.Name == "exec" {
+			foundExec = true
+			break
+		}
+	}
+	if !foundExec {
+		t.Fatalf("expected exec tool in list")
+	}
+}

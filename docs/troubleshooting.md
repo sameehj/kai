@@ -1,12 +1,12 @@
 # Troubleshooting
 
 ## Gateway won't start
-- Ensure port 18789 is free
+- Ensure port 18790 is free
 - Try a different port and update your client
 
 ## No response in chat
 - Verify the gateway is running
-- Check that `kai chat` connects to `ws://127.0.0.1:18789/ws`
+- Check that `kai chat` connects to `ws://127.0.0.1:18790/ws`
 
 ## Skills not found
 - Ensure skills are in `skills/<name>/SKILL.md`

@@ -101,6 +101,18 @@ cd ~/my-project
 kai init
 ```
 
+### 2.5) Authenticate model provider (choose one)
+API key:
+```bash
+export OPENAI_API_KEY="sk-..."
+export OPENAI_MODEL="gpt-4o-mini"
+```
+
+Account login (via Codex):
+```bash
+kai login
+```
+
 ### 3) Start gateway
 ```bash
 kai gateway

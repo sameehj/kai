@@ -14,14 +14,12 @@ Add a Linux-only eBPF execution path while keeping KAI cross-platform compilable
   - checks BTF and `/sys/fs/bpf`
 - `pkg/ebpf/manager_stub.go`
   - non-Linux fallback returning `ErrNotSupported`
-- `pkg/tool/ebpf_tcp_retransmit.go`
-  - validates input duration and checks eBPF readiness
 
 ## Why this shape
 
 - macOS/Windows developers can still compile and run tests
 - Linux hosts can run real eBPF loading path
-- future skills can reuse the same manager
+- future skills can reuse the same manager via primitive `exec` workflows
 
 ## Next implementation step
 
