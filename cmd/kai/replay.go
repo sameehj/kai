@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kai-ai/kai/pkg/config"
+	"github.com/kai-ai/kai/pkg/daemon"
 	"github.com/kai-ai/kai/pkg/models"
 	"github.com/kai-ai/kai/pkg/storage"
 )
@@ -30,11 +31,6 @@ func newReplayCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			db, err := storage.Open(cfg.Daemon.DBPath)
-			if err != nil {
-				return err
-			}
-			defer db.Close()
 
 			id := ""
 			filterPath := ""
@@ -43,23 +39,17 @@ func newReplayCmd() *cobra.Command {
 			}
 			if len(args) > 0 && args[0] != "last" {
 				id = args[0]
-			} else {
-				var aid *models.AgentID
-				if agent != "" {
-					a := models.AgentID(strings.ToLower(agent))
-					aid = &a
-				}
-				s, err := db.GetLastSession(aid)
-				if err != nil {
-					return err
-				}
-				id = s.ID
 			}
-
-			replay, err := db.GetReplay(id)
+			var aid *models.AgentID
+			if agent != "" {
+				a := models.AgentID(strings.ToLower(agent))
+				aid = &a
+			}
+			resp, err := rpcCall(cfg, daemon.RPCRequest{Action: "replay", Agent: aid, SessionID: id})
 			if err != nil {
 				return err
 			}
+			replay := resp.Replay
 			if asJSON {
 				b, _ := json.MarshalIndent(replay, "", "  ")
 				fmt.Println(string(b))

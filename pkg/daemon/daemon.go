@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -39,7 +41,7 @@ type Daemon struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	events int64
+	events atomic.Int64
 	start  time.Time
 }
 
@@ -88,6 +90,7 @@ func (d *Daemon) Start() error {
 				if agentEv == nil {
 					continue
 				}
+				d.events.Add(1)
 				switch agentEv.ActionType {
 				case models.ActionFileCreate:
 					d.snap.OnFileEvent(agentEv.SessionID, agentEv.Target, models.FileCreated)
@@ -136,18 +139,101 @@ func (d *Daemon) serve(listener net.Listener) {
 		go func(c net.Conn) {
 			defer d.wg.Done()
 			defer c.Close()
-			enc := json.NewEncoder(c)
-			ch := make(chan models.AgentEvent, 64)
-			d.engine.Watch(ch)
-			for {
-				select {
-				case <-d.ctx.Done():
-					return
-				case ev := <-ch:
-					_ = enc.Encode(ev)
-				}
-			}
+			d.handleConn(c)
 		}(conn)
+	}
+}
+
+func (d *Daemon) handleConn(c net.Conn) {
+	dec := json.NewDecoder(c)
+	enc := json.NewEncoder(c)
+	var req RPCRequest
+	if err := dec.Decode(&req); err != nil {
+		_ = enc.Encode(RPCResponse{OK: false, Error: "invalid request"})
+		return
+	}
+	switch req.Action {
+	case "watch":
+		d.handleWatch(req, enc)
+	case "status":
+		_ = enc.Encode(RPCResponse{OK: true, Status: &RPCStatus{Running: true, PID: os.Getpid(), Uptime: time.Since(d.start), Events: d.events.Load()}})
+	case "sessions":
+		limit := req.Limit
+		if limit <= 0 {
+			limit = 20
+		}
+		sessions, err := d.store.GetSessions(limit, req.Agent)
+		if err != nil {
+			_ = enc.Encode(RPCResponse{OK: false, Error: err.Error()})
+			return
+		}
+		_ = enc.Encode(RPCResponse{OK: true, Sessions: sessions})
+	case "replay":
+		id := req.SessionID
+		if id == "" {
+			s, err := d.store.GetLastSession(req.Agent)
+			if err != nil {
+				_ = enc.Encode(RPCResponse{OK: false, Error: err.Error()})
+				return
+			}
+			id = s.ID
+		}
+		r, err := d.store.GetReplay(id)
+		if err != nil {
+			_ = enc.Encode(RPCResponse{OK: false, Error: err.Error()})
+			return
+		}
+		_ = enc.Encode(RPCResponse{OK: true, Replay: r})
+	case "report":
+		sessions, err := d.store.GetSessions(500, nil)
+		if err != nil {
+			_ = enc.Encode(RPCResponse{OK: false, Error: err.Error()})
+			return
+		}
+		agg := map[string]ReportRow{}
+		for _, s := range sessions {
+			key := string(s.Agent)
+			row := agg[key]
+			row.Agent = key
+			row.Sessions++
+			row.FileOps += s.FileWrites + s.FileCreates + s.FileDeletes
+			row.Execs += s.ExecCount
+			if s.MaxRisk > row.MaxRisk {
+				row.MaxRisk = s.MaxRisk
+			}
+			agg[key] = row
+		}
+		rows := make([]ReportRow, 0, len(agg))
+		for _, row := range agg {
+			rows = append(rows, row)
+		}
+		_ = enc.Encode(RPCResponse{OK: true, Report: rows})
+	default:
+		_ = enc.Encode(RPCResponse{OK: false, Error: "unknown action"})
+	}
+}
+
+func (d *Daemon) handleWatch(req RPCRequest, enc *json.Encoder) {
+	ch := make(chan models.AgentEvent, 128)
+	d.engine.Watch(ch)
+	for {
+		select {
+		case <-d.ctx.Done():
+			return
+		case ev := <-ch:
+			if req.Agent != nil && ev.Agent != *req.Agent {
+				continue
+			}
+			if req.MinRisk > 0 && ev.RiskScore < req.MinRisk {
+				continue
+			}
+			if err := enc.Encode(RPCResponse{OK: true, Event: &ev}); err != nil {
+				if !errors.Is(err, io.EOF) {
+					_ = err
+				}
+				return
+			}
+		}
 	}
 }
 

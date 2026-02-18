@@ -1,16 +1,14 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/kai-ai/kai/pkg/config"
+	"github.com/kai-ai/kai/pkg/daemon"
 	"github.com/kai-ai/kai/pkg/models"
 )
 
@@ -25,23 +23,29 @@ func newWatchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			conn, err := net.Dial("unix", cfg.Daemon.SocketPath)
+			conn, enc, dec, err := rpcConn(cfg)
 			if err != nil {
-				return fmt.Errorf("connect daemon: %w", err)
+				return err
 			}
 			defer conn.Close()
-			dec := json.NewDecoder(conn)
+
+			var aid *models.AgentID
+			if agent != "" {
+				a := models.AgentID(strings.ToLower(agent))
+				aid = &a
+			}
+			if err := enc.Encode(daemon.RPCRequest{Action: "watch", Agent: aid, MinRisk: minRisk}); err != nil {
+				return err
+			}
 			for {
-				var ev models.AgentEvent
-				if err := dec.Decode(&ev); err != nil {
+				var resp daemon.RPCResponse
+				if err := dec.Decode(&resp); err != nil {
 					return err
 				}
-				if minRisk > 0 && ev.RiskScore < minRisk {
+				if !resp.OK || resp.Event == nil {
 					continue
 				}
-				if agent != "" && !strings.EqualFold(string(ev.Agent), agent) {
-					continue
-				}
+				ev := resp.Event
 				warn := ""
 				if len(ev.RiskLabels) > 0 {
 					warn = " \u26A0 " + strings.Join(ev.RiskLabels, ", ")
@@ -52,7 +56,6 @@ func newWatchCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&agent, "agent", "", "filter by agent")
 	cmd.Flags().IntVar(&minRisk, "min-risk", 0, "minimum risk score")
-	_ = time.Second
 	return cmd
 }
 

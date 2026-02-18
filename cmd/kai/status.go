@@ -8,7 +8,6 @@ import (
 
 	"github.com/kai-ai/kai/pkg/config"
 	"github.com/kai-ai/kai/pkg/daemon"
-	"github.com/kai-ai/kai/pkg/storage"
 )
 
 func newStatusCmd() *cobra.Command {
@@ -20,13 +19,15 @@ func newStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			st, _ := daemon.RunningStatus(cfg)
-			db, err := storage.Open(cfg.Daemon.DBPath)
+			statusResp, err := rpcCall(cfg, daemon.RPCRequest{Action: "status"})
 			if err != nil {
 				return err
 			}
-			defer db.Close()
-			sessions, _ := db.GetSessions(10, nil)
+			sessionsResp, err := rpcCall(cfg, daemon.RPCRequest{Action: "sessions", Limit: 10})
+			if err != nil {
+				return err
+			}
+			sessions := sessionsResp.Sessions
 
 			fmt.Println("Active agents:")
 			now := time.Now()
@@ -35,8 +36,8 @@ func newStatusCmd() *cobra.Command {
 					fmt.Printf("  ● %-12s session=%s active %s\n", stringsUpper(string(s.Agent)), s.ID, now.Sub(s.StartedAt).Truncate(time.Second))
 				}
 			}
-			if st.Running {
-				fmt.Printf("\nDaemon: running pid=%d\n", st.PID)
+			if statusResp.Status != nil && statusResp.Status.Running {
+				fmt.Printf("\nDaemon: running pid=%d uptime=%s events=%d\n", statusResp.Status.PID, statusResp.Status.Uptime.Truncate(time.Second), statusResp.Status.Events)
 			} else {
 				fmt.Println("\nDaemon: stopped")
 			}

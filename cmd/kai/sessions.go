@@ -8,8 +8,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kai-ai/kai/pkg/config"
+	"github.com/kai-ai/kai/pkg/daemon"
 	"github.com/kai-ai/kai/pkg/models"
-	"github.com/kai-ai/kai/pkg/storage"
 )
 
 func newSessionsCmd() *cobra.Command {
@@ -23,20 +23,16 @@ func newSessionsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			db, err := storage.Open(cfg.Daemon.DBPath)
-			if err != nil {
-				return err
-			}
-			defer db.Close()
 			var aid *models.AgentID
 			if agent != "" {
 				a := models.AgentID(strings.ToLower(agent))
 				aid = &a
 			}
-			sessions, err := db.GetSessions(limit, aid)
+			resp, err := rpcCall(cfg, daemon.RPCRequest{Action: "sessions", Agent: aid, Limit: limit})
 			if err != nil {
 				return err
 			}
+			sessions := resp.Sessions
 			for _, s := range sessions {
 				end := "active"
 				if s.EndedAt != nil {

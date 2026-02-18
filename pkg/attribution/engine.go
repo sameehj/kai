@@ -3,6 +3,7 @@ package attribution
 import (
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kai-ai/kai/pkg/models"
@@ -11,6 +12,7 @@ import (
 )
 
 type Engine struct {
+	mu       sync.RWMutex
 	sm       *SessionManager
 	dnsCache *DNSCache
 	store    *storage.DB
@@ -25,6 +27,8 @@ func NewEngine(store *storage.DB) *Engine {
 }
 
 func (e *Engine) Watch(ch chan models.AgentEvent) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.watchers = append(e.watchers, ch)
 }
 
@@ -54,10 +58,15 @@ func (e *Engine) Process(raw models.RawEvent) *models.AgentEvent {
 	session := e.sm.OnEvent(&ae)
 	e.persist(session, &ae)
 	if raw.PID > 0 {
+		e.mu.Lock()
 		e.pidAgent[raw.PID] = ae.Agent
+		e.mu.Unlock()
 	}
 
-	for _, w := range e.watchers {
+	e.mu.RLock()
+	watchers := append([]chan models.AgentEvent(nil), e.watchers...)
+	e.mu.RUnlock()
+	for _, w := range watchers {
 		select {
 		case w <- ae:
 		default:
@@ -74,12 +83,16 @@ func (e *Engine) classify(raw models.RawEvent, now time.Time) models.AgentID {
 			}
 		}
 	}
+	e.mu.RLock()
 	if id, ok := e.pidAgent[raw.PID]; ok {
+		e.mu.RUnlock()
 		return id
 	}
 	if id, ok := e.pidAgent[raw.PPID]; ok {
+		e.mu.RUnlock()
 		return id
 	}
+	e.mu.RUnlock()
 
 	if raw.ActionType == models.ActionNetConnect {
 		host := raw.Target

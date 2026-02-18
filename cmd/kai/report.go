@@ -2,12 +2,13 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/kai-ai/kai/pkg/config"
-	"github.com/kai-ai/kai/pkg/storage"
+	"github.com/kai-ai/kai/pkg/daemon"
 )
 
 func newReportCmd() *cobra.Command {
@@ -20,31 +21,16 @@ func newReportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			db, err := storage.Open(cfg.Daemon.DBPath)
+			resp, err := rpcCall(cfg, daemon.RPCRequest{Action: "report"})
 			if err != nil {
 				return err
-			}
-			defer db.Close()
-			sessions, err := db.GetSessions(200, nil)
-			if err != nil {
-				return err
-			}
-			agg := map[string][4]int{}
-			for _, s := range sessions {
-				k := strings.ToUpper(string(s.Agent))
-				v := agg[k]
-				v[0]++
-				v[1] += s.FileWrites + s.FileCreates + s.FileDeletes
-				v[2] += s.ExecCount
-				if s.MaxRisk > v[3] {
-					v[3] = s.MaxRisk
-				}
-				agg[k] = v
 			}
 			_ = last
+			rows := resp.Report
+			sort.Slice(rows, func(i, j int) bool { return strings.ToUpper(rows[i].Agent) < strings.ToUpper(rows[j].Agent) })
 			fmt.Println("AGENT      SESSIONS   FILE_OPS   EXECS   MAX_RISK")
-			for k, v := range agg {
-				fmt.Printf("%-10s %-10d %-10d %-7d %-8d\n", k, v[0], v[1], v[2], v[3])
+			for _, row := range rows {
+				fmt.Printf("%-10s %-10d %-10d %-7d %-8d\n", strings.ToUpper(row.Agent), row.Sessions, row.FileOps, row.Execs, row.MaxRisk)
 			}
 			return nil
 		},
