@@ -425,8 +425,9 @@ func (d *DB) getSessionByID(id string) (*models.Session, error) {
 func scanSession(row *sql.Row) (*models.Session, error) {
 	var s models.Session
 	var agent string
-	var started, ended, last int64
-	var duration int64
+	var started, last int64
+	var ended sql.NullInt64
+	var duration sql.NullInt64
 	var cwds, labels sql.NullString
 	var repoRoot, repoBranch sql.NullString
 	if err := row.Scan(
@@ -438,11 +439,13 @@ func scanSession(row *sql.Row) (*models.Session, error) {
 	}
 	s.Agent = models.AgentID(agent)
 	s.StartedAt = fromTS(started)
-	if ended != 0 {
-		t := fromTS(ended)
+	if ended.Valid {
+		t := fromTS(ended.Int64)
 		s.EndedAt = &t
 	}
-	s.Duration = time.Duration(duration) * time.Millisecond
+	if duration.Valid {
+		s.Duration = time.Duration(duration.Int64) * time.Millisecond
+	}
 	s.LastActivity = fromTS(last)
 	s.CWDs = parseJSONArray[string](cwds)
 	if repoRoot.Valid {
@@ -458,8 +461,9 @@ func scanSession(row *sql.Row) (*models.Session, error) {
 func scanSessionRow(rows *sql.Rows) (*models.Session, error) {
 	var s models.Session
 	var agent string
-	var started, ended, last int64
-	var duration int64
+	var started, last int64
+	var ended sql.NullInt64
+	var duration sql.NullInt64
 	var cwds, labels sql.NullString
 	var repoRoot, repoBranch sql.NullString
 	if err := rows.Scan(
@@ -471,11 +475,13 @@ func scanSessionRow(rows *sql.Rows) (*models.Session, error) {
 	}
 	s.Agent = models.AgentID(agent)
 	s.StartedAt = fromTS(started)
-	if ended != 0 {
-		t := fromTS(ended)
+	if ended.Valid {
+		t := fromTS(ended.Int64)
 		s.EndedAt = &t
 	}
-	s.Duration = time.Duration(duration) * time.Millisecond
+	if duration.Valid {
+		s.Duration = time.Duration(duration.Int64) * time.Millisecond
+	}
 	s.LastActivity = fromTS(last)
 	s.CWDs = parseJSONArray[string](cwds)
 	if repoRoot.Valid {
