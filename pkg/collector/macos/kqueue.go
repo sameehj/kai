@@ -21,12 +21,18 @@ import (
 type collector struct {
 	mu       sync.Mutex
 	seenProc map[int]struct{}
+	seenConn map[string]time.Time
 	watched  map[int]struct{}
 	kq       int
 }
 
 func New() *collector {
-	return &collector{seenProc: map[int]struct{}{}, watched: map[int]struct{}{}, kq: -1}
+	return &collector{
+		seenProc: map[int]struct{}{},
+		seenConn: map[string]time.Time{},
+		watched:  map[int]struct{}{},
+		kq:       -1,
+	}
 }
 
 func (c *collector) Start(ctx context.Context, out chan<- models.RawEvent) error {
@@ -51,6 +57,7 @@ func (c *collector) Start(ctx context.Context, out chan<- models.RawEvent) error
 			return nil
 		case <-ticker.C:
 			c.scanProc(out)
+			c.scanNet(out)
 			if kqErr == nil {
 				c.bootstrapKqueue()
 			}
@@ -262,4 +269,80 @@ func (c *collector) scanProc(out chan<- models.RawEvent) {
 		}
 	}
 	_ = cmd.Wait()
+}
+
+func (c *collector) scanNet(out chan<- models.RawEvent) {
+	cmd := exec.Command("lsof", "-nP", "-iTCP", "-sTCP:ESTABLISHED", "-Fpcn")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		return
+	}
+	defer cmd.Wait()
+
+	var (
+		pid  int
+		proc string
+	)
+	s := bufio.NewScanner(stdout)
+	for s.Scan() {
+		line := strings.TrimSpace(s.Text())
+		if line == "" {
+			continue
+		}
+		switch line[0] {
+		case 'p':
+			pid, _ = strconv.Atoi(line[1:])
+		case 'c':
+			proc = line[1:]
+		case 'n':
+			remote := parseRemoteFromLsof(line[1:])
+			if remote == "" {
+				continue
+			}
+			key := strconv.Itoa(pid) + "|" + remote
+			if _, ok := c.seenConn[key]; ok {
+				continue
+			}
+			c.seenConn[key] = time.Now()
+			out <- models.RawEvent{
+				Timestamp:   time.Now(),
+				PID:         pid,
+				ProcessName: proc,
+				ActionType:  models.ActionNetConnect,
+				Target:      remote,
+				Platform:    "macos",
+			}
+		}
+	}
+	c.gcConnCache()
+}
+
+func parseRemoteFromLsof(name string) string {
+	parts := strings.Split(name, "->")
+	if len(parts) != 2 {
+		return ""
+	}
+	right := strings.TrimSpace(parts[1])
+	if idx := strings.Index(right, " "); idx >= 0 {
+		right = right[:idx]
+	}
+	if idx := strings.Index(right, "("); idx >= 0 {
+		right = strings.TrimSpace(right[:idx])
+	}
+	if right == "" || !strings.Contains(right, ":") {
+		return ""
+	}
+	return right
+}
+
+func (c *collector) gcConnCache() {
+	cut := time.Now().Add(-2 * time.Minute)
+	for k, t := range c.seenConn {
+		if t.Before(cut) {
+			delete(c.seenConn, k)
+		}
+	}
 }

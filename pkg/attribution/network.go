@@ -81,6 +81,6 @@ func (c *DNSCache) ResolveIP(ip string) (*string, bool) {
 }
 
 func isKnownAIDomain(d string) bool {
-	_, ok := KnownAIDomains[d]
+	_, ok := AgentForDomain(d)
 	return ok
 }

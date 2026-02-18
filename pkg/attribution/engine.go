@@ -100,7 +100,7 @@ func (e *Engine) classify(raw models.RawEvent, now time.Time) models.AgentID {
 			host = strings.Split(host, ":")[0]
 		}
 		if domain, isAI := e.dnsCache.ResolveIP(host); isAI && domain != nil {
-			if id, ok := KnownAIDomains[*domain]; ok {
+			if id, ok := AgentForDomain(*domain); ok {
 				return id
 			}
 		}
