@@ -50,9 +50,8 @@ func (c *collector) Start(ctx context.Context, out chan<- models.RawEvent) error
 			}
 			return nil
 		case <-ticker.C:
-			if kqErr != nil {
-				c.scanProc(out)
-			} else {
+			c.scanProc(out)
+			if kqErr == nil {
 				c.bootstrapKqueue()
 			}
 		}
