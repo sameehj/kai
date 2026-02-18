@@ -173,17 +173,6 @@ func (d *DB) UpsertSessionFile(sf *models.SessionFile, snap *models.Snapshot) er
 	}
 	defer tx.Rollback()
 
-	if snap != nil {
-		_, err = tx.Exec(`
-			INSERT OR REPLACE INTO snapshots (id, session_file_id, captured_at, before_text, after_text, before_hash, after_hash, lines_added, lines_removed, compressed)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, snap.ID, snap.SessionFileID, ts(snap.CapturedAt), nilOrBytes(snap.BeforeText), nilOrBytes(snap.AfterText), nullStr(snap.BeforeHash), nullStr(snap.AfterHash), snap.LinesAdded, snap.LinesRemoved, boolInt(snap.Compressed))
-		if err != nil {
-			return err
-		}
-		sf.SnapshotID = &snap.ID
-	}
-
 	_, err = tx.Exec(`
 		INSERT INTO session_files (
 			id, session_id, file_path, change_type, lines_added, lines_removed, save_count, first_seen, last_seen, snapshot_id, is_redacted
@@ -199,6 +188,23 @@ func (d *DB) UpsertSessionFile(sf *models.SessionFile, snap *models.Snapshot) er
 	`, sf.ID, sf.SessionID, sf.FilePath, string(sf.ChangeType), sf.LinesAdded, sf.LinesRemoved, sf.SaveCount, ts(sf.FirstSeen), ts(sf.LastSeen), nullStr(sf.SnapshotID), boolInt(sf.IsRedacted))
 	if err != nil {
 		return err
+	}
+
+	if snap != nil {
+		if snap.SessionFileID == "" {
+			snap.SessionFileID = sf.ID
+		}
+		_, err = tx.Exec(`
+			INSERT OR REPLACE INTO snapshots (id, session_file_id, captured_at, before_text, after_text, before_hash, after_hash, lines_added, lines_removed, compressed)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, snap.ID, snap.SessionFileID, ts(snap.CapturedAt), nilOrBytes(snap.BeforeText), nilOrBytes(snap.AfterText), nullStr(snap.BeforeHash), nullStr(snap.AfterHash), snap.LinesAdded, snap.LinesRemoved, boolInt(snap.Compressed))
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`UPDATE session_files SET snapshot_id=? WHERE session_id=? AND file_path=?`, snap.ID, sf.SessionID, sf.FilePath)
+		if err != nil {
+			return err
+		}
 	}
 
 	return tx.Commit()
