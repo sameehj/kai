@@ -67,6 +67,29 @@ func (sm *SessionManager) CloseAll() {
 	sm.active = map[models.AgentID]*models.Session{}
 }
 
+func (sm *SessionManager) GuessActiveAgent(now time.Time) (models.AgentID, bool) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	var (
+		bestAgent models.AgentID
+		bestTime  time.Time
+		found     bool
+	)
+	for agent, s := range sm.active {
+		if sm.isExpired(s, now) {
+			sm.closeSessionLocked(s, now)
+			delete(sm.active, agent)
+			continue
+		}
+		if !found || s.LastActivity.After(bestTime) {
+			bestAgent = agent
+			bestTime = s.LastActivity
+			found = true
+		}
+	}
+	return bestAgent, found
+}
+
 func (sm *SessionManager) closeSessionLocked(s *models.Session, now time.Time) {
 	s.EndedAt = &now
 	s.Duration = now.Sub(s.StartedAt)

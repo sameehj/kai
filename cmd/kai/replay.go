@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
+	"github.com/pmezard/go-difflib/difflib"
 	"github.com/spf13/cobra"
 
 	"github.com/kai-ai/kai/pkg/config"
@@ -16,10 +20,11 @@ import (
 func newReplayCmd() *cobra.Command {
 	var agent string
 	var asJSON bool
+	var withDiff bool
 	cmd := &cobra.Command{
-		Use:   "replay [session-id|last]",
+		Use:   "replay [session-id|last] [file-path]",
 		Short: "Replay session",
-		Args:  cobra.MaximumNArgs(1),
+		Args:  cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load("")
 			if err != nil {
@@ -32,6 +37,10 @@ func newReplayCmd() *cobra.Command {
 			defer db.Close()
 
 			id := ""
+			filterPath := ""
+			if len(args) == 2 {
+				filterPath = args[1]
+			}
 			if len(args) > 0 && args[0] != "last" {
 				id = args[0]
 			} else {
@@ -57,11 +66,15 @@ func newReplayCmd() *cobra.Command {
 				return nil
 			}
 			printReplay(replay)
+			if withDiff {
+				printReplayDiffs(replay, filterPath)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&agent, "agent", "", "replay most recent session for agent")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "json output")
+	cmd.Flags().BoolVar(&withDiff, "diff", false, "include inline diffs")
 	return cmd
 }
 
@@ -139,4 +152,52 @@ func printReplay(r *storage.ReplayResult) {
 		}
 	}
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+}
+
+func printReplayDiffs(r *storage.ReplayResult, filterPath string) {
+	for _, f := range r.Files {
+		if filterPath != "" && f.FilePath != filterPath {
+			continue
+		}
+		snap := r.Snapshots[f.ID]
+		if snap == nil {
+			continue
+		}
+		before := decodeMaybeGzip(snap.BeforeText)
+		after := decodeMaybeGzip(snap.AfterText)
+		diff := unifiedDiff(f.FilePath, before, after)
+		if diff == "" {
+			continue
+		}
+		fmt.Println()
+		fmt.Printf("%s  (%s · %s)\n\n", f.FilePath, strings.ToUpper(string(r.Session.Agent)), snap.CapturedAt.Local().Format("15:04:05"))
+		fmt.Print(diff)
+	}
+}
+
+func decodeMaybeGzip(v *[]byte) string {
+	if v == nil || len(*v) == 0 {
+		return ""
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(*v))
+	if err == nil {
+		defer zr.Close()
+		b, readErr := io.ReadAll(zr)
+		if readErr == nil {
+			return string(b)
+		}
+	}
+	return string(*v)
+}
+
+func unifiedDiff(path, before, after string) string {
+	ud := difflib.UnifiedDiff{
+		A:        difflib.SplitLines(before),
+		B:        difflib.SplitLines(after),
+		FromFile: "a/" + path,
+		ToFile:   "b/" + path,
+		Context:  2,
+	}
+	d, _ := difflib.GetUnifiedDiffString(ud)
+	return d
 }

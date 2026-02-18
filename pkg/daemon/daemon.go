@@ -84,7 +84,18 @@ func (d *Daemon) Start() error {
 			case <-d.ctx.Done():
 				return
 			case ev := <-rawEvents:
-				d.engine.Process(ev)
+				agentEv := d.engine.Process(ev)
+				if agentEv == nil {
+					continue
+				}
+				switch agentEv.ActionType {
+				case models.ActionFileCreate:
+					d.snap.OnFileEvent(agentEv.SessionID, agentEv.Target, models.FileCreated)
+				case models.ActionFileWrite:
+					d.snap.OnFileEvent(agentEv.SessionID, agentEv.Target, models.FileModified)
+				case models.ActionFileDelete:
+					d.snap.OnFileDelete(agentEv.SessionID, agentEv.Target)
+				}
 			}
 		}
 	}()

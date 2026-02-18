@@ -4,6 +4,8 @@ go 1.24.0
 
 require (
 	github.com/BurntSushi/toml v1.5.0
+	github.com/fsnotify/fsnotify v1.9.0
+	github.com/pmezard/go-difflib v1.0.0
 	github.com/spf13/cobra v1.10.1
 	modernc.org/sqlite v1.40.0
 )

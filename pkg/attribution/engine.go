@@ -15,12 +15,13 @@ type Engine struct {
 	dnsCache *DNSCache
 	store    *storage.DB
 	watchers []chan models.AgentEvent
+	pidAgent map[int]models.AgentID
 }
 
 func NewEngine(store *storage.DB) *Engine {
 	cache := NewDNSCache(store)
 	PreResolveKnownDomains(cache)
-	return &Engine{sm: NewSessionManager(store), dnsCache: cache, store: store}
+	return &Engine{sm: NewSessionManager(store), dnsCache: cache, store: store, pidAgent: map[int]models.AgentID{}}
 }
 
 func (e *Engine) Watch(ch chan models.AgentEvent) {
@@ -31,7 +32,7 @@ func (e *Engine) Close() {
 	e.sm.CloseAll()
 }
 
-func (e *Engine) Process(raw models.RawEvent) {
+func (e *Engine) Process(raw models.RawEvent) *models.AgentEvent {
 	ae := models.AgentEvent{
 		ID:          utils.NewID("ev"),
 		Timestamp:   raw.Timestamp,
@@ -41,10 +42,10 @@ func (e *Engine) Process(raw models.RawEvent) {
 		PID:         raw.PID,
 		ProcessName: raw.ProcessName,
 		Platform:    raw.Platform,
-		Agent:       e.classify(raw),
+		Agent:       e.classify(raw, raw.Timestamp),
 	}
 	if ae.Agent == models.AgentUnknown {
-		return
+		return nil
 	}
 	score, labels := ScoreEvent(&ae)
 	ae.RiskScore = score
@@ -52,6 +53,9 @@ func (e *Engine) Process(raw models.RawEvent) {
 
 	session := e.sm.OnEvent(&ae)
 	e.persist(session, &ae)
+	if raw.PID > 0 {
+		e.pidAgent[raw.PID] = ae.Agent
+	}
 
 	for _, w := range e.watchers {
 		select {
@@ -59,15 +63,22 @@ func (e *Engine) Process(raw models.RawEvent) {
 		default:
 		}
 	}
+	return &ae
 }
 
-func (e *Engine) classify(raw models.RawEvent) models.AgentID {
+func (e *Engine) classify(raw models.RawEvent, now time.Time) models.AgentID {
 	for _, sig := range Signatures {
 		for _, name := range sig.ProcessNames {
 			if strings.EqualFold(raw.ProcessName, name) || strings.EqualFold(filepath.Base(raw.ProcessName), name) {
 				return sig.ID
 			}
 		}
+	}
+	if id, ok := e.pidAgent[raw.PID]; ok {
+		return id
+	}
+	if id, ok := e.pidAgent[raw.PPID]; ok {
+		return id
 	}
 
 	if raw.ActionType == models.ActionNetConnect {
@@ -79,6 +90,11 @@ func (e *Engine) classify(raw models.RawEvent) models.AgentID {
 			if id, ok := KnownAIDomains[*domain]; ok {
 				return id
 			}
+		}
+	}
+	if raw.ActionType == models.ActionFileWrite || raw.ActionType == models.ActionFileCreate || raw.ActionType == models.ActionFileDelete {
+		if guessed, ok := e.sm.GuessActiveAgent(now); ok {
+			return guessed
 		}
 	}
 	return models.AgentUnknown
