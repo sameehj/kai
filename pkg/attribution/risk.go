@@ -1,7 +1,11 @@
 package attribution
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/kai-ai/kai/pkg/models"
 )
@@ -47,6 +51,18 @@ var riskRules = []RiskRule{
 	{Score: 70, Label: "recursive delete", Match: func(e *models.AgentEvent) bool {
 		return e.ActionType == models.ActionExec && containsAll(strings.ToLower(e.Target), "rm", "-rf")
 	}},
+	{Score: 60, Label: "home dir deletion", Match: func(e *models.AgentEvent) bool {
+		if e.ActionType != models.ActionFileDelete {
+			return false
+		}
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return false
+		}
+		cleanTarget := filepath.Clean(e.Target)
+		cleanHome := filepath.Clean(home)
+		return cleanTarget == cleanHome || strings.HasPrefix(cleanTarget, cleanHome+string(filepath.Separator))
+	}},
 	{Score: 50, Label: "sudo escalation", Match: func(e *models.AgentEvent) bool {
 		return e.ActionType == models.ActionExec && strings.HasPrefix(strings.TrimSpace(strings.ToLower(e.Target)), "sudo ")
 	}},
@@ -61,6 +77,11 @@ var riskRules = []RiskRule{
 	}},
 }
 
+var (
+	riskMu          sync.Mutex
+	recentFileOpsBy = map[models.AgentID][]time.Time{}
+)
+
 func ScoreEvent(event *models.AgentEvent) (int, []string) {
 	total := 0
 	labels := []string{}
@@ -69,6 +90,10 @@ func ScoreEvent(event *models.AgentEvent) (int, []string) {
 			total += rule.Score
 			labels = append(labels, rule.Label)
 		}
+	}
+	if massFileOperation(event) {
+		total += 55
+		labels = append(labels, "mass file operation")
 	}
 	if total > 100 {
 		total = 100
@@ -105,4 +130,24 @@ func hasExt(s string, exts ...string) bool {
 		}
 	}
 	return false
+}
+
+func massFileOperation(e *models.AgentEvent) bool {
+	if !(e.ActionType == models.ActionFileWrite || e.ActionType == models.ActionFileCreate || e.ActionType == models.ActionFileDelete) {
+		return false
+	}
+	riskMu.Lock()
+	defer riskMu.Unlock()
+	now := e.Timestamp
+	threshold := now.Add(-5 * time.Second)
+	events := recentFileOpsBy[e.Agent]
+	kept := events[:0]
+	for _, t := range events {
+		if t.After(threshold) {
+			kept = append(kept, t)
+		}
+	}
+	kept = append(kept, now)
+	recentFileOpsBy[e.Agent] = kept
+	return len(kept) > 20
 }

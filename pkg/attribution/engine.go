@@ -104,6 +104,9 @@ func (e *Engine) classify(raw models.RawEvent, now time.Time) models.AgentID {
 				return id
 			}
 		}
+		if guessed, ok := e.sm.GuessActiveAgent(now); ok {
+			return guessed
+		}
 	}
 	if raw.ActionType == models.ActionFileWrite || raw.ActionType == models.ActionFileCreate || raw.ActionType == models.ActionFileDelete {
 		if guessed, ok := e.sm.GuessActiveAgent(now); ok {
