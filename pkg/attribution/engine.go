@@ -1,7 +1,9 @@
 package attribution
 
 import (
+	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -95,10 +97,7 @@ func (e *Engine) classify(raw models.RawEvent, now time.Time) models.AgentID {
 	e.mu.RUnlock()
 
 	if raw.ActionType == models.ActionNetConnect {
-		host := raw.Target
-		if strings.Contains(host, ":") {
-			host = strings.Split(host, ":")[0]
-		}
+		host, _ := splitHostPort(raw.Target)
 		if domain, isAI := e.dnsCache.ResolveIP(host); isAI && domain != nil {
 			if id, ok := AgentForDomain(*domain); ok {
 				return id
@@ -146,18 +145,32 @@ func (e *Engine) persist(session *models.Session, ev *models.AgentEvent) {
 }
 
 func splitHostPort(v string) (string, int) {
-	parts := strings.Split(v, ":")
-	if len(parts) != 2 {
-		return v, 0
+	raw := strings.TrimSpace(v)
+	if raw == "" {
+		return "", 0
 	}
+
+	// Best case: standard host:port or [ipv6]:port
+	if h, p, err := net.SplitHostPort(raw); err == nil {
+		port, _ := strconv.Atoi(p)
+		return strings.Trim(h, "[]"), port
+	}
+
+	// Fallback: take last ':' as port separator.
+	i := strings.LastIndex(raw, ":")
+	if i < 0 || i == len(raw)-1 {
+		return strings.Trim(raw, "[]"), 0
+	}
+	hostPart := strings.Trim(raw[:i], "[]")
+	portPart := raw[i+1:]
 	port := 0
-	for _, c := range parts[1] {
+	for _, c := range portPart {
 		if c < '0' || c > '9' {
-			break
+			return hostPart, 0
 		}
 		port = port*10 + int(c-'0')
 	}
-	return parts[0], port
+	return hostPart, port
 }
 
 func NewRawEvent(action models.ActionType, processName, target string, pid int) models.RawEvent {

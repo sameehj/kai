@@ -332,8 +332,20 @@ func parseRemoteFromLsof(name string) string {
 	if idx := strings.Index(right, "("); idx >= 0 {
 		right = strings.TrimSpace(right[:idx])
 	}
+	// lsof may render remote as host.port in some environments.
+	if strings.Count(right, ":") == 0 {
+		if dot := strings.LastIndex(right, "."); dot > 0 {
+			right = right[:dot] + ":" + right[dot+1:]
+		}
+	}
 	if right == "" || !strings.Contains(right, ":") {
 		return ""
+	}
+	if strings.Count(right, ":") > 1 && !strings.HasPrefix(right, "[") {
+		// Normalize bare IPv6 endpoint to [ipv6]:port for downstream parsing.
+		if i := strings.LastIndex(right, ":"); i > 0 {
+			right = "[" + right[:i] + "]:" + right[i+1:]
+		}
 	}
 	return right
 }
