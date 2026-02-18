@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -104,7 +105,12 @@ func newDaemonCmd() *cobra.Command {
 				fmt.Println("daemon: stopped")
 				return nil
 			}
-			fmt.Printf("daemon: running pid=%d\n", st.PID)
+			resp, err := rpcCall(cfg, daemon.RPCRequest{Action: "status"})
+			if err != nil || resp.Status == nil {
+				fmt.Printf("daemon: running pid=%d\n", st.PID)
+				return nil
+			}
+			fmt.Printf("daemon: running pid=%d uptime=%s events=%d\n", resp.Status.PID, resp.Status.Uptime.Truncate(time.Second), resp.Status.Events)
 			return nil
 		},
 	})
