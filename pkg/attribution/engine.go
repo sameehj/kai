@@ -100,11 +100,11 @@ func (e *Engine) classify(raw models.RawEvent, now time.Time) models.AgentID {
 		if id, ok := AgentForDomain(raw.Target); ok {
 			return id
 		}
-		host, _ := splitHostPort(raw.Target)
+		host, port := splitHostPort(raw.Target)
 		if id, ok := AgentForDomain(host); ok {
 			return id
 		}
-		if domain, isAI := e.dnsCache.ResolveIP(host); isAI && domain != nil {
+		if domain, isAI := e.dnsCache.ResolveIP(host, port); isAI && domain != nil {
 			if id, ok := AgentForDomain(*domain); ok {
 				return id
 			}
@@ -132,7 +132,7 @@ func (e *Engine) persist(session *models.Session, ev *models.AgentEvent) {
 		})
 	case models.ActionNetConnect:
 		ip, port := splitHostPort(ev.Target)
-		domain, isAI := e.dnsCache.ResolveIP(ip)
+		domain, isAI := e.dnsCache.ResolveIP(ip, port)
 		_ = e.store.InsertNetEvent(&models.NetEvent{
 			ID:           ev.ID,
 			SessionID:    session.ID,
