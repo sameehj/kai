@@ -43,6 +43,27 @@ type Daemon struct {
 
 	events atomic.Int64
 	start  time.Time
+
+	watchMu     sync.RWMutex
+	rawWatchers []chan models.RawEvent
+}
+
+func (d *Daemon) registerRawWatcher(ch chan models.RawEvent) {
+	d.watchMu.Lock()
+	defer d.watchMu.Unlock()
+	d.rawWatchers = append(d.rawWatchers, ch)
+}
+
+func (d *Daemon) broadcastRaw(ev models.RawEvent) {
+	d.watchMu.RLock()
+	watchers := append([]chan models.RawEvent(nil), d.rawWatchers...)
+	d.watchMu.RUnlock()
+	for _, w := range watchers {
+		select {
+		case w <- ev:
+		default:
+		}
+	}
 }
 
 func New(cfg config.Config) (*Daemon, error) {
@@ -86,6 +107,7 @@ func (d *Daemon) Start() error {
 			case <-d.ctx.Done():
 				return
 			case ev := <-rawEvents:
+				d.broadcastRaw(ev)
 				agentEv := d.engine.Process(ev)
 				if agentEv == nil {
 					continue
@@ -155,6 +177,8 @@ func (d *Daemon) handleConn(c net.Conn) {
 	switch req.Action {
 	case "watch":
 		d.handleWatch(req, enc)
+	case "debug_net":
+		d.handleDebugNet(enc)
 	case "status":
 		_ = enc.Encode(RPCResponse{OK: true, Status: &RPCStatus{Running: true, PID: os.Getpid(), Uptime: time.Since(d.start), Events: d.events.Load()}})
 	case "sessions":
@@ -210,6 +234,27 @@ func (d *Daemon) handleConn(c net.Conn) {
 		_ = enc.Encode(RPCResponse{OK: true, Report: rows})
 	default:
 		_ = enc.Encode(RPCResponse{OK: false, Error: "unknown action"})
+	}
+}
+
+func (d *Daemon) handleDebugNet(enc *json.Encoder) {
+	ch := make(chan models.RawEvent, 256)
+	d.registerRawWatcher(ch)
+	for {
+		select {
+		case <-d.ctx.Done():
+			return
+		case ev := <-ch:
+			if ev.ActionType != models.ActionNetConnect {
+				continue
+			}
+			if err := enc.Encode(RPCResponse{OK: true, RawEvent: &ev}); err != nil {
+				if !errors.Is(err, io.EOF) {
+					_ = err
+				}
+				return
+			}
+		}
 	}
 }
 

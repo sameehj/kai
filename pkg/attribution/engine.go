@@ -97,14 +97,17 @@ func (e *Engine) classify(raw models.RawEvent, now time.Time) models.AgentID {
 	e.mu.RUnlock()
 
 	if raw.ActionType == models.ActionNetConnect {
+		if id, ok := AgentForDomain(raw.Target); ok {
+			return id
+		}
 		host, _ := splitHostPort(raw.Target)
+		if id, ok := AgentForDomain(host); ok {
+			return id
+		}
 		if domain, isAI := e.dnsCache.ResolveIP(host); isAI && domain != nil {
 			if id, ok := AgentForDomain(*domain); ok {
 				return id
 			}
-		}
-		if guessed, ok := e.sm.GuessActiveAgent(now); ok {
-			return guessed
 		}
 	}
 	if raw.ActionType == models.ActionFileWrite || raw.ActionType == models.ActionFileCreate || raw.ActionType == models.ActionFileDelete {

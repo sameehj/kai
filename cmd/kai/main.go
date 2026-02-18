@@ -16,6 +16,7 @@ func main() {
 	root.AddCommand(newSessionsCmd())
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newConfigCmd())
+	root.AddCommand(newDebugCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

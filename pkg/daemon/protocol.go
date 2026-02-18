@@ -38,4 +38,5 @@ type RPCResponse struct {
 	Replay   *storage.ReplayResult `json:"replay,omitempty"`
 	Report   []ReportRow           `json:"report,omitempty"`
 	Event    *models.AgentEvent    `json:"event,omitempty"`
+	RawEvent *models.RawEvent      `json:"raw_event,omitempty"`
 }
