@@ -8,11 +8,12 @@ import (
 )
 
 type RPCRequest struct {
-	Action    string          `json:"action"`
-	Agent     *models.AgentID `json:"agent,omitempty"`
-	MinRisk   int             `json:"min_risk,omitempty"`
-	Limit     int             `json:"limit,omitempty"`
-	SessionID string          `json:"session_id,omitempty"`
+	Action      string          `json:"action"`
+	Agent       *models.AgentID `json:"agent,omitempty"`
+	MinRisk     int             `json:"min_risk,omitempty"`
+	Limit       int             `json:"limit,omitempty"`
+	SessionID   string          `json:"session_id,omitempty"`
+	UnknownOnly bool            `json:"unknown_only,omitempty"`
 }
 
 type ReportRow struct {

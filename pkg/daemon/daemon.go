@@ -183,6 +183,8 @@ func (d *Daemon) handleConn(c net.Conn) {
 		d.handleWatch(req, enc)
 	case "debug_net":
 		d.handleDebugNet(enc)
+	case "debug_classify_net":
+		d.handleDebugClassifyNet(req, enc)
 	case "status":
 		_ = enc.Encode(RPCResponse{OK: true, Status: &RPCStatus{Running: true, PID: os.Getpid(), Uptime: time.Since(d.start), Events: d.events.Load()}})
 	case "sessions":
@@ -253,6 +255,41 @@ func (d *Daemon) handleDebugNet(enc *json.Encoder) {
 				continue
 			}
 			if err := enc.Encode(RPCResponse{OK: true, RawEvent: &ev}); err != nil {
+				if !errors.Is(err, io.EOF) {
+					_ = err
+				}
+				return
+			}
+		}
+	}
+}
+
+func (d *Daemon) handleDebugClassifyNet(req RPCRequest, enc *json.Encoder) {
+	ch := make(chan models.RawEvent, 256)
+	d.registerRawWatcher(ch)
+	for {
+		select {
+		case <-d.ctx.Done():
+			return
+		case raw := <-ch:
+			if raw.ActionType != models.ActionNetConnect {
+				continue
+			}
+			agent := d.engine.PeekClassify(raw)
+			if req.UnknownOnly && agent != models.AgentUnknown {
+				continue
+			}
+			ev := models.AgentEvent{
+				ID:          "",
+				Timestamp:   raw.Timestamp,
+				Agent:       agent,
+				ActionType:  raw.ActionType,
+				Target:      raw.Target,
+				PID:         raw.PID,
+				ProcessName: raw.ProcessName,
+				Platform:    raw.Platform,
+			}
+			if err := enc.Encode(RPCResponse{OK: true, Event: &ev, RawEvent: &raw}); err != nil {
 				if !errors.Is(err, io.EOF) {
 					_ = err
 				}

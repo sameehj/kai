@@ -77,6 +77,10 @@ func (e *Engine) Process(raw models.RawEvent) *models.AgentEvent {
 	return &ae
 }
 
+func (e *Engine) PeekClassify(raw models.RawEvent) models.AgentID {
+	return e.classify(raw, raw.Timestamp)
+}
+
 func (e *Engine) classify(raw models.RawEvent, now time.Time) models.AgentID {
 	for _, sig := range Signatures {
 		for _, name := range sig.ProcessNames {

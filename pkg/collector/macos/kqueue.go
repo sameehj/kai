@@ -278,6 +278,12 @@ func (c *collector) scanProc(ctx context.Context, out chan<- models.RawEvent) {
 }
 
 func (c *collector) scanNet(ctx context.Context, out chan<- models.RawEvent) {
+	c.scanNetTCP(ctx, out)
+	c.scanNetUDP(ctx, out)
+	c.gcConnCache()
+}
+
+func (c *collector) scanNetTCP(ctx context.Context, out chan<- models.RawEvent) {
 	scanCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
 	defer cancel()
 	cmd := exec.CommandContext(scanCtx, "lsof", "-nP", "-iTCP", "-sTCP:ESTABLISHED", "-Fpcn")
@@ -325,7 +331,64 @@ func (c *collector) scanNet(ctx context.Context, out chan<- models.RawEvent) {
 			}
 		}
 	}
-	c.gcConnCache()
+}
+
+func (c *collector) scanNetUDP(ctx context.Context, out chan<- models.RawEvent) {
+	scanCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
+	defer cancel()
+	cmd := exec.CommandContext(scanCtx, "lsof", "-nP", "-iUDP", "-Fpcn")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		return
+	}
+	defer cmd.Wait()
+
+	var (
+		pid  int
+		proc string
+	)
+	s := bufio.NewScanner(stdout)
+	for s.Scan() {
+		line := strings.TrimSpace(s.Text())
+		if line == "" {
+			continue
+		}
+		switch line[0] {
+		case 'p':
+			pid, _ = strconv.Atoi(line[1:])
+		case 'c':
+			proc = line[1:]
+		case 'n':
+			remote := parseRemoteFromLsof(line[1:])
+			if remote == "" {
+				// UDP lines often do not include "->"; fallback to direct endpoint.
+				remote = parseUDPEndpoint(line[1:])
+			}
+			if remote == "" {
+				continue
+			}
+			_, port := splitHostPortFromCollector(remote)
+			if port != 443 {
+				continue
+			}
+			key := strconv.Itoa(pid) + "|udp|" + remote
+			if _, ok := c.seenConn[key]; ok {
+				continue
+			}
+			c.seenConn[key] = time.Now()
+			out <- models.RawEvent{
+				Timestamp:   time.Now(),
+				PID:         pid,
+				ProcessName: proc,
+				ActionType:  models.ActionNetConnect,
+				Target:      remote,
+				Platform:    "macos",
+			}
+		}
+	}
 }
 
 func parseRemoteFromLsof(name string) string {
@@ -356,6 +419,46 @@ func parseRemoteFromLsof(name string) string {
 		}
 	}
 	return right
+}
+
+func parseUDPEndpoint(v string) string {
+	s := strings.TrimSpace(v)
+	if s == "" || strings.HasPrefix(s, "*:") || strings.HasPrefix(s, "127.0.0.1:") || strings.HasPrefix(s, "[::1]:") {
+		return ""
+	}
+	if strings.Count(s, ":") == 0 {
+		if dot := strings.LastIndex(s, "."); dot > 0 {
+			s = s[:dot] + ":" + s[dot+1:]
+		}
+	}
+	if strings.Count(s, ":") > 1 && !strings.HasPrefix(s, "[") {
+		if i := strings.LastIndex(s, ":"); i > 0 {
+			s = "[" + s[:i] + "]:" + s[i+1:]
+		}
+	}
+	if !strings.Contains(s, ":") {
+		return ""
+	}
+	return s
+}
+
+func splitHostPortFromCollector(v string) (string, int) {
+	s := strings.TrimSpace(v)
+	if s == "" {
+		return "", 0
+	}
+	if strings.HasPrefix(s, "[") {
+		if i := strings.LastIndex(s, "]:"); i > 0 {
+			p, _ := strconv.Atoi(s[i+2:])
+			return s[1:i], p
+		}
+	}
+	i := strings.LastIndex(s, ":")
+	if i <= 0 || i >= len(s)-1 {
+		return s, 0
+	}
+	p, _ := strconv.Atoi(s[i+1:])
+	return s[:i], p
 }
 
 func (c *collector) gcConnCache() {
