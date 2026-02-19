@@ -85,16 +85,18 @@ func (e *Engine) classify(raw models.RawEvent, now time.Time) models.AgentID {
 			}
 		}
 	}
-	e.mu.RLock()
-	if id, ok := e.pidAgent[raw.PID]; ok {
+	if raw.ActionType != models.ActionNetConnect {
+		e.mu.RLock()
+		if id, ok := e.pidAgent[raw.PID]; ok {
+			e.mu.RUnlock()
+			return id
+		}
+		if id, ok := e.pidAgent[raw.PPID]; ok {
+			e.mu.RUnlock()
+			return id
+		}
 		e.mu.RUnlock()
-		return id
 	}
-	if id, ok := e.pidAgent[raw.PPID]; ok {
-		e.mu.RUnlock()
-		return id
-	}
-	e.mu.RUnlock()
 
 	if raw.ActionType == models.ActionNetConnect {
 		if id, ok := AgentForDomain(raw.Target); ok {
