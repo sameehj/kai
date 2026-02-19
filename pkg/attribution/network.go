@@ -70,10 +70,13 @@ func PreResolveKnownDomains(cache *DNSCache) {
 				return
 			}
 			for _, ip := range ips {
-				cache.Set(ip, d, 10*time.Minute)
 				if port > 0 {
+					// Domain signatures with explicit ports (e.g. localhost:1234)
+					// must only match that exact endpoint, not all ports on the IP.
 					cache.SetEndpoint(ip, port, d, 10*time.Minute)
+					continue
 				}
+				cache.Set(ip, d, 10*time.Minute)
 			}
 		}()
 	}
