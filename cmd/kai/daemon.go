@@ -85,7 +85,18 @@ func newDaemonCmd() *cobra.Command {
 			if err := p.Signal(syscall.SIGTERM); err != nil {
 				return err
 			}
-			fmt.Println("daemon stop signal sent")
+			// Wait briefly for graceful shutdown, then force kill if needed.
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				st, _ := daemon.RunningStatus(cfg)
+				if !st.Running {
+					fmt.Println("daemon stopped")
+					return nil
+				}
+				time.Sleep(150 * time.Millisecond)
+			}
+			_ = p.Signal(syscall.SIGKILL)
+			fmt.Println("daemon force-killed")
 			return nil
 		},
 	})

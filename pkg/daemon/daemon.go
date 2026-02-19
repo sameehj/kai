@@ -36,6 +36,7 @@ type Daemon struct {
 	collector collector.Collector
 	engine    *attribution.Engine
 	snap      *snapshot.Manager
+	listener  net.Listener
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -133,6 +134,9 @@ func (d *Daemon) Start() error {
 	if err != nil {
 		return err
 	}
+	d.watchMu.Lock()
+	d.listener = listener
+	d.watchMu.Unlock()
 	d.wg.Add(1)
 	go d.serve(listener)
 
@@ -284,6 +288,12 @@ func (d *Daemon) handleWatch(req RPCRequest, enc *json.Encoder) {
 
 func (d *Daemon) Stop() error {
 	d.cancel()
+	d.watchMu.Lock()
+	if d.listener != nil {
+		_ = d.listener.Close()
+		d.listener = nil
+	}
+	d.watchMu.Unlock()
 	d.snap.FlushAll()
 	d.engine.Close()
 	d.wg.Wait()
