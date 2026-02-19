@@ -43,8 +43,8 @@ func (c *collector) Start(ctx context.Context, out chan<- models.RawEvent) error
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			c.scanProc(out)
-			c.scanNet(out)
+			c.scanProc(ctx, out)
+			c.scanNet(ctx, out)
 		}
 	}
 }
@@ -92,8 +92,10 @@ func addRecursive(w *fsnotify.Watcher, root string) error {
 	})
 }
 
-func (c *collector) scanProc(out chan<- models.RawEvent) {
-	cmd := exec.Command("ps", "-axo", "pid=,ppid=,comm=,args=")
+func (c *collector) scanProc(ctx context.Context, out chan<- models.RawEvent) {
+	scanCtx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
+	defer cancel()
+	cmd := exec.CommandContext(scanCtx, "ps", "-axo", "pid=,ppid=,comm=,args=")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return
@@ -127,14 +129,14 @@ func (c *collector) scanProc(out chan<- models.RawEvent) {
 	_ = cmd.Wait()
 }
 
-func (c *collector) scanNet(out chan<- models.RawEvent) {
+func (c *collector) scanNet(ctx context.Context, out chan<- models.RawEvent) {
 	inodePID := c.buildInodePIDMap()
-	c.scanProcNetFile("/proc/net/tcp", inodePID, out)
-	c.scanProcNetFile("/proc/net/tcp6", inodePID, out)
+	c.scanProcNetFile(ctx, "/proc/net/tcp", inodePID, out)
+	c.scanProcNetFile(ctx, "/proc/net/tcp6", inodePID, out)
 	c.gcConnCache()
 }
 
-func (c *collector) scanProcNetFile(path string, inodePID map[string]int, out chan<- models.RawEvent) {
+func (c *collector) scanProcNetFile(ctx context.Context, path string, inodePID map[string]int, out chan<- models.RawEvent) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -143,6 +145,11 @@ func (c *collector) scanProcNetFile(path string, inodePID map[string]int, out ch
 	s := bufio.NewScanner(f)
 	first := true
 	for s.Scan() {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		line := strings.TrimSpace(s.Text())
 		if line == "" {
 			continue

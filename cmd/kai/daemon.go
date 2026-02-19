@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -83,6 +84,11 @@ func newDaemonCmd() *cobra.Command {
 				return err
 			}
 			if err := p.Signal(syscall.SIGTERM); err != nil {
+				if errors.Is(err, os.ErrProcessDone) {
+					_ = os.Remove(pidPath)
+					fmt.Println("daemon already stopped")
+					return nil
+				}
 				return err
 			}
 			// Wait briefly for graceful shutdown, then force kill if needed.
@@ -95,9 +101,7 @@ func newDaemonCmd() *cobra.Command {
 				}
 				time.Sleep(150 * time.Millisecond)
 			}
-			_ = p.Signal(syscall.SIGKILL)
-			fmt.Println("daemon force-killed")
-			return nil
+			return fmt.Errorf("daemon did not stop within 5s after SIGTERM")
 		},
 	})
 	cmd.AddCommand(&cobra.Command{

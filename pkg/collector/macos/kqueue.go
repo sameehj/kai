@@ -56,10 +56,10 @@ func (c *collector) Start(ctx context.Context, out chan<- models.RawEvent) error
 			}
 			return nil
 		case <-ticker.C:
-			c.scanProc(out)
-			c.scanNet(out)
+			c.scanProc(ctx, out)
+			c.scanNet(ctx, out)
 			if kqErr == nil {
-				c.bootstrapKqueue()
+				c.bootstrapKqueue(ctx)
 			}
 		}
 	}
@@ -71,13 +71,13 @@ func (c *collector) startKqueue(ctx context.Context, out chan<- models.RawEvent)
 		return err
 	}
 	c.kq = kq
-	c.bootstrapKqueue()
+	c.bootstrapKqueue(ctx)
 	go c.runKqueue(ctx, out)
 	return nil
 }
 
-func (c *collector) bootstrapKqueue() {
-	procs := listProcesses()
+func (c *collector) bootstrapKqueue(ctx context.Context) {
+	procs := listProcesses(ctx)
 	for _, p := range procs {
 		c.registerPID(p.pid)
 	}
@@ -106,12 +106,12 @@ func (c *collector) runKqueue(ctx context.Context, out chan<- models.RawEvent) {
 				child := int(ev.Data)
 				if child > 0 {
 					c.registerPID(child)
-					proc, args := procInfo(child)
+					proc, args := procInfo(ctx, child)
 					out <- models.RawEvent{Timestamp: time.Now(), PID: child, PPID: pid, ProcessName: proc, ActionType: models.ActionProcSpawn, Target: args, Platform: "macos"}
 				}
 			}
 			if ev.Fflags&syscall.NOTE_EXEC != 0 {
-				proc, args := procInfo(pid)
+				proc, args := procInfo(ctx, pid)
 				out <- models.RawEvent{Timestamp: time.Now(), PID: pid, ProcessName: proc, ActionType: models.ActionExec, Target: args, Platform: "macos"}
 				c.registerPID(pid)
 			}
@@ -145,8 +145,10 @@ func (c *collector) registerPID(pid int) {
 	_, _ = syscall.Kevent(c.kq, []syscall.Kevent_t{kev}, nil, nil)
 }
 
-func listProcesses() []procEntry {
-	cmd := exec.Command("ps", "-axo", "pid=,comm=,args=")
+func listProcesses(ctx context.Context) []procEntry {
+	scanCtx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
+	defer cancel()
+	cmd := exec.CommandContext(scanCtx, "ps", "-axo", "pid=,comm=,args=")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil
@@ -174,8 +176,10 @@ func listProcesses() []procEntry {
 
 type procEntry struct{ pid int }
 
-func procInfo(pid int) (string, string) {
-	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=,args=")
+func procInfo(ctx context.Context, pid int) (string, string) {
+	infoCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	cmd := exec.CommandContext(infoCtx, "ps", "-p", strconv.Itoa(pid), "-o", "comm=,args=")
 	b, err := cmd.Output()
 	if err != nil {
 		return "", ""
@@ -236,8 +240,10 @@ func addRecursive(w *fsnotify.Watcher, root string) error {
 	})
 }
 
-func (c *collector) scanProc(out chan<- models.RawEvent) {
-	cmd := exec.Command("ps", "-axo", "pid=,ppid=,comm=,args=")
+func (c *collector) scanProc(ctx context.Context, out chan<- models.RawEvent) {
+	scanCtx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
+	defer cancel()
+	cmd := exec.CommandContext(scanCtx, "ps", "-axo", "pid=,ppid=,comm=,args=")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return
@@ -271,8 +277,10 @@ func (c *collector) scanProc(out chan<- models.RawEvent) {
 	_ = cmd.Wait()
 }
 
-func (c *collector) scanNet(out chan<- models.RawEvent) {
-	cmd := exec.Command("lsof", "-nP", "-iTCP", "-sTCP:ESTABLISHED", "-Fpcn")
+func (c *collector) scanNet(ctx context.Context, out chan<- models.RawEvent) {
+	scanCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
+	defer cancel()
+	cmd := exec.CommandContext(scanCtx, "lsof", "-nP", "-iTCP", "-sTCP:ESTABLISHED", "-Fpcn")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return
