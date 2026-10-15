@@ -8,6 +8,8 @@
  *   kai redact                 clean stdin -> stdout
  *   kai init                   write a default ~/.kai/policy
  *   kai doctor                 check policy + installs
+ *   kai status [--json]        doctor, or machine-readable status
+ *   kai policy ...             show or edit the policy (see manage.c)
  *   kai log tail|verify        audit log
  *   kai version
  */
@@ -22,24 +24,21 @@
 int kai_cmd_hook(int argc, char **argv);
 int kai_cmd_install(int argc, char **argv);
 int kai_cmd_uninstall(int argc, char **argv);
+int kai_cmd_status_json(void);
+int kai_cmd_policy(int argc, char **argv);
 
 static int cmd_version(void) { printf("kai %s\n", KAI_VERSION); return 0; }
 
 static int cmd_init(void) {
     mkdir(kai_home(), 0700);
-    char *path = kai_expand_home("~/.kai/policy");
-    const char *env = getenv("KAI_HOME");
-    char full[1200];
-    if (env && *env) { snprintf(full, sizeof full, "%s/policy", env); }
-    else kai_strlcpy(full, path, sizeof full);
+    const char *full = kai_policy_file();
     FILE *f = fopen(full, "rb");
-    if (f) { fclose(f); printf("Policy already exists at %s\n", full); free(path); return 0; }
+    if (f) { fclose(f); printf("Policy already exists at %s\n", full); return 0; }
     f = fopen(full, "wb");
-    if (!f) { fprintf(stderr, "Cannot write %s\n", full); free(path); return 1; }
+    if (!f) { fprintf(stderr, "Cannot write %s\n", full); return 1; }
     fputs(kai_default_policy(), f);
     fclose(f);
     printf("Wrote default policy to %s\n", full);
-    free(path);
     return 0;
 }
 
@@ -143,6 +142,8 @@ static void usage(void) {
         "  kai redact                        clean stdin -> stdout\n"
         "  kai init                          write ~/.kai/policy\n"
         "  kai doctor                        check policy and installs\n"
+        "  kai status [--json]               same as doctor; --json for scripts/app\n"
+        "  kai policy [show|set|add|remove]  view or change the policy safely\n"
         "  kai log [tail|verify]             view / verify the audit log\n"
         "  kai version\n", KAI_VERSION);
 }
@@ -159,6 +160,9 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "redact") == 0) return cmd_redact();
     if (strcmp(cmd, "init") == 0) return cmd_init();
     if (strcmp(cmd, "doctor") == 0) return cmd_doctor();
+    if (strcmp(cmd, "status") == 0)
+        return (rest > 0 && strcmp(restv[0], "--json") == 0) ? kai_cmd_status_json() : cmd_doctor();
+    if (strcmp(cmd, "policy") == 0) return kai_cmd_policy(rest, restv);
     if (strcmp(cmd, "log") == 0) return cmd_log(rest, restv);
     if (strcmp(cmd, "version") == 0 || strcmp(cmd, "--version") == 0) return cmd_version();
     if (strcmp(cmd, "help") == 0 || strcmp(cmd, "-h") == 0 || strcmp(cmd, "--help") == 0) {

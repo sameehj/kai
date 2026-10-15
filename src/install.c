@@ -54,6 +54,20 @@ static void mkparents(const char *path) {
     }
 }
 
+static cJSON *without_kai(cJSON *node);
+
+/* Parse an agent settings file, dropping any Kai entries already in it so
+ * installing twice never duplicates hooks. */
+static cJSON *load_clean(const char *path) {
+    char *cur = read_or_empty(path);
+    cJSON *root = *cur ? cJSON_Parse(cur) : NULL;
+    free(cur);
+    if (!root) return cJSON_CreateObject();
+    cJSON *clean = without_kai(root);
+    cJSON_Delete(root);
+    return clean;
+}
+
 /* ----- Claude Code: ~/.claude/settings.json -----
  * hooks.<Event>[] = { matcher, hooks:[{type:command, command:"kai hook claude", _kai:true}] }
  */
@@ -87,10 +101,7 @@ static int install_claude(const char *exe) {
     char *path = kai_expand_home("~/.claude/settings.json");
     mkparents(path);
     backup(path);
-    char *cur = read_or_empty(path);
-    cJSON *root = *cur ? cJSON_Parse(cur) : cJSON_CreateObject();
-    free(cur);
-    if (!root) root = cJSON_CreateObject();
+    cJSON *root = load_clean(path);
     cJSON *hooks = cJSON_GetObjectItemCaseSensitive(root, "hooks");
     if (!cJSON_IsObject(hooks)) {
         hooks = cJSON_CreateObject();
@@ -137,10 +148,7 @@ static int install_cursor(const char *exe) {
     char *path = kai_expand_home("~/.cursor/hooks.json");
     mkparents(path);
     backup(path);
-    char *cur = read_or_empty(path);
-    cJSON *root = *cur ? cJSON_Parse(cur) : cJSON_CreateObject();
-    free(cur);
-    if (!root) root = cJSON_CreateObject();
+    cJSON *root = load_clean(path);
     if (!cJSON_GetObjectItemCaseSensitive(root, "version"))
         cJSON_AddNumberToObject(root, "version", 1);
     cJSON *hooks = cJSON_GetObjectItemCaseSensitive(root, "hooks");

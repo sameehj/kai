@@ -30,6 +30,23 @@ static void gather_strings(const cJSON *node, sb_t *b, int depth) {
     }
 }
 
+/* Does a shell command try to switch Kai off or loosen its policy? Built in,
+ * not policy-driven: a hijacked agent must not be able to edit its own leash.
+ * The user changes settings from their own terminal or the menu-bar app. */
+static int command_controls_kai(const char *cmd) {
+    static regex_t re;
+    static int ready = 0;
+    if (!ready) {
+        if (regcomp(&re,
+                    "(^|[^a-z0-9_.-])kai[ \t]+(install|uninstall|init|"
+                    "policy[ \t]+(set|add|remove))([^a-z]|$)",
+                    REG_EXTENDED | REG_ICASE | REG_NOSUB) != 0)
+            return 0;
+        ready = 1;
+    }
+    return regexec(&re, cmd, 0, NULL, 0) == 0;
+}
+
 /* ---------- Claude Code ---------- */
 
 static int hook_claude(const char *json, const char *cwd_arg) {
@@ -86,7 +103,12 @@ static int hook_claude(const char *json, const char *cwd_arg) {
             kai_strlcpy(rule, why, sizeof rule);
             snprintf(reason, sizeof reason, "reading protected path (%s)", why);
         } else if (cmd) {
-            if (kai_command_touches_protected(p, cmd, cwd, why, sizeof why)) {
+            if (command_controls_kai(cmd)) {
+                decision = KAI_ACT_BLOCK;
+                kai_strlcpy(rule, "kai_self_protect", sizeof rule);
+                snprintf(reason, sizeof reason,
+                         "agents may not change Kai's settings; the user can do this themselves");
+            } else if (kai_command_touches_protected(p, cmd, cwd, why, sizeof why)) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, why, sizeof rule);
                 snprintf(reason, sizeof reason, "command touches protected path (%s)", why);
@@ -200,7 +222,12 @@ static int hook_cursor(const char *json) {
         }
     } else if (ev && strcmp(ev, "beforeShellExecution") == 0) {
         const char *cmd = cjstr(root, "command");
-        if (cmd && kai_command_touches_protected(p, cmd, cwd, why, sizeof why)) {
+        if (cmd && command_controls_kai(cmd)) {
+            deny = 1;
+            kai_strlcpy(why, "kai_self_protect", sizeof why);
+            snprintf(reason, sizeof reason,
+                     "agents may not change Kai's settings; the user can do this themselves");
+        } else if (cmd && kai_command_touches_protected(p, cmd, cwd, why, sizeof why)) {
             deny = 1; snprintf(reason, sizeof reason, "command touches protected path (%s)", why);
         } else if (cmd && kai_command_looks_like_upload(p, cmd, why, sizeof why)) {
             deny = kai_policy_upload_action(p) >= KAI_ACT_BLOCK;

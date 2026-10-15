@@ -44,12 +44,38 @@ locally.
 
 ## Install
 
+One line (macOS and Linux). Installs the `kai` command, plus the menu-bar app
+on macOS once a release is published, and writes a default policy. It does not
+touch your agents' settings:
+
 ```sh
-git clone https://github.com/<org>/kai
+curl -fsSL https://raw.githubusercontent.com/sameehj/kai/master/install.sh | sh
+```
+
+Add `KAI_HOOKS=all` before `sh` to also turn Kai on for Claude Code and Cursor.
+The script checks release downloads against `SHA256SUMS` and falls back to
+building from source (needs `cc` and `make`).
+
+Homebrew:
+
+```sh
+brew tap sameehj/kai https://github.com/sameehj/kai
+brew install --HEAD kai     # plain `brew install kai` after the first release
+```
+
+From source:
+
+```sh
+git clone https://github.com/sameehj/kai
 cd kai
 make
 sudo make install          # puts `kai` in /usr/local/bin
+make install-app           # macOS: menu-bar app -> /Applications/Kai.app
+```
 
+Then:
+
+```sh
 kai init                   # write ~/.kai/policy (edit it for your company)
 kai install claude         # add Kai hooks to ~/.claude/settings.json
 kai install cursor         # add Kai hooks to ~/.cursor/hooks.json
@@ -57,6 +83,20 @@ kai doctor                 # check everything is wired up
 ```
 
 Uninstall is clean and keeps your own hooks: `kai uninstall all`.
+
+## Menu-bar app (macOS)
+
+`Kai.app` puts a shield in the menu bar:
+
+- **Status at a glance:** protecting, partly protecting, off, or a problem
+  such as a policy error.
+- **One switch per agent** to turn Kai on or off for Claude Code and Cursor.
+- **Notifications** when Kai blocks something, and a list of recent activity.
+- **Settings** for the protection switches, protected files, and company terms
+  and codenames. Changes go through `kai policy`, so the app and the terminal
+  always agree.
+
+The app needs no special permissions, only notifications.
 
 ## Policy
 
@@ -85,9 +125,19 @@ See [`policy/default.policy`](policy/default.policy) for the full set.
 | `kai scan [file…]` | Report secrets and company terms (stdin if no files) |
 | `kai redact` | Clean text from stdin to stdout |
 | `kai doctor` | Check policy and installs |
+| `kai status --json` | Status for scripts and the menu-bar app |
+| `kai policy show [--json]` | Print the policy |
+| `kai policy set <switch> <value>` | Change a switch, e.g. `on_upload ask` |
+| `kai policy add\|remove protect\|allow <path>` | Edit protected paths |
+| `kai policy add term <action> <text>` | Add a company term (`block`, `redact`, `warn`, `replace:"X"`) |
 | `kai log [tail\|verify]` | View or verify the audit log |
 
 `kai scan` doubles as a git pre-commit secret check (exit code 1 on findings).
+
+Policy edits are checked before they're written: a change that would break the
+policy is rejected. Agents can't change Kai's settings: a shell command from an
+agent that runs `kai install`, `kai uninstall`, `kai init` or
+`kai policy set|add|remove` is always blocked.
 
 ## Roadmap
 

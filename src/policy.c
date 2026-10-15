@@ -317,6 +317,16 @@ static kai_policy *parse(const char *text, const char *source, char *err,
 
 const char *kai_default_policy(void) { return DEFAULT_POLICY; }
 
+/* $KAI_POLICY, else <kai home>/policy. */
+const char *kai_policy_file(void) {
+    static char buf[1200];
+    if (buf[0]) return buf;
+    const char *env = getenv("KAI_POLICY");
+    if (env && *env) kai_strlcpy(buf, env, sizeof buf);
+    else snprintf(buf, sizeof buf, "%s/policy", kai_home());
+    return buf;
+}
+
 kai_policy *kai_policy_from_string(const char *text, char *err, size_t errlen) {
     return parse(text, "string", err, errlen);
 }
@@ -326,13 +336,9 @@ kai_policy *kai_policy_load(const char *path, char *err, size_t errlen) {
     if (path && *path) {
         chosen = strdup(path);
     } else {
-        const char *env = getenv("KAI_POLICY");
-        if (env && *env) chosen = strdup(env);
-        else {
-            char *def = kai_expand_home("~/.kai/policy");
-            FILE *f = fopen(def, "rb");
-            if (f) { fclose(f); chosen = def; } else free(def);
-        }
+        const char *def = kai_policy_file();
+        FILE *f = fopen(def, "rb");
+        if (f) { fclose(f); chosen = strdup(def); }
     }
     if (!chosen) return parse(DEFAULT_POLICY, "built-in", err, errlen);
 

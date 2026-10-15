@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+- macOS menu-bar app (`make app`): status, per-agent switches, block
+  notifications, recent activity, and a settings window for the policy.
+- `kai status --json` and `kai policy show|set|add|remove`: comment-preserving,
+  validated, atomic policy edits.
+- Agents are blocked from running Kai's own control commands.
+- `kai install` is idempotent (no duplicate hooks when run twice).
+- The policy file follows `KAI_HOME` (it was always read from `~/.kai`).
+- One-line installer (`install.sh`), release workflow, and a Homebrew formula.
+- CI runs on `master` (it was set to `main`) and builds the macOS app.
+
 ## v0.1.0 — unreleased
 First cut. Hook-based protection for Claude Code and Cursor.
 

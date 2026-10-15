@@ -13,7 +13,7 @@ LDLIBS   =
 
 CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
        third_party/cjson/cJSON.c
-APP  = src/main.c src/hooks.c src/install.c
+APP  = src/main.c src/hooks.c src/install.c src/manage.c
 
 OBJ      = $(CORE:.c=.o) $(APP:.c=.o)
 COREOBJ  = $(CORE:.c=.o)
@@ -37,6 +37,15 @@ test: kai
 	$(CC) $(CFLAGS) -o tests/run_tests tests/run_tests.c $(CORE) $(LDLIBS)
 	./tests/run_tests
 	sh tests/hooks/run_hook_tests.sh ./kai
+	sh tests/cli/run_cli_tests.sh ./kai
+
+# macOS menu-bar app -> build/Kai.app (needs Xcode or the Swift toolchain)
+app: kai
+	sh app/macos/build-app.sh
+
+install-app: app
+	rm -rf /Applications/Kai.app
+	cp -R build/Kai.app /Applications/Kai.app
 
 install: all
 	install -d $(DESTDIR)$(PREFIX)/bin
@@ -47,5 +56,6 @@ uninstall:
 
 clean:
 	rm -f $(OBJ) kai libkai.a tests/run_tests
+	rm -rf build app/macos/.build
 
-.PHONY: all asan test install uninstall clean
+.PHONY: all asan test app install-app install uninstall clean

@@ -4,6 +4,8 @@
 /kai
 tests/run_tests
 *.kai-bak
+/build/
+app/macos/.build/
 # editor/OS cruft
 .DS_Store
 *.swp

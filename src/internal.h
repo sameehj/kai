@@ -32,6 +32,7 @@ char *kai_expand_home(const char *path); /* ~ and $HOME; caller frees */
 char *kai_normalize_path(const char *path, const char *cwd); /* absolute, no . / .. */
 void kai_strlcpy(char *dst, const char *src, size_t n);
 const char *kai_exe_path(void);
+const char *kai_policy_file(void); /* $KAI_POLICY or <kai home>/policy */
 
 /* ---- policy internals ---- */
 typedef enum { RULE_CONTENT = 0, RULE_INJECTION, RULE_UPLOAD } rule_kind;

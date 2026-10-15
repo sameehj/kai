@@ -2,7 +2,7 @@
 name: ci
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
 
 jobs:
@@ -23,6 +23,13 @@ jobs:
         if: runner.os == 'Linux'
         run: make asan
 
+  macos-app:
+    name: menu-bar app builds
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: make app
+
   self-scan:
     name: kai scans its own tree for secrets
     runs-on: ubuntu-latest
@@ -31,6 +38,8 @@ jobs:
       - run: make
       - name: fail if any tracked file contains a secret
         run: |
-          # exclude tests, which contain deliberate fake secrets
-          files=$(git ls-files | grep -v '^tests/' | grep -v '^docs/' || true)
-          if [ -n "$files" ]; then ./kai scan $files || exit 1; fi
+          # exclude tests (deliberate fake secrets) and the files that define
+          # or document the detectors themselves (their patterns match)
+          git ls-files | grep -v -e '^tests/' -e '^docs/' -e '\.md$' \
+            -e '^src/policy\.c$' -e '^policy/' | xargs ./kai scan > scan.txt || true
+          grep -v ': no findings' scan.txt && exit 1 || echo "no secrets found"

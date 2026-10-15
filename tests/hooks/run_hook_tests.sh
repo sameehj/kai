@@ -47,6 +47,16 @@ expect "claude blocks mcp secret arg" claude \
   '{"hook_event_name":"PreToolUse","tool_name":"mcp__db__query","tool_input":{"token":"ghp_abcdefghijklmnopqrstuvwxyz0123"}}' \
   'deny'
 
+expect "claude blocks agent running kai uninstall" claude \
+  '{"hook_event_name":"PreToolUse","cwd":"/home/u","tool_name":"Bash","tool_input":{"command":"/usr/local/bin/kai uninstall all"}}' \
+  'may not change Kai'
+expect "claude blocks agent loosening policy" claude \
+  '{"hook_event_name":"PreToolUse","cwd":"/home/u","tool_name":"Bash","tool_input":{"command":"echo hi && kai policy set on_upload ask"}}' \
+  'deny'
+refute "claude allows kai scan" claude \
+  '{"hook_event_name":"PreToolUse","cwd":"/home/u","tool_name":"Bash","tool_input":{"command":"kai scan README.md"}}' \
+  'deny'
+
 echo "== Cursor hook =="
 expect "cursor blocks reading .env" cursor \
   '{"hook_event_name":"beforeReadFile","workspace_roots":["/home/u"],"file_path":"/home/u/app/.env"}' \
@@ -60,6 +70,10 @@ expect "cursor blocks exfil shell" cursor \
 expect "cursor blocks secret prompt" cursor \
   '{"hook_event_name":"beforeSubmitPrompt","prompt":"deploy with AKIAIOSFODNN7EXAMPLE and sk-ant-abcdefghijklmnopqrst"}' \
   '"continue":false'
+
+expect "cursor blocks agent running kai uninstall" cursor \
+  '{"hook_event_name":"beforeShellExecution","workspace_roots":["/home/u"],"command":"kai uninstall cursor"}' \
+  '"permission":"deny"'
 
 echo "== audit log =="
 if [ -f "$KAI_HOME/audit.log" ]; then

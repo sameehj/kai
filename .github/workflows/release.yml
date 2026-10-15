@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
+# Push a tag like v0.1.0 to build binaries + the macOS app and publish a
+# GitHub release. install.sh downloads these assets and checks SHA256SUMS.
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x86_64
+          - runner: ubuntu-22.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: make && make test
+      - name: package
+        run: |
+          tar -czf "kai-${GITHUB_REF_NAME}-linux-${{ matrix.arch }}.tar.gz" kai LICENSE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: kai-*.tar.gz
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: universal CLI
+        run: make CC="cc -arch x86_64 -arch arm64" && make test
+      - name: menu-bar app (universal)
+        run: sh app/macos/build-app.sh --universal
+      - name: package
+        run: |
+          tar -czf "kai-${GITHUB_REF_NAME}-darwin-universal.tar.gz" kai LICENSE
+          (cd build && ditto -c -k --keepParent Kai.app "../Kai-${GITHUB_REF_NAME}-macos.zip")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: |
+            kai-*.tar.gz
+            Kai-*.zip
+
+  publish:
+    needs: [linux, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: checksums
+        run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --title "Kai $GITHUB_REF_NAME" --generate-notes
