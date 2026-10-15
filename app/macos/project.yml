@@ -67,6 +67,8 @@ targets:
       path: Network/Network.entitlements
       properties:
         com.apple.developer.networking.networkextension: [content-filter-provider]
+        # NEMachServiceName must start with an app group the extension holds.
+        com.apple.security.application-groups: [$(TeamIdentifierPrefix)io.github.sameehj.kai]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.sameehj.kai.network
@@ -95,6 +97,7 @@ targets:
       properties:
         com.apple.developer.system-extension.install: true
         com.apple.developer.networking.networkextension: [content-filter-provider]
+        com.apple.security.application-groups: [$(TeamIdentifierPrefix)io.github.sameehj.kai]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.sameehj.kai
