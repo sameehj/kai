@@ -34,6 +34,41 @@ The hook reads the event JSON on stdin and prints a decision:
 - `PostToolUse` → `{"hookSpecificOutput":{"additionalContext":"Kai warning: …"}}`
   to flag prompt-injection text.
 
+## Codex — `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`)
+
+*Implemented and unit-tested against Codex's published hook schemas (Codex CLI
+0.142); not yet run against a live Codex session.*
+
+Codex hooks use the same events, input fields and decision output as Claude
+Code. Kai registers one handler per event, with **no matcher**, so it sees
+every tool (shell, `apply_patch`, MCP) and decides itself:
+
+```json
+{
+  "hooks": {
+    "PreToolUse":       [{ "hooks": [{ "type": "command", "command": "/usr/local/bin/kai hook codex" }] }],
+    "PostToolUse":      [{ "hooks": [{ "type": "command", "command": "/usr/local/bin/kai hook codex" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "/usr/local/bin/kai hook codex" }] }]
+  }
+}
+```
+
+- **No `_kai` marker:** Codex validates its hook config strictly, so Kai's
+  entries are recognised by their command (`… hook codex`) when reinstalling or
+  uninstalling. Your own hooks and other keys are kept.
+- **Review once in Codex:** Codex asks you to review and trust new or changed
+  hooks before it runs them ("Hooks need review"). Trust Kai's hooks the first
+  time you open Codex after `kai install codex`.
+- **What Kai checks:**
+  - shell commands, whether sent as a string or an argv array: protected
+    paths, uploads, and Kai's own control commands;
+  - `apply_patch` edits: every `*** Add/Update/Delete File:` and
+    `*** Move to:` path against your protected paths;
+  - MCP tool arguments: secrets and blocked terms;
+  - prompts: secrets and blocked terms;
+  - tool results: prompt-injection warnings.
+- Audit records use `"source":"codex"`.
+
 ## Cursor — `~/.cursor/hooks.json`
 
 ```json

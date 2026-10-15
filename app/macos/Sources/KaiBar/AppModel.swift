@@ -5,9 +5,15 @@ import ServiceManagement
 import UserNotifications
 
 enum Agent: String, CaseIterable, Identifiable {
-    case claude, cursor
+    case claude, cursor, codex
     var id: String { rawValue }
-    var title: String { self == .claude ? "Claude Code" : "Cursor" }
+    var title: String {
+        switch self {
+        case .claude: return "Claude Code"
+        case .cursor: return "Cursor"
+        case .codex: return "Codex"
+        }
+    }
 }
 
 @MainActor
@@ -44,14 +50,11 @@ final class AppModel: ObservableObject {
     var health: Health {
         guard let s = status else { return cliPath == nil ? .problem : .unknown }
         if !s.policy.ok || !s.audit.intact { return .problem }
-        let on = [s.claude.installed, s.cursor.installed]
-        if on.allSatisfy({ $0 }) { return .protecting }
-        if on.contains(true) {
-            // Only "partial" if an agent that is actually used here is unprotected.
-            let missed = (!s.claude.installed && s.claude.detected) || (!s.cursor.installed && s.cursor.detected)
-            return missed ? .partial : .protecting
-        }
-        return .off
+        let infos = Agent.allCases.map(agentInfo)
+        if !infos.contains(where: \.installed) { return .off }
+        // Only "partial" if an agent that is actually used here is unprotected.
+        let missed = infos.contains { $0.detected && !$0.installed }
+        return missed ? .partial : .protecting
     }
 
     var menuBarSymbol: String {
@@ -69,7 +72,7 @@ final class AppModel: ObservableObject {
         switch health {
         case .protecting:
             let names = Agent.allCases.filter { installed($0) }.map(\.title)
-            return "Protecting " + names.joined(separator: " and ")
+            return "Protecting " + (ListFormatter.localizedString(byJoining: names))
         case .partial: return "Partly protected"
         case .off: return "Not protecting any agent"
         case .unknown: return "Checking…"
@@ -94,8 +97,13 @@ final class AppModel: ObservableObject {
     func installed(_ a: Agent) -> Bool { agentInfo(a).installed }
 
     func agentInfo(_ a: Agent) -> KaiStatus.Agent {
-        guard let s = status else { return .init(installed: false, detected: false, config: "") }
-        return a == .claude ? s.claude : s.cursor
+        let none = KaiStatus.Agent(installed: false, detected: false, config: "")
+        guard let s = status else { return none }
+        switch a {
+        case .claude: return s.claude
+        case .cursor: return s.cursor
+        case .codex: return s.codex ?? none // older kai CLIs don't report Codex
+        }
     }
 
     var todayCounts: (blocked: Int, warned: Int) {

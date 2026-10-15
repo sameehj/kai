@@ -75,9 +75,11 @@ int kai_cmd_status_json(void) {
     cJSON_AddStringToObject(pol, "error", p ? "" : err);
     kai_policy_free(p);
 
+    char *codex = kai_codex_hooks_path();
     const struct { const char *name, *rel, *needle; } agents[] = {
         {"claude", "~/.claude/settings.json", "hook claude"},
         {"cursor", "~/.cursor/hooks.json", "hook cursor"},
+        {"codex", codex, "hook codex"},
     };
     for (size_t i = 0; i < sizeof agents / sizeof agents[0]; i++) {
         int detected = 0;
@@ -89,6 +91,7 @@ int kai_cmd_status_json(void) {
         cJSON_AddStringToObject(a, "config", cfg);
         free(cfg);
     }
+    free(codex);
 
     cJSON *au = cJSON_AddObjectToObject(o, "audit");
     cJSON_AddStringToObject(au, "path", kai_audit_path());

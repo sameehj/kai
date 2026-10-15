@@ -1,6 +1,13 @@
 # Changelog
 
 ## Unreleased
+- Codex hooks: `kai install|uninstall codex` writes `$CODEX_HOME/hooks.json`
+  (default `~/.codex/hooks.json`; `install all` includes Codex when `~/.codex`
+  exists), and `kai hook codex` checks shell commands (string or argv array),
+  `apply_patch` paths, MCP arguments and prompts. `kai doctor`, `kai status`
+  and the menu-bar app report Codex. Not yet tested with a live Codex session.
+- Hook policy errors now answer in the shape each event accepts (Codex
+  validates hook output strictly).
 - macOS menu-bar app (`make app`): status, per-agent switches, block
   notifications, recent activity, and a settings window for the policy.
 - `kai status --json` and `kai policy show|set|add|remove`: comment-preserving,

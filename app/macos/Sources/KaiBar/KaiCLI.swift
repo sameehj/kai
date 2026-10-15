@@ -27,6 +27,7 @@ struct KaiStatus: Decodable, Equatable {
     let policy: Policy
     let claude: Agent
     let cursor: Agent
+    let codex: Agent?
     let audit: Audit
 }
 

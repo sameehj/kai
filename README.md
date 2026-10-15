@@ -13,7 +13,7 @@
 
   [Get started](#-get-started) · [How it works](#-how-kai-works) · [Security boundaries](#-what-kai-doesnt-promise) · [Roadmap](#-roadmap)
 
-  **macOS + Linux** · **Claude Code + Cursor hooks** · **Open source**
+  **macOS + Linux** · **Claude Code + Cursor hooks** · **Codex hooks (preview)** · **Open source**
 </div>
 
 ---
@@ -31,6 +31,7 @@ Kai puts local rules around supported agent actions so you can use AI tools with
 | Layer | What it does | Status |
 | --- | --- | --- |
 | **Agent hooks** | Deny protected file reads and suspicious commands in Claude Code and Cursor; examine supported tool and prompt events | ✅ Working and tested |
+| **Codex hooks** | Same checks for OpenAI Codex CLI (shell commands, `apply_patch` edits, MCP arguments, prompts) | 🧪 Implemented, not yet tested with real Codex |
 | **Policy + scanner** | Redact detected credentials, replace company terms, or block confidential markers | ✅ Working and tested |
 | **Audit log** | Record decisions in a hash-chained log without storing detected secret values | ✅ Working and tested |
 | **macOS menu-bar app** | Show status, recent activity, protection switches, and policy controls | ✅ Running in development |
@@ -76,6 +77,7 @@ brew install --HEAD kai
 kai init
 kai install claude
 kai install cursor
+kai install codex      # preview; Codex asks you to trust new hooks once
 kai doctor
 ```
 
@@ -186,8 +188,8 @@ Read [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) before using Kai for sensiti
 
 | Command | Purpose |
 | --- | --- |
-| `kai install [claude\|cursor\|all]` | Add supported agent hooks |
-| `kai uninstall [claude\|cursor\|all]` | Remove Kai's hook entries while preserving other hooks |
+| `kai install [claude\|cursor\|codex\|all]` | Add supported agent hooks (`all` adds Codex only if `~/.codex` exists) |
+| `kai uninstall [claude\|cursor\|codex\|all]` | Remove Kai's hook entries while preserving other hooks |
 | `kai scan [file…]` | Find configured secret/company patterns; stdin if no files |
 | `kai redact` | Apply text-cleaning policy from stdin to stdout |
 | `kai doctor` | Check local configuration and integrations |

@@ -67,6 +67,31 @@ hasnt "uninstall removes kai hooks" "$s" 'hook claude'
 has "uninstall keeps user hooks" "$s" 'echo mine'
 has "uninstall keeps other settings" "$s" '"theme"'
 
+echo "== codex install / uninstall =="
+export CODEX_HOME="$TMP/codex-home"
+codex_installed() { "$KAI" status --json | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["codex"]["installed"])'; }
+has "status: codex not installed" "$(codex_installed)" "False"
+"$KAI" install all >/dev/null
+[ -e "$CODEX_HOME/hooks.json" ] && fail "install all wrote codex hooks without codex present" || pass "install all skips codex when not used here"
+mkdir -p "$CODEX_HOME"
+printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo mine"}]}],"Stop":[{"hooks":[{"type":"command","command":"echo stop"}]}]},"other":1}' > "$CODEX_HOME/hooks.json"
+"$KAI" install codex >/dev/null
+"$KAI" install codex >/dev/null
+s=$(cat "$CODEX_HOME/hooks.json")
+[ "$(count "$s" 'hook codex')" = 3 ] && pass "install codex twice adds hooks once" || fail "codex hooks duplicated ($(count "$s" 'hook codex'))"
+hasnt "codex entries carry no _kai marker" "$s" '_kai'
+has "status: codex installed" "$(codex_installed)" "True"
+has "doctor reports codex" "$("$KAI" doctor)" 'codex hooks: installed'
+"$KAI" uninstall codex >/dev/null
+s=$(cat "$CODEX_HOME/hooks.json")
+hasnt "uninstall removes kai codex hooks" "$s" 'hook codex'
+has "uninstall keeps user PreToolUse hook" "$s" 'echo mine'
+has "uninstall keeps user Stop hook" "$s" 'echo stop'
+has "uninstall keeps other keys" "$s" '"other"'
+python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if "PostToolUse" not in d["hooks"] else 1)' "$CODEX_HOME/hooks.json" \
+  && pass "uninstall drops events left empty" || fail "empty codex event left behind"
+unset CODEX_HOME
+
 rm -rf "$TMP"
 echo ""
 if [ "$fails" -eq 0 ]; then echo "cli tests: all passed"; else echo "cli tests: $fails failed"; fi

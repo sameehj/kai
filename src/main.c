@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
  *
  * The `kai` command. Subcommands:
- *   kai hook claude|cursor     run as an agent hook (reads JSON on stdin)
- *   kai install [claude|cursor|all]
- *   kai uninstall [claude|cursor|all]
+ *   kai hook claude|cursor|codex   run as an agent hook (reads JSON on stdin)
+ *   kai install [claude|cursor|codex|all]
+ *   kai uninstall [claude|cursor|codex|all]
  *   kai scan <file>...         report findings in files
  *   kai redact                 clean stdin -> stdout
  *   kai init                   write a default ~/.kai/policy
@@ -104,7 +104,11 @@ static int cmd_doctor(void) {
     s = kai_read_file(cu, 4 * 1024 * 1024, &n);
     printf("cursor hooks: %s\n", (s && strstr(s, "hook cursor")) ? "installed" : "not installed");
     free(s);
-    free(cc); free(cu);
+    char *cx = kai_codex_hooks_path();
+    s = kai_read_file(cx, 4 * 1024 * 1024, &n);
+    printf("codex hooks: %s\n", (s && strstr(s, "hook codex")) ? "installed" : "not installed");
+    free(s);
+    free(cc); free(cu); free(cx);
 
     int nl; char verr[256];
     if (kai_audit_verify(NULL, &nl, verr, sizeof verr) == 0)
@@ -182,9 +186,9 @@ static void usage(void) {
     fprintf(stderr,
         "kai %s — security layer for AI agents\n\n"
         "Usage:\n"
-        "  kai install [claude|cursor|all]   add Kai hooks to an agent\n"
-        "  kai uninstall [claude|cursor|all] remove them\n"
-        "  kai hook claude|cursor            (run by the agent; reads JSON)\n"
+        "  kai install [claude|cursor|codex|all]   add Kai hooks to an agent\n"
+        "  kai uninstall [claude|cursor|codex|all] remove them\n"
+        "  kai hook claude|cursor|codex            (run by the agent; reads JSON)\n"
         "  kai scan [file...]                report secrets/terms (stdin if none)\n"
         "  kai redact                        clean stdin -> stdout\n"
         "  kai init                          write ~/.kai/policy\n"
