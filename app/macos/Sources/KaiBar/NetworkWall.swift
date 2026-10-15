@@ -47,8 +47,22 @@ final class NetworkWall: NSObject, ObservableObject {
                 if let error { self.state = .failed(error.localizedDescription); return }
                 let m = NEFilterManager.shared()
                 self.state = (m.providerConfiguration != nil && m.isEnabled) ? .on : .off
+                if self.state == .on { self.updateExtensionOnce() }
             }
         }
+    }
+
+    /// When the wall is on, re-submit activation once per launch. If this
+    /// Kai.app carries a newer extension, macOS swaps it in (no new approval
+    /// for the same team); if not, the request just completes.
+    private var updateRequested = false
+    private func updateExtensionOnce() {
+        guard !updateRequested, Bundle.main.bundlePath.hasPrefix("/Applications/") else { return }
+        updateRequested = true
+        let req = OSSystemExtensionRequest.activationRequest(forExtensionWithIdentifier: Self.extensionID,
+                                                             queue: .main)
+        req.delegate = self
+        OSSystemExtensionManager.shared.submitRequest(req)
     }
 
     func turnOn() {

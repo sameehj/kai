@@ -242,9 +242,11 @@ final class Engine {
 
     // MARK: parsing helpers
 
+    /// (address, port). IPv6 addresses come back in brackets so that
+    /// "\(ip):\(port)" reads as [2606:4700::1]:443, not 2606:4700::1:443.
     static func endpoint(_ f: NEFilterSocketFlow) -> (String, String) {
-        if let e = f.remoteEndpoint as? NWHostEndpoint { return (e.hostname, e.port) }
-        return ("?", "?")
+        guard let e = f.remoteEndpoint as? NWHostEndpoint else { return ("?", "?") }
+        return (e.hostname.contains(":") ? "[\(e.hostname)]" : e.hostname, e.port)
     }
 
     static func isIPLiteral(_ s: String) -> Bool {

@@ -18,7 +18,9 @@ settings:
     CODE_SIGN_STYLE: Automatic
     ENABLE_HARDENED_RUNTIME: YES
     MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    # Bump on every extension change: macOS only replaces an activated
+    # extension when its version differs.
+    CURRENT_PROJECT_VERSION: "2"
     SWIFT_VERSION: "5.9"
 
 targets:
@@ -84,7 +86,7 @@ targets:
   Kai:
     type: application
     platform: macOS
-    sources: [Sources/KaiBar]
+    sources: [Sources/KaiBar, Sources/Assets.xcassets]
     dependencies:
       - target: KaiNetwork
       - sdk: NetworkExtension.framework
@@ -109,6 +111,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.sameehj.kai
         PRODUCT_NAME: Kai
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     postBuildScripts:
       # Ship the kai CLI inside the app; the app uses it when none is installed.
       - name: Bundle kai CLI
