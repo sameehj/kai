@@ -50,34 +50,35 @@ static void esc(sb_t *b, const char *s) {
     sb_add(b, "\"", 1);
 }
 
-/* Read the last record's chain hash from the log (field "h":"..."). */
-static void last_hash(const char *path, char out[65]) {
+/* Read the last record's chain hash ("h":"...") from the open log. Only the
+ * file's tail is read, so appending stays fast however long the log gets
+ * (it used to re-read the whole file on every write). */
+static void last_hash(int fd, char out[65]) {
     kai_strlcpy(out, "genesis", 65);
-    FILE *f = fopen(path, "rb");
-    if (!f) return;
-    char line[8192], keep[8192];
-    keep[0] = '\0';
-    while (fgets(line, sizeof line, f))
-        if (line[0]) kai_strlcpy(keep, line, sizeof keep);
-    fclose(f);
-    char *p = strstr(keep, "\"h\":\"");
-    if (p) {
-        p += 5;
-        char *e = strchr(p, '"');
-        if (e && (size_t)(e - p) < 65) { memcpy(out, p, (size_t)(e - p)); out[e - p] = '\0'; }
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size == 0) return;
+    off_t want = st.st_size < 65536 ? st.st_size : 65536;
+    char *buf = malloc((size_t)want + 1);
+    if (!buf) return;
+    ssize_t n = pread(fd, buf, (size_t)want, st.st_size - want);
+    if (n <= 0) { free(buf); return; }
+    buf[n] = '\0';
+    /* the last occurrence of "h":" is in the last complete record */
+    const char *key = "\"h\":\"", *hit = NULL;
+    for (char *q = strstr(buf, key); q; q = strstr(q + 1, key)) hit = q;
+    if (hit) {
+        hit += 5;
+        const char *e = strchr(hit, '"');
+        if (e && (size_t)(e - hit) < 65) { memcpy(out, hit, (size_t)(e - hit)); out[e - hit] = '\0'; }
     }
+    free(buf);
 }
 
-int kai_audit(const char *source, const char *event, const char *decision,
-              const char *rule, const char *detail) {
-    ensure_home();
-    const char *path = kai_audit_path();
-    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0600);
-    if (fd < 0) return -1;
-    flock(fd, LOCK_EX);
-
+/* Write one hash-chained record to fd, which the caller holds locked. */
+static int append_record(int fd, const char *source, const char *event, const char *decision,
+                         const char *rule, const char *detail) {
     char prev[65];
-    last_hash(path, prev);
+    last_hash(fd, prev);
 
     char ts[32];
     time_t now = time(NULL);
@@ -117,9 +118,53 @@ int kai_audit(const char *source, const char *event, const char *decision,
     size_t len = strlen(out);
     ssize_t w = write(fd, out, len);
     free(out);
+    return (w == (ssize_t)len) ? 0 : -1;
+}
+
+/* Size at which the log is rotated to audit.log.1 (one old file is kept). */
+static off_t max_log_bytes(void) {
+    const char *e = getenv("KAI_AUDIT_MAX_BYTES");
+    long v = e ? strtol(e, NULL, 10) : 0;
+    return v > 0 ? (off_t)v : (off_t)8 * 1024 * 1024;
+}
+
+static int open_locked(const char *path) {
+    int fd = open(path, O_RDWR | O_CREAT | O_APPEND, 0600);
+    if (fd >= 0) flock(fd, LOCK_EX);
+    return fd;
+}
+
+int kai_audit(const char *source, const char *event, const char *decision,
+              const char *rule, const char *detail) {
+    ensure_home();
+    const char *path = kai_audit_path();
+    int fd = open_locked(path);
+    if (fd < 0) return -1;
+
+    struct stat st;
+    if (fstat(fd, &st) == 0 && st.st_size > max_log_bytes()) {
+        /* Rotate. The new file starts its own chain, and its first record
+         * names the hash the old file ended on, so the two still link up. */
+        char ended[65];
+        last_hash(fd, ended);
+        char old[1200];
+        snprintf(old, sizeof old, "%s.1", path);
+        if (rename(path, old) == 0) {
+            int nfd = open_locked(path);
+            flock(fd, LOCK_UN);
+            close(fd);
+            fd = nfd;
+            if (fd < 0) return -1;
+            char note[200];
+            snprintf(note, sizeof note, "previous log %s.1 ended with %s", "audit.log", ended);
+            append_record(fd, "kai", "rotate", "allow", "audit.log.1", note); /* "allow": bookkeeping, not an event */
+        }
+    }
+
+    int rc = append_record(fd, source, event, decision, rule, detail);
     flock(fd, LOCK_UN);
     close(fd);
-    return (w == (ssize_t)len) ? 0 : -1;
+    return rc;
 }
 
 int kai_audit_verify(const char *path, int *nlines, char *err, size_t errlen) {

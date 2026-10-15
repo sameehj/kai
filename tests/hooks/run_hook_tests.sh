@@ -57,6 +57,29 @@ refute "claude allows kai scan" claude \
   '{"hook_event_name":"PreToolUse","cwd":"/home/u","tool_name":"Bash","tool_input":{"command":"kai scan README.md"}}' \
   'deny'
 
+echo "== agents can't edit their own hooks =="
+expect "claude Edit of ~/.claude/settings.json" claude \
+  '{"hook_event_name":"PreToolUse","cwd":"/home/u","tool_name":"Edit","tool_input":{"file_path":"~/.claude/settings.json","old_string":"kai","new_string":""}}' \
+  'deny'
+expect "claude Write of project .claude/settings.local.json" claude \
+  '{"hook_event_name":"PreToolUse","cwd":"/home/u/proj","tool_name":"Write","tool_input":{"file_path":".claude/settings.local.json","content":"{\"disableAllHooks\":true}"}}' \
+  'deny'
+expect "claude MultiEdit of ~/.cursor/hooks.json" claude \
+  '{"hook_event_name":"PreToolUse","cwd":"/home/u","tool_name":"MultiEdit","tool_input":{"file_path":"~/.cursor/hooks.json","edits":[]}}' \
+  'deny'
+expect "claude shell edit of codex hooks" claude \
+  '{"hook_event_name":"PreToolUse","cwd":"/home/u","tool_name":"Bash","tool_input":{"command":"sed -i \"\" /hook/d ~/.codex/hooks.json"}}' \
+  'deny'
+expect "claude turning off codex hooks feature" claude \
+  '{"hook_event_name":"PreToolUse","cwd":"/home/u","tool_name":"Bash","tool_input":{"command":"echo hooks=false >> ~/.codex/config.toml"}}' \
+  'deny'
+expect "claude Grep into ~/.ssh (path argument)" claude \
+  '{"hook_event_name":"PreToolUse","cwd":"/home/u","tool_name":"Grep","tool_input":{"pattern":"BEGIN","path":"~/.ssh"}}' \
+  'deny'
+refute "claude can still edit ordinary files" claude \
+  '{"hook_event_name":"PreToolUse","cwd":"/home/u/proj","tool_name":"Edit","tool_input":{"file_path":"src/settings.json","old_string":"a","new_string":"b"}}' \
+  'deny'
+
 echo "== Codex hook =="
 CX='"cwd":"/home/u","model":"m","permission_mode":"default","session_id":"s","transcript_path":null,"turn_id":"t","tool_use_id":"u"'
 expect "codex blocks reading ~/.ssh via argv command" codex \

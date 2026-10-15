@@ -80,6 +80,15 @@ static void test_paths(void) {
           ".env.example allowed");
     CHECK(!kai_path_protected(p, "/home/u/src/main.c", "/home/u", why, sizeof why),
           "normal file not protected");
+    /* agent hook files are protected even if the policy tries to allow them */
+    kai_policy *lax = P("allow ~/.claude/settings.json\nallow .cursor\n");
+    CHECK(kai_path_protected(lax, "~/.claude/settings.json", NULL, why, sizeof why),
+          "agent hook config can't be allowed by policy");
+    CHECK(kai_path_protected(lax, "/home/u/proj/.cursor/hooks.json", NULL, why, sizeof why),
+          "project-level hook file protected");
+    CHECK(!kai_path_protected(lax, "/home/u/proj/settings.json", NULL, why, sizeof why),
+          "an ordinary settings.json is not");
+    kai_policy_free(lax);
     /* traversal must not escape: ~/proj/../.ssh resolves back into ~/.ssh */
     CHECK(kai_path_protected(p, "~/proj/../.ssh/x", NULL, why, sizeof why),
           "traversal into ~/.ssh still caught");
@@ -111,6 +120,27 @@ static void test_injection(void) {
           "exfil instruction");
     CHECK(kai_injection_check(p, "just a normal README about our project", w, sizeof w) == 0,
           "benign text not flagged");
+    kai_policy_free(p);
+}
+
+static void test_generic_secret_precision(void) {
+    printf("generic secret rule: real values vs prose and placeholders\n");
+    kai_policy *p = kai_policy_from_string(kai_default_policy(), NULL, 0);
+    const char *real[] = {"password=hunter2Qx!9", "api_key: 8f3a9c1d2e4b6a7f90",
+                          "secret = \"s3cr3t-Value#2024\""};
+    const char *noise[] = {"the log never stores the secret itself).", "password: <your password here>",
+                           "api_key=EXAMPLE_KEY_123", "access_token=aaaaaaaaaaaa",
+                           "set password = changeme123 for local dev"};
+    for (size_t i = 0; i < sizeof real / sizeof real[0]; i++) {
+        kai_report rep;
+        free(kai_scan_text(p, real[i], &rep));
+        CHECK(rep.nhits == 1, real[i]);
+    }
+    for (size_t i = 0; i < sizeof noise / sizeof noise[0]; i++) {
+        kai_report rep;
+        free(kai_scan_text(p, noise[i], &rep));
+        CHECK(rep.nhits == 0, noise[i]);
+    }
     kai_policy_free(p);
 }
 
@@ -240,6 +270,7 @@ int main(void) {
     test_command_checks();
     test_injection();
     test_scan_order();
+    test_generic_secret_precision();
     test_sni();
     test_egress();
     test_agents();

@@ -1,0 +1,7 @@
+diff --git a/src/upload.py b/src/upload.py
++def upload_secret_to_vault(secret_name, value):
++    """Upload a secret to the vault; never log the value."""
++    client.post("/v1/secrets", json={"name": secret_name, "value": value})
++
++# send the token in the Authorization header, not the URL
++headers = {"Authorization": f"Bearer {token}"}

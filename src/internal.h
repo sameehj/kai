@@ -55,7 +55,12 @@ typedef struct {
     char *replacement; /* for KAI_ACT_REPLACE */
     regex_t re;
     int compiled;
+    /* optional second check on a match; returns 0 to ignore it */
+    int (*validate)(const char *match, size_t len);
 } kai_rule;
+
+/* validator for "password = …"-style matches (scan.c) */
+int kai_plausible_secret_value(const char *match, size_t len);
 
 #define KAI_MAX_LIST 256
 

@@ -46,9 +46,16 @@ extension AppModel {
             .sorted { ($0.last ?? .distantPast) > ($1.last ?? .distantPast) }
     }
 
-    /// Hook, gateway and block events, the ones worth a line in the menu.
+    /// What deserves a line in the menu: things Kai stopped or cleaned.
+    /// Prompt-injection suspicions and noticed hosts are signals, not
+    /// incidents; they stay on the Activity page.
     var importantEvents: [AuditEvent] {
-        events.filter { $0.source != "network" || $0.isBlock }
+        events.filter { $0.isBlock || $0.decision == "redact" || $0.decision == "replace" }
+    }
+
+    /// Prompt-injection suspicions in the last 7 days (shown in Activity).
+    var suspicionsThisWeek: Int {
+        events.filter { $0.detail.hasPrefix("possible prompt injection") }.count
     }
 
     /// The block that is still "fresh" (last 30 s), shown as the alert hero.

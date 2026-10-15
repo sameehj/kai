@@ -43,8 +43,8 @@ jobs:
       - run: make
       - name: fail if any tracked file contains a secret
         run: |
-          # exclude tests (deliberate fake secrets) and the files that define
-          # or document the detectors themselves (their patterns match)
-          git ls-files | grep -v -e '^tests/' -e '^docs/' -e '\.md$' \
-            -e '^src/policy\.c$' -e '^policy/' -e 'kai-browser-test\.html$' | xargs ./kai scan > scan.txt || true
+          # exclude only files with deliberate fake secrets: tests, design docs
+          # with examples, and the browser test page
+          git ls-files | grep -v -e '^tests/' -e '^docs/' -e 'kai-browser-test\.html$' \
+            | xargs ./kai scan > scan.txt || true
           grep -v ': no findings' scan.txt && exit 1 || echo "no secrets found"

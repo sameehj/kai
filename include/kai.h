@@ -78,6 +78,22 @@ int kai_command_looks_like_upload(const kai_policy *p, const char *cmd,
 int kai_injection_check(const kai_policy *p, const char *text, char *which,
                         size_t whichlen);
 
+/* Weighs evidence that text addresses an AI agent with instructions, instead
+ * of firing on any keyword. Matches inside code blocks, inline code, quoted
+ * examples and policy/config lines don't count; phrasing as a command,
+ * addressing the agent, and hiding (HTML comments, invisible characters)
+ * add weight. snippet holds a short excerpt around the strongest match with
+ * secrets already redacted, safe to log. */
+#define KAI_INJECTION_WARN 4 /* score at which Kai warns (tuned on tests/corpus) */
+typedef struct {
+    int score;                 /* 0 = nothing; >= KAI_INJECTION_WARN = warn  */
+    int rules;                 /* distinct patterns that matched in prose     */
+    int hidden;                /* found in an HTML comment / invisible text   */
+    char rule[KAI_NAME_MAX];   /* strongest pattern                           */
+    char snippet[240];
+} kai_injection_finding;
+int kai_injection_assess(const kai_policy *p, const char *text, kai_injection_finding *f);
+
 /* Policy switches used by integrations. */
 kai_action kai_policy_prompt_action(const kai_policy *p);      /* block | warn */
 kai_action kai_policy_file_secret_action(const kai_policy *p); /* block | warn */

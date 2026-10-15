@@ -65,6 +65,37 @@ has "agents listed in json" "$("$KAI" policy show --json)" '"kind":	"team"'
 "$KAI" policy remove agent aider >/dev/null
 hasnt "remove agent drops all its lines" "$(cat "$KAI_HOME/policy")" 'agent aider'
 
+echo "== audit log =="
+ALLOWED='{"hook_event_name":"PreToolUse","cwd":"/tmp","tool_name":"Read","tool_input":{"file_path":"README.md"}}'
+DENIED='{"hook_event_name":"PreToolUse","cwd":"/tmp","tool_name":"Read","tool_input":{"file_path":"~/.ssh/id_rsa"}}'
+before=$(cat "$KAI_HOME/audit.log" 2>/dev/null | wc -l)
+for _ in 1 2 3 4 5; do printf '%s' "$ALLOWED" | "$KAI" hook claude >/dev/null; done
+after=$(cat "$KAI_HOME/audit.log" 2>/dev/null | wc -l)
+[ "$before" = "$after" ] && pass "allowed tool calls are not logged" || fail "allowed calls logged ($before -> $after)"
+printf '%s' "$DENIED" | "$KAI" hook claude >/dev/null
+has "blocked tool call is logged" "$(tail -n 1 "$KAI_HOME/audit.log")" '"decision":"block"'
+# rotation: a tiny limit forces several rotations
+export KAI_AUDIT_MAX_BYTES=1500
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do printf '%s' "$DENIED" | "$KAI" hook claude >/dev/null; done
+unset KAI_AUDIT_MAX_BYTES
+[ -f "$KAI_HOME/audit.log.1" ] && pass "log rotated to audit.log.1" || fail "no rotation"
+has "new log starts with a link to the old one" "$(head -n 1 "$KAI_HOME/audit.log")" '"event":"rotate"'
+"$KAI" log verify >/dev/null && pass "rotated log verifies" || fail "rotated log broken"
+"$KAI" log verify >/dev/null 2>&1
+# appending stays fast on a big log: 2000 records, then time 50 more
+python3 -I - "$KAI_HOME/audit.log" <<'PY'
+import sys
+with open(sys.argv[1], "a") as f:
+    for i in range(2000):
+        f.write('{"ts":"x","source":"t","event":"t","decision":"block","rule":"r","detail":"d","prev":"p","h":"%064d"}\n' % i)
+PY
+t0=$(python3 -I -c 'import time; print(time.time())')
+for _ in $(seq 50); do printf '%s' "$DENIED" | "$KAI" hook claude >/dev/null; done
+t1=$(python3 -I -c 'import time; print(time.time())')
+python3 -I -c "import sys; d=($t1-$t0)/50; print('  info avg hook+append: %.1f ms' % (d*1000)); sys.exit(0 if d < 0.05 else 1)" \
+  && pass "append stays fast on a large log" || fail "append is slow on a large log"
+mv "$KAI_HOME/audit.log" "$KAI_HOME/audit.log.junk"
+
 echo "== install / uninstall =="
 mkdir -p "$HOME/.claude"
 printf '{"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}' > "$HOME/.claude/settings.json"

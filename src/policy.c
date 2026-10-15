@@ -388,6 +388,9 @@ static kai_policy *parse(const char *text, const char *source, char *err,
                 kai_policy_free(p);
                 return NULL;
             }
+            /* the generic pattern only matters when the value looks like a secret */
+            if (strcmp(BUILTIN_SECRETS[i].name, "generic_secret_assign") == 0)
+                p->rules[p->nrules - 1].validate = kai_plausible_secret_value;
         }
     }
     return p;

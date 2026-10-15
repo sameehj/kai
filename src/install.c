@@ -108,7 +108,7 @@ static int install_claude(const char *exe) {
         cJSON_AddItemToObject(root, "hooks", hooks);
     }
     ensure_event(hooks, "UserPromptSubmit", NULL, exe);
-    ensure_event(hooks, "PreToolUse", "Bash|Read|Edit|Write|Grep|Glob", exe);
+    ensure_event(hooks, "PreToolUse", "Bash|Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Glob|LS", exe);
     ensure_event(hooks, "PreToolUse", "mcp__.*", exe);
     ensure_event(hooks, "PostToolUse", NULL, exe);
     char *out = cJSON_Print(root);

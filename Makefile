@@ -16,7 +16,7 @@ SDK     := $(shell xcrun --show-sdk-path 2>/dev/null)
 CFLAGS  += -I$(SDK)/usr/include
 LDLIBS   = $(SDK)/usr/lib/libcurl.tbd -lpthread -framework Security -framework CoreFoundation
 else
-LDLIBS   = -lcurl -lpthread
+LDLIBS   = -lcurl -lpthread -lm
 endif
 
 CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
@@ -34,7 +34,7 @@ kai: $(OBJ)
 libkai.a: $(COREOBJ)
 	$(AR) rcs $@ $(COREOBJ)
 
-%.o: %.c
+%.o: %.c include/kai.h src/internal.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Address/UB sanitizer build used in CI
@@ -48,6 +48,7 @@ test: kai
 	sh tests/cli/run_cli_tests.sh ./kai
 	sh tests/gateway/run_gateway_tests.sh ./kai
 	sh tests/browser/run_native_tests.sh ./kai
+	python3 -I tests/corpus/run_corpus.py ./kai
 
 # macOS app (menu bar + network system extension), via XcodeGen + Xcode.
 #   make app                  ad-hoc signed; menu bar works, the network wall

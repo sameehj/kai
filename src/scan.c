@@ -2,8 +2,10 @@
 #include "internal.h"
 
 #include <ctype.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 const char *kai_action_name(kai_action a) {
     switch (a) {
@@ -54,6 +56,11 @@ static char *apply_rule(const kai_rule *r, char *text, kai_report *rep) {
             s += m.rm_eo + (s[m.rm_eo] ? 1 : 0);
             continue;
         }
+        if (r->validate && !r->validate(s + m.rm_so, mlen)) {
+            sb_add(&out, s + m.rm_so, mlen); /* not a real finding: keep the text */
+            s += m.rm_eo;
+            continue;
+        }
         record(rep, r->name, r->action);
         switch (r->action) {
         case KAI_ACT_REDACT: {
@@ -94,6 +101,57 @@ char *kai_scan_text(const kai_policy *p, const char *text, kai_report *rep) {
     for (int i = 0; i < p->nrules && cur; i++)
         cur = apply_rule(&p->rules[i], cur, rep);
     return cur;
+}
+
+/* ---- secret plausibility ---- */
+
+/* A random-looking value after a key name is a secret; prose ("the secret
+ * itself"), markdown ("secret detectors**") and placeholders ("<your
+ * password>", "EXAMPLE_KEY") are not. Look at the value after the key and
+ * separator: it must be long enough, varied enough (Shannon entropy), mix
+ * character kinds, and not be a known placeholder. (Examples live in
+ * tests/run_tests.c, which the self-scan skips.) */
+int kai_plausible_secret_value(const char *match, size_t len) {
+    /* skip the key name, then the separator run ("= : ' \"") */
+    size_t i = 0;
+    while (i < len && (isalnum((unsigned char)match[i]) || match[i] == '_' || match[i] == '-')) i++;
+    while (i < len && strchr("\"'= :", match[i])) i++;
+    const char *v = match + i;
+    size_t n = len - i;
+    while (n && strchr(".,;:!?)]}*_`", v[n - 1])) n--; /* sentence / markdown punctuation */
+    if (n < 8) return 0;
+    /* a plain lowercase word ("detectors", "itself") is prose, not a key */
+    int word = 1;
+    for (size_t k = 0; k < n && word; k++) word = islower((unsigned char)v[k]) || v[k] == '-';
+    if (word) return 0;
+
+    char low[128];
+    size_t ln = n < sizeof low - 1 ? n : sizeof low - 1;
+    for (size_t k = 0; k < ln; k++) low[k] = (char)tolower((unsigned char)v[k]);
+    low[ln] = '\0';
+    static const char *const PLACEHOLDERS[] = {"example", "changeme", "password", "secret", "your",
+                                               "xxxx", "****", "<", ">", "${", "{{", "%s", "redacted",
+                                               "dummy", "placeholder", "sample", "todo", "none", "null"};
+    for (size_t k = 0; k < sizeof PLACEHOLDERS / sizeof PLACEHOLDERS[0]; k++)
+        if (strstr(low, PLACEHOLDERS[k])) return 0;
+
+    int counts[256] = {0}, lower = 0, upper = 0, digit = 0, other = 0;
+    for (size_t k = 0; k < n; k++) {
+        unsigned char c = (unsigned char)v[k];
+        counts[c]++;
+        if (islower(c)) lower = 1;
+        else if (isupper(c)) upper = 1;
+        else if (isdigit(c)) digit = 1;
+        else other = 1;
+    }
+    double h = 0;
+    for (int c = 0; c < 256; c++)
+        if (counts[c]) {
+            double pr = (double)counts[c] / (double)n;
+            h -= pr * log2(pr);
+        }
+    int kinds = lower + upper + digit + other;
+    return (h >= 3.0 && kinds >= 2) || kinds >= 3;
 }
 
 /* ---- path matching ---- */
@@ -142,12 +200,50 @@ static int path_matches(const char *pat, const char *np) {
     return 0;
 }
 
+/* Files that switch Kai (or an agent's hooks) on and off. Always protected,
+ * whatever the policy says, so a hijacked agent can't edit its way out:
+ * matched by path suffix, so project-level copies are covered too. */
+static const char *const AGENT_CONTROL[] = {
+    "/.claude/settings.json",
+    "/.claude/settings.local.json",
+    "/.cursor/hooks.json",
+    "/.codex/hooks.json",
+    "/.codex/config.toml",
+    "/NativeMessagingHosts/io.github.sameehj.kai.json",
+};
+
+static int agent_control_path(const char *np, char *why, size_t whylen) {
+    size_t n = strlen(np);
+    for (size_t i = 0; i < sizeof AGENT_CONTROL / sizeof AGENT_CONTROL[0]; i++) {
+        size_t l = strlen(AGENT_CONTROL[i]);
+        if (n >= l && strcmp(np + n - l, AGENT_CONTROL[i]) == 0) {
+            if (why) kai_strlcpy(why, AGENT_CONTROL[i] + 1, whylen);
+            return 1;
+        }
+    }
+    /* Kai's own home (policy, audit log, browser extension) and a custom
+     * CODEX_HOME's hooks */
+    const char *roots[] = {kai_home(), getenv("CODEX_HOME")};
+    for (size_t i = 0; i < sizeof roots / sizeof roots[0]; i++) {
+        if (!roots[i] || !*roots[i]) continue;
+        char *r = kai_normalize_path(roots[i], NULL);
+        size_t rl = r ? strlen(r) : 0;
+        int hit = r && strncmp(np, r, rl) == 0 && (np[rl] == '\0' || np[rl] == '/') &&
+                  (i == 0 || strstr(np + rl, "hooks.json") || strstr(np + rl, "config.toml"));
+        if (hit && why) kai_strlcpy(why, i == 0 ? "~/.kai" : np, whylen);
+        free(r);
+        if (hit) return 1;
+    }
+    return 0;
+}
+
 int kai_path_protected(const kai_policy *p, const char *path, const char *cwd,
                        char *why, size_t whylen) {
     if (why && whylen) why[0] = '\0';
     if (!p || !path) return 0;
     char *np = kai_normalize_path(path, cwd);
     if (!np) return 0;
+    if (agent_control_path(np, why, whylen)) { free(np); return 1; }
     for (int i = 0; i < p->nallow; i++) {
         char *ap = kai_normalize_path(p->allow[i], cwd);
         int hit = ap && (path_matches(p->allow[i], np) || strcmp(ap, np) == 0);
@@ -207,20 +303,204 @@ int kai_command_looks_like_upload(const kai_policy *p, const char *cmd,
     return 0;
 }
 
+/* ---- prompt-injection assessment ---- */
+
+/* Blank out (with spaces, keeping newlines and offsets) everything that is
+ * an example rather than speech: fenced code, inline code, short quoted
+ * strings, and config/comment lines (Kai's own policy, shell comments). */
+static void mask_non_prose(char *s) {
+    size_t n = strlen(s);
+    /* fenced code blocks */
+    for (size_t i = 0; i + 2 < n; i++) {
+        if ((s[i] == '`' || s[i] == '~') && s[i + 1] == s[i] && s[i + 2] == s[i]) {
+            char fence = s[i];
+            size_t j = i + 3;
+            while (j + 2 < n && !(s[j] == fence && s[j + 1] == fence && s[j + 2] == fence)) j++;
+            size_t end = j + 2 < n ? j + 3 : n;
+            for (size_t k = i; k < end; k++)
+                if (s[k] != '\n') s[k] = ' ';
+            i = end;
+        }
+    }
+    /* line by line: config lines, inline code, quoted strings */
+    for (char *line = s; line && *line;) {
+        char *nl = strchr(line, '\n');
+        size_t len = nl ? (size_t)(nl - line) : strlen(line);
+        const char *t = line;
+        while (t < line + len && (*t == ' ' || *t == '\t')) t++;
+        static const char *const CONFIG[] = {"rule_injection", "rule_upload", "rule ", "term ",
+                                             "#", "//", "/*", "* "};
+        int config = 0;
+        for (size_t c = 0; c < sizeof CONFIG / sizeof CONFIG[0]; c++)
+            if (strncmp(t, CONFIG[c], strlen(CONFIG[c])) == 0) config = 1;
+        if (config) {
+            memset(line, ' ', len);
+        } else {
+            /* pass 0: inline code; 1: escaped \"…\" (JSON inside a string);
+             * 2: plain "…", skipping escaped quotes so the pairs line up */
+            for (int pass = 0; pass < 3; pass++) {
+                char *open = NULL;
+                for (char *c = line; c < line + len; c++) {
+                    int esc = c > line && c[-1] == '\\';
+                    int hit = pass == 0 ? *c == '`' : (*c == '"' && (pass == 1 ? esc : !esc));
+                    if (!hit) continue;
+                    if (!open) { open = c; continue; }
+                    if (c - open <= 300)
+                        for (char *k = open + 1; k < c; k++)
+                            if (!(pass == 2 && *k == '"')) *k = ' ';
+                    open = NULL;
+                }
+            }
+        }
+        line = nl ? nl + 1 : NULL;
+    }
+}
+
+/* Invisible characters used to hide text from people but not from models:
+ * zero-width spaces/joiners, word joiner, BOM, Unicode tag characters. */
+static int has_invisible(const char *s) {
+    for (const unsigned char *c = (const unsigned char *)s; *c; c++) {
+        if (c[0] == 0xE2 && c[1] == 0x80 && c[2] >= 0x8B && c[2] <= 0x8F) return 1;
+        if (c[0] == 0xE2 && c[1] == 0x81 && c[2] == 0xA0) return 1;
+        if (c[0] == 0xEF && c[1] == 0xBB && c[2] == 0xBF) return 1;
+        if (c[0] == 0xF3 && c[1] == 0xA0 && (c[2] == 0x80 || c[2] == 0x81)) return 1;
+    }
+    return 0;
+}
+
+/* How specific each built-in pattern is. Others default to 2. */
+static int rule_weight(const char *name) {
+    if (strcmp(name, "ignore_prev") == 0 || strcmp(name, "override_role") == 0) return 3;
+    return 2;
+}
+
+static int near_word(const char *text, size_t from, size_t to, const char *word) {
+    size_t wl = strlen(word);
+    for (size_t i = from; i + wl <= to; i++) {
+        if (strncasecmp(text + i, word, wl) != 0) continue;
+        int before = i == 0 || !isalnum((unsigned char)text[i - 1]);
+        int after = !isalnum((unsigned char)text[i + wl]);
+        if (before && after) return 1;
+    }
+    return 0;
+}
+
+/* name used to call on someone: "Assistant:", "Claude, …", "AI agents reading this" */
+static int greets(const char *text, size_t from, size_t to, const char *name) {
+    size_t wl = strlen(name);
+    for (size_t i = from; i + wl <= to; i++) {
+        if (strncasecmp(text + i, name, wl) != 0) continue;
+        if (i > 0 && isalnum((unsigned char)text[i - 1])) continue;
+        const char *after = text + i + wl;
+        if (isalnum((unsigned char)*after)) continue;
+        while (*after == ' ') after++;
+        if (*after == ':' || *after == ',') return 1;
+        if (strncasecmp(after, "reading this", 12) == 0) return 1;
+    }
+    return 0;
+}
+
+int kai_injection_assess(const kai_policy *p, const char *text, kai_injection_finding *f) {
+    memset(f, 0, sizeof *f);
+    if (!p || !p->injection_on || !text) return 0;
+    size_t n = strlen(text);
+    if (n > p->max_scan) return 0;
+    char *prose = strdup(text);
+    if (!prose) return 0;
+    mask_non_prose(prose);
+    /* Text in files is wrapped: let a phrase continue across a line break.
+     * (Offsets don't move, so matches still point into the original.) */
+    for (char *c = prose; *c; c++)
+        if (*c == '\n' || *c == '\r') *c = ' ';
+
+    /* names an attacker uses to call on the agent ("Assistant:", "AI agents
+     * reading this", "Claude,"); a plain third-person mention doesn't count */
+    static const char *const NAMES[] = {"assistant", "ai", "ai agent", "ai agents", "agent", "agents",
+                                        "claude", "chatgpt", "codex", "gpt", "llm", "model", "ai model"};
+    int best_w = 0, imperative = 0, addressed = 0;
+    size_t best_so = 0, best_eo = 0;
+    regmatch_t m;
+    for (int i = 0; i < p->ninj; i++) {
+        if (regexec(&p->inj[i].re, prose, 1, &m, 0) != 0) continue;
+        size_t so = (size_t)m.rm_so, eo = (size_t)m.rm_eo;
+        int w = rule_weight(p->inj[i].name);
+        /* asking to move a key file is more specific than "send a token" */
+        if (strcmp(p->inj[i].name, "exfil_ask") == 0) {
+            char tmp[256];
+            size_t ml = eo - so < sizeof tmp - 1 ? eo - so : sizeof tmp - 1;
+            memcpy(tmp, text + so, ml);
+            tmp[ml] = '\0';
+            if (strstr(tmp, ".ssh") || strstr(tmp, ".env") || strstr(tmp, "id_rsa")) w = 3;
+        }
+        f->rules++;
+        f->score += w;
+        if (w > best_w) {
+            best_w = w;
+            best_so = so;
+            best_eo = eo;
+            kai_strlcpy(f->rule, p->inj[i].name, sizeof f->rule);
+        }
+        /* phrased as a command: the match opens its sentence (allowing a
+         * short lead-in such as "Please" or "IMPORTANT:") */
+        size_t st = so;
+        while (st > 0 && !strchr(".!?:\n", text[st - 1])) st--;
+        while (st < so && strchr(" \t-*>#", text[st])) st++;
+        if (so - st <= 12) imperative = 1;
+        if (so >= 7 && strncasecmp(text + so - 7, "please ", 7) == 0) imperative = 1;
+        size_t from = so > 150 ? so - 150 : 0, to = eo + 150 < n ? eo + 150 : n;
+        /* addressed to the agent: second person, or a name used as a greeting */
+        addressed |= near_word(text, from, to, "you") || near_word(text, from, to, "your");
+        for (size_t a = 0; a < sizeof NAMES / sizeof NAMES[0] && !addressed; a++)
+            addressed = greets(text, from, to, NAMES[a]);
+        /* inside an HTML comment: shown to models, hidden from readers */
+        const char *open = NULL;
+        for (const char *c = strstr(text, "<!--"); c && (size_t)(c - text) < so; c = strstr(c + 4, "<!--"))
+            open = c;
+        if (open) {
+            const char *close = strstr(open, "-->");
+            if (!close || (size_t)(close - text) > so) f->hidden = 1;
+        }
+    }
+    free(prose);
+    if (f->rules == 0) return 0;
+    if (has_invisible(text)) f->hidden = 1;
+    f->score += imperative + addressed + (f->hidden ? 2 : 0);
+
+    /* excerpt around the strongest match, on UTF-8 boundaries, redacted */
+    size_t a = best_so > 80 ? best_so - 80 : 0, b = best_eo + 80 < n ? best_eo + 80 : n;
+    while (a > 0 && ((unsigned char)text[a] & 0xC0) == 0x80) a--;
+    while (b < n && ((unsigned char)text[b] & 0xC0) == 0x80) b++;
+    char *raw = malloc(b - a + 1);
+    if (raw) {
+        memcpy(raw, text + a, b - a);
+        raw[b - a] = '\0';
+        for (char *c = raw; *c; c++)
+            if (*c == '\n' || *c == '\r' || *c == '\t') *c = ' ';
+        char *clean = kai_scan_text(p, raw, NULL);
+        snprintf(f->snippet, sizeof f->snippet, "%s%s%s", a > 0 ? "…" : "", clean ? clean : "",
+                 b < n ? "…" : "");
+        free(clean);
+        free(raw);
+        /* snprintf may have cut a multi-byte character: drop the partial one,
+         * since agents parse the warning as JSON and reject invalid UTF-8 */
+        size_t L = strlen(f->snippet), k = L;
+        while (k > 0 && ((unsigned char)f->snippet[k - 1] & 0xC0) == 0x80) k--;
+        if (k > 0) {
+            unsigned char lead = (unsigned char)f->snippet[k - 1];
+            size_t need = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+            if (L - (k - 1) < need) f->snippet[k - 1] = '\0';
+        }
+    }
+    return f->score;
+}
+
 int kai_injection_check(const kai_policy *p, const char *text, char *which,
                         size_t whichlen) {
     if (which && whichlen) which[0] = '\0';
-    if (!p || !p->injection_on || !text) return 0;
-    if (strlen(text) > p->max_scan) return 0;
-    int count = 0;
-    regmatch_t m;
-    for (int i = 0; i < p->ninj; i++) {
-        if (regexec(&p->inj[i].re, text, 1, &m, 0) == 0) {
-            if (count == 0 && which) kai_strlcpy(which, p->inj[i].name, whichlen);
-            count++;
-        }
-    }
-    return count;
+    kai_injection_finding f;
+    if (kai_injection_assess(p, text, &f) < KAI_INJECTION_WARN) return 0;
+    if (which) kai_strlcpy(which, f.rule, whichlen);
+    return f.rules;
 }
 
 void kai_report_summary(const kai_report *rep, char *out, size_t outlen) {
