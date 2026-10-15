@@ -6,11 +6,13 @@ import SwiftUI
 struct KaiBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
+    @StateObject private var wall = NetworkWall()
 
     var body: some Scene {
         MenuBarExtra {
             MenuView()
                 .environmentObject(model)
+                .environmentObject(wall)
         } label: {
             Image(systemName: model.menuBarSymbol)
                 .accessibilityLabel("Kai: \(model.headline)")
@@ -20,6 +22,7 @@ struct KaiBarApp: App {
         Window("Kai Settings", id: "settings") {
             SettingsView()
                 .environmentObject(model)
+                .environmentObject(wall)
         }
         .windowResizability(.contentSize)
     }

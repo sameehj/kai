@@ -48,11 +48,28 @@ test: kai
 	sh tests/cli/run_cli_tests.sh ./kai
 	sh tests/gateway/run_gateway_tests.sh ./kai
 
-# macOS menu-bar app -> build/Kai.app (needs Xcode or the Swift toolchain)
+# macOS app (menu bar + network system extension), via XcodeGen + Xcode.
+#   make app                  ad-hoc signed; menu bar works, the network wall
+#                             can't load (CI, quick local builds)
+#   make app-dev KAI_TEAM=..  signed with your Apple team; network wall works
+#   make install-app          copy build/Kai.app to /Applications
+XCODE_FLAGS = -project app/macos/Kai.xcodeproj -scheme Kai -configuration Release \
+              -derivedDataPath build/dd
 app: kai
-	sh app/macos/build-app.sh
+	cd app/macos && xcodegen generate --quiet
+	xcodebuild $(XCODE_FLAGS) CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual \
+	  DEVELOPMENT_TEAM= CODE_SIGN_ENTITLEMENTS= $(XCODE_EXTRA) -quiet build
+	rm -rf build/Kai.app && cp -R build/dd/Build/Products/Release/Kai.app build/Kai.app
 
-install-app: app
+app-dev: kai
+	@test -n "$(KAI_TEAM)" || { echo "set KAI_TEAM to your Apple team ID"; exit 1; }
+	cd app/macos && KAI_TEAM=$(KAI_TEAM) xcodegen generate --quiet
+	xcodebuild $(XCODE_FLAGS) -allowProvisioningUpdates DEVELOPMENT_TEAM=$(KAI_TEAM) \
+	  $(XCODE_EXTRA) -quiet build
+	rm -rf build/Kai.app && cp -R build/dd/Build/Products/Release/Kai.app build/Kai.app
+
+install-app:
+	@test -d build/Kai.app || { echo "build it first: make app or make app-dev"; exit 1; }
 	rm -rf /Applications/Kai.app
 	cp -R build/Kai.app /Applications/Kai.app
 
@@ -65,6 +82,6 @@ uninstall:
 
 clean:
 	rm -f $(OBJ) kai libkai.a tests/run_tests
-	rm -rf build app/macos/.build
+	rm -rf build app/macos/Kai.xcodeproj
 
-.PHONY: all asan test app install-app install uninstall clean
+.PHONY: all asan test app app-dev install-app install uninstall clean

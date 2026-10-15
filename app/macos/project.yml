@@ -1,0 +1,116 @@
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
+#
+# Xcode project for Kai.app and its network system extension. The .xcodeproj
+# is generated from this file (it is not committed):
+#
+#   make app         ad-hoc signed build, no extension entitlements (CI)
+#   make app-dev     signed with your Apple team, extension works (see Makefile)
+#
+name: Kai
+options:
+  bundleIdPrefix: io.github.sameehj
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    DEVELOPMENT_TEAM: ${KAI_TEAM}
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_HARDENED_RUNTIME: YES
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.9"
+
+targets:
+  # The shared C policy engine (include/kai.h), compiled for whatever
+  # architecture Xcode builds. Same sources as `make`.
+  libkai:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: ../../src/util.c
+      - path: ../../src/policy.c
+      - path: ../../src/scan.c
+      - path: ../../src/sha256.c
+      - path: ../../src/audit.c
+      - path: ../../src/net.c
+      - path: ../../src/proc.c
+      - path: ../../third_party/cjson/cJSON.c
+    settings:
+      base:
+        PRODUCT_NAME: kai
+        GCC_C_LANGUAGE_STANDARD: c11
+        HEADER_SEARCH_PATHS: ["$(SRCROOT)/../../include", "$(SRCROOT)/../../third_party/cjson"]
+        GCC_PREPROCESSOR_DEFINITIONS: ["_POSIX_C_SOURCE=200809L", "_DARWIN_C_SOURCE"]
+        SKIP_INSTALL: YES
+
+  KaiNetwork:
+    type: system-extension
+    platform: macOS
+    sources: [Network]
+    dependencies:
+      - target: libkai
+      - sdk: NetworkExtension.framework
+      - sdk: Security.framework
+      - sdk: CoreFoundation.framework
+    info:
+      path: Network/Info.plist
+      properties:
+        CFBundleDisplayName: Kai Network
+        NSHumanReadableCopyright: GPL-3.0 · The Kai Authors
+        NSSystemExtensionUsageDescription: Kai checks where AI agents send data and blocks connections your policy does not allow.
+        NetworkExtension:
+          NEMachServiceName: $(TeamIdentifierPrefix)io.github.sameehj.kai.network
+          NEProviderClasses:
+            com.apple.networkextension.filter-data: $(PRODUCT_MODULE_NAME).FilterDataProvider
+    entitlements:
+      path: Network/Network.entitlements
+      properties:
+        com.apple.developer.networking.networkextension: [content-filter-provider]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.sameehj.kai.network
+        PRODUCT_NAME: io.github.sameehj.kai.network
+        PRODUCT_MODULE_NAME: KaiNetwork
+        SWIFT_INCLUDE_PATHS: $(SRCROOT)/KaiCore
+        SKIP_INSTALL: YES
+
+  Kai:
+    type: application
+    platform: macOS
+    sources: [Sources/KaiBar]
+    dependencies:
+      - target: KaiNetwork
+      - sdk: NetworkExtension.framework
+      - sdk: SystemExtensions.framework
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: Kai
+        LSUIElement: true
+        LSMinimumSystemVersion: "13.0"
+        NSHumanReadableCopyright: GPL-3.0 · The Kai Authors
+    entitlements:
+      path: Sources/Kai.entitlements
+      properties:
+        com.apple.developer.system-extension.install: true
+        com.apple.developer.networking.networkextension: [content-filter-provider]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.sameehj.kai
+        PRODUCT_NAME: Kai
+    postBuildScripts:
+      # Ship the kai CLI inside the app; the app uses it when none is installed.
+      - name: Bundle kai CLI
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          make -C "$SRCROOT/../.." kai >/dev/null
+          dest="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/kai"
+          mkdir -p "$(dirname "$dest")"
+          cp "$SRCROOT/../../kai" "$dest"
+          if [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
+            codesign --force --options runtime --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$dest"
+          else
+            codesign --force --sign - "$dest"
+          fi

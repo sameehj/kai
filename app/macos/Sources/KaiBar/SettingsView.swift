@@ -14,12 +14,13 @@ struct SettingsView: View {
                 GeneralTab().tabItem { Label("General", systemImage: "gearshape") }
                 ProtectionTab().tabItem { Label("Protection", systemImage: "shield") }
                 FilesTab().tabItem { Label("Files", systemImage: "folder.badge.minus") }
+                NetworkTab().tabItem { Label("Network", systemImage: "network") }
                 CompanyTab().tabItem { Label("Company Data", systemImage: "building.2") }
                 ActivityTab().tabItem { Label("Activity", systemImage: "list.bullet.rectangle") }
             }
             .padding()
         }
-        .frame(width: 620, height: 480)
+        .frame(width: 680, height: 500)
         .task { await model.refresh() }
     }
 }
@@ -131,6 +132,8 @@ private struct PathList: View {
     let title: String
     let help: String
     let items: [String]
+    var placeholder = "~/path or pattern"
+    var canChoose = true
     @State private var newItem = ""
     @State private var selection: String?
 
@@ -141,10 +144,10 @@ private struct PathList: View {
             List(items, id: \.self, selection: $selection) { Text($0).font(.system(.body, design: .monospaced)) }
                 .listStyle(.bordered(alternatesRowBackgrounds: true))
             HStack {
-                TextField("~/path or pattern", text: $newItem)
+                TextField(placeholder, text: $newItem)
                     .onSubmit(add)
                 Button("Add", action: add).disabled(newItem.trimmingCharacters(in: .whitespaces).isEmpty)
-                Button("Choose…", action: choose)
+                if canChoose { Button("Choose…", action: choose) }
                 Button {
                     if let s = selection { model.remove(kind, s); selection = nil }
                 } label: { Image(systemName: "minus") }
@@ -173,6 +176,34 @@ private struct PathList: View {
             return
         }
         model.add(kind, p)
+    }
+}
+
+// MARK: - Network
+
+private struct NetworkTab: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var wall: NetworkWall
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Form {
+                Section {
+                    NetworkWallToggle()
+                    SwitchPicker(key: "egress", title: "Agent connections to hosts not on the list",
+                                 help: "Start with Log to see what your agents reach, then switch to Block.",
+                                 options: [("log", "Log only"), ("block", "Block"), ("off", "Off")])
+                }
+            }
+            .formStyle(.grouped)
+            .frame(height: 170)
+            PathList(kind: "egress_allow", title: "Extra allowed hosts",
+                     help: "Each host also covers its subdomains. Model APIs, GitHub and package registries are always allowed.",
+                     items: model.policy?.egressAllow ?? [],
+                     placeholder: "e.g. artifacts.example.com", canChoose: false)
+        }
+        .disabled(model.busy || model.policy == nil)
+        .onAppear { wall.refresh() }
     }
 }
 

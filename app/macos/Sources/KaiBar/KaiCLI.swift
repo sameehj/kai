@@ -50,6 +50,7 @@ struct PolicyInfo: Decodable, Equatable {
     let switches: [String: String]
     let protect: [String]
     let allow: [String]
+    let egressAllow: [String]?
     let terms: [Term]
     let rules: [Rule]
 }

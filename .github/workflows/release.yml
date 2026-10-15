@@ -37,8 +37,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: universal CLI
         run: make CC="cc -arch x86_64 -arch arm64" && make test
-      - name: menu-bar app (universal)
-        run: sh app/macos/build-app.sh --universal
+      - name: menu-bar app (universal, ad-hoc signed until Developer ID is set up)
+        run: |
+          brew install xcodegen
+          make app XCODE_EXTRA="ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO"
       - name: package
         run: |
           tar -czf "kai-${GITHUB_REF_NAME}-darwin-universal.tar.gz" kai LICENSE

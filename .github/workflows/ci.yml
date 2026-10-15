@@ -27,10 +27,11 @@ jobs:
         run: make asan
 
   macos-app:
-    name: menu-bar app builds
+    name: macOS app + network extension build
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+      - run: brew install xcodegen
       - run: make app
 
   self-scan:

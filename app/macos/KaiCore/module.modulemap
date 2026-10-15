@@ -1,0 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
+// Exposes libkai's public C API (include/kai.h) to Swift as `import KaiCore`.
+module KaiCore [system] {
+    header "../../../include/kai.h"
+    export *
+}

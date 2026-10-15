@@ -59,6 +59,7 @@ struct MenuView: View {
             ForEach(Agent.allCases) { a in
                 AgentToggle(agent: a)
             }
+            NetworkWallToggle()
         }
     }
 
@@ -107,14 +108,41 @@ struct AgentToggle: View {
     }
 }
 
+struct NetworkWallToggle: View {
+    @EnvironmentObject var wall: NetworkWall
+
+    var body: some View {
+        Toggle(isOn: Binding(get: { wall.isOn },
+                             set: { $0 ? wall.turnOn() : wall.turnOff() })) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Network wall")
+                Text(wall.summary)
+                    .font(.caption)
+                    .foregroundStyle(warn ? Color.orange : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .toggleStyle(.switch)
+        .disabled(wall.state == .activating || wall.state == .checking)
+    }
+
+    private var warn: Bool {
+        switch wall.state {
+        case .needsApproval, .failed: return true
+        default: return false
+        }
+    }
+}
+
 struct EventRow: View {
     let event: AuditEvent
     var compact = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: event.isBlock ? "hand.raised.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(event.isBlock ? .red : .orange)
+            Image(systemName: event.isBlock ? "hand.raised.fill"
+                  : (event.decision == "log" ? "eye.fill" : "exclamationmark.triangle.fill"))
+                .foregroundStyle(event.isBlock ? Color.red : (event.decision == "log" ? Color.secondary : Color.orange))
                 .frame(width: 16)
             VStack(alignment: .leading, spacing: 1) {
                 Text(event.summary)

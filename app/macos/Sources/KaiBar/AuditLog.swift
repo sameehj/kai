@@ -17,17 +17,21 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
     var isBlock: Bool { decision == "block" }
     var isNotable: Bool { decision != "allow" }
 
+    /// Network and gateway records name the agent in `event`.
     var agentName: String {
-        switch source {
+        let who = (source == "network" || source == "gateway") ? event : source
+        switch who {
         case "claude": return "Claude Code"
         case "cursor": return "Cursor"
-        default: return source.capitalized
+        case "codex": return "Codex"
+        case "anthropic", "openai", "openrouter": return "AI gateway (\(who))"
+        default: return who.capitalized
         }
     }
 
     /// One readable line, e.g. "Blocked Claude Code: reading protected path (~/.ssh)".
     var summary: String {
-        let verb = isBlock ? "Blocked" : "Warning"
+        let verb = isBlock ? "Blocked" : (decision == "log" ? "Noticed" : "Warning")
         let what = detail.isEmpty ? (rule.isEmpty ? event : rule) : detail
         return "\(verb) \(agentName): \(what)"
     }
