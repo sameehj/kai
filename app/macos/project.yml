@@ -57,6 +57,10 @@ targets:
       path: Network/Info.plist
       properties:
         CFBundleDisplayName: Kai Network
+        # macOS only treats the bundle as a system extension with type SYSX.
+        CFBundlePackageType: SYSX
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSHumanReadableCopyright: GPL-3.0 · The Kai Authors
         NSSystemExtensionUsageDescription: Kai checks where AI agents send data and blocks connections your policy does not allow.
         NetworkExtension:
@@ -89,6 +93,9 @@ targets:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: Kai
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSUIElement: true
         LSMinimumSystemVersion: "13.0"
         NSHumanReadableCopyright: GPL-3.0 · The Kai Authors
