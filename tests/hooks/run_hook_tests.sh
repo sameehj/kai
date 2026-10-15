@@ -57,6 +57,28 @@ refute "claude allows kai scan" claude \
   '{"hook_event_name":"PreToolUse","cwd":"/home/u","tool_name":"Bash","tool_input":{"command":"kai scan README.md"}}' \
   'deny'
 
+echo "== shell reading: evasions caught =="
+bash_cmd() { python3 -I -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1"; }
+expect "quote-split path (~/.ss''h)" claude "$(bash_cmd "cat ~/.ss''h/id_rsa")" 'deny'
+expect "path inside python -c" claude "$(bash_cmd "python3 -c \"print(open('/tmp/k/id_rsa').read())\"")" 'deny'
+expect "path inside a heredoc" claude "$(bash_cmd "python3 - <<'EOF'
+print(open('/tmp/k/id_ed25519').read())
+EOF")" 'deny'
+expect "kai behind a variable" claude "$(bash_cmd 'k=kai; $k uninstall all')" 'may not change Kai'
+expect "kai inside bash -c" claude "$(bash_cmd "bash -c 'kai policy set on_upload ask'")" 'may not change Kai'
+expect "kai behind sudo + full path" claude "$(bash_cmd 'sudo -n /usr/local/bin/kai uninstall claude')" 'may not change Kai'
+expect "kai via xargs" claude "$(bash_cmd 'echo claude | xargs kai uninstall')" 'may not change Kai'
+expect "kai inside \$( )" claude "$(bash_cmd 'echo $(kai uninstall cursor)')" 'may not change Kai'
+
+echo "== shell reading: mentions allowed =="
+refute "commit message mentioning kai install" claude "$(bash_cmd 'git commit -m "docs: explain kai install chrome"')" 'deny'
+refute "echo mentioning kai uninstall" claude "$(bash_cmd "echo 'kai uninstall is blocked for agents'")" 'deny'
+refute "grep for kai policy set" claude "$(bash_cmd 'grep -n "kai policy set" README.md')" 'deny'
+refute "kai policy show is fine" claude "$(bash_cmd 'kai policy show --json')" 'deny'
+refute "heredoc writing docs that mention kai init" claude "$(bash_cmd "cat > notes.md <<'EOF'
+Run kai init, then kai install claude.
+EOF")" 'deny'
+
 echo "== agents can't edit their own hooks =="
 expect "claude Edit of ~/.claude/settings.json" claude \
   '{"hook_event_name":"PreToolUse","cwd":"/home/u","tool_name":"Edit","tool_input":{"file_path":"~/.claude/settings.json","old_string":"kai","new_string":""}}' \

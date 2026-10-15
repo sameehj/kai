@@ -59,6 +59,13 @@ typedef struct {
     int (*validate)(const char *match, size_t len);
 } kai_rule;
 
+/* Shell command reader (shell.c): calls on_cmd for every simple command
+ * (quotes resolved, $(), ``, sh -c and eval included) and on_text for
+ * heredoc bodies that don't feed a shell. Nothing is executed. */
+typedef void (*kai_shell_cmd_fn)(char **argv, int argc, void *ud);
+typedef void (*kai_shell_text_fn)(const char *text, void *ud);
+void kai_shell_walk(const char *cmd, kai_shell_cmd_fn on_cmd, kai_shell_text_fn on_text, void *ud);
+
 /* validator for "password = …"-style matches (scan.c) */
 int kai_plausible_secret_value(const char *match, size_t len);
 

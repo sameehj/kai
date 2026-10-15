@@ -133,10 +133,25 @@
     const r = await scan(text);
     busy = false;
     if (!r.ok) {
-      toast("warn", "Kai couldn't check this message", "The kai app didn't answer, so it was sent unchecked. " +
-            "Run kai install chrome in your terminal.");
-      lastApproved = text;
-      triggerSend(composer);
+      // Never fail open silently: either the user said "send unchecked" in
+      // the popup, or we ask on this message.
+      const { kaiFailMode = "ask" } = await chrome.storage.local.get("kaiFailMode").catch(() => ({}));
+      if (kaiFailMode === "send") {
+        toast("warn", "Sent without a Kai check", "Kai isn't reachable on this computer.");
+        lastApproved = text;
+        triggerSend(composer);
+        return;
+      }
+      panel({
+        tone: "redact",
+        title: "Kai can't check this message",
+        body: "Kai isn't reachable on this computer, so nothing was checked. Open the Kai app, " +
+              "or run its Chrome setup again.",
+        actions: [
+          { label: "Edit", primary: true, run: () => composer.focus() },
+          { label: "Send unchecked", run: () => { lastApproved = text; triggerSend(composer); } },
+        ],
+      });
       return;
     }
     if (r.worst === "none" || r.worst === "allow" || r.worst === "warn") {
@@ -209,7 +224,14 @@
     e.stopImmediatePropagation();
     const r = await scan(text);
     composer.focus();
-    if (!r.ok || r.worst === "none" || r.worst === "allow" || r.worst === "warn") {
+    if (!r.ok) {
+      // A paste stays on this computer until it's sent, and sending is
+      // checked (or asked about) separately, so paste it but say so.
+      document.execCommand("insertText", false, text);
+      toast("warn", "Kai can't check pastes right now", "Kai isn't reachable on this computer.");
+      return;
+    }
+    if (r.worst === "none" || r.worst === "allow" || r.worst === "warn") {
       document.execCommand("insertText", false, text);
       return;
     }

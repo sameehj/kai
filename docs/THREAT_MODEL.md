@@ -16,7 +16,9 @@ mistake with the developer's full privileges.
 | Company codename / confidential marker in a prompt | `term` / `rule` | same |
 | Secret passed as an MCP tool argument | scan of tool input | `PreToolUse` `mcp__*`, `beforeMCPExecution` |
 | Prompt injection in a tool result | injection patterns | `PostToolUse` (warn the agent) |
-| Agent edits Kai's own policy/log | `protect ~/.kai` | path rules |
+| Agent edits Kai's own policy/log | `~/.kai` is always protected | path rules |
+| Agent disables its own hooks (edits `~/.claude/settings.json`, `.cursor/hooks.json`, `.codex/hooks.json`/`config.toml`, project copies) | built-in protected paths, not overridable by policy | `PreToolUse` (Edit/Write/MultiEdit/NotebookEdit, Bash), `beforeShellExecution` |
+| Agent runs Kai's settings commands (`k=kai; $k uninstall`, `sh -c '…'`) | shell reader looks at executed commands | `PreToolUse` Bash, `beforeShellExecution` |
 
 ## What v0.1 does NOT stop (documented limits)
 

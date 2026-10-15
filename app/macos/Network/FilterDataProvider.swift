@@ -50,8 +50,13 @@ final class FilterDataProvider: NEFilterDataProvider {
 
         let (ip, port) = Engine.endpoint(sf)
         let proto = sf.socketProtocol
+        // The flow's own name can be a CDN alias (api3.cursor.sh.cdn.cloudflare.net
+        // for api3.cursor.sh). Use it to allow quickly; otherwise read the name
+        // the client actually asked for (TLS SNI / HTTP Host) before deciding.
+        var hint: String? = nil
         if let host = sf.remoteHostname, !host.isEmpty, !Engine.isIPLiteral(host) {
-            return engine.decide(host: host, agent: agent, ip: ip, port: port) ? .allow() : .drop()
+            if engine.isAllowed(host) { return .allow() }
+            hint = host
         }
         if proto == IPPROTO_UDP && port == "443" {
             // QUIC hides the name in an encrypted Initial. Dropping it makes the
@@ -59,11 +64,14 @@ final class FilterDataProvider: NEFilterDataProvider {
             return engine.decide(host: nil, agent: agent, ip: ip, port: port, what: "QUIC") ? .allow() : .drop()
         }
         if proto == IPPROTO_TCP && (port == "443" || port == "80") {
-            engine.remember(flow, agent: agent, ip: ip, port: port)
+            engine.remember(flow, agent: agent, ip: ip, port: port, hint: hint)
             return .filterDataVerdict(withFilterInbound: false, peekInboundBytes: 0,
                                       filterOutbound: true, peekOutboundBytes: 4096)
         }
         if port == "53" { return .allow() } // DNS answers are not exfiltration by themselves
+        if let hint { // not web traffic, but the flow named its host
+            return engine.decide(host: hint, agent: agent, ip: ip, port: port) ? .allow() : .drop()
+        }
         // Other ports (ssh, databases, ...) carry no hostname we can read yet.
         // Logged, never dropped, until DNS correlation lands (docs/WALLS.md).
         engine.note(agent: agent, ip: ip, port: port)
@@ -77,12 +85,17 @@ final class FilterDataProvider: NEFilterDataProvider {
         switch found {
         case .host(let host):
             engine.forget(flow)
+            // allowed if either the requested name or the flow's name is listed
+            if let h = ctx.hint, engine.isAllowed(h) { return .allow() }
             return engine.decide(host: host, agent: ctx.agent, ip: ctx.ip, port: ctx.port) ? .allow() : .drop()
         case .needMore where offset + readBytes.count < 16384:
             return NEFilterDataVerdict(passBytes: 0, peekBytes: offset + readBytes.count + 4096)
         default:
             engine.forget(flow)
             let what = ctx.port == "443" ? "TLS without server name" : "HTTP without Host"
+            if let h = ctx.hint { // fall back to the flow's own name
+                return engine.decide(host: h, agent: ctx.agent, ip: ctx.ip, port: ctx.port) ? .allow() : .drop()
+            }
             return engine.decide(host: nil, agent: ctx.agent, ip: ctx.ip, port: ctx.port, what: what)
                 ? .allow() : .drop()
         }
@@ -92,7 +105,7 @@ final class FilterDataProvider: NEFilterDataProvider {
 /// Policy, caches and audit logging, shared by the provider callbacks.
 final class Engine {
     enum Found { case host(String), needMore, none }
-    struct FlowContext { let agent: String; let ip: String; let port: String }
+    struct FlowContext { let agent: String; let ip: String; let port: String; let hint: String? }
 
     private let lock = NSLock()
     private var policy: OpaquePointer?
@@ -179,10 +192,19 @@ final class Engine {
 
     // MARK: flows waiting for their first bytes
 
-    func remember(_ flow: NEFilterFlow, agent: String, ip: String, port: String) {
+    func remember(_ flow: NEFilterFlow, agent: String, ip: String, port: String, hint: String?) {
         lock.lock(); defer { lock.unlock() }
         if flows.count > 4096 { flows.removeAll() }
-        flows[flow.identifier] = FlowContext(agent: agent, ip: ip, port: port)
+        flows[flow.identifier] = FlowContext(agent: agent, ip: ip, port: port, hint: hint)
+    }
+
+    /// Is this host on the allowlist? (No logging: used for fast paths.)
+    func isAllowed(_ host: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        reloadLocked(force: false)
+        guard let p = policy else { return true }
+        var why = [CChar](repeating: 0, count: 256)
+        return kai_egress_allowed(p, host, &why, why.count) == 1
     }
 
     func context(for flow: NEFilterFlow) -> FlowContext? {

@@ -116,7 +116,11 @@ macOS: agent process (and its children) → Network Extension
 
 Kai can deny supported agent operations that target files such as `~/.ssh`, `~/.aws`, `.env`, or `*.pem`, along with your own protected paths. It can also detect certain risky shell commands, including upload patterns such as `curl -d @file`, `scp`, and `nc`.
 
-These are **hook-level checks**, not guaranteed prevention against arbitrary shell scripts, alternate encodings, or every way to access files.
+Shell commands are read the way a shell would read them: quotes and escapes are resolved, and `$(…)`, backticks, `sh -c`, `eval` and heredocs are looked into. So `cat ~/.ss''h/id_rsa`, a path inside `python3 -c` and `k=kai; $k uninstall` are caught, while a commit message that merely mentions those words is not.
+
+These are still **hook-level checks**: a tripwire, not a sandbox. Anything a program computes at run time (a path built from variables, a script that reads a file itself) is out of their reach. That's what the OS-level walls are for.
+
+Agents also can't switch Kai off from inside: their own hook settings (`~/.claude/settings.json`, `~/.cursor/hooks.json`, `~/.codex/hooks.json` and `config.toml`, project-level copies too) and `~/.kai` are always protected, whatever the policy says.
 
 ### Keep company context in your control
 
@@ -137,7 +141,7 @@ See [`policy/default.policy`](policy/default.policy) for the complete policy gra
 
 ### Review what happened
 
-Kai records local decisions in a hash-chained audit log. This helps detect some unauthorized changes, but it is **not tamper-proof** against an attacker who controls the log and its verification state.
+Kai records its decisions (blocks, redactions, warnings; not the many allowed actions) in a hash-chained audit log that never stores the matched secrets. It rotates at 8 MB and appending stays fast however long it gets. The chain helps detect some unauthorized changes, but it is **not tamper-proof** against an attacker who controls the log and its verification state.
 
 ## 💬 AI chats in your browser
 
@@ -213,7 +217,8 @@ Kai is a **layer of defense**, not a guarantee against data leakage or malicious
 
 - Agent hooks can be bypassed by activities that do not pass through them; they do not confine arbitrary agent-spawned processes.
 - The gateway cannot inspect requests that never route through it, nor traffic encrypted end-to-end through an unknown route.
-- Secret and prompt-injection detectors can miss new patterns or produce false positives. Prompt-injection checks currently **warn** on detected suspicious tool text; they do not prove that a model will ignore it.
+- Secret and prompt-injection detectors can miss new patterns or produce false positives. Prompt-injection checks weigh evidence (phrasing, whether the text addresses the agent, hidden text) and only **warn**, with a confidence level and a redacted excerpt; they never block, and a warning doesn't mean an attack happened. On Kai's test corpus (`tests/corpus`) they catch 7/7 attack samples with 0/13 false alarms, but that corpus is small and written by us.
+- If Kai can't be reached, nothing passes silently: hooks and the gateway refuse, and the browser extension asks before sending (configurable in its popup).
 - The network wall has been verified in Log mode only; Block mode has not been tested. Non-web traffic is not blocked, and an allowlist cannot stop data sent *to* an allowed host. A process that detaches from its agent (re-parented to `launchd`) is no longer recognized as part of the agent.
 - Host-local log hash chaining does not defend against a fully compromised host.
 

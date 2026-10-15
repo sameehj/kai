@@ -262,31 +262,72 @@ int kai_path_protected(const kai_policy *p, const char *path, const char *cwd,
 }
 
 /* crude shell tokenizer: split on whitespace, strip simple quotes */
+/* ---- protected paths in shell commands ---- */
+
+typedef struct {
+    const kai_policy *p;
+    const char *cwd;
+    char *why;
+    size_t whylen;
+    int hit;
+} path_scan_t;
+
+static int path_char(char c) {
+    return isalnum((unsigned char)c) || strchr("._/~+@%-", c);
+}
+
+/* Check one string: the whole thing as a path, then every path-looking run
+ * inside it (so open('/Users/u/.ssh/id_rsa') or --key=~/.aws/creds count). */
+static void scan_string(path_scan_t *ps, const char *w) {
+    if (ps->hit || !w || !*w) return;
+    if (w[0] != '-' && (strchr(w, '/') || w[0] == '~' || strchr(w, '.')) &&
+        kai_path_protected(ps->p, w, ps->cwd, ps->why, ps->whylen)) {
+        ps->hit = 1;
+        return;
+    }
+    for (const char *c = w; *c && !ps->hit; c++) {
+        if (!(*c == '/' || *c == '~' || *c == '.') || (c > w && path_char(c[-1]))) continue;
+        const char *e = c;
+        while (*e && path_char(*e)) e++;
+        size_t n = (size_t)(e - c);
+        if (n < 2 || n > 1000 || (c == w && *e == '\0')) { c = e - 1; continue; }
+        char tmp[1024];
+        memcpy(tmp, c, n);
+        tmp[n] = '\0';
+        if ((strchr(tmp, '/') || tmp[0] == '.') &&
+            kai_path_protected(ps->p, tmp, ps->cwd, ps->why, ps->whylen))
+            ps->hit = 1;
+        c = e - 1;
+    }
+}
+
+static void scan_cmd_words(char **argv, int argc, void *ud) {
+    for (int i = 0; i < argc; i++) scan_string(ud, argv[i]);
+}
+
+static void scan_text_paths(const char *text, void *ud) {
+    /* heredoc bodies (python, cat > file, ...): look for paths line by line */
+    const char *s = text;
+    while (*s && !((path_scan_t *)ud)->hit) {
+        const char *e = strchr(s, '\n');
+        size_t n = e ? (size_t)(e - s) : strlen(s);
+        char *line = malloc(n + 1);
+        if (!line) return;
+        memcpy(line, s, n);
+        line[n] = '\0';
+        scan_string(ud, line);
+        free(line);
+        s = e ? e + 1 : s + n;
+    }
+}
+
 int kai_command_touches_protected(const kai_policy *p, const char *cmd,
                                    const char *cwd, char *why, size_t whylen) {
     if (why && whylen) why[0] = '\0';
-    if (!p) return 0;
-    char *copy = strdup(cmd ? cmd : "");
-    if (!copy) return 0;
-    int hit = 0;
-    char *save = NULL;
-    for (char *tok = strtok_r(copy, " \t\n|;&><()", &save);
-         tok && !hit; tok = strtok_r(NULL, " \t\n|;&><()", &save)) {
-        /* strip surrounding quotes */
-        size_t tl = strlen(tok);
-        if (tl >= 2 && (tok[0] == '"' || tok[0] == '\'') &&
-            tok[tl - 1] == tok[0]) {
-            tok[tl - 1] = '\0';
-            tok++;
-        }
-        if (tok[0] == '-' || tok[0] == '\0') continue;
-        /* only consider things that look like paths or known names */
-        if (strchr(tok, '/') || tok[0] == '~' || strchr(tok, '.')) {
-            if (kai_path_protected(p, tok, cwd, why, whylen)) hit = 1;
-        }
-    }
-    free(copy);
-    return hit;
+    if (!p || !cmd) return 0;
+    path_scan_t ps = {p, cwd, why, whylen, 0};
+    kai_shell_walk(cmd, scan_cmd_words, scan_text_paths, &ps);
+    return ps.hit;
 }
 
 int kai_command_looks_like_upload(const kai_policy *p, const char *cmd,

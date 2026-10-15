@@ -22,7 +22,7 @@ settings:
     MARKETING_VERSION: "0.1.0"
     # Bump on every extension change: macOS only replaces an activated
     # extension when its version differs.
-    CURRENT_PROJECT_VERSION: "2"
+    CURRENT_PROJECT_VERSION: "3"
     SWIFT_VERSION: "5.9"
 
 targets:
@@ -39,6 +39,7 @@ targets:
       - path: ../../src/audit.c
       - path: ../../src/net.c
       - path: ../../src/proc.c
+      - path: ../../src/shell.c
       - path: ../../third_party/cjson/cJSON.c
     settings:
       base:

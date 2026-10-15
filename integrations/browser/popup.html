@@ -20,6 +20,9 @@
   .help { margin: 0 16px 16px; padding: 10px 12px; background: #1C1D21; border-radius: 10px; color: #C9CCD3;
           font-size: 12px; display: none; }
   code { color: #D9FF3F; }
+  .setting { margin: 0 16px 14px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #A7ABB4; }
+  select { background: #1C1D21; color: #fff; border: 1px solid #2A2C32; border-radius: 8px; padding: 6px 8px;
+           font: inherit; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -31,6 +34,13 @@
     <div class="stat"><b id="checked">0</b><span>checked</span></div>
     <div class="stat"><b id="cleaned">0</b><span>cleaned</span></div>
     <div class="stat"><b id="held">0</b><span>held</span></div>
+  </div>
+  <div class="setting">
+    <label for="failmode">If Kai isn't reachable</label>
+    <select id="failmode">
+      <option value="ask">Ask me before sending</option>
+      <option value="send">Send without checking</option>
+    </select>
   </div>
   <div class="help" id="help">The extension can't reach Kai on this Mac. In Terminal run
     <code>kai install chrome</code>, then restart the browser.</div>

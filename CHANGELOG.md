@@ -1,6 +1,22 @@
 # Changelog
 
 ## Unreleased
+- Review fixes:
+  - Agents can't disable Kai by editing their own hook settings: those files
+    (and project-level copies) and `~/.kai` are always protected. Claude Code
+    hooks now cover MultiEdit, NotebookEdit and LS, and Grep/Glob/LS paths.
+  - Audit log: only decisions are recorded (not every allowed call), appends
+    read just the file's tail, and the log rotates at 8 MB.
+  - Prompt-injection warnings weigh evidence and carry a confidence level and
+    a redacted excerpt; `tests/corpus` measures misses and false alarms.
+  - The generic secret rule checks that a value looks like a secret.
+  - Shell commands are read like a shell would (quotes, `$()`, backticks,
+    `sh -c`, `eval`, heredocs) for path and self-protection checks.
+  - Network wall: a flow's CDN name no longer hides the requested host; the
+    TLS server name decides, and either name being allowed is enough.
+  - Browser extension: never sends unchecked silently when Kai is
+    unreachable; installs to `~/.kai/browser-extension`.
+  - The app re-applies agent setup after an update; `make fuzz`.
 - Browser extension (`integrations/browser`) for ChatGPT, Claude.ai, Gemini,
   DeepSeek, Perplexity, Copilot, Mistral, Grok and Poe: cleans secrets on
   paste and holds sensitive messages with Redact and send / Send anyway / Edit.

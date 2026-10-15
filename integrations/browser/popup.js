@@ -8,6 +8,13 @@ chrome.runtime.sendMessage({ type: "ping" }, (r) => {
   $("help").style.display = ok ? "none" : "block";
 });
 
+chrome.storage.local.get("kaiFailMode", ({ kaiFailMode = "ask" }) => {
+  $("failmode").value = kaiFailMode;
+});
+$("failmode").addEventListener("change", (e) => {
+  chrome.storage.local.set({ kaiFailMode: e.target.value });
+});
+
 chrome.storage.local.get("kaiStats", ({ kaiStats: s = {} }) => {
   $("checked").textContent = s.checked || 0;
   $("cleaned").textContent = s.cleaned || 0;

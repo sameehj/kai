@@ -82,18 +82,26 @@ unset KAI_AUDIT_MAX_BYTES
 has "new log starts with a link to the old one" "$(head -n 1 "$KAI_HOME/audit.log")" '"event":"rotate"'
 "$KAI" log verify >/dev/null && pass "rotated log verifies" || fail "rotated log broken"
 "$KAI" log verify >/dev/null 2>&1
-# appending stays fast on a big log: 2000 records, then time 50 more
+# appending must not slow down as the log grows: time 40 appends on a
+# small log, then on one with 20,000 more records (relative, so it holds
+# for sanitizer builds too)
+now() { python3 -I -c 'import time; print(time.time())'; }
+avg40() { t0=$(now); for _ in $(seq 40); do printf '%s' "$DENIED" | "$KAI" hook claude >/dev/null; done; t1=$(now); echo "$t0 $t1"; }
+small=$(avg40)
 python3 -I - "$KAI_HOME/audit.log" <<'PY'
 import sys
 with open(sys.argv[1], "a") as f:
-    for i in range(2000):
+    for i in range(20000):
         f.write('{"ts":"x","source":"t","event":"t","decision":"block","rule":"r","detail":"d","prev":"p","h":"%064d"}\n' % i)
 PY
-t0=$(python3 -I -c 'import time; print(time.time())')
-for _ in $(seq 50); do printf '%s' "$DENIED" | "$KAI" hook claude >/dev/null; done
-t1=$(python3 -I -c 'import time; print(time.time())')
-python3 -I -c "import sys; d=($t1-$t0)/50; print('  info avg hook+append: %.1f ms' % (d*1000)); sys.exit(0 if d < 0.05 else 1)" \
-  && pass "append stays fast on a large log" || fail "append is slow on a large log"
+big=$(avg40)
+python3 -I -c "
+import sys
+s0,s1=map(float,'$small'.split()); b0,b1=map(float,'$big'.split())
+s=(s1-s0)/40; b=(b1-b0)/40
+print('  info append: %.1f ms on a small log, %.1f ms with 20,000 more records' % (s*1000, b*1000))
+sys.exit(0 if b < s*2 + 0.005 else 1)" \
+  && pass "append time doesn't grow with the log" || fail "append slows down as the log grows"
 mv "$KAI_HOME/audit.log" "$KAI_HOME/audit.log.junk"
 
 echo "== install / uninstall =="

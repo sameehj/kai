@@ -20,7 +20,7 @@ LDLIBS   = -lcurl -lpthread -lm
 endif
 
 CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
-       src/net.c src/proc.c src/gateway.c third_party/cjson/cJSON.c
+       src/net.c src/proc.c src/shell.c src/gateway.c third_party/cjson/cJSON.c
 APP  = src/main.c src/hooks.c src/install.c src/manage.c src/browser.c src/native.c
 
 OBJ      = $(CORE:.c=.o) $(APP:.c=.o)
@@ -36,6 +36,11 @@ libkai.a: $(COREOBJ)
 
 %.o: %.c include/kai.h src/internal.h
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+# Random malformed input against the hook handlers (run after `make asan`
+# to catch memory errors)
+fuzz: kai
+	ASAN_OPTIONS=detect_leaks=0 python3 -I tests/fuzz/fuzz_hooks.py ./kai 3000
 
 # Address/UB sanitizer build used in CI
 asan: CFLAGS += -fsanitize=address,undefined -g -O1
@@ -96,4 +101,4 @@ clean:
 	rm -f $(OBJ) kai libkai.a tests/run_tests
 	rm -rf build app/macos/Kai.xcodeproj
 
-.PHONY: all asan test app app-dev try-app install-app install uninstall clean
+.PHONY: all asan fuzz test app app-dev try-app install-app install uninstall clean

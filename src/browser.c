@@ -49,9 +49,63 @@ static char *manifest_path(size_t i) {
     return sb_take(&b);
 }
 
-/* Where the unpacked extension lives: next to an installed kai
+/* The copy the browser loads: ~/.kai/browser-extension. An ordinary folder
+ * you can pick in "Load unpacked" (the one inside Kai.app is hidden in the
+ * bundle), and inside ~/.kai, which agents can't read or modify. */
+static void installed_ext_dir(char *out, size_t n) {
+    snprintf(out, n, "%s/browser-extension", kai_home());
+}
+
+/* Where the extension ships: next to an installed kai
  * (<prefix>/share/kai/browser), inside Kai.app, or in a source checkout. */
+static const char *shipped_ext_dir(void);
+
 const char *kai_browser_ext_dir(void) {
+    static char found[1200];
+    char mine[1100], mf[1200];
+    installed_ext_dir(mine, sizeof mine);
+    snprintf(mf, sizeof mf, "%s/manifest.json", mine);
+    struct stat st;
+    if (stat(mf, &st) == 0) { kai_strlcpy(found, mine, sizeof found); return found; }
+    return shipped_ext_dir();
+}
+
+static int copy_file(const char *from, const char *to) {
+    size_t n;
+    char *data = kai_read_file(from, 16 * 1024 * 1024, &n);
+    if (!data) return -1;
+    FILE *f = fopen(to, "wb");
+    int ok = f && fwrite(data, 1, n, f) == n;
+    if (f) fclose(f);
+    free(data);
+    return ok ? 0 : -1;
+}
+
+/* Refresh ~/.kai/browser-extension from the shipped copy. Only the files the
+ * extension needs, so a test page or stray file never ends up loaded. */
+static int sync_extension(const char *src, char *dst, size_t dstlen) {
+    installed_ext_dir(dst, dstlen);
+    char icons[1200];
+    snprintf(icons, sizeof icons, "%s/icons", dst);
+    mkdir(kai_home(), 0700);
+    mkdir(dst, 0755);
+    mkdir(icons, 0755);
+    static const char *const FILES[] = {"manifest.json", "background.js", "content.js", "popup.html",
+                                        "popup.js", "icons/kai-16.png", "icons/kai-32.png",
+                                        "icons/kai-48.png", "icons/kai-128.png"};
+    for (size_t i = 0; i < sizeof FILES / sizeof FILES[0]; i++) {
+        char a[1300], b[1300];
+        snprintf(a, sizeof a, "%s/%s", src, FILES[i]);
+        snprintf(b, sizeof b, "%s/%s", dst, FILES[i]);
+        if (copy_file(a, b) != 0) {
+            fprintf(stderr, "Cannot copy %s\n", a);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static const char *shipped_ext_dir(void) {
     static char found[1200];
     if (found[0]) return found;
     char exe[1024];
@@ -114,12 +168,22 @@ int kai_browser_install(const char *exe) {
         fprintf(stderr, "No Chrome, Brave, Edge or Chromium profile found.\n");
         return 1;
     }
-    const char *ext = kai_browser_ext_dir();
-    printf("\nNow load the extension (once):\n"
-           "  1. Open chrome://extensions and turn on Developer mode\n"
-           "  2. Click \"Load unpacked\" and choose:\n"
-           "     %s\n",
-           ext ? ext : "the integrations/browser folder of the Kai source");
+    const char *src = shipped_ext_dir();
+    char dst[1100];
+    if (!src || sync_extension(src, dst, sizeof dst) != 0) {
+        fprintf(stderr, "Couldn't find Kai's browser extension files to install.\n");
+        return 1;
+    }
+    if (kai_browser_extension_loaded()) {
+        printf("\nThe Kai extension is loaded; it was updated in place.\n"
+               "Click the reload arrow on Kai in chrome://extensions to pick up changes.\n");
+    } else {
+        printf("\nNow load the extension (once):\n"
+               "  1. Open chrome://extensions and turn on Developer mode\n"
+               "  2. Click \"Load unpacked\" and choose this folder\n"
+               "     (in the file dialog press Cmd+Shift+G and paste the path):\n"
+               "     %s\n", dst);
+    }
     return rc;
 }
 

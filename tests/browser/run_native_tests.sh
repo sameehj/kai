@@ -68,6 +68,9 @@ m=$(cat "$M" 2>/dev/null)
 has "manifest points at this kai" "$m" "\"path\": \"$KAI\""
 has "manifest allows only the Kai extension" "$m" "$ORIGIN"
 python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$M" && pass "manifest is valid JSON" || fail "manifest JSON invalid"
+[ -f "$KAI_HOME/browser-extension/manifest.json" ] && pass "extension copied to ~/.kai/browser-extension" || fail "extension not copied"
+[ ! -e "$KAI_HOME/browser-extension/kai-browser-test.html" ] && pass "test page not copied" || fail "test page copied"
+has "status points at the copied extension" "$("$KAI" status --json)" "$KAI_HOME/browser-extension"
 has "status reports chrome installed" "$("$KAI" status --json)" '"chrome":	{
 		"installed":	true'
 "$KAI" uninstall chrome >/dev/null

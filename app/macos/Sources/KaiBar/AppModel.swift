@@ -150,6 +150,23 @@ final class AppModel: ObservableObject {
             tail = AuditTail(path: path)
             pollAudit()
         }
+        if let s = newStatus { await reapplyIntegrationsIfUpdated(s) }
+    }
+
+    /// After Kai is updated, re-run setup for every agent that's turned on, so
+    /// new protections (hook matchers, the browser extension copy) take effect
+    /// without the user flipping switches. Setup is idempotent.
+    private var reappliedThisLaunch = false
+    private func reapplyIntegrationsIfUpdated(_ s: KaiStatus) async {
+        guard !reappliedThisLaunch else { return }
+        reappliedThisLaunch = true
+        let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "") + "/" + s.version
+        let key = "integrationsAppliedFor"
+        guard UserDefaults.standard.string(forKey: key) != build else { return }
+        for agent in Agent.allCases where agentInfo(agent).installed {
+            _ = await KaiCLI.run(["install", agent.rawValue])
+        }
+        UserDefaults.standard.set(build, forKey: key)
     }
 
     private func tick() {

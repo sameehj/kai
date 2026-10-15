@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 static const char *cjstr(const cJSON *o, const char *k) {
     const cJSON *v = cJSON_GetObjectItemCaseSensitive(o, k);
@@ -34,18 +35,48 @@ static void gather_strings(const cJSON *node, sb_t *b, int depth) {
 /* Does a shell command try to switch Kai off or loosen its policy? Built in,
  * not policy-driven: a hijacked agent must not be able to edit its own leash.
  * The user changes settings from their own terminal or the menu-bar app. */
-static int command_controls_kai(const char *cmd) {
-    static regex_t re;
-    static int ready = 0;
-    if (!ready) {
-        if (regcomp(&re,
-                    "(^|[^a-z0-9_.-])kai[ \t]+(install|uninstall|init|"
-                    "policy[ \t]+(set|add|remove))([^a-z]|$)",
-                    REG_EXTENDED | REG_ICASE | REG_NOSUB) != 0)
-            return 0;
-        ready = 1;
+/* Runs on every simple command the shell reader finds: is this command Kai
+ * (or something we can't name, like $k) being asked to change settings?
+ * Looking at the executed command, not the text, means a commit message or
+ * an echo that merely mentions these words is fine, while k=kai; $k ...
+ * and sh -c '...' are still caught. */
+static void check_kai_control(char **argv, int argc, void *ud) {
+    int i = 0;
+    /* VAR=value prefixes, then wrappers that run the next word */
+    static const char *const WRAPPERS[] = {"sudo", "env", "exec", "command", "nohup", "time",
+                                           "nice", "timeout", "xargs", "doas", "builtin"};
+    for (;;) {
+        while (i < argc && strchr(argv[i], '=') && argv[i][0] != '-' && argv[i][0] != '=') i++;
+        if (i >= argc) return;
+        const char *b = strrchr(argv[i], '/') ? strrchr(argv[i], '/') + 1 : argv[i];
+        int wrapped = 0;
+        for (size_t w = 0; w < sizeof WRAPPERS / sizeof WRAPPERS[0]; w++)
+            if (strcmp(b, WRAPPERS[w]) == 0) wrapped = 1;
+        if (!wrapped) break;
+        i++;
+        while (i < argc && argv[i][0] == '-') i++;                      /* wrapper options */
+        if (strcmp(b, "timeout") == 0 && i < argc) i++;                  /* its duration */
     }
-    return regexec(&re, cmd, 0, NULL, 0) == 0;
+    const char *word = argv[i];
+    const char *b = strrchr(word, '/') ? strrchr(word, '/') + 1 : word;
+    int is_kai = strcasecmp(b, "kai") == 0;
+    int unknown = word[0] == '$' || word[0] == '`'; /* computed command name */
+    if (!is_kai && !unknown) return;
+    int k = i + 1;
+    while (k < argc && argv[k][0] == '-') k++;
+    if (k >= argc) return;
+    const char *sub = argv[k];
+    int control = !strcmp(sub, "install") || !strcmp(sub, "uninstall") || !strcmp(sub, "init");
+    if (!strcmp(sub, "policy") && k + 1 < argc)
+        control = !strcmp(argv[k + 1], "set") || !strcmp(argv[k + 1], "add") ||
+                  !strcmp(argv[k + 1], "remove");
+    if (control) *(int *)ud = 1;
+}
+
+static int command_controls_kai(const char *cmd) {
+    int hit = 0;
+    kai_shell_walk(cmd, check_kai_control, NULL, &hit);
+    return hit;
 }
 
 /* A shell command from tool_input: "command" or "cmd", as a string or as an
