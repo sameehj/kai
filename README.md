@@ -98,6 +98,35 @@ Uninstall is clean and keeps your own hooks: `kai uninstall all`.
 
 The app needs no special permissions, only notifications.
 
+## AI gateway
+
+`kai gateway` runs a local server that cleans what agents send to model APIs:
+secrets are redacted, codenames replaced, and requests with confidential
+markers blocked, before anything leaves your machine. Replies stream back
+unchanged. Point an agent at it:
+
+```sh
+kai gateway &                                             # 127.0.0.1:8787
+ANTHROPIC_BASE_URL=http://127.0.0.1:8787 claude           # Claude Code
+OPENAI_BASE_URL=http://127.0.0.1:8787/openai/v1 codex     # Codex / OpenAI SDKs
+```
+
+It listens on loopback only and forwards only to fixed provider URLs, using
+the agent's own API key.
+
+## Network and storage walls (in progress)
+
+System-wide walls for macOS, built as Apple system extensions so you start
+your agents normally (no wrapper). See [`docs/WALLS.md`](docs/WALLS.md).
+
+- **Done in the engine:** agent identification (`kai agent-of <pid>`), the
+  egress allowlist (`egress log|block`, `egress_allow`), and a TLS server-name
+  parser.
+- **Next:** the Network Extension that enforces them. It needs a paid Apple
+  Developer account.
+- **After that:** the Endpoint Security file wall, once Apple grants the
+  entitlement.
+
 ## Policy
 
 One readable file at `~/.kai/policy`. Missing file = safe defaults.
@@ -130,6 +159,9 @@ See [`policy/default.policy`](policy/default.policy) for the full set.
 | `kai policy set <switch> <value>` | Change a switch, e.g. `on_upload ask` |
 | `kai policy add\|remove protect\|allow <path>` | Edit protected paths |
 | `kai policy add term <action> <text>` | Add a company term (`block`, `redact`, `warn`, `replace:"X"`) |
+| `kai policy add egress_allow <host>` | Let agents reach a host (and its subdomains) |
+| `kai gateway [--port N]` | Run the local AI gateway |
+| `kai agent-of <pid>` | Show whether a process is an agent or runs under one |
 | `kai log [tail\|verify]` | View or verify the audit log |
 
 `kai scan` doubles as a git pre-commit secret check (exit code 1 on findings).
@@ -152,7 +184,8 @@ agent that runs `kai install`, `kai uninstall`, `kai init` or
 ## How it's built
 
 A small C11 core (`libkai`) with a stable C API ([`include/kai.h`](include/kai.h)),
-plus thin command/hook/installer code. Only dependency is POSIX regex and a
+plus thin command/hook/installer code. Dependencies: POSIX regex, libcurl for
+the gateway (built into macOS; `libcurl4-openssl-dev` on Debian/Ubuntu), and a
 vendored MIT copy of [cJSON](third_party/cjson/). The same code builds on macOS
 and Linux. See [`docs/DESIGN.md`](docs/DESIGN.md) and
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md).

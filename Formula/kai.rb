@@ -13,6 +13,8 @@ class Kai < Formula
   license "GPL-3.0-only"
   head "https://github.com/sameehj/kai.git", branch: "master"
 
+  uses_from_macos "curl"
+
   def install
     system "make", "kai"
     bin.install "kai"

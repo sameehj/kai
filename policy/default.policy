@@ -33,6 +33,17 @@ on_upload          block   # command that looks like it exfiltrates data: block 
 injection          warn    # prompt-injection text in a tool result: warn | off
 max_scan_bytes     2000000
 
+# ── Network wall (macOS network extension + gateway) ──────────────────
+# Traffic from agent processes (Claude Code, Cursor, Codex, … and anything
+# they start) to hosts not on the allowlist: off | log | block
+# Model APIs, GitHub and the main package registries are built in.
+egress             log
+# egress_allow  internal.example.com  artifacts.example.com
+# gateway_port  8787               # local AI gateway (kai gateway)
+#
+# Extra agents, matched by executable path, argument, or signing Team ID:
+# agent  aider  arg  */bin/aider
+
 # ── Company rules ─────────────────────────────────────────────────────
 # term  <action> <text>          exact words, case-insensitive
 # rule  <name> <action> <regex>  POSIX extended regex, case-insensitive

@@ -10,6 +10,9 @@
  *   kai doctor                 check policy + installs
  *   kai status [--json]        doctor, or machine-readable status
  *   kai policy ...             show or edit the policy (see manage.c)
+ *   kai gateway [--port N]     local AI gateway (see gateway.c)
+ *   kai agent-of <pid>         is this process an agent, or under one?
+ *   kai sni                    print the TLS server name from a ClientHello on stdin
  *   kai log tail|verify        audit log
  *   kai version
  */
@@ -131,6 +134,50 @@ static int cmd_log(int argc, char **argv) {
     return 0;
 }
 
+static int cmd_gateway(int argc, char **argv) {
+    const char *addr = "127.0.0.1";
+    int port = 0;
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) port = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--addr") == 0 && i + 1 < argc) addr = argv[++i];
+        else { fprintf(stderr, "usage: kai gateway [--port N] [--addr 127.0.0.1]\n"); return 2; }
+    }
+    if (port <= 0) {
+        char err[256];
+        kai_policy *p = kai_policy_load(NULL, err, sizeof err);
+        if (!p) { fprintf(stderr, "kai: %s\n", err); return 2; }
+        port = p->gateway_port;
+        kai_policy_free(p);
+    }
+    return kai_gateway_run(addr, port);
+}
+
+static int cmd_agent_of(int argc, char **argv) {
+    if (argc != 1) { fprintf(stderr, "usage: kai agent-of <pid>\n"); return 2; }
+    char err[256];
+    kai_policy *p = kai_policy_load(NULL, err, sizeof err);
+    if (!p) { fprintf(stderr, "kai: %s\n", err); return 2; }
+    char name[64];
+    int apid;
+    int hit = kai_process_agent(p, atoi(argv[0]), name, sizeof name, &apid);
+    if (hit) printf("%s (pid %d)\n", name, apid);
+    else printf("not an agent\n");
+    kai_policy_free(p);
+    return hit ? 0 : 1;
+}
+
+static int cmd_sni(void) {
+    size_t n;
+    char *buf = kai_read_stream(stdin, 65536, &n);
+    if (!buf) return 2;
+    char host[256];
+    int rc = kai_tls_sni((const unsigned char *)buf, n, host, sizeof host);
+    free(buf);
+    if (rc == 1) { printf("%s\n", host); return 0; }
+    printf(rc < 0 ? "(incomplete ClientHello)\n" : "(no server name)\n");
+    return 1;
+}
+
 static void usage(void) {
     fprintf(stderr,
         "kai %s — security layer for AI agents\n\n"
@@ -144,6 +191,8 @@ static void usage(void) {
         "  kai doctor                        check policy and installs\n"
         "  kai status [--json]               same as doctor; --json for scripts/app\n"
         "  kai policy [show|set|add|remove]  view or change the policy safely\n"
+        "  kai gateway [--port N]            run the local AI gateway\n"
+        "  kai agent-of <pid>                is this process an agent, or under one?\n"
         "  kai log [tail|verify]             view / verify the audit log\n"
         "  kai version\n", KAI_VERSION);
 }
@@ -163,6 +212,9 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "status") == 0)
         return (rest > 0 && strcmp(restv[0], "--json") == 0) ? kai_cmd_status_json() : cmd_doctor();
     if (strcmp(cmd, "policy") == 0) return kai_cmd_policy(rest, restv);
+    if (strcmp(cmd, "gateway") == 0) return cmd_gateway(rest, restv);
+    if (strcmp(cmd, "agent-of") == 0) return cmd_agent_of(rest, restv);
+    if (strcmp(cmd, "sni") == 0) return cmd_sni();
     if (strcmp(cmd, "log") == 0) return cmd_log(rest, restv);
     if (strcmp(cmd, "version") == 0 || strcmp(cmd, "--version") == 0) return cmd_version();
     if (strcmp(cmd, "help") == 0 || strcmp(cmd, "-h") == 0 || strcmp(cmd, "--help") == 0) {

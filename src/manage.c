@@ -7,7 +7,7 @@
  *   kai policy path
  *   kai policy show [--json]
  *   kai policy set <switch> <value>
- *   kai policy add protect|allow <path>
+ *   kai policy add protect|allow|egress_allow <path-or-host>
  *   kai policy add term <action> <text...>
  *   kai policy add rule <name> <action> <regex...>
  *   kai policy remove protect|allow <path>
@@ -282,6 +282,8 @@ static const struct {
     {"on_upload", "block", {"block", "ask", NULL}},
     {"injection", "warn", {"warn", "off", NULL}},
     {"max_scan_bytes", "2000000", {NULL}},
+    {"egress", "log", {"log", "block", "off", NULL}},
+    {"gateway_port", "8787", {NULL}},
 };
 #define NSWITCHES (int)(sizeof SWITCHES / sizeof SWITCHES[0])
 
@@ -346,6 +348,7 @@ static int policy_show(int json) {
 
     cJSON *protect = cJSON_CreateArray(), *allow = cJSON_CreateArray();
     cJSON *terms = cJSON_CreateArray(), *rules = cJSON_CreateArray();
+    cJSON *egress = cJSON_CreateArray();
     for (int i = 0; i < L.n; i++) {
         char dir[32];
         const char *arg;
@@ -357,12 +360,14 @@ static int policy_show(int json) {
             memcpy(valbuf[si], arg, n);
             valbuf[si][n] = '\0';
             vals[si] = valbuf[si];
-        } else if (strcmp(dir, "protect") == 0 || strcmp(dir, "allow") == 0) {
+        } else if (strcmp(dir, "protect") == 0 || strcmp(dir, "allow") == 0 ||
+                   strcmp(dir, "egress_allow") == 0) {
             char *v = malloc(al + 1);
             if (!v) continue;
             memcpy(v, arg, al);
             v[al] = '\0';
-            cJSON_AddItemToArray(dir[0] == 'p' ? protect : allow, cJSON_CreateString(v));
+            cJSON *list = dir[0] == 'p' ? protect : (dir[0] == 'a' ? allow : egress);
+            cJSON_AddItemToArray(list, cJSON_CreateString(v));
             free(v);
         } else if (strcmp(dir, "term") == 0) {
             const char *ae = action_end(arg);
@@ -395,6 +400,7 @@ static int policy_show(int json) {
     for (int i = 0; i < NSWITCHES; i++) cJSON_AddStringToObject(sw, SWITCHES[i].key, vals[i]);
     cJSON_AddItemToObject(o, "protect", protect);
     cJSON_AddItemToObject(o, "allow", allow);
+    cJSON_AddItemToObject(o, "egress_allow", egress);
     cJSON_AddItemToObject(o, "terms", terms);
     cJSON_AddItemToObject(o, "rules", rules);
     lines_free(&L);
@@ -533,7 +539,8 @@ static int policy_add(int argc, char **argv) {
     if (lines_load(&L) != 0) { fprintf(stderr, "kai policy: cannot read policy\n"); return 1; }
     sb_t b;
     sb_init(&b);
-    if (strcmp(kind, "protect") == 0 || strcmp(kind, "allow") == 0) {
+    if (strcmp(kind, "protect") == 0 || strcmp(kind, "allow") == 0 ||
+        strcmp(kind, "egress_allow") == 0) {
         const char *path = argv[1];
         if (argc != 2 || strpbrk(path, " \t#") || has_newline(path)) {
             fprintf(stderr, "kai policy add %s: one path, no spaces or '#'\n", kind);
@@ -597,7 +604,7 @@ static int policy_remove(int argc, char **argv) {
     if (argc < 2) goto usage;
     const char *kind = argv[0];
     if (strcmp(kind, "protect") && strcmp(kind, "allow") && strcmp(kind, "term") &&
-        strcmp(kind, "rule"))
+        strcmp(kind, "rule") && strcmp(kind, "egress_allow"))
         goto usage;
     lines_t L;
     if (lines_load(&L) != 0) { fprintf(stderr, "kai policy: cannot read policy\n"); return 1; }

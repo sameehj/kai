@@ -9,10 +9,18 @@ HARDEN   = -D_FORTIFY_SOURCE=2 -fstack-protector-strong
 OPT     ?= -O2
 CFLAGS  ?= $(CSTD) $(WARN) $(OPT) $(HARDEN)
 CFLAGS  += -Iinclude -Ithird_party/cjson -D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE
-LDLIBS   =
+# libcurl (gateway) and pthreads. On macOS link Apple's libcurl from the SDK
+# explicitly, so a Homebrew/static libcurl in /usr/local can't shadow it.
+ifeq ($(shell uname -s),Darwin)
+SDK     := $(shell xcrun --show-sdk-path 2>/dev/null)
+CFLAGS  += -I$(SDK)/usr/include
+LDLIBS   = $(SDK)/usr/lib/libcurl.tbd -lpthread -framework Security -framework CoreFoundation
+else
+LDLIBS   = -lcurl -lpthread
+endif
 
 CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
-       third_party/cjson/cJSON.c
+       src/net.c src/proc.c src/gateway.c third_party/cjson/cJSON.c
 APP  = src/main.c src/hooks.c src/install.c src/manage.c
 
 OBJ      = $(CORE:.c=.o) $(APP:.c=.o)
@@ -38,6 +46,7 @@ test: kai
 	./tests/run_tests
 	sh tests/hooks/run_hook_tests.sh ./kai
 	sh tests/cli/run_cli_tests.sh ./kai
+	sh tests/gateway/run_gateway_tests.sh ./kai
 
 # macOS menu-bar app -> build/Kai.app (needs Xcode or the Swift toolchain)
 app: kai

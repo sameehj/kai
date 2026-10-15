@@ -83,6 +83,39 @@ kai_action kai_policy_prompt_action(const kai_policy *p);      /* block | warn *
 kai_action kai_policy_file_secret_action(const kai_policy *p); /* block | warn */
 kai_action kai_policy_upload_action(const kai_policy *p);      /* block | ask(=warn) */
 
+/* ---- Network wall: egress allowlist ----
+ * Applies to traffic from agent processes (see kai_process_agent). */
+typedef enum {
+    KAI_EGRESS_OFF = 0,  /* no egress control                              */
+    KAI_EGRESS_LOG = 1,  /* allow everything, log non-allowlisted hosts    */
+    KAI_EGRESS_BLOCK = 2 /* drop agent traffic to non-allowlisted hosts    */
+} kai_egress_mode;
+
+kai_egress_mode kai_policy_egress_mode(const kai_policy *p);
+/* Is host on the allowlist? An entry matches itself and its subdomains.
+ * why receives the matching entry. Hosts are compared case-insensitively. */
+int kai_egress_allowed(const kai_policy *p, const char *host, char *why, size_t whylen);
+
+/* Extract the server name (SNI) from the start of a TLS ClientHello.
+ * Returns 1 and fills host if found, 0 if this is not TLS or carries no SNI,
+ * -1 if more bytes are needed. Never reads past len. */
+int kai_tls_sni(const unsigned char *buf, size_t len, char *host, size_t hostlen);
+
+/* ---- Agent identity ----
+ * An agent is matched by executable path, any argv element, or code-signing
+ * Team ID, using the policy's `agent` lines. */
+int kai_agent_match(const kai_policy *p, const char *exe, const char *const *argv,
+                    int argc, const char *team, char *name, size_t namelen);
+/* Is pid an agent or a descendant of one? Walks the parent chain. Returns 1
+ * and fills name (agent name) and agent_pid, else 0. */
+int kai_process_agent(const kai_policy *p, int pid, char *name, size_t namelen,
+                      int *agent_pid);
+
+/* ---- AI gateway ----
+ * Local HTTP server that cleans AI API requests and forwards them upstream.
+ * Blocks until stopped. Point agents at it with ANTHROPIC_BASE_URL etc. */
+int kai_gateway_run(const char *listen_addr, int port);
+
 const char *kai_action_name(kai_action a);
 void kai_report_summary(const kai_report *rep, char *out, size_t outlen);
 

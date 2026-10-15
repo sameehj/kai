@@ -10,6 +10,12 @@
 - The policy file follows `KAI_HOME` (it was always read from `~/.kai`).
 - One-line installer (`install.sh`), release workflow, and a Homebrew formula.
 - CI runs on `master` (it was set to `main`) and builds the macOS app.
+- `kai gateway`: local AI gateway that redacts/replaces/blocks request content
+  for Anthropic, OpenAI and OpenRouter APIs and streams replies back.
+- Network-wall engine: agent identity (`agent` lines, `kai agent-of`), egress
+  allowlist (`egress`, `egress_allow`) and a TLS SNI parser. Design in
+  `docs/WALLS.md`.
+- Build now links libcurl (system libcurl on macOS).
 
 ## v0.1.0 — unreleased
 First cut. Hook-based protection for Claude Code and Cursor.

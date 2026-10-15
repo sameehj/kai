@@ -9,3 +9,4 @@ app/macos/.build/
 # editor/OS cruft
 .DS_Store
 *.swp
+*.dSYM/

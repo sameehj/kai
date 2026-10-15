@@ -109,6 +109,9 @@ if [ "$installed" = 0 ]; then
   fetch "$SRC" "$TMP/src.tar.gz" || die "cannot download $SRC"
   mkdir "$TMP/src"
   tar -xzf "$TMP/src.tar.gz" -C "$TMP/src" --strip-components=1
+  if [ "$OS" = linux ] && ! printf '#include <curl/curl.h>\n' | cc -E - >/dev/null 2>&1; then
+    die "building from source needs libcurl headers (Debian/Ubuntu: sudo apt-get install libcurl4-openssl-dev; Fedora: sudo dnf install libcurl-devel)"
+  fi
   say "building"
   make -C "$TMP/src" >/dev/null
   mkdir -p "$BINDIR"

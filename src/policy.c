@@ -32,6 +32,7 @@ static const char DEFAULT_POLICY[] =
     "on_upload block\n"
     "injection warn\n"
     "max_scan_bytes 2000000\n"
+    "egress log\n"
     "rule_upload curl_upload (curl|wget).*(-d|--data|-T|--upload-file|-F).*@\n"
     "rule_upload pipe_to_shell (curl|wget).*\\|.*(sh|bash|zsh|python)\n"
     "rule_upload netcat (^|[^a-z])(nc|ncat|netcat)([^a-z]|$)\n"
@@ -66,6 +67,40 @@ static const struct {
      "(postgres|postgresql|mysql|mongodb)(\\+srv)?://[^ :@/]+:[^ :@/]+@"},
     {"generic_secret_assign",
      "(password|passwd|secret|api[_-]?key|access[_-]?token)[\"'= :]+[^ \"']{8,}"},
+};
+
+/* Known agents. Always active; policy `agent` lines add more.
+ * kind: exe = executable path glob, arg = any argv element glob,
+ *       team = code-signing Team ID (macOS). */
+static const struct {
+    const char *name, *kind, *pattern;
+} BUILTIN_AGENTS[] = {
+    {"claude", "arg", "*/@anthropic-ai/claude-code/*"},
+    {"claude", "arg", "*/.claude/local/*"},
+    {"claude", "exe", "*/.local/share/claude/versions/*"},
+    {"claude", "exe", "*/.claude/local/*"},
+    {"cursor", "exe", "/Applications/Cursor.app/Contents/*"},
+    {"cursor", "team", "VDXQ22DGB9"},
+    {"codex", "exe", "*/bin/codex"},
+    {"codex", "arg", "*/@openai/codex/*"},
+    {"codex", "team", "2DC432GLL2"},
+    {"gemini", "arg", "*/@google/gemini-cli/*"},
+};
+
+/* Hosts agents may always reach. Each entry also covers its subdomains.
+ * Policy `egress_allow` lines add more. */
+static const char *const BUILTIN_EGRESS[] = {
+    /* model providers and agent backends */
+    "anthropic.com", "claude.ai", "claude.com", "openai.com", "chatgpt.com",
+    "openrouter.ai", "googleapis.com", "cursor.sh", "cursor.com",
+    "cursorapi.com", "cursor-cdn.com",
+    /* source hosting */
+    "github.com", "githubusercontent.com", "gitlab.com", "bitbucket.org",
+    /* package registries */
+    "npmjs.org", "npmjs.com", "yarnpkg.com", "pypi.org", "pythonhosted.org",
+    "crates.io", "proxy.golang.org", "sum.golang.org", "rubygems.org",
+    "repo.maven.apache.org", "repo1.maven.org", "docker.io", "ghcr.io",
+    "brew.sh",
 };
 
 static char *trimdup(const char *s) {
@@ -167,6 +202,8 @@ static kai_policy *policy_new(void) {
     p->upload_action = KAI_ACT_BLOCK;
     p->injection_on = 1;
     p->max_scan = 2000000;
+    p->egress_mode = KAI_EGRESS_LOG;
+    p->gateway_port = 8787;
     kai_strlcpy(p->source, "built-in", sizeof p->source);
     return p;
 }
@@ -246,6 +283,36 @@ static kai_policy *parse(const char *text, const char *source, char *err,
             char *v; if (!next_tok(&cur, &v)) continue;
             long m = strtol(v, NULL, 10);
             if (m > 0) p->max_scan = (size_t)m;
+        } else if (strcmp(d, "egress") == 0) {
+            char *v; if (!next_tok(&cur, &v)) continue;
+            if (strcmp(v, "block") == 0) p->egress_mode = KAI_EGRESS_BLOCK;
+            else if (strcmp(v, "off") == 0) p->egress_mode = KAI_EGRESS_OFF;
+            else p->egress_mode = KAI_EGRESS_LOG;
+        } else if (strcmp(d, "egress_allow") == 0) {
+            char *v;
+            while (next_tok(&cur, &v) && v[0] != '#') {
+                if (strncmp(v, "*.", 2) == 0) v += 2;
+                if (p->negress < KAI_MAX_LIST) p->egress_allow[p->negress++] = strdup(v);
+            }
+        } else if (strcmp(d, "agent") == 0) {
+            char *nm, *kind, *pat;
+            if (!next_tok(&cur, &nm) || !next_tok(&cur, &kind)) continue;
+            pat = cur; while (*pat == ' ' || *pat == '\t') pat++;
+            char *pt = trimdup(pat);
+            if (!pt || !*pt || (strcmp(kind, "exe") && strcmp(kind, "arg") && strcmp(kind, "team")) ||
+                p->nagents >= KAI_MAX_LIST) {
+                free(pt);
+                continue;
+            }
+            char *ex = kai_expand_home(pt);
+            free(pt);
+            kai_strlcpy(p->agents[p->nagents].name, nm, sizeof p->agents[0].name);
+            kai_strlcpy(p->agents[p->nagents].kind, kind, sizeof p->agents[0].kind);
+            p->agents[p->nagents++].pattern = ex;
+        } else if (strcmp(d, "gateway_port") == 0) {
+            char *v; if (!next_tok(&cur, &v)) continue;
+            long port = strtol(v, NULL, 10);
+            if (port > 0 && port < 65536) p->gateway_port = (int)port;
         } else if (strcmp(d, "term") == 0) {
             char *act, *txt;
             if (!next_action_tok(&cur, &act)) continue;
@@ -297,6 +364,17 @@ static kai_policy *parse(const char *text, const char *source, char *err,
         kai_policy_free(p);
         return NULL;
     }
+
+    /* Built-in agents and egress hosts come after the user's own entries. */
+    for (size_t i = 0; i < sizeof BUILTIN_AGENTS / sizeof BUILTIN_AGENTS[0] &&
+                       p->nagents < KAI_MAX_LIST; i++) {
+        kai_strlcpy(p->agents[p->nagents].name, BUILTIN_AGENTS[i].name, sizeof p->agents[0].name);
+        kai_strlcpy(p->agents[p->nagents].kind, BUILTIN_AGENTS[i].kind, sizeof p->agents[0].kind);
+        p->agents[p->nagents++].pattern = strdup(BUILTIN_AGENTS[i].pattern);
+    }
+    for (size_t i = 0; i < sizeof BUILTIN_EGRESS / sizeof BUILTIN_EGRESS[0] &&
+                       p->negress < KAI_MAX_LIST; i++)
+        p->egress_allow[p->negress++] = strdup(BUILTIN_EGRESS[i]);
 
     /* Compile built-in secret detectors unless turned off. */
     if (p->builtin_secrets != KAI_ACT_NONE) {
@@ -368,6 +446,8 @@ void kai_policy_free(kai_policy *p) {
     free(p->rules); free(p->inj); free(p->upl);
     for (int i = 0; i < p->nprotect; i++) free(p->protect[i]);
     for (int i = 0; i < p->nallow; i++) free(p->allow[i]);
+    for (int i = 0; i < p->negress; i++) free(p->egress_allow[i]);
+    for (int i = 0; i < p->nagents; i++) free(p->agents[i].pattern);
     free(p);
 }
 
@@ -377,3 +457,6 @@ const char *kai_policy_source(const kai_policy *p) {
 kai_action kai_policy_prompt_action(const kai_policy *p) { return p->prompt_action; }
 kai_action kai_policy_file_secret_action(const kai_policy *p) { return p->file_secret_action; }
 kai_action kai_policy_upload_action(const kai_policy *p) { return p->upload_action; }
+kai_egress_mode kai_policy_egress_mode(const kai_policy *p) {
+    return p ? p->egress_mode : KAI_EGRESS_OFF;
+}

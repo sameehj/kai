@@ -65,6 +65,29 @@ struct kai_policy {
     kai_action upload_action;
     int injection_on;
     size_t max_scan;
+    /* network wall */
+    kai_egress_mode egress_mode;
+    char *egress_allow[KAI_MAX_LIST];
+    int negress;
+    /* agent identities: "exe", "arg" or "team" patterns */
+    struct {
+        char name[32];
+        char kind[8];
+        char *pattern;
+    } agents[KAI_MAX_LIST];
+    int nagents;
+    int gateway_port;
 };
+
+/* ---- process inspection (proc.c) ---- */
+typedef struct {
+    int pid, ppid;
+    char exe[1024];
+    char team[32];  /* code-signing Team ID, "" if unsigned / unknown */
+    char **argv;    /* owned */
+    int argc;
+} kai_proc;
+int kai_proc_read(int pid, kai_proc *out); /* 0 on success */
+void kai_proc_free(kai_proc *pr);
 
 #endif
