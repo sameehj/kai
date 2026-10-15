@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claw.dev/schemas/tool-definition.schema.json",
+  "title": "Claw Tool Definition",
+  "description": "JSON schema for tool definitions exposed by Claw to LLM providers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "description",
+    "inputSchema"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]*$",
+      "description": "Globally unique tool identifier, e.g. file.read or ebpf.load."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable behavior summary shown to the model."
+    },
+    "inputSchema": {
+      "description": "JSON Schema object used to validate tool call arguments.",
+      "$ref": "https://json-schema.org/draft/2020-12/schema"
+    },
+    "group": {
+      "type": "string",
+      "enum": [
+        "file",
+        "exec",
+        "search",
+        "package",
+        "ebpf",
+        "system"
+      ]
+    },
+    "dangerous": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether the tool mutates system state and may require explicit user confirmation."
+    },
+    "examples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "args"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "args": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  }
+}

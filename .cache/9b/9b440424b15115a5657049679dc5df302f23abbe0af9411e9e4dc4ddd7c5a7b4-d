@@ -1,0 +1,9 @@
+# test log
+getenv TMPDIR
+getenv TMPDIR
+open /var/folders/5j/hftp45l14dg8hx927d3cn3qh0000gn/T/TestValidateArtifacts1691232278/001/prog.o
+open /var/folders/5j/hftp45l14dg8hx927d3cn3qh0000gn/T/TestReportPackage624874799/001/prog.o
+stat /var/folders/5j/hftp45l14dg8hx927d3cn3qh0000gn/T/TestValidateArtifacts1691232278/001/prog.o
+open /var/folders/5j/hftp45l14dg8hx927d3cn3qh0000gn/T
+stat /var/folders/5j/hftp45l14dg8hx927d3cn3qh0000gn/T/TestReportPackage624874799/001/prog.o
+open /var/folders/5j/hftp45l14dg8hx927d3cn3qh0000gn/T

@@ -1,0 +1,14 @@
+name: net-debug
+version: 0.1.0
+description: Linux network troubleshooting
+category: networking
+author: kai
+root: preferred
+required_binaries:
+  - ss
+common_commands:
+  - ss -s
+  - ip addr
+  - ip route
+  - cat /proc/net/snmp
+  - dmesg --time-format iso

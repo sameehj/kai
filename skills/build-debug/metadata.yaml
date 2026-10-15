@@ -1,0 +1,4 @@
+name: build-debug
+version: 0.1.0
+description: "Debug build failures across make, bitbake, cargo, cmake, go, npm"
+category: build

@@ -1,0 +1,9 @@
+name: kernel-watch
+version: 0.1.0
+description: Compare running kernel with latest stable release info
+category: kernel
+author: kai
+root: optional
+common_commands:
+  - uname -r
+  - cat /etc/os-release

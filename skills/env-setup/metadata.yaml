@@ -1,0 +1,9 @@
+name: env-setup
+version: 0.1.0
+description: "Set up development environments on Linux distros"
+category: general
+root: preferred
+required_binaries:
+  - apt
+  - dnf
+  - pacman

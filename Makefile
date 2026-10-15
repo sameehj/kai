@@ -1,49 +1,44 @@
 SHELL := /bin/bash
 
-GO ?= go
-BINARY ?= kai
-PKG ?= ./...
-BUILD_DIR ?= bin
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -X main.version=$(VERSION)
+GOCACHE ?= $(CURDIR)/.cache/go-build
 
-.PHONY: all build test race fmt lint tidy clean install run daemon-start daemon-stop e2e ci
-
-all: fmt test build
-
-ci: fmt lint test build
+.PHONY: build test test-integration lint clean release demo-up demo-inject demo-down fmt tidy
 
 build:
-	@mkdir -p $(BUILD_DIR)
-	$(GO) build -o $(BUILD_DIR)/$(BINARY) ./cmd/kai
+	@mkdir -p bin $(dir $(GOCACHE))
+	GOCACHE=$(GOCACHE) go build -ldflags "$(LDFLAGS)" -o bin/kai ./cmd/kai
 
 test:
-	$(GO) test $(PKG)
+	@mkdir -p $(dir $(GOCACHE))
+	GOCACHE=$(GOCACHE) go test ./internal/... -v
 
-race:
-	$(GO) test -race $(PKG)
-
-fmt:
-	$(GO) fmt ./...
+test-integration:
+	@mkdir -p $(dir $(GOCACHE))
+	GOCACHE=$(GOCACHE) go test ./tests/integration/... -tags=integration -v
 
 lint:
-	$(GO) vet ./...
+	golangci-lint run ./...
+
+fmt:
+	gofmt -w $$(rg --files -g '*.go')
 
 tidy:
-	$(GO) mod tidy
-
-install:
-	$(GO) install ./cmd/kai
-
-run:
-	$(GO) run ./cmd/kai
-
-daemon-start:
-	$(GO) run ./cmd/kai daemon start
-
-daemon-stop:
-	$(GO) run ./cmd/kai daemon stop
-
-e2e: build
-	./scripts/test-e2e.sh
+	@mkdir -p $(dir $(GOCACHE))
+	GOCACHE=$(GOCACHE) go mod tidy
 
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf bin/ .cache/
+
+demo-up:
+	cd demo/slow-app && docker compose -f docker-compose.yaml up -d
+
+demo-inject: demo-up
+	cd demo/slow-app && bash inject-problems.sh
+
+demo-down:
+	cd demo/slow-app && docker compose -f docker-compose.yaml down
+
+release:
+	goreleaser release --clean

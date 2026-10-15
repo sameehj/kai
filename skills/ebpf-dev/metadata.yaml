@@ -1,0 +1,8 @@
+name: ebpf-dev
+version: 0.1.0
+description: "Develop, compile, load, and debug eBPF programs"
+category: kernel
+root: preferred
+kernel_min: "4.18"
+required_binaries:
+  - clang

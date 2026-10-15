@@ -1,0 +1,5 @@
+./doc.go
+./errno_other.go
+./error.go
+./strings_other.go
+./types_other.go

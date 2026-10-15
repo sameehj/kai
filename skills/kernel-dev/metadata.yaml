@@ -1,0 +1,7 @@
+name: kernel-dev
+version: 0.1.0
+description: "Kernel development: modules, builds, bisect, and debug"
+category: kernel
+required_binaries:
+  - make
+  - gcc

@@ -1,32 +1,91 @@
-# kai — see exactly what your AI agent did
+# Kai - The Linux Systems Agent
 
-Cursor refactored your auth module. Did it push to main?
-Claude ran a script. What did it actually execute?
+Open-source systems agent in Go. Runs on your machine, operates Linux targets via SSH/Docker/local, reports to Slack/Telegram/Email, and logs full evidence.
 
-kai watches your AI agents at the OS level and gives you
-a complete replay of every session.
-
-$ kai replay last
-
-  CURSOR SESSION  cs_a3f2  4m 32s
-
-  Modified: src/auth/login.ts      +47 -12
-  Deleted:  src/auth/old_login.ts
-  Executed: git push origin main   ⚠
-  Network:  api.anthropic.com      4 calls
-
-Works with Cursor, Claude Desktop, Codex CLI, GitHub Copilot,
-Ollama, LM Studio, and any browser-based AI tool — including Chrome.
-
-No cloud. No account. No kernel modules. All local.
+One binary. 5 tools. Expanding skills.
 
 ## Install
 
-# macOS
-brew install kai-ai/kai/kai
+```bash
+curl -fsSL https://usekai.dev/install | sh
+```
 
-# Linux
-curl -sSL https://kai.ai/install | bash
+## First Run
 
-kai daemon start
-kai watch
+```bash
+kai
+```
+
+Kai walks you through provider, target, skills, notifications, safety, and a first health check.
+
+## Example Prompts
+
+```bash
+kai "my server is slow, figure out why"
+kai "audit this machine"
+kai "check network health"
+kai "what kernel am I running?"
+```
+
+## Skill Management
+
+```bash
+kai skill add https://github.com/iovisor/bcc
+kai skill list
+kai skill update bcc
+kai skill remove bcc
+```
+
+Community skills live under `~/.kai/community-skills/`.
+
+## Built-in Skills
+
+- `env-setup`
+- `build-debug`
+- `watch`
+- `server-audit`
+- `perf-diagnosis`
+- `ebpf-dev`
+- `kernel-dev`
+
+## Works With
+
+- Targets: local, SSH, Docker
+- Channels: stdout, Slack webhook, Telegram, Email (outgoing)
+- LLM: Anthropic, OpenAI, Ollama, OpenRouter
+
+## Evidence and Replay
+
+```bash
+kai runs list
+kai replay last
+```
+
+Every tool call is recorded with inputs, outputs, timings, and policy decisions.
+
+## Core Commands
+
+```bash
+kai                         # REPL
+kai -c "..."               # Single-shot
+kai probe --target local
+kai --notify slack:#ops -c "check system health"
+kai gateway start|stop|status
+```
+
+## Build and Test
+
+```bash
+make build
+make test
+make test-integration
+```
+
+## Docs
+
+- [`docs/quickstart.md`](docs/quickstart.md)
+- [`docs/skills.md`](docs/skills.md)
+- [`docs/targets.md`](docs/targets.md)
+- [`docs/channels.md`](docs/channels.md)
+- [`docs/config.md`](docs/config.md)
+- [`CONTRIBUTING.md`](CONTRIBUTING.md)

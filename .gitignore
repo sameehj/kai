@@ -1,59 +1,8 @@
-# --- Build artifacts ---
-/build/
-/dist/
-/tmp/
-/out/
-/logs/
-*.log
-.gocache
-.cache/*
-.gomodcache/*
-./vmlinux.h
-
-# --- OS / Editor junk ---
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
-*.bak
-*.tmp
-*~
-.idea/
-.vscode/
-*.code-workspace
-
-# --- Python / Scripts cache ---
-__pycache__/
-*.pyc
-*.pyo
-
-# --- Go build cache (if used later) ---
-/bin/
-
-# --- eBPF / LLVM outputs ---
-*.o
-*.ll
-*.bc
-*.bpf.*
-*.elf
-*.ko
-*.dSYM/
-
-# --- Dependencies (future-proof) ---
-vendor/
 node_modules/
-.env
-
-# --- Recipe-specific temp dirs ---
-/recipes/tmp/
-/recipes/.cache/
-/scripts/.cache/
-
-# --- GitHub Actions artifacts ---
-*.tgz
-*.tar.gz
-*.zip
-
-# --- Ignore generated schema validations ---
-schemas/generated/
-
+dist/
+.ebpf-claw/
+*.log
+.DS_Store
+.cache/
+bin/
+~/.kai/

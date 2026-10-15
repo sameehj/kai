@@ -1,0 +1,7 @@
+name: watch
+version: 0.1.0
+description: "Monitor logs, builds, and processes; alert on important patterns"
+category: general
+required_binaries:
+  - tail
+  - grep

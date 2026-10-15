@@ -1,0 +1,7 @@
+name: server-audit
+version: 0.1.0
+description: "Audit server state: processes, users, ports, services, and security posture"
+category: security
+required_binaries:
+  - ss
+  - ps

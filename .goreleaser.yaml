@@ -1,0 +1,21 @@
+version: 2
+
+builds:
+  - main: ./cmd/kai
+    binary: kai
+    ldflags:
+      - -X main.version={{.Version}}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+
+archives:
+  - format: tar.gz
+    name_template: "kai_{{ .Os }}_{{ .Arch }}"
+
+release:
+  github:
+    owner: sameehj
+    name: kai
+
+checksum:
+  name_template: checksums.txt
