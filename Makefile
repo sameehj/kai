@@ -64,13 +64,13 @@ app: kai
 app-dev: kai
 	@test -n "$(KAI_TEAM)" || { echo "set KAI_TEAM to your Apple team ID"; exit 1; }
 	cd app/macos && KAI_TEAM=$(KAI_TEAM) xcodegen generate --quiet
-	xcodebuild $(XCODE_FLAGS) -allowProvisioningUpdates DEVELOPMENT_TEAM=$(KAI_TEAM) \
+	xcodebuild $(XCODE_FLAGS) -allowProvisioningUpdates -allowProvisioningDeviceRegistration DEVELOPMENT_TEAM=$(KAI_TEAM) \
 	  $(XCODE_EXTRA) -quiet build
 	rm -rf build/Kai.app && cp -R build/dd/Build/Products/Release/Kai.app build/Kai.app
 
 # Build signed, install to /Applications, quit any running copy, and open it.
 try-app: app-dev
-	-pkill -x Kai
+	@pkill -x Kai || true
 	$(MAKE) install-app
 	open /Applications/Kai.app
 
