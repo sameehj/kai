@@ -1,0 +1,60 @@
+# Kai policy — this file controls what agents may read and what may leave
+# the machine. Lines are "directive arguments". '#' starts a comment.
+# Edit it, then run `kai doctor` to check it. Missing file = these defaults.
+
+# ── Files agents may never read ──────────────────────────────────────
+protect ~/.ssh
+protect ~/.aws
+protect ~/.config/gcloud
+protect ~/.kube
+protect ~/.docker/config.json
+protect ~/.netrc
+protect ~/.npmrc
+protect ~/.pypirc
+protect ~/.gnupg
+protect ~/.kai                 # agents can't read or edit Kai's own config/log
+protect .env
+protect .env.*
+protect *.pem
+protect *.key
+protect id_rsa
+protect id_ed25519
+allow   .env.example           # safe to share
+allow   .env.sample
+
+# ── Built-in secret detectors ────────────────────────────────────────
+# action for anything the detectors below match: redact | block | warn | off
+secrets redact
+
+# ── Behaviour switches ───────────────────────────────────────────────
+on_prompt_secret   block   # secret typed into a prompt: block | warn
+on_file_secret     block   # agent tries to read a file full of secrets
+on_upload          block   # command that looks like it exfiltrates data: block | ask
+injection          warn    # prompt-injection text in a tool result: warn | off
+max_scan_bytes     2000000
+
+# ── Company rules ─────────────────────────────────────────────────────
+# term  <action> <text>          exact words, case-insensitive
+# rule  <name> <action> <regex>  POSIX extended regex, case-insensitive
+#   action: block | redact | warn | replace:"replacement text"
+#
+# Examples — uncomment and edit for your company:
+# term  replace:"Project X"   Project Falcon
+# term  block                 CONFIDENTIAL DO NOT DISTRIBUTE
+# rule  internal_host redact  [a-z0-9-]+\.corp\.example\.com
+# rule  cust_email    redact  [a-z0-9._%+-]+@bigcustomer\.com
+
+# ── Upload / remote-code patterns (checked on shell commands) ─────────
+# POSIX extended regex, case-insensitive. Avoid \b and \s (not portable to
+# macOS BSD regex); '.' already excludes newlines here.
+rule_upload curl_upload    (curl|wget).*(-d|--data|-T|--upload-file|-F).*@
+rule_upload pipe_to_shell  (curl|wget).*\|.*(sh|bash|zsh|python)
+rule_upload netcat         (^|[^a-z])(nc|ncat|netcat)([^a-z]|$)
+rule_upload remote_scp     (^|[^a-z])scp[^"]+:
+
+# ── Prompt-injection patterns (checked on tool results) ───────────────
+rule_injection ignore_prev   ignore (all |your |previous |prior )*instructions
+rule_injection new_instr     (new|updated|system) (instructions|directive|prompt)[: ]
+rule_injection exfil_ask     (send|upload|post|exfiltrate|leak).{0,40}(\.ssh|\.env|secret|credential|token|api[_ ]?key)
+rule_injection override_role you are (now )?(a |an )?(different|new|dan|developer mode)
+rule_injection disregard     (disregard|forget|override).{0,20}(instruction|rule|guardrail|policy)

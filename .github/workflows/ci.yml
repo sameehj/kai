@@ -1,23 +1,36 @@
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
 name: ci
-
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
-  test:
+  build-test:
+    name: build + test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: build
+        run: make
+      - name: unit + hook tests
+        run: make test
+      - name: sanitizer build (Linux only)
+        if: runner.os == 'Linux'
+        run: make asan
+
+  self-scan:
+    name: kai scans its own tree for secrets
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22.x'
-
-      - name: Go test
-        env:
-          GOCACHE: /tmp/go-build-cache
+      - uses: actions/checkout@v4
+      - run: make
+      - name: fail if any tracked file contains a secret
         run: |
-          go test ./...
+          # exclude tests, which contain deliberate fake secrets
+          files=$(git ls-files | grep -v '^tests/' | grep -v '^docs/' || true)
+          if [ -n "$files" ]; then ./kai scan $files || exit 1; fi

@@ -1,0 +1,100 @@
+/*
+ * Kai — open-source security layer for AI agents.
+ * Copyright (C) 2026 The Kai Authors.
+ * SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
+ *
+ * This is the public, embeddable C API of libkai. Everything else in the
+ * project (hooks, CLI, installer) is built on these functions.
+ */
+#ifndef KAI_H
+#define KAI_H
+
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define KAI_VERSION "0.1.0"
+
+/* What to do when a rule matches. Ordered by severity. */
+typedef enum {
+    KAI_ACT_NONE = 0,
+    KAI_ACT_WARN = 1,    /* log only, text unchanged                 */
+    KAI_ACT_REPLACE = 2, /* swap the match for policy-defined text   */
+    KAI_ACT_REDACT = 3,  /* swap the match for a [REDACTED…] marker  */
+    KAI_ACT_BLOCK = 4    /* refuse the whole action / request        */
+} kai_action;
+
+#define KAI_MAX_HITS 64
+#define KAI_NAME_MAX 64
+
+typedef struct {
+    char rule[KAI_NAME_MAX];
+    kai_action action;
+    int count;
+} kai_hit;
+
+/* Summary of one scan. Never contains the matched secret itself. */
+typedef struct {
+    kai_hit hits[KAI_MAX_HITS];
+    int nhits;
+    kai_action worst;
+    int skipped; /* text too large to scan */
+} kai_report;
+
+typedef struct kai_policy kai_policy;
+
+/* Load the policy. path == NULL means $KAI_POLICY, then ~/.kai/policy,
+ * then the built-in defaults. Returns NULL and fills err on a parse error. */
+kai_policy *kai_policy_load(const char *path, char *err, size_t errlen);
+kai_policy *kai_policy_from_string(const char *text, char *err, size_t errlen);
+void kai_policy_free(kai_policy *p);
+const char *kai_policy_source(const kai_policy *p); /* file path or "built-in" */
+
+/* The built-in default policy text (what `kai init` writes). */
+const char *kai_default_policy(void);
+
+/* Scan text against content rules. Returns a newly allocated copy with
+ * redact/replace/block rules applied (caller frees). rep may be NULL. */
+char *kai_scan_text(const kai_policy *p, const char *text, kai_report *rep);
+
+/* Is this path protected (secrets, keys, Kai itself)? cwd resolves relative
+ * paths; why receives the matching pattern. Returns 1 if protected. */
+int kai_path_protected(const kai_policy *p, const char *path, const char *cwd,
+                       char *why, size_t whylen);
+
+/* Does a shell command touch a protected path? Returns 1 and fills why. */
+int kai_command_touches_protected(const kai_policy *p, const char *cmd,
+                                  const char *cwd, char *why, size_t whylen);
+
+/* Does a shell command look like it uploads data or pipes remote code into
+ * a shell? Returns 1 and fills why with the pattern name. */
+int kai_command_looks_like_upload(const kai_policy *p, const char *cmd,
+                                  char *why, size_t whylen);
+
+/* Does text contain instructions aimed at an AI agent (prompt injection)?
+ * Returns the number of patterns matched; which receives the first name. */
+int kai_injection_check(const kai_policy *p, const char *text, char *which,
+                        size_t whichlen);
+
+/* Policy switches used by integrations. */
+kai_action kai_policy_prompt_action(const kai_policy *p);      /* block | warn */
+kai_action kai_policy_file_secret_action(const kai_policy *p); /* block | warn */
+kai_action kai_policy_upload_action(const kai_policy *p);      /* block | ask(=warn) */
+
+const char *kai_action_name(kai_action a);
+void kai_report_summary(const kai_report *rep, char *out, size_t outlen);
+
+/* Audit log: append one hash-chained record. Never pass secret values. */
+int kai_audit(const char *source, const char *event, const char *decision,
+              const char *rule, const char *detail);
+/* Verify the chain. Returns 0 if intact; fills nlines and err. */
+int kai_audit_verify(const char *path, int *nlines, char *err, size_t errlen);
+const char *kai_home(void);       /* $KAI_HOME or ~/.kai */
+const char *kai_audit_path(void); /* <home>/audit.log    */
+
+#ifdef __cplusplus
+}
+#endif
+#endif /* KAI_H */

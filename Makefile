@@ -1,49 +1,51 @@
-SHELL := /bin/bash
+# Kai — Makefile. Builds the `kai` binary and libkai.a.
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
 
-GO ?= go
-BINARY ?= kai
-PKG ?= ./...
-BUILD_DIR ?= bin
+CC      ?= cc
+PREFIX  ?= /usr/local
+CSTD    ?= -std=c11
+WARN     = -Wall -Wextra -Wno-unused-parameter
+HARDEN   = -D_FORTIFY_SOURCE=2 -fstack-protector-strong
+OPT     ?= -O2
+CFLAGS  ?= $(CSTD) $(WARN) $(OPT) $(HARDEN)
+CFLAGS  += -Iinclude -Ithird_party/cjson -D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE
+LDLIBS   =
 
-.PHONY: all build test race fmt lint tidy clean install run daemon-start daemon-stop e2e ci
+CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
+       third_party/cjson/cJSON.c
+APP  = src/main.c src/hooks.c src/install.c
 
-all: fmt test build
+OBJ      = $(CORE:.c=.o) $(APP:.c=.o)
+COREOBJ  = $(CORE:.c=.o)
 
-ci: fmt lint test build
+all: kai libkai.a
 
-build:
-	@mkdir -p $(BUILD_DIR)
-	$(GO) build -o $(BUILD_DIR)/$(BINARY) ./cmd/kai
+kai: $(OBJ)
+	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LDLIBS)
 
-test:
-	$(GO) test $(PKG)
+libkai.a: $(COREOBJ)
+	$(AR) rcs $@ $(COREOBJ)
 
-race:
-	$(GO) test -race $(PKG)
+%.o: %.c
+	$(CC) $(CFLAGS) -c -o $@ $<
 
-fmt:
-	$(GO) fmt ./...
+# Address/UB sanitizer build used in CI
+asan: CFLAGS += -fsanitize=address,undefined -g -O1
+asan: clean kai test
 
-lint:
-	$(GO) vet ./...
+test: kai
+	$(CC) $(CFLAGS) -o tests/run_tests tests/run_tests.c $(CORE) $(LDLIBS)
+	./tests/run_tests
+	sh tests/hooks/run_hook_tests.sh ./kai
 
-tidy:
-	$(GO) mod tidy
+install: all
+	install -d $(DESTDIR)$(PREFIX)/bin
+	install -m 0755 kai $(DESTDIR)$(PREFIX)/bin/kai
 
-install:
-	$(GO) install ./cmd/kai
-
-run:
-	$(GO) run ./cmd/kai
-
-daemon-start:
-	$(GO) run ./cmd/kai daemon start
-
-daemon-stop:
-	$(GO) run ./cmd/kai daemon stop
-
-e2e: build
-	./scripts/test-e2e.sh
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/kai
 
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -f $(OBJ) kai libkai.a tests/run_tests
+
+.PHONY: all asan test install uninstall clean

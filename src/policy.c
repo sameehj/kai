@@ -1,0 +1,373 @@
+/* SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial */
+#include "internal.h"
+
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* The built-in default policy. Kept in sync with policy/default.policy;
+ * tests/test_policy checks that the shipped file parses identically. */
+static const char DEFAULT_POLICY[] =
+    "protect ~/.ssh\n"
+    "protect ~/.aws\n"
+    "protect ~/.config/gcloud\n"
+    "protect ~/.kube\n"
+    "protect ~/.docker/config.json\n"
+    "protect ~/.netrc\n"
+    "protect ~/.npmrc\n"
+    "protect ~/.pypirc\n"
+    "protect ~/.gnupg\n"
+    "protect ~/.kai\n"
+    "protect .env\n"
+    "protect .env.*\n"
+    "protect *.pem\n"
+    "protect *.key\n"
+    "protect id_rsa\n"
+    "protect id_ed25519\n"
+    "allow .env.example\n"
+    "allow .env.sample\n"
+    "secrets redact\n"
+    "on_prompt_secret block\n"
+    "on_file_secret block\n"
+    "on_upload block\n"
+    "injection warn\n"
+    "max_scan_bytes 2000000\n"
+    "rule_upload curl_upload (curl|wget).*(-d|--data|-T|--upload-file|-F).*@\n"
+    "rule_upload pipe_to_shell (curl|wget).*\\|.*(sh|bash|zsh|python)\n"
+    "rule_upload netcat (^|[^a-z])(nc|ncat|netcat)([^a-z]|$)\n"
+    "rule_upload remote_scp (^|[^a-z])scp[^\"]+:\n"
+    "rule_injection ignore_prev ignore (all |your |previous |prior )*instructions\n"
+    "rule_injection new_instr (new|updated|system) (instructions|directive|prompt)[: ]\n"
+    "rule_injection exfil_ask "
+    "(send|upload|post|exfiltrate|leak).{0,40}(\\.ssh|\\.env|secret|credential|token|api[_ ]?key)\n"
+    "rule_injection override_role you are (now )?(a |an )?(different|new|dan|developer mode)\n"
+    "rule_injection disregard "
+    "(disregard|forget|override).{0,20}(instruction|rule|guardrail|policy)\n";
+
+/* Built-in secret detectors. name|regex. Applied when `secrets` != off. */
+static const struct {
+    const char *name, *re;
+} BUILTIN_SECRETS[] = {
+    /* Patterns avoid \b and \s for POSIX portability (glibc + macOS BSD). */
+    {"private_key_block",
+     "-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"},
+    {"aws_access_key", "(AKIA|ASIA)[0-9A-Z]{16}"},
+    {"aws_secret_key", "aws_secret_access_key[\"'= :]+[A-Za-z0-9/+]{40}"},
+    {"github_token", "(ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{20,}"},
+    {"gitlab_token", "glpat-[A-Za-z0-9_-]{20,}"},
+    {"slack_token", "xox[baprs]-[A-Za-z0-9-]{10,}"},
+    {"stripe_key", "(sk|rk)_(live|test)_[A-Za-z0-9]{16,}"},
+    {"google_api_key", "AIza[0-9A-Za-z_-]{35}"},
+    {"openai_key", "sk-(proj-)?[A-Za-z0-9_-]{20,}"},
+    {"anthropic_key", "sk-ant-[A-Za-z0-9_-]{20,}"},
+    {"openrouter_key", "sk-or-v1-[A-Za-z0-9]{32,}"},
+    {"jwt", "eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}"},
+    {"db_url_with_password",
+     "(postgres|postgresql|mysql|mongodb)(\\+srv)?://[^ :@/]+:[^ :@/]+@"},
+    {"generic_secret_assign",
+     "(password|passwd|secret|api[_-]?key|access[_-]?token)[\"'= :]+[^ \"']{8,}"},
+};
+
+static char *trimdup(const char *s) {
+    while (*s == ' ' || *s == '\t') s++;
+    const char *end = s + strlen(s);
+    while (end > s && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' ||
+                       end[-1] == '\n'))
+        end--;
+    size_t n = (size_t)(end - s);
+    char *r = malloc(n + 1);
+    if (r) { memcpy(r, s, n); r[n] = '\0'; }
+    return r;
+}
+
+static kai_action parse_action(const char *tok, char **replacement) {
+    *replacement = NULL;
+    if (strncmp(tok, "replace:", 8) == 0) {
+        const char *v = tok + 8;
+        if (*v == '"') {
+            v++;
+            const char *e = strchr(v, '"');
+            size_t n = e ? (size_t)(e - v) : strlen(v);
+            char *r = malloc(n + 1);
+            if (r) { memcpy(r, v, n); r[n] = '\0'; }
+            *replacement = r;
+        } else {
+            *replacement = strdup(v);
+        }
+        return KAI_ACT_REPLACE;
+    }
+    if (strcmp(tok, "block") == 0) return KAI_ACT_BLOCK;
+    if (strcmp(tok, "redact") == 0) return KAI_ACT_REDACT;
+    if (strcmp(tok, "warn") == 0 || strcmp(tok, "ask") == 0) return KAI_ACT_WARN;
+    if (strcmp(tok, "off") == 0 || strcmp(tok, "none") == 0) return KAI_ACT_NONE;
+    return KAI_ACT_WARN;
+}
+
+/* Turn a glob of exact words (term) into an anchored regex is overkill;
+ * we instead match terms literally and case-insensitively in scan.c.
+ * Here we only compile real regex rules. */
+static int add_rule(kai_rule **arr, int *n, int *cap, const char *name,
+                    kai_action act, char *replacement, const char *pattern,
+                    int literal, char *err, size_t errlen) {
+    if (*n >= *cap) {
+        int nc = *cap ? *cap * 2 : 8;
+        kai_rule *na = realloc(*arr, (size_t)nc * sizeof **arr);
+        if (!na) { free(replacement); return -1; }
+        *arr = na;
+        *cap = nc;
+    }
+    kai_rule *r = &(*arr)[*n];
+    memset(r, 0, sizeof *r);
+    kai_strlcpy(r->name, name, sizeof r->name);
+    r->action = act;
+    r->replacement = replacement;
+
+    /* For a literal term, quote every regex metacharacter. */
+    char *buf = NULL;
+    const char *pat = pattern;
+    if (literal) {
+        sb_t b;
+        sb_init(&b);
+        for (const char *c = pattern; *c; c++) {
+            if (strchr(".^$*+?()[]{}|\\", *c)) sb_add(&b, "\\", 1);
+            sb_add(&b, c, 1);
+        }
+        buf = sb_take(&b);
+        pat = buf;
+    }
+    int rc = regcomp(&r->re, pat, REG_EXTENDED | REG_ICASE | REG_NEWLINE);
+    free(buf);
+    if (rc != 0) {
+        char msg[256];
+        regerror(rc, &r->re, msg, sizeof msg);
+        snprintf(err, errlen, "bad pattern for rule '%s': %s", name, msg);
+        free(replacement);
+        r->replacement = NULL;
+        return -1;
+    }
+    r->compiled = 1;
+    (*n)++;
+    return 0;
+}
+
+static int add_list(char **arr, int *n, const char *val) {
+    if (*n >= KAI_MAX_LIST) return -1;
+    char *d = kai_expand_home(val);
+    if (!d) return -1;
+    arr[(*n)++] = d;
+    return 0;
+}
+
+static kai_policy *policy_new(void) {
+    kai_policy *p = calloc(1, sizeof *p);
+    if (!p) return NULL;
+    p->builtin_secrets = KAI_ACT_REDACT;
+    p->prompt_action = KAI_ACT_BLOCK;
+    p->file_secret_action = KAI_ACT_BLOCK;
+    p->upload_action = KAI_ACT_BLOCK;
+    p->injection_on = 1;
+    p->max_scan = 2000000;
+    kai_strlcpy(p->source, "built-in", sizeof p->source);
+    return p;
+}
+
+static int next_tok(char **cur, char **tok) {
+    char *s = *cur;
+    while (*s == ' ' || *s == '\t') s++;
+    if (!*s) return 0;
+    *tok = s;
+    while (*s && *s != ' ' && *s != '\t') s++;
+    if (*s) { *s = '\0'; s++; }
+    *cur = s;
+    return 1;
+}
+
+/* Read an action token, honoring replace:"..." which may contain spaces.
+ * Leaves *cur pointing just past the action. */
+static int next_action_tok(char **cur, char **tok) {
+    char *s = *cur;
+    while (*s == ' ' || *s == '\t') s++;
+    if (!*s) return 0;
+    *tok = s;
+    if (strncmp(s, "replace:\"", 9) == 0) {
+        s += 9;
+        while (*s && *s != '"') s++;
+        if (*s == '"') s++; /* include closing quote */
+    } else {
+        while (*s && *s != ' ' && *s != '\t') s++;
+    }
+    if (*s) { *s = '\0'; s++; }
+    *cur = s;
+    return 1;
+}
+
+static kai_policy *parse(const char *text, const char *source, char *err,
+                         size_t errlen) {
+    if (errlen) err[0] = '\0';
+    kai_policy *p = policy_new();
+    if (!p) { snprintf(err, errlen, "out of memory"); return NULL; }
+    if (source) kai_strlcpy(p->source, source, sizeof p->source);
+
+    char *copy = strdup(text);
+    if (!copy) { kai_policy_free(p); snprintf(err, errlen, "out of memory"); return NULL; }
+
+    int lineno = 0, failed = 0;
+    char *save = NULL;
+    for (char *line = strtok_r(copy, "\n", &save); line && !failed;
+         line = strtok_r(NULL, "\n", &save)) {
+        lineno++;
+        char *cur = line;
+        char *d;
+        if (!next_tok(&cur, &d)) continue;
+        if (d[0] == '#') continue;
+
+        if (strcmp(d, "protect") == 0) {
+            char *v; if (!next_tok(&cur, &v)) continue;
+            add_list(p->protect, &p->nprotect, v);
+        } else if (strcmp(d, "allow") == 0) {
+            char *v; if (!next_tok(&cur, &v)) continue;
+            add_list(p->allow, &p->nallow, v);
+        } else if (strcmp(d, "secrets") == 0) {
+            char *v; if (!next_tok(&cur, &v)) continue;
+            char *rep; p->builtin_secrets = parse_action(v, &rep); free(rep);
+        } else if (strcmp(d, "on_prompt_secret") == 0) {
+            char *v; if (!next_tok(&cur, &v)) continue;
+            char *rep; p->prompt_action = parse_action(v, &rep); free(rep);
+        } else if (strcmp(d, "on_file_secret") == 0) {
+            char *v; if (!next_tok(&cur, &v)) continue;
+            char *rep; p->file_secret_action = parse_action(v, &rep); free(rep);
+        } else if (strcmp(d, "on_upload") == 0) {
+            char *v; if (!next_tok(&cur, &v)) continue;
+            char *rep; p->upload_action = parse_action(v, &rep); free(rep);
+        } else if (strcmp(d, "injection") == 0) {
+            char *v; if (!next_tok(&cur, &v)) continue;
+            p->injection_on = strcmp(v, "off") != 0;
+        } else if (strcmp(d, "max_scan_bytes") == 0) {
+            char *v; if (!next_tok(&cur, &v)) continue;
+            long m = strtol(v, NULL, 10);
+            if (m > 0) p->max_scan = (size_t)m;
+        } else if (strcmp(d, "term") == 0) {
+            char *act, *txt;
+            if (!next_action_tok(&cur, &act)) continue;
+            txt = cur; while (*txt == ' ' || *txt == '\t') txt++;
+            char *t = trimdup(txt);
+            if (!t || !*t) { free(t); continue; }
+            char *rep; kai_action a = parse_action(act, &rep);
+            char nm[KAI_NAME_MAX]; snprintf(nm, sizeof nm, "term:%.48s", t);
+            if (add_rule(&p->rules, &p->nrules, &p->caprules, nm, a, rep, t, 1,
+                         err, errlen) != 0) failed = 1;
+            free(t);
+        } else if (strcmp(d, "rule") == 0) {
+            char *nm, *act, *pat;
+            if (!next_tok(&cur, &nm) || !next_action_tok(&cur, &act)) continue;
+            pat = cur; while (*pat == ' ' || *pat == '\t') pat++;
+            char *pt = trimdup(pat);
+            if (!pt || !*pt) { free(pt); continue; }
+            char *rep; kai_action a = parse_action(act, &rep);
+            if (add_rule(&p->rules, &p->nrules, &p->caprules, nm, a, rep, pt, 0,
+                         err, errlen) != 0) failed = 1;
+            free(pt);
+        } else if (strcmp(d, "rule_injection") == 0) {
+            char *nm, *pat;
+            if (!next_tok(&cur, &nm)) continue;
+            pat = cur; while (*pat == ' ' || *pat == '\t') pat++;
+            char *pt = trimdup(pat);
+            if (!pt || !*pt) { free(pt); continue; }
+            if (add_rule(&p->inj, &p->ninj, &p->capinj, nm, KAI_ACT_WARN, NULL,
+                         pt, 0, err, errlen) != 0) failed = 1;
+            free(pt);
+        } else if (strcmp(d, "rule_upload") == 0) {
+            char *nm, *pat;
+            if (!next_tok(&cur, &nm)) continue;
+            pat = cur; while (*pat == ' ' || *pat == '\t') pat++;
+            char *pt = trimdup(pat);
+            if (!pt || !*pt) { free(pt); continue; }
+            if (add_rule(&p->upl, &p->nupl, &p->capupl, nm, KAI_ACT_BLOCK, NULL,
+                         pt, 0, err, errlen) != 0) failed = 1;
+            free(pt);
+        } else {
+            /* unknown directive: ignore, forward-compatible */
+        }
+    }
+    free(copy);
+
+    if (failed) {
+        if (errlen && err[0] == '\0')
+            snprintf(err, errlen, "policy error near line %d", lineno);
+        kai_policy_free(p);
+        return NULL;
+    }
+
+    /* Compile built-in secret detectors unless turned off. */
+    if (p->builtin_secrets != KAI_ACT_NONE) {
+        int n = (int)(sizeof BUILTIN_SECRETS / sizeof BUILTIN_SECRETS[0]);
+        for (int i = 0; i < n; i++) {
+            char nm[KAI_NAME_MAX];
+            snprintf(nm, sizeof nm, "secret:%s", BUILTIN_SECRETS[i].name);
+            if (add_rule(&p->rules, &p->nrules, &p->caprules, nm,
+                         p->builtin_secrets, NULL, BUILTIN_SECRETS[i].re, 0,
+                         err, errlen) != 0) {
+                kai_policy_free(p);
+                return NULL;
+            }
+        }
+    }
+    return p;
+}
+
+const char *kai_default_policy(void) { return DEFAULT_POLICY; }
+
+kai_policy *kai_policy_from_string(const char *text, char *err, size_t errlen) {
+    return parse(text, "string", err, errlen);
+}
+
+kai_policy *kai_policy_load(const char *path, char *err, size_t errlen) {
+    char *chosen = NULL;
+    if (path && *path) {
+        chosen = strdup(path);
+    } else {
+        const char *env = getenv("KAI_POLICY");
+        if (env && *env) chosen = strdup(env);
+        else {
+            char *def = kai_expand_home("~/.kai/policy");
+            FILE *f = fopen(def, "rb");
+            if (f) { fclose(f); chosen = def; } else free(def);
+        }
+    }
+    if (!chosen) return parse(DEFAULT_POLICY, "built-in", err, errlen);
+
+    size_t len = 0;
+    char *txt = kai_read_file(chosen, 4000000, &len);
+    if (!txt) {
+        snprintf(err, errlen, "cannot read policy file: %s", chosen);
+        free(chosen);
+        return NULL;
+    }
+    kai_policy *p = parse(txt, chosen, err, errlen);
+    free(txt);
+    free(chosen);
+    return p;
+}
+
+void kai_policy_free(kai_policy *p) {
+    if (!p) return;
+    for (int i = 0; i < p->nrules; i++) {
+        if (p->rules[i].compiled) regfree(&p->rules[i].re);
+        free(p->rules[i].replacement);
+    }
+    for (int i = 0; i < p->ninj; i++)
+        if (p->inj[i].compiled) regfree(&p->inj[i].re);
+    for (int i = 0; i < p->nupl; i++)
+        if (p->upl[i].compiled) regfree(&p->upl[i].re);
+    free(p->rules); free(p->inj); free(p->upl);
+    for (int i = 0; i < p->nprotect; i++) free(p->protect[i]);
+    for (int i = 0; i < p->nallow; i++) free(p->allow[i]);
+    free(p);
+}
+
+const char *kai_policy_source(const kai_policy *p) {
+    return p ? p->source : "built-in";
+}
+kai_action kai_policy_prompt_action(const kai_policy *p) { return p->prompt_action; }
+kai_action kai_policy_file_secret_action(const kai_policy *p) { return p->file_secret_action; }
+kai_action kai_policy_upload_action(const kai_policy *p) { return p->upload_action; }
