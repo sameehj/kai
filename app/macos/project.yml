@@ -12,6 +12,8 @@ options:
   deploymentTarget:
     macOS: "13.0"
   createIntermediateGroups: true
+  # Readable by Xcode 15 (CI runners) as well as newer Xcode versions.
+  projectFormat: xcode15_0
 settings:
   base:
     DEVELOPMENT_TEAM: ${KAI_TEAM}
