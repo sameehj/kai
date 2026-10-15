@@ -68,6 +68,12 @@ app-dev: kai
 	  $(XCODE_EXTRA) -quiet build
 	rm -rf build/Kai.app && cp -R build/dd/Build/Products/Release/Kai.app build/Kai.app
 
+# Build signed, install to /Applications, quit any running copy, and open it.
+try-app: app-dev
+	-pkill -x Kai
+	$(MAKE) install-app
+	open /Applications/Kai.app
+
 install-app:
 	@test -d build/Kai.app || { echo "build it first: make app or make app-dev"; exit 1; }
 	rm -rf /Applications/Kai.app
@@ -84,4 +90,4 @@ clean:
 	rm -f $(OBJ) kai libkai.a tests/run_tests
 	rm -rf build app/macos/Kai.xcodeproj
 
-.PHONY: all asan test app app-dev install-app install uninstall clean
+.PHONY: all asan test app app-dev try-app install-app install uninstall clean
