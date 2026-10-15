@@ -5,13 +5,14 @@ import ServiceManagement
 import UserNotifications
 
 enum Agent: String, CaseIterable, Identifiable {
-    case claude, cursor, codex
+    case claude, cursor, codex, chrome
     var id: String { rawValue }
     var title: String {
         switch self {
         case .claude: return "Claude Code"
         case .cursor: return "Cursor"
         case .codex: return "Codex"
+        case .chrome: return "Chrome AI chats"
         }
     }
 }
@@ -53,7 +54,7 @@ final class AppModel: ObservableObject {
         let infos = Agent.allCases.map(agentInfo)
         if !infos.contains(where: \.installed) { return .off }
         // Only "partial" if an agent that is actually used here is unprotected.
-        let missed = infos.contains { $0.detected && !$0.installed }
+        let missed = infos.contains { $0.detected && !$0.installed } || chromeNeedsExtension
         return missed ? .partial : .protecting
     }
 
@@ -96,6 +97,29 @@ final class AppModel: ObservableObject {
 
     func installed(_ a: Agent) -> Bool { agentInfo(a).installed }
 
+    /// Kai is registered with the browser but the extension isn't loaded yet.
+    var chromeNeedsExtension: Bool {
+        let c = agentInfo(.chrome)
+        return c.installed && c.extensionLoaded == false
+    }
+
+    /// Finish the browser setup: copy the extension folder's path, show it in
+    /// Finder and open the browser's extensions page ("Load unpacked").
+    func openExtensionSetup() {
+        let dir = agentInfo(.chrome).config
+        guard !dir.isEmpty else {
+            errorMessage = "Can't find Kai's browser extension folder."
+            return
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(dir, forType: .string)
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: dir)])
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        p.arguments = ["-a", "Google Chrome", "chrome://extensions"]
+        try? p.run()
+    }
+
     func agentInfo(_ a: Agent) -> KaiStatus.Agent {
         let none = KaiStatus.Agent(installed: false, detected: false, config: "")
         guard let s = status else { return none }
@@ -103,6 +127,7 @@ final class AppModel: ObservableObject {
         case .claude: return s.claude
         case .cursor: return s.cursor
         case .codex: return s.codex ?? none // older kai CLIs don't report Codex
+        case .chrome: return s.chrome ?? none
         }
     }
 

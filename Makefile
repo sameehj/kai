@@ -21,7 +21,7 @@ endif
 
 CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
        src/net.c src/proc.c src/gateway.c third_party/cjson/cJSON.c
-APP  = src/main.c src/hooks.c src/install.c src/manage.c
+APP  = src/main.c src/hooks.c src/install.c src/manage.c src/browser.c src/native.c
 
 OBJ      = $(CORE:.c=.o) $(APP:.c=.o)
 COREOBJ  = $(CORE:.c=.o)
@@ -47,6 +47,7 @@ test: kai
 	sh tests/hooks/run_hook_tests.sh ./kai
 	sh tests/cli/run_cli_tests.sh ./kai
 	sh tests/gateway/run_gateway_tests.sh ./kai
+	sh tests/browser/run_native_tests.sh ./kai
 
 # macOS app (menu bar + network system extension), via XcodeGen + Xcode.
 #   make app                  ad-hoc signed; menu bar works, the network wall
@@ -82,6 +83,10 @@ install-app:
 install: all
 	install -d $(DESTDIR)$(PREFIX)/bin
 	install -m 0755 kai $(DESTDIR)$(PREFIX)/bin/kai
+	install -d $(DESTDIR)$(PREFIX)/share/kai/browser/icons
+	install -m 0644 integrations/browser/*.js integrations/browser/*.json \
+	  integrations/browser/popup.html $(DESTDIR)$(PREFIX)/share/kai/browser/
+	install -m 0644 integrations/browser/icons/*.png $(DESTDIR)$(PREFIX)/share/kai/browser/icons/
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/kai

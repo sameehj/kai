@@ -33,6 +33,16 @@ char *kai_normalize_path(const char *path, const char *cwd); /* absolute, no . /
 void kai_strlcpy(char *dst, const char *src, size_t n);
 const char *kai_exe_path(void);
 const char *kai_policy_file(void); /* $KAI_POLICY or <kai home>/policy */
+/* Browser extension (browser.c, native.c) */
+#define KAI_NATIVE_HOST "io.github.sameehj.kai"
+#define KAI_EXTENSION_ID "bfefkchkkleigcefbgligmkknhmdnhee"
+int kai_browser_install(const char *exe);
+int kai_browser_uninstall(void);
+int kai_browser_installed(int *detected);
+const char *kai_browser_ext_dir(void);
+int kai_browser_extension_loaded(void);
+int kai_native_host(const char *origin);
+
 char *kai_codex_home(void);       /* $CODEX_HOME or ~/.codex; caller frees */
 char *kai_codex_hooks_path(void); /* <codex home>/hooks.json; caller frees */
 

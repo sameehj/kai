@@ -363,12 +363,13 @@ int kai_cmd_install(int argc, char **argv) {
     if (strcmp(which, "claude") == 0) return install_claude(exe);
     if (strcmp(which, "cursor") == 0) return install_cursor(exe);
     if (strcmp(which, "codex") == 0) return install_codex(exe);
+    if (strcmp(which, "chrome") == 0 || strcmp(which, "browser") == 0) return kai_browser_install(exe);
     if (strcmp(which, "all") == 0 || !*which) {
         int a = install_claude(exe), b = install_cursor(exe);
         int c = codex_present() ? install_codex(exe) : 0;
         return (a || b || c) ? 1 : 0;
     }
-    fprintf(stderr, "kai install: expected claude | cursor | codex | all\n");
+    fprintf(stderr, "kai install: expected claude | cursor | codex | chrome | all\n");
     return 1;
 }
 
@@ -381,5 +382,7 @@ int kai_cmd_uninstall(int argc, char **argv) {
         rc |= uninstall_file("~/.cursor/hooks.json");
     if (strcmp(which, "codex") == 0 || strcmp(which, "all") == 0)
         rc |= uninstall_codex();
+    if (strcmp(which, "chrome") == 0 || strcmp(which, "browser") == 0 || strcmp(which, "all") == 0)
+        rc |= kai_browser_uninstall();
     return rc;
 }

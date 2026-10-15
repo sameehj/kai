@@ -278,6 +278,7 @@ struct AgentBadge: View {
         case "claude": return ("C", Color(hex: 0x2B2420), Color(hex: 0xF0A27A))
         case "cursor": return ("Cu", Theme.raised, .white)
         case "codex": return ("Cx", Color(hex: 0x1E2A26), Color(hex: 0x7FE0B8))
+        case "chrome": return ("Ch", Color(hex: 0x1E2638), Color(hex: 0x8AB4FF))
         default: return (String(agent.title.prefix(1)), Theme.raised, .white)
         }
     }
@@ -292,6 +293,11 @@ struct AgentCard: View {
     @EnvironmentObject var model: AppModel
     let agent: Agent
 
+    private func subtitle(_ info: KaiStatus.Agent) -> String {
+        if info.installed { return agent == .chrome ? "Checking chats" : "Hooks on" }
+        return info.detected ? "Not protected" : "Not found on this Mac"
+    }
+
     var body: some View {
         let info = model.agentInfo(agent)
         Card(padding: 10) {
@@ -299,9 +305,15 @@ struct AgentCard: View {
                 AgentBadge(agent: agent)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(agent.title).font(.system(size: 14, weight: .semibold))
-                    Text(info.installed ? "Hooks on" : (info.detected ? "Not protected" : "Not found on this Mac"))
-                        .font(.system(size: 12))
-                        .foregroundStyle(!info.installed && info.detected ? Theme.amber : Theme.muted)
+                    if agent == .chrome && model.chromeNeedsExtension {
+                        Button("Load the extension to finish") { model.openExtensionSetup() }
+                            .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.amber)
+                            .help("Shows the extension folder (path copied) and opens chrome://extensions: turn on Developer mode, click Load unpacked, paste the path.")
+                    } else {
+                        Text(subtitle(info))
+                            .font(.system(size: 12))
+                            .foregroundStyle(!info.installed && info.detected ? Theme.amber : Theme.muted)
+                    }
                 }
                 Spacer()
                 Toggle(agent.title, isOn: Binding(get: { info.installed },

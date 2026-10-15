@@ -54,6 +54,17 @@ has "rule is enforced" "$(printf 'host internal-db.corp ok' | "$KAI" redact)" 'R
 "$KAI" policy remove rule corp_host >/dev/null
 hasnt "remove rule" "$(cat "$KAI_HOME/policy")" 'corp_host'
 
+echo "== other agents =="
+"$KAI" policy add agent aider arg '*/bin/aider' >/dev/null
+"$KAI" policy add agent aider arg '*/bin/aider' >/dev/null
+[ "$(count "$(cat "$KAI_HOME/policy")" '^agent aider')" = 1 ] && pass "add agent is idempotent" || fail "agent duplicated"
+"$KAI" policy add agent aider team ABCDE12345 >/dev/null
+has "agents listed in json" "$("$KAI" policy show --json)" '"kind":	"team"'
+"$KAI" policy add agent aider sideways x >/dev/null 2>&1 && fail "bad agent kind accepted" || pass "bad agent kind rejected"
+"$KAI" policy add agent 'bad name' exe x >/dev/null 2>&1 && fail "bad agent name accepted" || pass "bad agent name rejected"
+"$KAI" policy remove agent aider >/dev/null
+hasnt "remove agent drops all its lines" "$(cat "$KAI_HOME/policy")" 'agent aider'
+
 echo "== install / uninstall =="
 mkdir -p "$HOME/.claude"
 printf '{"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}' > "$HOME/.claude/settings.json"

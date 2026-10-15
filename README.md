@@ -13,7 +13,7 @@
 
   [Get started](#-get-started) · [How it works](#-how-kai-works) · [Security boundaries](#-what-kai-doesnt-promise) · [Roadmap](#-roadmap)
 
-  **macOS + Linux** · **Claude Code + Cursor hooks** · **Codex hooks (preview)** · **Open source**
+  **macOS + Linux** · **Claude Code + Cursor hooks** · **Codex hooks (preview)** · **Chrome AI chats (preview)** · **Open source**
 </div>
 
 ---
@@ -32,6 +32,7 @@ Kai puts local rules around supported agent actions so you can use AI tools with
 | --- | --- | --- |
 | **Agent hooks** | Deny protected file reads and suspicious commands in Claude Code and Cursor; examine supported tool and prompt events | ✅ Working and tested |
 | **Codex hooks** | Same checks for OpenAI Codex CLI (shell commands, `apply_patch` edits, MCP arguments, prompts) | 🧪 Implemented, not yet tested with real Codex |
+| **Browser extension** | Check what you paste and send in ChatGPT, Claude.ai, Gemini and other AI chats (Chrome, Brave, Edge) | 🧪 Native host tested; not yet tried on live chat sites |
 | **Policy + scanner** | Redact detected credentials, replace company terms, or block confidential markers | ✅ Working and tested |
 | **Audit log** | Record decisions in a hash-chained log without storing detected secret values | ✅ Working and tested |
 | **macOS menu-bar app** | Show status, recent activity, protection switches, and policy controls | ✅ Running in development |
@@ -138,6 +139,40 @@ See [`policy/default.policy`](policy/default.policy) for the complete policy gra
 
 Kai records local decisions in a hash-chained audit log. This helps detect some unauthorized changes, but it is **not tamper-proof** against an attacker who controls the log and its verification state.
 
+## 💬 AI chats in your browser
+
+The Kai extension checks what you paste and send on ChatGPT, Claude.ai, Gemini, DeepSeek, Perplexity, Copilot, Mistral, Grok and Poe, using the same local policy as everything else.
+
+- **Pasting** text that contains a secret pastes a cleaned version and tells you what was removed.
+- **Sending** a message with something sensitive holds it and offers **Redact and send**, **Send anyway** or **Edit**. If your policy says *block* (for example a `CONFIDENTIAL` marker), only **Edit** is offered.
+- Messages with nothing sensitive send as usual. Every choice lands in the audit log; the text itself never does.
+
+The extension talks to `kai` on your Mac through the browser's native messaging, so nothing goes through a proxy and no certificates are involved.
+
+```sh
+kai install chrome     # registers Kai with Chrome, Brave, Edge and Chromium
+```
+
+Then load the extension once: open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked** and choose the folder the command prints. In the menu-bar app, the Chrome card's **Load the extension to finish** button does the same: it copies the folder path and opens the extensions page.
+
+**Current maturity:** the native host is covered by automated tests. The page integration has a local test page (`integrations/browser/kai-browser-test.html`) and has not yet been tried on the live chat sites, whose editors change often. A Chrome Web Store listing is planned.
+
+## 🧩 Other agents
+
+| How the agent works | What Kai uses | Examples |
+| --- | --- | --- |
+| Has a hook system | `kai install <agent>`: checks every file read, command, tool call and prompt | Claude Code, Cursor, Codex |
+| No hooks | The network wall recognizes it and applies the egress allowlist; the AI gateway cleans its requests if it supports a base URL | Aider, Continue, OpenCode, Goose |
+| Runs in the browser | The browser extension | ChatGPT, Claude.ai, Gemini |
+
+Teach Kai to recognize any other agent by its executable, an argument, or its Apple signing team:
+
+```sh
+kai policy add agent aider arg '*/bin/aider'
+kai policy add agent mytool team ABCDE12345
+kai agent-of <pid>            # check what Kai thinks a process is
+```
+
 ## 🌐 Optional AI gateway
 
 The local gateway can inspect outgoing model API requests from clients configured to use it. It listens on loopback and forwards to configured, fixed provider destinations.
@@ -188,7 +223,7 @@ Read [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) before using Kai for sensiti
 
 | Command | Purpose |
 | --- | --- |
-| `kai install [claude\|cursor\|codex\|all]` | Add supported agent hooks (`all` adds Codex only if `~/.codex` exists) |
+| `kai install [claude\|cursor\|codex\|chrome\|all]` | Add supported agent hooks, or register the browser extension (`all` adds Codex only if `~/.codex` exists) |
 | `kai uninstall [claude\|cursor\|codex\|all]` | Remove Kai's hook entries while preserving other hooks |
 | `kai scan [file…]` | Find configured secret/company patterns; stdin if no files |
 | `kai redact` | Apply text-cleaning policy from stdin to stdout |
@@ -199,6 +234,7 @@ Read [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) before using Kai for sensiti
 | `kai policy add\|remove protect\|allow <path>` | Edit protected or allowed paths |
 | `kai policy add term <action> <text>` | Add a company term rule |
 | `kai policy add egress_allow <host>` | Add an allowed destination and subdomains |
+| `kai policy add agent <name> exe\|arg\|team <pattern>` | Recognize another AI agent |
 | `kai gateway [--port N]` | Start the loopback AI gateway |
 | `kai agent-of <pid>` | Identify a recognized agent/descendant process |
 | `kai log [tail\|verify]` | Inspect or verify audit records |

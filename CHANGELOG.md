@@ -1,6 +1,15 @@
 # Changelog
 
 ## Unreleased
+- Browser extension (`integrations/browser`) for ChatGPT, Claude.ai, Gemini,
+  DeepSeek, Perplexity, Copilot, Mistral, Grok and Poe: cleans secrets on
+  paste and holds sensitive messages with Redact and send / Send anyway / Edit.
+  `kai install|uninstall chrome` registers a native-messaging host with
+  Chrome, Brave, Edge and Chromium; `kai status` reports whether the
+  extension is loaded. The extension ships in Kai.app and `make install`.
+- `kai policy add|remove agent <name> exe|arg|team <pattern>` to recognize
+  other AI agents; `kai policy show --json` lists them.
+- Menu-bar app: Chrome card with a "Load the extension to finish" helper.
 - Codex hooks: `kai install|uninstall codex` writes `$CODEX_HOME/hooks.json`
   (default `~/.codex/hooks.json`; `install all` includes Codex when `~/.codex`
   exists), and `kai hook codex` checks shell commands (string or argv array),

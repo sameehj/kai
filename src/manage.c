@@ -20,6 +20,7 @@
 #include "cJSON.h"
 #include "internal.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -92,6 +93,16 @@ int kai_cmd_status_json(void) {
         free(cfg);
     }
     free(codex);
+    {
+        int detected = 0;
+        int on = kai_browser_installed(&detected);
+        cJSON *b = cJSON_AddObjectToObject(o, "chrome");
+        cJSON_AddBoolToObject(b, "installed", on);
+        cJSON_AddBoolToObject(b, "detected", detected);
+        const char *ext = kai_browser_ext_dir();
+        cJSON_AddStringToObject(b, "config", ext ? ext : "");
+        cJSON_AddBoolToObject(b, "extension_loaded", kai_browser_extension_loaded());
+    }
 
     cJSON *au = cJSON_AddObjectToObject(o, "audit");
     cJSON_AddStringToObject(au, "path", kai_audit_path());
@@ -352,6 +363,7 @@ static int policy_show(int json) {
     cJSON *protect = cJSON_CreateArray(), *allow = cJSON_CreateArray();
     cJSON *terms = cJSON_CreateArray(), *rules = cJSON_CreateArray();
     cJSON *egress = cJSON_CreateArray();
+    cJSON *agents = cJSON_CreateArray();
     for (int i = 0; i < L.n; i++) {
         char dir[32];
         const char *arg;
@@ -397,6 +409,28 @@ static int policy_show(int json) {
             cJSON_AddStringToObject(r, "pattern", pat);
             cJSON_AddItemToArray(rules, r);
             free(pat);
+        } else if (strcmp(dir, "agent") == 0) {
+            /* agent <name> <exe|arg|team> <pattern> */
+            char name[32];
+            size_t nl = al < sizeof name - 1 ? al : sizeof name - 1;
+            memcpy(name, arg, nl);
+            name[nl] = '\0';
+            const char *s = arg + al;
+            while (*s == ' ' || *s == '\t') s++;
+            const char *ke = s;
+            while (*ke && *ke != ' ' && *ke != '\t') ke++;
+            char how[8];
+            size_t kl = (size_t)(ke - s) < sizeof how - 1 ? (size_t)(ke - s) : sizeof how - 1;
+            memcpy(how, s, kl);
+            how[kl] = '\0';
+            char *pat = trimmed(ke);
+            if (!pat || !*pat) { free(pat); continue; }
+            cJSON *a = cJSON_CreateObject();
+            cJSON_AddStringToObject(a, "name", name);
+            cJSON_AddStringToObject(a, "kind", how);
+            cJSON_AddStringToObject(a, "pattern", pat);
+            cJSON_AddItemToArray(agents, a);
+            free(pat);
         }
     }
     cJSON *sw = cJSON_AddObjectToObject(o, "switches");
@@ -406,6 +440,7 @@ static int policy_show(int json) {
     cJSON_AddItemToObject(o, "egress_allow", egress);
     cJSON_AddItemToObject(o, "terms", terms);
     cJSON_AddItemToObject(o, "rules", rules);
+    cJSON_AddItemToObject(o, "agents", agents);
     lines_free(&L);
     print_json(o);
     return 0;
@@ -588,6 +623,34 @@ static int policy_add(int argc, char **argv) {
         sb_addf(&b, "rule %s %s %s", name, act, pat);
         add_line(&L, "rule", sb_take(&b));
         free(act); free(pat);
+    } else if (strcmp(kind, "agent") == 0) {
+        /* agent <name> exe|arg|team <pattern>: teach Kai to recognize another
+         * AI agent (for the network wall and the activity log). */
+        if (argc < 4) { lines_free(&L); goto usage; }
+        const char *name = argv[1], *how = argv[2];
+        char *pat = join_args(argc - 3, argv + 3);
+        int name_ok = *name && strlen(name) < 32;
+        for (const char *c = name; *c; c++)
+            if (!(isalnum((unsigned char)*c) || *c == '-' || *c == '_')) name_ok = 0;
+        if (!name_ok || (strcmp(how, "exe") && strcmp(how, "arg") && strcmp(how, "team")) ||
+            !pat || !*pat || has_newline(pat) || strchr(pat, '#')) {
+            fprintf(stderr, "kai policy add agent: <name> exe|arg|team <pattern>\n"
+                            "  exe   executable path, globs allowed   e.g. */bin/aider\n"
+                            "  arg   any command-line argument        e.g. */opencode/*\n"
+                            "  team  Apple code-signing Team ID       e.g. ABCDE12345\n");
+            free(pat); lines_free(&L);
+            return 1;
+        }
+        sb_addf(&b, "agent %s %s %s", name, how, pat);
+        char *line = sb_take(&b);
+        for (int i = 0; i < L.n; i++)
+            if (strcmp(L.v[i], line) == 0) {
+                printf("agent %s: already present\n", name);
+                free(line); free(pat); lines_free(&L);
+                return 0;
+            }
+        add_line(&L, "agent", line);
+        free(pat);
     } else {
         lines_free(&L);
         goto usage;
@@ -599,7 +662,8 @@ static int policy_add(int argc, char **argv) {
 usage:
     fprintf(stderr, "usage: kai policy add protect|allow <path>\n"
                     "       kai policy add term <action> <text...>\n"
-                    "       kai policy add rule <name> <action> <regex...>\n");
+                    "       kai policy add rule <name> <action> <regex...>\n"
+                    "       kai policy add agent <name> exe|arg|team <pattern>\n");
     return 1;
 }
 
@@ -607,7 +671,7 @@ static int policy_remove(int argc, char **argv) {
     if (argc < 2) goto usage;
     const char *kind = argv[0];
     if (strcmp(kind, "protect") && strcmp(kind, "allow") && strcmp(kind, "term") &&
-        strcmp(kind, "rule") && strcmp(kind, "egress_allow"))
+        strcmp(kind, "rule") && strcmp(kind, "egress_allow") && strcmp(kind, "agent"))
         goto usage;
     lines_t L;
     if (lines_load(&L) != 0) { fprintf(stderr, "kai policy: cannot read policy\n"); return 1; }

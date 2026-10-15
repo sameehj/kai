@@ -124,6 +124,12 @@ targets:
           dest="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/kai"
           mkdir -p "$(dirname "$dest")"
           cp "$SRCROOT/../../kai" "$dest"
+          # The browser extension, so `kai install chrome` can point at it.
+          ext="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/browser"
+          rm -rf "$ext" && mkdir -p "$ext/icons"
+          cp "$SRCROOT/../../integrations/browser/"*.js "$SRCROOT/../../integrations/browser/"*.json \
+             "$SRCROOT/../../integrations/browser/popup.html" "$ext/"
+          cp "$SRCROOT/../../integrations/browser/icons/"*.png "$ext/icons/"
           if [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
             codesign --force --options runtime --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$dest"
           else

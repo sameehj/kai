@@ -14,6 +14,7 @@ struct KaiStatus: Decodable, Equatable {
         let installed: Bool
         let detected: Bool
         let config: String
+        var extensionLoaded: Bool? = nil // chrome only
     }
     struct Audit: Decodable, Equatable {
         let path: String
@@ -28,6 +29,7 @@ struct KaiStatus: Decodable, Equatable {
     let claude: Agent
     let cursor: Agent
     let codex: Agent?
+    let chrome: Agent?
     let audit: Audit
 }
 
