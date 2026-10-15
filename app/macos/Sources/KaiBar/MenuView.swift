@@ -33,6 +33,10 @@ struct MenuView: View {
         .padding(16)
         .frame(width: 360)
         .background(background)
+        // The menu-bar panel follows the system appearance and ignores
+        // preferredColorScheme: force dark and a white default text color.
+        .environment(\.colorScheme, .dark)
+        .foregroundStyle(Color.white)
         .preferredColorScheme(.dark)
         .task { await model.refresh(); wall.refresh() }
     }
@@ -75,11 +79,12 @@ struct MenuView: View {
     }
 
     private var stats: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .top, spacing: 8) {
             StatTile(value: model.blockedThisWeek, label: "blocked this week", accent: model.blockedThisWeek > 0)
             StatTile(value: model.cleanedThisWeek, label: "requests cleaned")
             StatTile(value: model.reachedHosts.count, label: "hosts noticed")
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var protection: some View {
@@ -258,8 +263,11 @@ struct StatTile: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(value)").font(Theme.display(22)).foregroundStyle(accent ? Theme.lime : .white)
                 Text(label).font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(2)
+                Spacer(minLength: 0)
             }
+            .frame(maxHeight: .infinity, alignment: .topLeading)
         }
+        .frame(maxHeight: .infinity)
     }
 }
 
@@ -356,9 +364,10 @@ struct NetworkCard: View {
 struct EventLine: View {
     let event: AuditEvent
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
             Circle().fill(event.isBlock ? Theme.coral : Theme.amber).frame(width: 8, height: 8)
-            Text(event.summary).font(.system(size: 13)).lineLimit(1).truncationMode(.middle)
+            Text(event.summary).font(.system(size: 13)).foregroundStyle(Theme.soft)
+                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
             if let d = event.date { Text(ago(d)).font(.system(size: 12)).foregroundStyle(Theme.muted) }
         }

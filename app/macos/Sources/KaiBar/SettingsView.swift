@@ -52,6 +52,8 @@ struct SettingsView: View {
             )
         }
         .frame(width: 980, height: 640)
+        .environment(\.colorScheme, .dark)
+        .foregroundStyle(Color.white)
         .preferredColorScheme(.dark)
         .task { await model.refresh() }
     }
