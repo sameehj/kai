@@ -68,6 +68,8 @@ void kai_shell_walk(const char *cmd, kai_shell_cmd_fn on_cmd, kai_shell_text_fn 
 
 /* validator for "password = …"-style matches (scan.c) */
 int kai_plausible_secret_value(const char *match, size_t len);
+/* validator for explicit "password: …" fields: any non-placeholder value */
+int kai_plausible_password_value(const char *match, size_t len);
 
 #define KAI_MAX_LIST 256
 

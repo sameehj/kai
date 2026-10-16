@@ -127,10 +127,12 @@ static void test_generic_secret_precision(void) {
     printf("generic secret rule: real values vs prose and placeholders\n");
     kai_policy *p = kai_policy_from_string(kai_default_policy(), NULL, 0);
     const char *real[] = {"password=hunter2Qx!9", "api_key: 8f3a9c1d2e4b6a7f90",
-                          "secret = \"s3cr3t-Value#2024\""};
+                          "secret = \"s3cr3t-Value#2024\"", "password: 12345678", "pw: 12345678",
+                          "my pwd=abc123 thanks", "\"passcode\": \"778899\""};
     const char *noise[] = {"the log never stores the secret itself).", "password: <your password here>",
                            "api_key=EXAMPLE_KEY_123", "access_token=aaaaaaaaaaaa",
-                           "set password = changeme123 for local dev"};
+                           "set password = changeme123 for local dev", "the password: required",
+                           "reset your password: see the docs", "password=${DB_PASSWORD}"};
     for (size_t i = 0; i < sizeof real / sizeof real[0]; i++) {
         kai_report rep;
         free(kai_scan_text(p, real[i], &rep));

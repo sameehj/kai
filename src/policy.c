@@ -65,8 +65,12 @@ static const struct {
     {"jwt", "eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}"},
     {"db_url_with_password",
      "(postgres|postgresql|mysql|mongodb)(\\+srv)?://[^ :@/]+:[^ :@/]+@"},
+    /* "password: …" / "pw=…": an explicit password field, any real value */
+    {"password_assign",
+     "(password|passwd|passcode|pwd|pw)[\"']?[ ]*[:=][ \"']*[^ \"']{6,}"},
+    /* vaguer key names that also appear in prose: value must look random */
     {"generic_secret_assign",
-     "(password|passwd|secret|api[_-]?key|access[_-]?token)[\"'= :]+[^ \"']{8,}"},
+     "(secret|api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)[\"'= :]+[^ \"']{8,}"},
 };
 
 /* Known agents. Always active; policy `agent` lines add more.
@@ -391,6 +395,8 @@ static kai_policy *parse(const char *text, const char *source, char *err,
             /* the generic pattern only matters when the value looks like a secret */
             if (strcmp(BUILTIN_SECRETS[i].name, "generic_secret_assign") == 0)
                 p->rules[p->nrules - 1].validate = kai_plausible_secret_value;
+            if (strcmp(BUILTIN_SECRETS[i].name, "password_assign") == 0)
+                p->rules[p->nrules - 1].validate = kai_plausible_password_value;
         }
     }
     return p;

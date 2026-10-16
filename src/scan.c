@@ -154,6 +154,30 @@ int kai_plausible_secret_value(const char *match, size_t len) {
     return (h >= 3.0 && kinds >= 2) || kinds >= 3;
 }
 
+/* A value given for an explicit password field is a credential however weak
+ * it is (all digits included); only placeholders and plain words such as
+ * "required" or "unknown" are let through. Examples: tests/run_tests.c. */
+int kai_plausible_password_value(const char *match, size_t len) {
+    size_t i = 0;
+    while (i < len && isalpha((unsigned char)match[i])) i++;
+    while (i < len && strchr("\"'= :", match[i])) i++;
+    const char *v = match + i;
+    size_t n = len - i;
+    while (n && strchr(".,;:!?)]}*_`", v[n - 1])) n--;
+    if (n < 6) return 0;
+    char low[128];
+    size_t ln = n < sizeof low - 1 ? n : sizeof low - 1;
+    for (size_t k = 0; k < ln; k++) low[k] = (char)tolower((unsigned char)v[k]);
+    low[ln] = '\0';
+    static const char *const PLACEHOLDERS[] = {"<", ">", "${", "{{", "%s", "xxxx", "****", "....",
+                                               "example", "changeme", "placeholder", "redacted", "your"};
+    for (size_t k = 0; k < sizeof PLACEHOLDERS / sizeof PLACEHOLDERS[0]; k++)
+        if (strstr(low, PLACEHOLDERS[k])) return 0;
+    int word = 1;
+    for (size_t k = 0; k < n && word; k++) word = islower((unsigned char)v[k]) || v[k] == '-';
+    return !word;
+}
+
 /* ---- path matching ---- */
 
 /* fnmatch-like, '*' matches within a path segment only (no '/'). */
