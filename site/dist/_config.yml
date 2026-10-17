@@ -1,0 +1,9 @@
+title: Kai
+description: Local control for AI coding agents.
+url: https://sameehj.github.io
+baseurl: /kai
+timezone: Asia/Jerusalem
+markdown: kramdown
+permalink: /blog/:title/
+exclude:
+  - README.md

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101114">
+  <meta name="description" content="{{ page.description | default: site.description | escape }}">
+  <title>{% if page.title %}{{ page.title | escape }} · {% endif %}Kai</title>
+  <link rel="icon" href="{{ '/assets/kai-logo.png' | relative_url }}">
+  <link rel="stylesheet" href="{{ '/assets/style.css' | relative_url }}">
+</head>
+<body>
+  <header class="site-header">
+    <nav class="nav wrap" aria-label="Main navigation">
+      <a class="brand" href="{{ '/' | relative_url }}"><img src="{{ '/assets/kai-logo.png' | relative_url }}" alt=""><span>Kai</span></a>
+      <div class="nav-links"><a class="features-link" href="{{ '/#features' | relative_url }}">Features</a><a href="{{ '/blog/' | relative_url }}"{% if page.url contains '/blog/' %} class="active"{% endif %}>Blog</a><a href="https://github.com/sameehj/kai">GitHub ↗</a></div>
+      <a class="nav-cta" href="https://github.com/sameehj/kai#-get-started">Get started ↗</a>
+    </nav>
+  </header>
+  <main>{{ content }}</main>
+  <footer class="footer"><div class="wrap footer-row"><span>© {{ 'now' | date: '%Y' }} Kai. Built for clearer control of AI agents.</span><div class="footer-links"><a href="{{ '/blog/' | relative_url }}">Blog</a><a href="https://github.com/sameehj/kai">Source</a><a href="https://github.com/sameehj/kai/blob/master/docs/THREAT_MODEL.md">Security boundaries</a></div></div></footer>
+</body>
+</html>

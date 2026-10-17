@@ -1,0 +1,56 @@
+---
+layout: default
+description: Kai helps you see and control what AI coding agents can access and share, locally on your machine.
+---
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <div class="eyebrow">Local security for AI coding agents</div>
+      <h1>Give your agent room to work. <em>Keep your secrets yours.</em></h1>
+      <p class="lead">Kai adds local checks around the tools AI agents use to read files, run commands and connect to the internet.</p>
+      <p class="sublead">Set the boundaries, see the decisions, and keep working with Claude Code, Cursor or Codex.</p>
+      <div class="actions"><a class="btn btn-primary" href="https://github.com/sameehj/kai#-get-started">Get Kai on GitHub ↗</a><a class="btn btn-secondary" href="{{ '/blog/' | relative_url }}">Read the blog →</a></div>
+      <div class="meta">Open source · Local first · macOS and Linux CLI</div>
+    </div>
+    <div class="hero-art" aria-hidden="true"><div class="orb"></div><img class="hero-shield" src="{{ '/assets/kai-logo.png' | relative_url }}" alt=""><div class="floating-label label-top"><span class="dot"></span>Agent action<strong>Read private config</strong></div><div class="floating-label label-bottom"><span class="dot"></span>Kai decision<strong>Blocked · protected file</strong></div></div>
+  </div>
+</section>
+<section class="section" id="features">
+  <div class="wrap">
+    <div class="section-head"><div><div class="eyebrow">Three useful layers</div><h2>Know what your agent tried.</h2></div><p class="section-intro">Kai is designed to make protective decisions visible and explainable, from tool calls to network destinations.</p></div>
+    <div class="three">
+      <div class="card"><div class="card-number">01 / FILES</div><h3>Guard sensitive paths</h3><p>Agent hooks check supported file reads, edits and shell commands against your protected paths.</p></div>
+      <div class="card"><div class="card-number">02 / CONTENT</div><h3>Catch sensitive text</h3><p>Local rules can detect credentials or company terms and block, redact, replace or warn in supported paths.</p></div>
+      <div class="card"><div class="card-number">03 / NETWORK</div><h3>See unfamiliar hosts</h3><p>On macOS, the network wall notices agent connections outside your allowlist and can apply a destination policy.</p></div>
+    </div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap example">
+    <div><div class="eyebrow">A decision you can understand</div><h2>“Why was that blocked?”</h2><p>Kai records the rule and reason for a decision. Current development builds can also keep a redacted excerpt of the attempted action so false positives are easier to spot.</p><a class="btn btn-secondary" href="{{ '/blog/reading-an-agent-block/' | relative_url }}">See how activity works →</a></div>
+    <div class="terminal" role="img" aria-label="Illustrative Kai decision: an agent attempted to read a protected file and Kai blocked it"><div class="term-top"><i></i><i></i><i></i></div><pre><span class="term-muted"># Illustrative example</span>
+<span class="term-lime">Agent</span>     Claude Code
+<span class="term-lime">Action</span>    Read private config
+<span class="term-lime">Policy</span>    Protected path
+<span class="term-red">Verdict</span>   Blocked by Kai
+<span class="term-muted">Reason    File is protected</span></pre></div>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="section-head"><div><div class="eyebrow">Current state</div><h2>What works today.</h2></div><p class="section-intro">The project documents its limits alongside its features. A hook decision is useful, but it is not an operating-system storage wall.</p></div>
+    <div class="feature-grid">
+      <div class="feature"><div class="feature-icon">✓</div><div><h3>Agent hooks and policy</h3><p>Claude Code and Cursor checks are working and tested. Codex integration is implemented as a preview.</p><span class="status">Working / preview</span></div></div>
+      <div class="feature"><div class="feature-icon">◎</div><div><h3>Activity and audit</h3><p>Local decisions are recorded with reasons. The menu bar app shows recent activity and policy controls.</p><span class="status">Working</span></div></div>
+      <div class="feature"><div class="feature-icon">↗</div><div><h3>Network wall</h3><p>Log mode has been verified on macOS. Block mode exists but still needs full validation.</p><span class="status preview">Validation in progress</span></div></div>
+      <div class="feature"><div class="feature-icon">◇</div><div><h3>Storage wall</h3><p>Operating-system file enforcement through Apple Endpoint Security is planned and requires an entitlement.</p><span class="status planned">Planned</span></div></div>
+    </div>
+    <p class="disclosure" style="margin-top:24px"><strong>Security boundaries matter.</strong> Hook checks only cover actions an agent exposes to its hooks. Scripts that build paths at runtime can still bypass them. Read the <a href="https://github.com/sameehj/kai/blob/master/docs/ESCAPES.md" style="color:var(--lime);text-decoration:underline">escape suite</a> for measured results.</p>
+  </div>
+</section>
+<section class="section">
+  <div class="wrap">
+    <div class="section-head"><div><div class="eyebrow">From the blog</div><h2>Notes from building Kai.</h2></div><a class="btn btn-secondary" href="{{ '/blog/' | relative_url }}">All posts →</a></div>
+    <div class="blog-list">{% for post in site.posts limit:3 %}<a class="post-card" href="{{ post.url | relative_url }}"><span class="post-kind">{{ post.category | default: 'Field notes' }}</span><h3>{{ post.title | escape }}</h3><p>{{ post.excerpt | strip_html | truncatewords: 22 }}</p><span class="read">Read article →</span></a>{% endfor %}</div>
+  </div>
+</section>

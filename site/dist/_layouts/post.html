@@ -1,0 +1,12 @@
+---
+layout: default
+---
+<article class="article wrap">
+  <a class="back" href="{{ '/blog/' | relative_url }}">← All posts</a>
+  <div class="eyebrow">{{ page.category | default: 'Field notes' }}</div>
+  <h1>{{ page.title | escape }}</h1>
+  <div class="article-meta">{{ page.date | date: '%B %-d, %Y' }} · Kai project</div>
+  {{ content }}
+  <hr class="divider">
+  <p class="source-note">Kai is under active development. For current capabilities and limits, check the <a href="https://github.com/sameehj/kai">repository</a>.</p>
+</article>
