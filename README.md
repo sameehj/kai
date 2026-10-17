@@ -5,26 +5,28 @@
 
   # Kai
 
-  ### Protect what matters. Build with AI.
+  ### Your AI agent needs access to your work. Not your secrets.
 
-  **Your agents can move fast. Your secrets shouldn't move with them.**
-
-  Local protection for AI coding agents: safeguard sensitive files, catch secrets before they're shared, and control risky actions.
+  Kai is an open-source, local-first tool that helps you control what AI coding agents can access and share.
 
   [Get started](#-get-started) · [How it works](#-how-kai-works) · [Security boundaries](#-what-kai-doesnt-promise) · [Roadmap](#-roadmap)
 
-  **macOS + Linux** · **Claude Code + Cursor hooks** · **Codex hooks (preview)** · **Chrome AI chats (preview)** · **Open source**
+  **macOS + Linux** · **Claude Code + Cursor** · **Codex (preview)** · **Open source**
 </div>
 
 ---
 
 ## 🛡️ Why Kai?
 
-AI coding agents can read files, execute commands, and call external services using your privileges. One malicious instruction or unintended action could expose credentials, confidential code, or company information.
+AI coding agents can read files, run commands and connect to the internet using your permissions. Think of a contractor working in your house: you want them fixing the kitchen, not opening your safe. Kai helps you lock the safe without stopping the work.
 
-Kai puts local rules around supported agent actions so you can use AI tools with more visibility and control — without changing your development workflow.
+- 🔒 **Protect sensitive files.** Block agent actions that try to read SSH keys, `.env` files and other protected paths, through the agent's own tools and the shell commands it runs.
+- ✋ **Stop recognized risky actions.** Apply local rules to supported file reads, shell commands, prompts and tool calls: redact secrets, block uploads, flag likely prompt injection.
+- 👀 **Spot unfamiliar connections (macOS).** See agent connections to destinations outside your trusted list.
 
-**You decide what matters. Kai helps protect it.**
+Kai runs locally, never stores detected secret values in its audit log, and needs no Kai account.
+
+**Security status:** agent hooks and local scanning are tested. Network monitoring is verified in Log mode; network blocking is not yet tested. A script the agent writes can still reach files directly; closing that gap is the planned storage wall. The [escape suite](docs/ESCAPES.md) shows exactly what is stopped today and what isn't, and the rest is in [what Kai doesn't promise](#-what-kai-doesnt-promise).
 
 ## ✨ What Kai can do today
 
@@ -248,10 +250,11 @@ Read [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) before using Kai for sensiti
 
 ## 🗺️ Roadmap
 
-- **Now — v0.1:** Claude Code/Cursor hooks, local policy and scanner, hash-chained audit, CLI; development menu-bar app; macOS network wall (Log mode verified).
-- **Validation next:** Test network-wall Block mode, add DNS correlation so non-web traffic can be attributed to a host, and exercise the gateway with real agents.
-- **Then:** Build and validate an optional decrypting proxy and credential handling where technically and legally appropriate; pursue Endpoint Security approval and stronger file restrictions.
-- **Later:** Linux OS-level enforcement (eBPF/Landlock), Windows support, and optional team policy/fleet management.
+- **Now — v0.1:** Claude Code/Cursor hooks, Codex hooks (preview), local policy and scanner, hash-chained audit, CLI; development menu-bar app; macOS network wall (Log mode verified); browser extension and gateway (experimental).
+- **Done:** A public [escape suite](docs/ESCAPES.md) (scripts, symlinks, detached processes, `osascript`, ssh-agent, Keychain, exfiltration, switching Kai off) with reproducible results, re-checked by `make test`.
+- **Next:** Verify network-wall Block mode, including connections with no readable hostname; a signed, notarized build that installs on any Mac.
+- **Then:** The storage wall (macOS Endpoint Security), with agent attribution that survives detached processes and never blocks commands you type yourself; scoped credentials so agents can do approved work without holding reusable secrets.
+- **Later:** Team policy and fleet management, Linux OS-level enforcement (eBPF/Landlock), Windows support. A decrypting proxy is on hold.
 
 Roadmap items are plans, not delivered security guarantees.
 

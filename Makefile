@@ -54,6 +54,11 @@ test: kai
 	sh tests/gateway/run_gateway_tests.sh ./kai
 	sh tests/browser/run_native_tests.sh ./kai
 	python3 -I tests/corpus/run_corpus.py ./kai
+	python3 -I tests/escape/run_escape.py ./kai
+
+# Escape suite: what agents can still get past. Also regenerates docs/ESCAPES.md.
+escape: kai
+	python3 -I tests/escape/run_escape.py ./kai --markdown docs/ESCAPES.md
 
 # macOS app (menu bar + network system extension), via XcodeGen + Xcode.
 #   make app                  ad-hoc signed; menu bar works, the network wall
@@ -101,4 +106,4 @@ clean:
 	rm -f $(OBJ) kai libkai.a tests/run_tests
 	rm -rf build app/macos/Kai.xcodeproj
 
-.PHONY: all asan fuzz test app app-dev try-app install-app install uninstall clean
+.PHONY: all asan fuzz test escape app app-dev try-app install-app install uninstall clean

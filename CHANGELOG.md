@@ -1,6 +1,13 @@
 # Changelog
 
 ## Unreleased
+- Escape suite (`tests/escape`, `make escape`): 33 ways an agent might reach
+  a secret, send data out or switch Kai off, with what the hooks do today
+  (14 stopped) and which layer is meant to close the rest. Runs in
+  `make test`; results published in `docs/ESCAPES.md`.
+- README leads with what Kai does for you and its current security status;
+  roadmap reordered (escape suite, Block mode, notarized build, then the
+  storage wall); the decrypting proxy is on hold.
 - Review fixes:
   - Agents can't disable Kai by editing their own hook settings: those files
     (and project-level copies) and `~/.kai` are always protected. Claude Code

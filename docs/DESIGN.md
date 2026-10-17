@@ -16,7 +16,7 @@
 
 **Not in the MVP** (honest limits):
 
-- **Kernel-level walls** (Endpoint Security, Network Extension) are v0.2, after Apple approves the entitlement.
+- **Kernel-level walls:** the Network Extension wall runs in Log mode (Block mode is v0.2); the Endpoint Security storage wall is v0.3, after Apple approves the entitlement. See [`ROADMAP.md`](ROADMAP.md).
 - **GUI apps Kai can't hook** (ChatGPT desktop, Claude Desktop chat) aren't covered yet.
 - **Judge models** (ML classifiers for prompt injection) come in v0.3. The MVP uses pattern rules only.
 
