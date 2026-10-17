@@ -51,6 +51,6 @@ description: Kai helps you see and control what AI coding agents can access and 
 <section class="section">
   <div class="wrap">
     <div class="section-head"><div><div class="eyebrow">From the blog</div><h2>Notes from building Kai.</h2></div><a class="btn btn-secondary" href="{{ '/blog/' | relative_url }}">All posts →</a></div>
-    <div class="blog-list">{% for post in site.posts limit:3 %}<a class="post-card" href="{{ post.url | relative_url }}"><span class="post-kind">{{ post.category | default: 'Field notes' }}</span><h3>{{ post.title | escape }}</h3><p>{{ post.excerpt | strip_html | truncatewords: 22 }}</p><span class="read">Read article →</span></a>{% endfor %}</div>
+    <div class="blog-list">{% for post in site.posts limit:3 %}<a class="post-card" href="{{ post.url | relative_url }}">{% if post.image %}<img class="post-thumb" src="{{ post.image | relative_url }}" alt="" loading="lazy">{% endif %}<span class="post-kind">{{ post.category | default: 'Field notes' }}</span><h3>{{ post.title | escape }}</h3><p>{{ post.excerpt | strip_html | truncatewords: 22 }}</p><span class="read">Read article →</span></a>{% endfor %}</div>
   </div>
 </section>
