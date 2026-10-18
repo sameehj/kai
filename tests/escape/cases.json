@@ -940,10 +940,6 @@
       "where": "app/macos/Network/FilterDataProvider.swift (`decide`, `isAllowed`)"
     },
     {
-      "what": "Connections on ports other than 80 and 443 that carry no hostname (a raw socket to an IP, ssh, a database) are logged but never dropped by the installed extension. Fixed in the source: Block mode now drops them unless `egress_allow` lists the address or range (not yet installed or measured).",
-      "where": "app/macos/Network/FilterDataProvider.swift (`handleNewFlow`); src/net.c (`kai_egress_endpoint_allowed`)"
-    },
-    {
       "what": "DNS (port 53) is always allowed, so data hidden in DNS lookups leaves the machine.",
       "where": "app/macos/Network/FilterDataProvider.swift (`handleNewFlow`, port 53)"
     },

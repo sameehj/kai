@@ -159,11 +159,11 @@ The agent can't change Kai's settings or hook files with its tools or with comma
 
 ## Network wall (live run)
 
-Run on 2026-10-17T19:29:06Z, macOS 14.3.1 (x86_64), with `egress block`, from inside Claude Code (the wall only filters connections from AI agents). Re-run with `python3 tests/network/run_network_check.py` from your agent's terminal tool, then `make validation`.
+Run on 2026-10-18T10:07:59Z, macOS 14.3.1 (x86_64), with `egress block`, from inside Claude Code (the wall only filters connections from AI agents). Re-run with `python3 tests/network/run_network_check.py` from your agent's terminal tool, then `make validation`.
 
 | Attempt | Result | In Kai's log |
 |---|---|---|
-| Raw TCP to an IP on another port (no hostname) | ❌ got through | yes |
+| Raw TCP to an IP on another port (no hostname; 192.0.2.1:22) | ✅ blocked | yes |
 | HTTPS straight to an IP address, no hostname | ✅ blocked | yes |
 | HTTPS to a host that isn't allowed (example.com) | ✅ blocked | yes |
 | Plain HTTP on port 80 | ✅ blocked | yes |
@@ -186,7 +186,6 @@ This is one machine on one day, not a test that runs in CI. Things learned getti
 | Finding | Where |
 |---|---|
 | If the network wall can't read the policy, it lets every connection through. The hooks do the opposite and refuse. | app/macos/Network/FilterDataProvider.swift (`decide`, `isAllowed`) |
-| Connections on ports other than 80 and 443 that carry no hostname (a raw socket to an IP, ssh, a database) are logged but never dropped by the installed extension. Fixed in the source: Block mode now drops them unless `egress_allow` lists the address or range (not yet installed or measured). | app/macos/Network/FilterDataProvider.swift (`handleNewFlow`); src/net.c (`kai_egress_endpoint_allowed`) |
 | DNS (port 53) is always allowed, so data hidden in DNS lookups leaves the machine. | app/macos/Network/FilterDataProvider.swift (`handleNewFlow`, port 53) |
 | A connection counts as the agent's only while the agent is one of its parent processes. A process handed to launchd, or one whose parent shell has exited, isn't filtered. | `kai_process_agent` (src/proc.c), called per connection |
 | The network wall writes one record per agent, host and decision every 10 minutes. Repeat attempts inside that window are blocked but leave no record. | app/macos/Network/FilterDataProvider.swift (`auditLocked`) |

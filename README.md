@@ -26,7 +26,7 @@ AI coding agents can read files, run commands and connect to the internet using 
 
 Kai runs locally, never stores detected secret values in its audit log (excerpts are redacted first), and needs no Kai account.
 
-**Security status:** agent hooks and local scanning are tested. Network blocking works for an agent's own web connections to unknown hosts (live run, macOS 14), but DNS lookups, raw connections to an IP on other ports, and processes that leave the agent's process tree get through. A script the agent writes can still reach files directly; closing that gap is the planned storage wall. [Security validation](docs/SECURITY-VALIDATION.md) gives a measured verdict for each risk, the [escape suite](docs/ESCAPES.md) lists every attempt, and the rest is in [what Kai doesn't promise](#-what-kai-doesnt-promise).
+**Security status:** agent hooks and local scanning are tested. Network blocking works for an agent's own connections to unknown hosts, including raw connections to an IP (live run, macOS 14), but DNS lookups and processes that leave the agent's process tree get through. A script the agent writes can still reach files directly; closing that gap is the planned storage wall. [Security validation](docs/SECURITY-VALIDATION.md) gives a measured verdict for each risk, the [escape suite](docs/ESCAPES.md) lists every attempt, and the rest is in [what Kai doesn't promise](#-what-kai-doesnt-promise).
 
 ## ✨ What Kai can do today
 
@@ -211,7 +211,7 @@ The **Network wall** is a signed Network Extension that checks connections made 
 **Verified so far (macOS 14, Block mode):** Claude Code's connections to hosts that aren't allowed were dropped and logged, over HTTPS, plain HTTP, another port named by hostname, HTTPS straight to an IP, a Python POST, and a backgrounded child; `github.com` (allowed) went through. `python3 tests/network/run_network_check.py` re-runs this from inside your agent; results are in [security validation](docs/SECURITY-VALIDATION.md#network-wall-live-run).
 
 - **Destinations are matched by hostname** for web traffic on ports 80 and 443 (TLS server name or HTTP `Host`), and by the flow's hostname on other ports. Allow addresses too: `egress_allow 10.0.0.0/8`, `egress_allow 203.0.113.5:22`, `egress_allow db.example.com:5432`; your own Mac (loopback) is always allowed.
-- **Connections with no hostname** on other ports (a raw socket to an IP, SSH to an IP, a database) are only logged by the extension installed so far. The current source blocks them in Block mode unless an address entry allows them; that build isn't installed or measured yet.
+- **Connections with no hostname** on other ports (a raw socket to an IP, SSH to an IP, a database) are dropped in Block mode unless an address entry allows them, and logged in Log mode (verified live on macOS 14).
 - **Gaps in Block mode today:** DNS lookups always go out; a process handed to `launchd`, or one whose parent shell has exited, is no longer treated as the agent's and isn't filtered; if the wall can't read the policy it allows everything. Don't rely on Block mode as complete egress containment yet.
 - **Turning it on** takes one approval in System Settings → Privacy & Security, plus the "filter network content" prompt.
 
@@ -233,7 +233,7 @@ Kai is a **layer of defense**, not a guarantee against data leakage or malicious
 - The gateway cannot inspect requests that never route through it, nor traffic encrypted end-to-end through an unknown route.
 - Secret and prompt-injection detectors can miss new patterns or produce false positives. Prompt-injection checks weigh evidence (phrasing, whether the text addresses the agent, hidden text) and only **warn**, with a confidence level and a redacted excerpt; they never block, and a warning doesn't mean an attack happened. On Kai's test corpus (`tests/corpus`) they catch 7/7 attack samples with 0/13 false alarms, but that corpus is small and written by us.
 - **If Kai's program is missing or crashes, agent actions are blocked**, with a message saying why: Kai installs Claude Code, Codex and Cursor hooks fail-closed. Installs from before this change need `kai install` again (the app re-applies setup after an update). To remove Kai, run `kai uninstall all` before deleting it. A broken policy file makes the hooks refuse; the gateway refuses when it can't check; the browser extension asks before sending (configurable in its popup).
-- The network wall's Block mode stops an agent's web connections to unknown hosts, but not DNS, not connections with no hostname on ports other than 80/443, and not processes that have left the agent's process tree. An allowlist cannot stop data sent *to* an allowed host.
+- The network wall's Block mode stops an agent's connections to unknown hosts and addresses, but not DNS and not processes that have left the agent's process tree. An allowlist cannot stop data sent *to* an allowed host.
 - Host-local log hash chaining does not defend against a fully compromised host.
 
 Read [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) before using Kai for sensitive or regulated workflows.
@@ -266,7 +266,7 @@ Read [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) before using Kai for sensiti
 
 - **Now — v0.1:** Claude Code/Cursor hooks, Codex hooks (preview), local policy and scanner, hash-chained audit, CLI; development menu-bar app; macOS network wall (Log mode verified); browser extension and gateway (experimental).
 - **Done:** A public [escape suite](docs/ESCAPES.md) (scripts, symlinks, detached processes, `osascript`, ssh-agent, Keychain, exfiltration, destroying work, databases, MCP, planted README instructions, switching Kai off), each local attempt also replayed for real without Kai, re-checked by `make test`; [security validation](docs/SECURITY-VALIDATION.md) with a verdict per risk; a first live Block-mode run; fail-closed hooks; agents can't make Terminal run commands for them.
-- **Next:** Close the gaps the validation found: DNS and no-hostname connections (address allowlist done in source, to be measured), processes that leave the agent's tree, a destructive-action rule; then a signed, notarized build that installs on any Mac.
+- **Next:** Close the gaps the validation found: DNS, processes that leave the agent's tree, a destructive-action rule; then a signed, notarized build that installs on any Mac.
 - **Then:** The storage wall (macOS Endpoint Security), with agent attribution that survives detached processes and never blocks commands you type yourself; scoped credentials so agents can do approved work without holding reusable secrets.
 - **Later:** Team policy and fleet management, Linux OS-level enforcement (eBPF/Landlock), Windows support. A decrypting proxy is on hold.
 

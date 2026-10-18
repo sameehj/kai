@@ -50,15 +50,16 @@ def python_post():
 
 
 def raw_socket(ip, port):
-    """Send bytes over plain TCP to an IP: no hostname anywhere. On ports other
-    than 80/443 the wall decides when the connection opens, so a connection
-    that opens and takes the bytes has let them out (the server needn't answer)."""
-    if not ip:
-        return False
+    """Plain TCP to an IP: no hostname anywhere. On ports other than 80/443 the
+    wall decides when the connection opens. The target is 192.0.2.1 (TEST-NET,
+    reserved for documentation): nothing answers there and no name resolves
+    to it, so macOS can't attach a host name. A dropped connection fails at
+    once; one the wall lets out just times out (its packets did leave)."""
     try:
-        with socket.create_connection((ip, port), timeout=8) as c:
-            c.sendall(b"KAI-FAKE-NOTES\r\n\r\n")
+        with socket.create_connection((ip, port), timeout=4):
             return True
+    except socket.timeout:
+        return True
     except OSError:
         return False
 
@@ -67,21 +68,6 @@ def dns():
     r = subprocess.run(["dig", "+short", "+time=3", "+tries=1", "example.com", "@1.1.1.1", "A"],
                        capture_output=True, text=True)
     return r.returncode == 0 and bool(r.stdout.strip())
-
-
-def ip_of(host):
-    """Look the address up with dig against a public resolver, not the system
-    resolver: macOS attaches a recently resolved name to a connection to its
-    address, and these tests need connections that truly carry no name."""
-    r = subprocess.run(["dig", "+short", "+time=3", "+tries=1", host, "@1.1.1.1", "A"],
-                       capture_output=True, text=True)
-    for line in r.stdout.split():
-        try:
-            socket.inet_aton(line)
-            return line
-        except OSError:
-            continue
-    return None
 
 
 def nohup_child(scratch, host, orphan):
@@ -135,11 +121,10 @@ def main():
     start = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     window = datetime.fromtimestamp(now.timestamp() - 600, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     ip = "1.0.0.1"  # Cloudflare's resolver also serves HTTPS; never looked up by name here
-    pq_ip = ip_of("portquiz.net")
-    # The no-name tests go first, before anything looks portquiz.net up.
+    # The no-name tests go first.
     tests = [
-        ("raw-ip-port", "Raw TCP to an IP on another port (no hostname)", f"{pq_ip}:8080" if pq_ip else "?",
-         lambda: raw_socket(pq_ip, 8080), "blocked"),
+        ("raw-ip-port", "Raw TCP to an IP on another port (no hostname; 192.0.2.1:22)", "192.0.2.1:22",
+         lambda: raw_socket("192.0.2.1", 22), "blocked"),
         ("https-ip", "HTTPS straight to an IP address, no hostname", ip or "?",
          lambda: curl("-k", f"https://{ip}/"), "blocked"),
         ("https-unknown", "HTTPS to a host that isn't allowed (example.com)", "example.com",
