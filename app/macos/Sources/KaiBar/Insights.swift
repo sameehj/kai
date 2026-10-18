@@ -64,12 +64,9 @@ extension AppModel {
         return events.first(where: \.isBlock)
     }
 
-    /// Allow a host the wall noticed: an IP:port can't be allowed by name.
+    /// Allow a destination the wall noticed: a host name, or for a connection
+    /// with no name the exact address and port (e.g. 203.0.113.5:22).
     func allowHost(_ host: String) {
-        guard !host.contains(":"), !host.hasPrefix("[") else {
-            errorMessage = "Only host names can be allowed; \(host) has no name yet."
-            return
-        }
         add("egress_allow", host)
     }
 }

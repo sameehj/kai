@@ -3,7 +3,7 @@
 | Phase | What ships | Needs Apple? |
 |---|---|---|
 | **v0.1 (now)** | Hooks for Claude Code & Cursor, Codex hooks (preview); policy engine; secret/company-data scanner (redact/replace/block); upload & prompt-injection detection; hash-chained audit log; `install`/`uninstall`/`scan`/`redact`/`doctor`/`log`. macOS + Linux. macOS network wall in Log mode (verified). Browser extension and gateway (experimental). Escape suite ([`ESCAPES.md`](ESCAPES.md)). | Network wall: paid developer account |
-| **v0.2** | Network wall Block mode verified, including flows with no readable hostname and what happens when the extension fails. Signed, notarized Kai.app that installs on any Mac. | Developer ID + notarization |
+| **v0.2** | Close the gaps [security validation](SECURITY-VALIDATION.md) found (fail-closed hooks and the Terminal-control check are done): network wall Block mode covers DNS, no-hostname flows on other ports, processes that leave the agent's tree, and an unreadable policy (first live run done: web traffic from the agent's own processes is blocked); a destructive-action rule. Signed, notarized Kai.app that installs on any Mac. | Developer ID + notarization |
 | **v0.3** | Storage wall (Endpoint Security): open, copy, clone, link, rename and exchange events for the agent's process tree; ssh-agent socket and Keychain tool rules; protection for Kai's own files. Agent attribution that survives detached processes and tells agent-started shells from the user's own. | Yes (Endpoint Security entitlement) |
 | **v0.4** | Scoped credentials: agents complete approved operations without holding reusable secrets, starting with one integration. | No |
 | **v0.5** | Linux backend (eBPF LSM + cgroup/connect, Landlock). | No |

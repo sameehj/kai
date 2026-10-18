@@ -36,9 +36,13 @@ max_scan_bytes     2000000
 # ── Network wall (macOS network extension + gateway) ──────────────────
 # Traffic from agent processes (Claude Code, Cursor, Codex, … and anything
 # they start) to hosts not on the allowlist: off | log | block
-# Model APIs, GitHub and the main package registries are built in.
+# Model APIs, GitHub, the main package registries and this Mac (loopback)
+# are built in. An entry is a host (with its subdomains), an IP address or
+# CIDR range, optionally with :port. In block mode a connection with no host
+# name (a raw socket to an IP, ssh to an IP) needs an address entry.
 egress             log
-# egress_allow  internal.example.com  artifacts.example.com
+# egress_allow  internal.example.com  db.example.com:5432
+# egress_allow  10.0.0.0/8  203.0.113.5:22  [2001:db8::1]:22
 # gateway_port  8787               # local AI gateway (kai gateway)
 #
 # Extra agents, matched by executable path, argument, or signing Team ID:
@@ -57,11 +61,25 @@ egress             log
 
 # ── Upload / remote-code patterns (checked on shell commands) ─────────
 # POSIX extended regex, case-insensitive. Avoid \b and \s (not portable to
-# macOS BSD regex); '.' already excludes newlines here.
-rule_upload curl_upload    (curl|wget).*(-d|--data|-T|--upload-file|-F).*@
-rule_upload pipe_to_shell  (curl|wget).*\|.*(sh|bash|zsh|python)
-rule_upload netcat         (^|[^a-z])(nc|ncat|netcat)([^a-z]|$)
-rule_upload remote_scp     (^|[^a-z])scp[^"]+:
+# macOS BSD regex). Matched against each pipeline as Kai reads it: one line
+# like "cat notes.txt | nc host 9000", command names without their path or
+# sudo/env in front, heredoc bodies and comments left out. So "(^|\| )nc"
+# means nc is run, not just mentioned.
+rule_upload curl_upload    (^|\| )(curl|wget) .*(-d|--data|-T|--upload-file|-F).*@
+rule_upload pipe_to_shell  (^|\| )(curl|wget) .*\| (sh|bash|zsh|python[0-9.]*)( |$)
+rule_upload netcat         (^|\| )(nc|ncat|netcat)( |$)
+rule_upload remote_scp     (^|\| )scp .*:
+
+# ── Your exceptions ───────────────────────────────────────────────────
+# exempt <rule> <glob over the whole command>: a check that wrongly blocked
+# you. '*' and '?' match anything. Kai's own protection can't be exempted.
+# The Activity page adds these for you ("Not a threat").
+# exempt  netcat  python3 tests/*
+
+# ── Activity log ──────────────────────────────────────────────────────
+# Keep a redacted excerpt of what was blocked (the command, path or part of
+# the prompt) so you can see why. Secrets in it are hidden. on | off
+audit_context      on
 
 # ── Prompt-injection patterns (checked on tool results) ───────────────
 rule_injection ignore_prev   ignore (all |your |previous |prior )*instructions

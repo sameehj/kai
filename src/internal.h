@@ -65,6 +65,29 @@ typedef struct {
 typedef void (*kai_shell_cmd_fn)(char **argv, int argc, void *ud);
 typedef void (*kai_shell_text_fn)(const char *text, void *ud);
 void kai_shell_walk(const char *cmd, kai_shell_cmd_fn on_cmd, kai_shell_text_fn on_text, void *ud);
+/* Index of the command actually run, past VAR=value and sudo/env/nohup/...
+ * wrappers; argc if there is none. */
+int kai_shell_command_start(char **argv, int argc);
+/* One line per pipeline: "name args | name args" (see shell.c). Caller frees. */
+char *kai_shell_view(const char *cmd);
+
+/* A check can skip a rule the user made an exception for: return 1 to skip. */
+typedef int (*kai_skip_fn)(const char *rule, void *ud);
+/* kai_command_touches_protected / kai_command_looks_like_upload, skipping
+ * rules skip() says are exempt, and (upload) copying the matched text. */
+int kai_command_touches_protected_skip(const kai_policy *p, const char *cmd, const char *cwd,
+                                       char *why, size_t whylen, kai_skip_fn skip, void *ud);
+int kai_upload_match(const kai_policy *p, const char *cmd, char *why, size_t whylen,
+                     char *match, size_t matchlen, kai_skip_fn skip, void *ud);
+/* For the activity log: every rule match hidden, whatever its action (scan
+ * leaves block/warn matches in place). NULL when secret detection is off,
+ * because then nothing can be safely redacted. Caller frees. */
+char *kai_redact_for_log(const kai_policy *p, const char *text);
+/* Kai's own protection (its settings, the agents' hook files): never exempt. */
+int kai_rule_is_builtin(const char *rule);
+/* Has the user made an exception ("exempt <rule> <glob>") covering target? */
+int kai_policy_exempt(const kai_policy *p, const char *rule, const char *target);
+int kai_policy_audit_context(const kai_policy *p); /* store redacted excerpts? */
 
 /* validator for "password = …"-style matches (scan.c) */
 int kai_plausible_secret_value(const char *match, size_t len);
@@ -103,6 +126,13 @@ struct kai_policy {
     } agents[KAI_MAX_LIST];
     int nagents;
     int gateway_port;
+    /* the user's exceptions: rule name + glob over the command */
+    struct {
+        char rule[KAI_NAME_MAX];
+        char *pattern;
+    } exempt[KAI_MAX_LIST];
+    int nexempt;
+    int audit_context;
 };
 
 /* ---- process inspection (proc.c) ---- */

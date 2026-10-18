@@ -71,12 +71,21 @@ names alone would be wrong, and a unit test guards this.
    outbound bytes and read the **SNI** from the TLS ClientHello with
    `kai_tls_sni`. Plain HTTP uses the `Host` header, and the flow's own
    hostname is used when present.
-3. `kai_egress_allowed(policy, host)`:
+3. `kai_egress_endpoint_allowed(policy, host, ip, port)`. Entries are hosts
+   (with subdomains), IP addresses or CIDR ranges, each optionally with
+   `:port`; loopback is always allowed:
    - allowed → pass
    - not allowed, `egress log` → pass and record in the audit log
    - not allowed, `egress block` → drop and record
-4. QUIC/UDP 443 from agent trees is dropped in `block` mode. Clients then fall
+4. On ports other than 80 and 443 there are no bytes to read a name from. The
+   flow's own hostname decides when macOS has one (it attaches a name the
+   process tree recently resolved through the system resolver); otherwise
+   only the address can, so in `block` mode a nameless connection is dropped
+   unless an address entry allows it.
+5. QUIC/UDP 443 from agent trees is dropped in `block` mode. Clients then fall
    back to TCP, where the SNI is visible.
+6. DNS (port 53) is always allowed. Data hidden in lookups still leaves; see
+   [SECURITY-VALIDATION.md](SECURITY-VALIDATION.md).
 
 The default mode is **`log`**, so you can see what your agents actually reach
 before tightening to `block`. The built-in allowlist covers model APIs, Cursor's

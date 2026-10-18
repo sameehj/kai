@@ -2,8 +2,25 @@
 #include "internal.h"
 
 #include <ctype.h>
+#include <fnmatch.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Upload patterns from earlier default policies, matched against raw command
+ * text, and their replacements for the command view (kai_shell_view). A
+ * policy file written by an older `kai init` still holds the old ones; they
+ * fired on any mention (a heredoc or an argument saying "netcat"). Only an
+ * unchanged default is upgraded, never a pattern the user wrote. */
+static const struct {
+    const char *old, *now;
+} UPLOAD_UPGRADES[] = {
+    {"(curl|wget).*(-d|--data|-T|--upload-file|-F).*@",
+     "(^|\\| )(curl|wget) .*(-d|--data|-T|--upload-file|-F).*@"},
+    {"(curl|wget).*\\|.*(sh|bash|zsh|python)",
+     "(^|\\| )(curl|wget) .*\\| (sh|bash|zsh|python[0-9.]*)( |$)"},
+    {"(^|[^a-z])(nc|ncat|netcat)([^a-z]|$)", "(^|\\| )(nc|ncat|netcat)( |$)"},
+    {"(^|[^a-z])scp[^\"]+:", "(^|\\| )scp .*:"},
+};
 
 /* The built-in default policy. Kept in sync with policy/default.policy;
  * tests/test_policy checks that the shipped file parses identically. */
@@ -33,10 +50,11 @@ static const char DEFAULT_POLICY[] =
     "injection warn\n"
     "max_scan_bytes 2000000\n"
     "egress log\n"
-    "rule_upload curl_upload (curl|wget).*(-d|--data|-T|--upload-file|-F).*@\n"
-    "rule_upload pipe_to_shell (curl|wget).*\\|.*(sh|bash|zsh|python)\n"
-    "rule_upload netcat (^|[^a-z])(nc|ncat|netcat)([^a-z]|$)\n"
-    "rule_upload remote_scp (^|[^a-z])scp[^\"]+:\n"
+    "audit_context on\n"
+    "rule_upload curl_upload (^|\\| )(curl|wget) .*(-d|--data|-T|--upload-file|-F).*@\n"
+    "rule_upload pipe_to_shell (^|\\| )(curl|wget) .*\\| (sh|bash|zsh|python[0-9.]*)( |$)\n"
+    "rule_upload netcat (^|\\| )(nc|ncat|netcat)( |$)\n"
+    "rule_upload remote_scp (^|\\| )scp .*:\n"
     "rule_injection ignore_prev ignore (all |your |previous |prior )*instructions\n"
     "rule_injection new_instr (new|updated|system) (instructions|directive|prompt)[: ]\n"
     "rule_injection exfil_ask "
@@ -208,6 +226,7 @@ static kai_policy *policy_new(void) {
     p->max_scan = 2000000;
     p->egress_mode = KAI_EGRESS_LOG;
     p->gateway_port = 8787;
+    p->audit_context = 1;
     kai_strlcpy(p->source, "built-in", sizeof p->source);
     return p;
 }
@@ -353,9 +372,24 @@ static kai_policy *parse(const char *text, const char *source, char *err,
             pat = cur; while (*pat == ' ' || *pat == '\t') pat++;
             char *pt = trimdup(pat);
             if (!pt || !*pt) { free(pt); continue; }
+            const char *use = pt;
+            for (size_t u = 0; u < sizeof UPLOAD_UPGRADES / sizeof UPLOAD_UPGRADES[0]; u++)
+                if (strcmp(pt, UPLOAD_UPGRADES[u].old) == 0) use = UPLOAD_UPGRADES[u].now;
             if (add_rule(&p->upl, &p->nupl, &p->capupl, nm, KAI_ACT_BLOCK, NULL,
-                         pt, 0, err, errlen) != 0) failed = 1;
+                         use, 0, err, errlen) != 0) failed = 1;
             free(pt);
+        } else if (strcmp(d, "exempt") == 0) {
+            /* exempt <rule> <glob over the command>: the user's own exception */
+            char *nm, *pat;
+            if (!next_tok(&cur, &nm) || p->nexempt >= KAI_MAX_LIST) continue;
+            pat = cur; while (*pat == ' ' || *pat == '\t') pat++;
+            char *pt = trimdup(pat);
+            if (!pt || !*pt || kai_rule_is_builtin(nm)) { free(pt); continue; }
+            kai_strlcpy(p->exempt[p->nexempt].rule, nm, sizeof p->exempt[0].rule);
+            p->exempt[p->nexempt++].pattern = pt;
+        } else if (strcmp(d, "audit_context") == 0) {
+            char *v; if (!next_tok(&cur, &v)) continue;
+            p->audit_context = strcmp(v, "off") != 0;
         } else {
             /* unknown directive: ignore, forward-compatible */
         }
@@ -457,6 +491,7 @@ void kai_policy_free(kai_policy *p) {
     for (int i = 0; i < p->nallow; i++) free(p->allow[i]);
     for (int i = 0; i < p->negress; i++) free(p->egress_allow[i]);
     for (int i = 0; i < p->nagents; i++) free(p->agents[i].pattern);
+    for (int i = 0; i < p->nexempt; i++) free(p->exempt[i].pattern);
     free(p);
 }
 
@@ -466,6 +501,17 @@ const char *kai_policy_source(const kai_policy *p) {
 kai_action kai_policy_prompt_action(const kai_policy *p) { return p->prompt_action; }
 kai_action kai_policy_file_secret_action(const kai_policy *p) { return p->file_secret_action; }
 kai_action kai_policy_upload_action(const kai_policy *p) { return p->upload_action; }
+int kai_policy_audit_context(const kai_policy *p) { return p && p->audit_context; }
+
+/* '*' and '?' span anything, '/' and newlines included: the pattern is over
+ * the whole command, usually the exact command with a few wildcards. */
+int kai_policy_exempt(const kai_policy *p, const char *rule, const char *target) {
+    if (!p || !rule || !target || kai_rule_is_builtin(rule)) return 0;
+    for (int i = 0; i < p->nexempt; i++)
+        if (strcmp(p->exempt[i].rule, rule) == 0 && fnmatch(p->exempt[i].pattern, target, 0) == 0)
+            return 1;
+    return 0;
+}
 kai_egress_mode kai_policy_egress_mode(const kai_policy *p) {
     return p ? p->egress_mode : KAI_EGRESS_OFF;
 }

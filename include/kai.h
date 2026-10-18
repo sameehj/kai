@@ -112,6 +112,18 @@ kai_egress_mode kai_policy_egress_mode(const kai_policy *p);
  * why receives the matching entry. Hosts are compared case-insensitively. */
 int kai_egress_allowed(const kai_policy *p, const char *host, char *why, size_t whylen);
 
+/* Is this connection allowed? host is the name the client asked for (TLS SNI,
+ * HTTP Host, or the flow's own name), or NULL when none is known; ip is the
+ * remote address (IPv6 may be in brackets); port is the remote port.
+ * Loopback (127.0.0.0/8, ::1) is always allowed. Entries may be a host
+ * (with its subdomains), an IP address or CIDR range, either with ":port":
+ *   example.com  db.example.com:5432  10.0.0.0/8  203.0.113.5:22  [2001:db8::1]:22
+ * why receives the matching entry. */
+int kai_egress_endpoint_allowed(const kai_policy *p, const char *host, const char *ip, int port,
+                                char *why, size_t whylen);
+/* Is entry a valid egress_allow value (one of the forms above)? */
+int kai_egress_entry_valid(const char *entry);
+
 /* Extract the server name (SNI) from the start of a TLS ClientHello.
  * Returns 1 and fills host if found, 0 if this is not TLS or carries no SNI,
  * -1 if more bytes are needed. Never reads past len. */
@@ -138,6 +150,24 @@ void kai_report_summary(const kai_report *rep, char *out, size_t outlen);
 /* Audit log: append one hash-chained record. Never pass secret values. */
 int kai_audit(const char *source, const char *event, const char *decision,
               const char *rule, const char *detail);
+
+/* A record with the context the activity view shows. Optional fields may be
+ * NULL or "" and are then left out. target and match must already be
+ * redacted (hooks pass them through the scanner first). */
+#define KAI_AUDIT_TARGET_MAX 400
+typedef struct {
+    const char *source;   /* claude, cursor, codex, network, ...            */
+    const char *event;    /* PreToolUse, beforeShellExecution, AfterBlock    */
+    const char *decision; /* block | warn | log | redact | exempt | note     */
+    const char *rule;
+    const char *detail;   /* the reason, in words                           */
+    const char *tool;     /* Bash, Read, Shell, ...                         */
+    const char *target;   /* command, path or prompt excerpt (redacted)     */
+    const char *match;    /* the part that matched (redacted)               */
+    const char *session;  /* the agent's session / conversation id          */
+    const char *cwd;
+} kai_audit_entry;
+int kai_audit_write(const kai_audit_entry *e);
 /* Verify the chain. Returns 0 if intact; fills nlines and err. */
 int kai_audit_verify(const char *path, int *nlines, char *err, size_t errlen);
 const char *kai_home(void);       /* $KAI_HOME or ~/.kai */

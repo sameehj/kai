@@ -58,6 +58,7 @@ static int is_shell(const char *w) {
 typedef struct {
     kai_shell_cmd_fn on_cmd;
     kai_shell_text_fn on_text;
+    void (*on_sep)(int pipe, void *ud); /* after each command: piped into the next? */
     void *ud;
 } walker_t;
 
@@ -116,8 +117,14 @@ static void walk(const walker_t *wk, const char *s, size_t len, int depth) {
     do {                                                   \
         if (in_word) { words_push(&argv, sb_take(&word)); in_word = 0; } \
     } while (0)
-#define END_CMD()                                          \
-    do { END_WORD(); emit(wk, &argv, depth); words_clear(&argv); } while (0)
+#define END_CMD(pipe)                                      \
+    do {                                                   \
+        END_WORD();                                        \
+        int had_ = argv.n > 0;                             \
+        emit(wk, &argv, depth);                            \
+        words_clear(&argv);                                \
+        if (had_ && wk->on_sep) wk->on_sep(pipe, wk->ud);  \
+    } while (0)
 
     for (size_t i = 0; i < len; i++) {
         char c = s[i];
@@ -198,7 +205,7 @@ static void walk(const walker_t *wk, const char *s, size_t len, int depth) {
             continue;
         }
         if (c == '\n') {
-            END_CMD();
+            END_CMD(0);
             /* read pending heredoc bodies */
             size_t p = i + 1;
             for (int h = 0; h < nhd; h++) {
@@ -231,12 +238,17 @@ static void walk(const walker_t *wk, const char *s, size_t len, int depth) {
             continue;
         }
         if (c == ' ' || c == '\t') { END_WORD(); continue; }
-        if (strchr(";&|(){}", c)) { END_CMD(); continue; }
+        if (strchr(";&|(){}", c)) {
+            /* a single | (or |&) pipes into the next command; || and ; don't */
+            int pipe = c == '|' && !(i + 1 < len && s[i + 1] == '|') && !(i > 0 && s[i - 1] == '|');
+            END_CMD(pipe);
+            continue;
+        }
         if (c == '<' || c == '>') { END_WORD(); continue; } /* redirection: target is the next word */
         sb_add(&word, &c, 1);
         in_word = 1;
     }
-    END_CMD();
+    END_CMD(0);
     words_clear(&argv);
     free(argv.v);
     sb_free(&word);
@@ -246,6 +258,95 @@ static void walk(const walker_t *wk, const char *s, size_t len, int depth) {
 
 void kai_shell_walk(const char *cmd, kai_shell_cmd_fn on_cmd, kai_shell_text_fn on_text, void *ud) {
     if (!cmd) return;
-    walker_t wk = {on_cmd, on_text, ud};
+    walker_t wk = {on_cmd, on_text, NULL, ud};
     walk(&wk, cmd, strlen(cmd), 0);
+}
+
+int kai_shell_command_start(char **argv, int argc) {
+    /* VAR=value prefixes, then wrappers that run the next word */
+    static const char *const WRAPPERS[] = {"sudo", "env", "exec", "command", "nohup", "time",
+                                           "nice", "timeout", "xargs", "doas", "builtin"};
+    int i = 0;
+    for (;;) {
+        while (i < argc && strchr(argv[i], '=') && argv[i][0] != '-' && argv[i][0] != '=') i++;
+        if (i >= argc) return argc;
+        const char *b = base(argv[i]);
+        int wrapped = 0;
+        for (size_t w = 0; w < sizeof WRAPPERS / sizeof WRAPPERS[0]; w++)
+            if (strcmp(b, WRAPPERS[w]) == 0) wrapped = 1;
+        if (!wrapped) return i;
+        i++;
+        while (i < argc && argv[i][0] == '-') i++;                      /* wrapper options */
+        if (strcmp(b, "timeout") == 0 && i < argc) i++;                  /* its duration */
+    }
+}
+
+/* ---- command view ----
+ * What upload rules are matched against: one line per pipeline, each command
+ * as its name (no path, no VAR= or sudo/env/... in front) and its arguments,
+ * piped commands joined by " | ". Heredoc bodies and comments are left out,
+ * so text that only mentions a command isn't taken for running it. Text
+ * echoed into a shell (echo '...' | sh) is read as commands too. */
+typedef struct {
+    sb_t out;
+    int open;       /* a command is on the current line, not yet ended */
+    char *echoed;   /* arguments of the last echo/printf in this pipeline */
+    char *extra[4]; /* echoed text that was piped into a shell */
+    int nextra;
+} view_t;
+
+static void view_cmd(char **argv, int argc, void *ud) {
+    view_t *v = ud;
+    int i = kai_shell_command_start(argv, argc);
+    if (i >= argc) return;
+    if (v->open) sb_adds(&v->out, "\n"); /* a command read inside another (sh -c, $()) */
+    const char *name = base(argv[i]);
+    sb_adds(&v->out, name);
+    for (int k = i + 1; k < argc; k++) {
+        sb_adds(&v->out, " ");
+        for (const char *c = argv[k]; *c; c++) sb_add(&v->out, (*c == '\n' || *c == '\r') ? " " : c, 1);
+    }
+    v->open = 1;
+    /* echo '...' | sh: a shell with no -c and no script reads the echoed text */
+    int reads_stdin = is_shell(name);
+    for (int k = i + 1; k < argc && reads_stdin; k++)
+        if (argv[k][0] != '-' || strchr(argv[k], 'c')) reads_stdin = 0;
+    if (reads_stdin && v->echoed && v->nextra < 4) {
+        v->extra[v->nextra++] = v->echoed;
+        v->echoed = NULL;
+    }
+    free(v->echoed);
+    v->echoed = NULL;
+    if (!strcmp(name, "echo") || !strcmp(name, "printf")) {
+        sb_t b;
+        sb_init(&b);
+        for (int k = i + 1; k < argc; k++) { if (k > i + 1) sb_adds(&b, " "); sb_adds(&b, argv[k]); }
+        v->echoed = sb_take(&b);
+    }
+}
+
+static void view_sep(int pipe, void *ud) {
+    view_t *v = ud;
+    sb_adds(&v->out, pipe ? " | " : "\n");
+    v->open = 0;
+    if (!pipe) { free(v->echoed); v->echoed = NULL; }
+}
+
+char *kai_shell_view(const char *cmd) {
+    view_t v;
+    memset(&v, 0, sizeof v);
+    sb_init(&v.out);
+    if (cmd) {
+        walker_t wk = {view_cmd, NULL, view_sep, &v};
+        walk(&wk, cmd, strlen(cmd), 0);
+        int n = v.nextra;
+        v.nextra = 4; /* echoed text inside echoed text isn't followed further */
+        for (int k = 0; k < n; k++) {
+            if (v.open) { sb_adds(&v.out, "\n"); v.open = 0; }
+            walk(&wk, v.extra[k], strlen(v.extra[k]), 1);
+            free(v.extra[k]);
+        }
+    }
+    free(v.echoed);
+    return sb_take(&v.out);
 }

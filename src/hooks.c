@@ -13,10 +13,16 @@
 #include "cJSON.h"
 #include "internal.h"
 
+#include <ctype.h>
+#include <dirent.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
 static const char *cjstr(const cJSON *o, const char *k) {
     const cJSON *v = cJSON_GetObjectItemCaseSensitive(o, k);
@@ -41,22 +47,8 @@ static void gather_strings(const cJSON *node, sb_t *b, int depth) {
  * an echo that merely mentions these words is fine, while k=kai; $k ...
  * and sh -c '...' are still caught. */
 static void check_kai_control(char **argv, int argc, void *ud) {
-    int i = 0;
-    /* VAR=value prefixes, then wrappers that run the next word */
-    static const char *const WRAPPERS[] = {"sudo", "env", "exec", "command", "nohup", "time",
-                                           "nice", "timeout", "xargs", "doas", "builtin"};
-    for (;;) {
-        while (i < argc && strchr(argv[i], '=') && argv[i][0] != '-' && argv[i][0] != '=') i++;
-        if (i >= argc) return;
-        const char *b = strrchr(argv[i], '/') ? strrchr(argv[i], '/') + 1 : argv[i];
-        int wrapped = 0;
-        for (size_t w = 0; w < sizeof WRAPPERS / sizeof WRAPPERS[0]; w++)
-            if (strcmp(b, WRAPPERS[w]) == 0) wrapped = 1;
-        if (!wrapped) break;
-        i++;
-        while (i < argc && argv[i][0] == '-') i++;                      /* wrapper options */
-        if (strcmp(b, "timeout") == 0 && i < argc) i++;                  /* its duration */
-    }
+    int i = kai_shell_command_start(argv, argc);
+    if (i >= argc) return;
     const char *word = argv[i];
     const char *b = strrchr(word, '/') ? strrchr(word, '/') + 1 : word;
     int is_kai = strcasecmp(b, "kai") == 0;
@@ -77,6 +69,115 @@ static int command_controls_kai(const char *cmd) {
     int hit = 0;
     kai_shell_walk(cmd, check_kai_control, NULL, &hit);
     return hit;
+}
+
+/* Does a shell command make a terminal app (or System Events, which can type
+ * into any app) run something? Those commands run in the terminal's process
+ * tree, not the agent's: Kai's hooks never see them and the network wall
+ * doesn't count them as the agent's. Caught: osascript whose script (in the
+ * command, piped in, or in a script file it runs) names one of these apps,
+ * open -a/-b <terminal> <file>, and open of a .command/.tool file. */
+static const char *const TERMINAL_APPS[] = {
+    "terminal", "iterm", "iterm2", "system events", "warp", "ghostty", "kitty",
+    "alacritty", "wezterm", "hyper", "tabby", "com.apple.terminal",
+    "com.googlecode.iterm2", "com.apple.systemevents", "dev.warp.warp-stable",
+    "com.mitchellh.ghostty", "net.kovidgoyal.kitty",
+};
+
+/* text names a terminal app in quotes ("Terminal", 'iTerm2') */
+static const char *names_terminal_app(const char *text) {
+    if (!text) return NULL;
+    for (size_t i = 0; i < sizeof TERMINAL_APPS / sizeof TERMINAL_APPS[0]; i++) {
+        size_t n = strlen(TERMINAL_APPS[i]);
+        for (const char *s = text; (s = strpbrk(s, "\"'")) != NULL; s++) {
+            if (strncasecmp(s + 1, TERMINAL_APPS[i], n) == 0 && s[n + 1] == s[0]) return TERMINAL_APPS[i];
+        }
+    }
+    return NULL;
+}
+
+typedef struct {
+    const char *cwd;
+    int osascript;        /* osascript runs somewhere in the command */
+    const char *app;      /* the app it drives, once found */
+} term_ctx;
+
+static const char *script_file_names_terminal(const char *file, const char *cwd) {
+    char path[4096];
+    if (file[0] == '/' || !cwd) kai_strlcpy(path, file, sizeof path);
+    else snprintf(path, sizeof path, "%s/%s", cwd, file);
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    char buf[65537];
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    for (size_t i = 0; i < n; i++) if (!buf[i]) buf[i] = ' '; /* compiled .scpt keeps names as text */
+    buf[n] = '\0';
+    return names_terminal_app(buf);
+}
+
+static int is_terminal_app(const char *name) {
+    const char *b = strrchr(name, '/') ? strrchr(name, '/') + 1 : name;
+    char app[256];
+    kai_strlcpy(app, b, sizeof app);
+    size_t l = strlen(app);
+    if (l > 4 && strcasecmp(app + l - 4, ".app") == 0) app[l - 4] = '\0';
+    for (size_t i = 0; i < sizeof TERMINAL_APPS / sizeof TERMINAL_APPS[0]; i++)
+        if (strcasecmp(app, TERMINAL_APPS[i]) == 0) return 1;
+    return 0;
+}
+
+static int ends_with(const char *s, const char *suffix) {
+    size_t a = strlen(s), b = strlen(suffix);
+    return a >= b && strcasecmp(s + a - b, suffix) == 0;
+}
+
+static void check_terminal_control(char **argv, int argc, void *ud) {
+    term_ctx *t = ud;
+    int i = kai_shell_command_start(argv, argc);
+    if (i >= argc || t->app) return;
+    const char *b = strrchr(argv[i], '/') ? strrchr(argv[i], '/') + 1 : argv[i];
+    if (!strcmp(b, "osascript")) {
+        t->osascript = 1;
+        for (int k = i + 1; k < argc; k++) {
+            if (!strcmp(argv[k], "-e") || !strcmp(argv[k], "-l") || !strcmp(argv[k], "-s")) {
+                if (!strcmp(argv[k], "-e") && k + 1 < argc) {
+                    /* the script keeps its own quotes: tell application "Terminal" */
+                    const char *hit = names_terminal_app(argv[k + 1]);
+                    if (hit) { t->app = hit; return; }
+                }
+                k++;
+            } else if (argv[k][0] != '-') {
+                const char *hit = script_file_names_terminal(argv[k], t->cwd);
+                if (hit) { t->app = hit; return; }
+                break; /* the rest are the script's own arguments */
+            }
+        }
+    } else if (!strcmp(b, "open")) {
+        int targets_terminal = 0, files = 0;
+        for (int k = i + 1; k < argc; k++) {
+            if ((!strcmp(argv[k], "-a") || !strcmp(argv[k], "-b")) && k + 1 < argc) {
+                if (is_terminal_app(argv[k + 1])) targets_terminal = 1;
+                k++;
+            } else if (argv[k][0] != '-') {
+                files++;
+                if (ends_with(argv[k], ".command") || ends_with(argv[k], ".tool")) {
+                    t->app = "terminal";
+                    return;
+                }
+            }
+        }
+        if (targets_terminal && files) t->app = "terminal";
+    }
+}
+
+/* Returns the app the command drives, or NULL. */
+static const char *command_drives_terminal(const char *cmd, const char *cwd) {
+    term_ctx t = {cwd, 0, NULL};
+    kai_shell_walk(cmd, check_terminal_control, NULL, &t);
+    /* a script piped or fed in (echo '...' | osascript, heredoc) is in the text */
+    if (!t.app && t.osascript) t.app = names_terminal_app(cmd);
+    return t.app;
 }
 
 /* A shell command from tool_input: "command" or "cmd", as a string or as an
@@ -150,6 +251,191 @@ static void deny_policy_error(const char *ev, const char *err) {
     cJSON_Delete(o);
 }
 
+/* ---------- what the activity log shows ----------
+ * A decision is only useful if you can see what it was about. Each record
+ * carries the command, path or prompt excerpt, redacted by the scanner (every
+ * rule match hidden, whatever its action) and cut to a window around the
+ * part that matched. `audit_context off` keeps just the rule and reason. */
+
+#define CONTEXT_WINDOW 300
+
+static size_t utf8_floor(const char *s, size_t n) {
+    while (n && ((unsigned char)s[n] & 0xC0) == 0x80) n--;
+    return n;
+}
+
+static void log_context(const kai_policy *p, const char *text, const char *match,
+                        char *out, size_t outlen, char *mout, size_t moutlen) {
+    if (outlen) out[0] = '\0';
+    if (mout && moutlen) mout[0] = '\0';
+    if (!kai_policy_audit_context(p) || !text || !*text) return;
+    char *red = kai_redact_for_log(p, text);
+    if (!red) return;
+    char *mred = match && *match ? kai_redact_for_log(p, match) : NULL;
+    if (mred && mout) kai_strlcpy(mout, mred, moutlen);
+
+    /* centre on the match; the view the match came from drops paths and
+     * quotes, so fall back to its first word, then to a redaction marker */
+    const char *at = NULL;
+    if (mred) {
+        at = strstr(red, mred);
+        if (!at) {
+            char first[64];
+            size_t fl = strcspn(mred, " ");
+            if (fl && fl < sizeof first) {
+                memcpy(first, mred, fl);
+                first[fl] = '\0';
+                at = strstr(red, first);
+            }
+        }
+    }
+    if (!at) at = strstr(red, "[REDACTED by Kai");
+    size_t n = strlen(red), start = 0;
+    if (at && (size_t)(at - red) > CONTEXT_WINDOW / 3) start = utf8_floor(red, (size_t)(at - red) - CONTEXT_WINDOW / 3);
+    size_t len = n - start;
+    if (len > CONTEXT_WINDOW) len = utf8_floor(red + start, CONTEXT_WINDOW);
+    snprintf(out, outlen, "%s%.*s%s", start ? "\xE2\x80\xA6" : "", (int)len, red + start,
+             start + len < n ? "\xE2\x80\xA6" : "");
+    free(red);
+    free(mred);
+}
+
+static const char *session_of(const cJSON *root) {
+    const char *s = cjstr(root, "session_id");      /* Claude Code, Codex */
+    return s ? s : cjstr(root, "conversation_id");  /* Cursor */
+}
+
+/* ---------- what the agent did after a block ----------
+ * The hook only learns this from the session's next event, so a block is
+ * parked in <kai home>/sessions/<session> until then. The next event writes
+ * one "note" record: tried the same thing, did something else, or stopped. */
+
+typedef enum { NEXT_TOOL, NEXT_PROMPT, NEXT_STOP } next_kind;
+
+#define FOLLOW_UP_SECONDS 1800 /* later than this, the next event isn't a reaction */
+
+static char *pending_path(const char *session) {
+    char safe[96];
+    size_t n = 0;
+    for (const char *c = session; *c && n < sizeof safe - 1; c++)
+        safe[n++] = (isalnum((unsigned char)*c) || *c == '-' || *c == '_') ? *c : '_';
+    safe[n] = '\0';
+    if (!n) return NULL;
+    sb_t b;
+    sb_init(&b);
+    sb_addf(&b, "%s/sessions/%s", kai_home(), safe);
+    return sb_take(&b);
+}
+
+static void describe_next(next_kind kind, const char *ptool, const char *ptarget, const char *tool,
+                          const char *target, char *out, size_t outlen) {
+    int prompt_block = !ptool || !*ptool;
+    if (kind == NEXT_STOP) {
+        snprintf(out, outlen, "After the block, the agent ended its turn without trying again");
+    } else if (kind == NEXT_PROMPT) {
+        snprintf(out, outlen, prompt_block ? "After the block, you sent a new prompt"
+                                           : "After the block, the agent stopped and the next "
+                                             "thing was a new prompt");
+    } else if (prompt_block) {
+        snprintf(out, outlen, "After the block, the agent went on with %s", tool ? tool : "a tool");
+    } else if (tool && strcmp(tool, ptool) == 0) {
+        if (target && ptarget && *target && strcmp(target, ptarget) == 0)
+            snprintf(out, outlen, "After the block, the agent tried the same action again");
+        else if (!strcmp(tool, "Bash") || !strcmp(tool, "Shell") || !strcmp(tool, "shell"))
+            snprintf(out, outlen, "After the block, the agent ran a different command");
+        else if (!strcmp(tool, "Read"))
+            snprintf(out, outlen, "After the block, the agent read a different file");
+        else
+            snprintf(out, outlen, "After the block, the agent used %s on something else", tool);
+    } else {
+        snprintf(out, outlen, "After the block, the agent switched to %s", tool ? tool : "another tool");
+    }
+}
+
+/* Drop parked blocks from sessions that never sent another event. */
+static void sweep_sessions(const char *dir) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+    time_t now = time(NULL);
+    struct dirent *de;
+    while ((de = readdir(d))) {
+        if (de->d_name[0] == '.') continue;
+        char path[1400];
+        snprintf(path, sizeof path, "%s/%s", dir, de->d_name);
+        struct stat st;
+        if (stat(path, &st) == 0 && now - st.st_mtime > 86400) unlink(path);
+    }
+    closedir(d);
+}
+
+/* raw is this event's command, path or prompt; its context is only worked
+ * out when a parked block needs it. blocked_rule is set when this event was
+ * itself blocked, with blocked_ctx its (already redacted) target. */
+static void follow_up(const kai_policy *p, const char *source, const char *session, next_kind kind,
+                      const char *tool, const char *raw, const char *cwd,
+                      const char *blocked_rule, const char *blocked_ctx) {
+    if (!session || !*session) return;
+    char *path = pending_path(session);
+    if (!path) return;
+    size_t len;
+    char *txt = kai_read_file(path, 65536, &len);
+    if (txt) {
+        cJSON *o = cJSON_Parse(txt);
+        free(txt);
+        const cJSON *t = o ? cJSON_GetObjectItemCaseSensitive(o, "t") : NULL;
+        if (o && cJSON_IsNumber(t) && time(NULL) - (time_t)t->valuedouble <= FOLLOW_UP_SECONDS &&
+            !blocked_rule) { /* blocked again: that block is its own record */
+            char ctx[KAI_AUDIT_TARGET_MAX], detail[200];
+            log_context(p, raw, NULL, ctx, sizeof ctx, NULL, 0);
+            describe_next(kind, cjstr(o, "tool"), cjstr(o, "target"), tool, ctx, detail, sizeof detail);
+            kai_audit_entry e = {source, "AfterBlock", "note", cjstr(o, "rule"), detail,
+                                 tool, ctx, NULL, session, cwd};
+            kai_audit_write(&e);
+        }
+        cJSON_Delete(o);
+        unlink(path);
+    }
+    if (blocked_rule) {
+        char dir[1200];
+        snprintf(dir, sizeof dir, "%s/sessions", kai_home());
+        mkdir(kai_home(), 0700);
+        mkdir(dir, 0700);
+        sweep_sessions(dir);
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "t", (double)time(NULL));
+        cJSON_AddStringToObject(o, "tool", tool ? tool : "");
+        cJSON_AddStringToObject(o, "target", blocked_ctx ? blocked_ctx : "");
+        cJSON_AddStringToObject(o, "rule", blocked_rule);
+        char *s = cJSON_PrintUnformatted(o);
+        int fd = s ? open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600) : -1;
+        if (fd >= 0) {
+            ssize_t w = write(fd, s, strlen(s));
+            (void)w;
+            close(fd);
+        }
+        free(s);
+        cJSON_Delete(o);
+    }
+    free(path);
+}
+
+/* ---------- the user's exceptions ----------
+ * A rule the user exempted for this exact command (exempt <rule> <glob>) is
+ * skipped, and the next check still runs: an exception for one rule never
+ * lets a different problem in the same command through. */
+typedef struct {
+    const kai_policy *p;
+    const char *cmd;
+    char exempted[KAI_NAME_MAX];
+} exempt_ctx;
+
+static int skip_exempt(const char *rule, void *ud) {
+    exempt_ctx *x = ud;
+    if (!kai_policy_exempt(x->p, rule, x->cmd)) return 0;
+    if (!x->exempted[0]) kai_strlcpy(x->exempted, rule, sizeof x->exempted);
+    return 1;
+}
+
 /* ---------- Claude Code and Codex ----------
  * Codex's hooks use the same events, input fields and decision output as
  * Claude Code (PreToolUse / PostToolUse / UserPromptSubmit, permissionDecision,
@@ -165,13 +451,19 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
     const char *ev = cjstr(root, "hook_event_name");
     const char *cwd = cjstr(root, "cwd");
     if (!cwd) cwd = cwd_arg;
+    const char *session = session_of(root);
     char err[256];
     kai_policy *p = kai_policy_load(NULL, err, sizeof err);
 
     kai_action decision = KAI_ACT_NONE;
     char reason[512] = "";
     char rule[KAI_NAME_MAX] = "";
+    char exempted[KAI_NAME_MAX] = "";
     const char *event_label = ev ? ev : "unknown";
+    const char *tool = NULL;
+    char *subject = NULL;   /* what the decision is about: command, path, prompt */
+    char match[160] = "";   /* the part of it that matched, if known */
+    next_kind kind = NEXT_TOOL;
 
     if (!p) {
         /* broken policy: fail closed on tool/prompt events */
@@ -181,58 +473,70 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
     }
 
     if (ev && strcmp(ev, "UserPromptSubmit") == 0) {
+        kind = NEXT_PROMPT;
         const char *prompt = cjstr(root, "prompt");
+        subject = strdup(prompt ? prompt : "");
         kai_report rep;
         char *cleaned = kai_scan_text(p, prompt ? prompt : "", &rep);
         free(cleaned);
         if (rep.worst >= KAI_ACT_REDACT) {
             kai_action a = kai_policy_prompt_action(p);
-            if (a >= KAI_ACT_REDACT) {
-                decision = KAI_ACT_BLOCK;
-                kai_report_summary(&rep, reason, sizeof reason);
-            } else {
-                decision = KAI_ACT_WARN;
-                kai_report_summary(&rep, reason, sizeof reason);
-            }
+            decision = a >= KAI_ACT_REDACT ? KAI_ACT_BLOCK : KAI_ACT_WARN;
+            kai_report_summary(&rep, reason, sizeof reason);
+            kai_strlcpy(rule, "prompt_secret", sizeof rule);
         }
     } else if (ev && (strcmp(ev, "PreToolUse") == 0)) {
-        const char *tool = cjstr(root, "tool_name");
+        tool = cjstr(root, "tool_name");
         const cJSON *ti = cJSON_GetObjectItemCaseSensitive(root, "tool_input");
         /* file tools: check paths */
         /* Read/Edit/Write/MultiEdit use file_path, Grep/Glob/LS use path,
          * NotebookEdit uses notebook_path: check every one present. */
         static const char *const PATH_KEYS[] = {"file_path", "path", "notebook_path"};
-        int path_hit = 0;
+        const char *hit_path = NULL, *first_path = NULL;
         char why[256];
-        for (size_t k = 0; ti && !path_hit && k < sizeof PATH_KEYS / sizeof PATH_KEYS[0]; k++) {
+        for (size_t k = 0; ti && !hit_path && k < sizeof PATH_KEYS / sizeof PATH_KEYS[0]; k++) {
             const char *fp = cjstr(ti, PATH_KEYS[k]);
-            path_hit = fp && kai_path_protected(p, fp, cwd, why, sizeof why);
+            if (fp && !first_path) first_path = fp;
+            if (fp && kai_path_protected(p, fp, cwd, why, sizeof why)) hit_path = fp;
         }
         char *cmd = command_text(ti);
         sb_t all;
         sb_init(&all);
         gather_strings(ti, &all, 0);
         char *alltext = sb_take(&all);
-        if (path_hit) {
+        exempt_ctx ex = {p, cmd, ""};
+        const char *app = NULL;
+        if (hit_path) {
             decision = KAI_ACT_BLOCK;
             kai_strlcpy(rule, why, sizeof rule);
             snprintf(reason, sizeof reason, "%s touches protected path (%s)",
                      tool ? tool : "tool", why);
+            subject = strdup(hit_path);
         } else if (patch_touches_protected(p, alltext, cwd, why, sizeof why)) {
             decision = KAI_ACT_BLOCK;
             kai_strlcpy(rule, why, sizeof rule);
             snprintf(reason, sizeof reason, "patch edits protected path (%s)", why);
+            subject = strdup(alltext);
         } else if (cmd) {
             if (command_controls_kai(cmd)) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, "kai_self_protect", sizeof rule);
                 snprintf(reason, sizeof reason,
                          "agents may not change Kai's settings; the user can do this themselves");
-            } else if (kai_command_touches_protected(p, cmd, cwd, why, sizeof why)) {
+            } else if ((app = command_drives_terminal(cmd, cwd)) &&
+                       !skip_exempt("terminal_control", &ex)) {
+                decision = KAI_ACT_BLOCK;
+                kai_strlcpy(rule, "terminal_control", sizeof rule);
+                kai_strlcpy(match, app, sizeof match);
+                snprintf(reason, sizeof reason,
+                         "command makes another app (%s) run commands, outside Kai's checks", app);
+            } else if (kai_command_touches_protected_skip(p, cmd, cwd, why, sizeof why,
+                                                          skip_exempt, &ex)) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, why, sizeof rule);
                 snprintf(reason, sizeof reason, "command touches protected path (%s)", why);
-            } else if (kai_command_looks_like_upload(p, cmd, why, sizeof why)) {
+            } else if (kai_upload_match(p, cmd, why, sizeof why, match, sizeof match,
+                                        skip_exempt, &ex)) {
                 decision = kai_policy_upload_action(p) >= KAI_ACT_BLOCK
                                ? KAI_ACT_BLOCK : KAI_ACT_WARN;
                 kai_strlcpy(rule, why, sizeof rule);
@@ -249,8 +553,12 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 decision = KAI_ACT_BLOCK;
                 kai_report_summary(&rep, reason, sizeof reason);
                 kai_strlcpy(rule, "mcp_arguments", sizeof rule);
+                free(subject);
+                subject = strdup(alltext);
             }
         }
+        if (!subject) subject = strdup(cmd ? cmd : (first_path ? first_path : alltext));
+        kai_strlcpy(exempted, ex.exempted, sizeof exempted);
         free(cmd);
         free(alltext);
     } else if (ev && strcmp(ev, "PostToolUse") == 0) {
@@ -278,11 +586,30 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             if (s) printf("%s\n", s);
             free(s);
             cJSON_Delete(o);
-            kai_audit(source, "PostToolUse", "warn", f.rule, detail);
+            /* where the text came from: the file read, the command run, the URL fetched */
+            const cJSON *ti = cJSON_GetObjectItemCaseSensitive(root, "tool_input");
+            const char *from = cjstr(ti, "file_path");
+            if (!from) from = cjstr(ti, "url");
+            char *cmd = from ? NULL : command_text(ti);
+            char ctx[KAI_AUDIT_TARGET_MAX];
+            log_context(p, from ? from : cmd, NULL, ctx, sizeof ctx, NULL, 0);
+            free(cmd);
+            kai_audit_entry e = {source, "PostToolUse", "warn", f.rule, detail,
+                                 cjstr(root, "tool_name"), ctx, NULL, session, cwd};
+            kai_audit_write(&e);
             kai_policy_free(p);
             cJSON_Delete(root);
             return 0;
         }
+        /* a tool result says nothing about how the agent took a block */
+        kai_policy_free(p);
+        cJSON_Delete(root);
+        return 0;
+    } else if (ev && strcmp(ev, "Stop") == 0) {
+        follow_up(p, source, session, NEXT_STOP, NULL, NULL, cwd, NULL, NULL);
+        kai_policy_free(p);
+        cJSON_Delete(root);
+        return 0;
     }
 
     const char *dec_str = (decision >= KAI_ACT_BLOCK) ? "block" : "warn";
@@ -313,8 +640,23 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
     }
     /* Record decisions, not traffic: an allowed tool call is the normal case
      * and logging every one buried the real events (and grew the log on
-     * every keystroke of agent work). Warnings were also logged as "allow". */
-    if (decision != KAI_ACT_NONE) kai_audit(source, event_label, dec_str, rule, reason);
+     * every keystroke of agent work). Warnings were also logged as "allow".
+     * An exception the user made is recorded too, so it never acts unseen. */
+    char ctx[KAI_AUDIT_TARGET_MAX] = "", mctx[160] = "";
+    if (decision != KAI_ACT_NONE || exempted[0]) {
+        log_context(p, subject, match, ctx, sizeof ctx, mctx, sizeof mctx);
+        kai_audit_entry e = {source, event_label, dec_str, rule, reason, tool, ctx, mctx, session, cwd};
+        if (decision == KAI_ACT_NONE) {
+            e.decision = "exempt";
+            e.rule = exempted;
+            e.detail = "allowed by your exception";
+        }
+        kai_audit_write(&e);
+    }
+    if (ev && (!strcmp(ev, "PreToolUse") || !strcmp(ev, "UserPromptSubmit")))
+        follow_up(p, source, session, kind, tool, subject, cwd,
+                  decision >= KAI_ACT_BLOCK ? rule : NULL, ctx);
+    free(subject);
     kai_policy_free(p);
     cJSON_Delete(root);
     return 0;
@@ -342,34 +684,54 @@ static int hook_cursor(const char *json) {
     const char *cwd = NULL;
     if (cJSON_IsArray(roots) && roots->child && cJSON_IsString(roots->child))
         cwd = roots->child->valuestring;
+    const char *session = session_of(root);
 
     char err[256];
     kai_policy *p = kai_policy_load(NULL, err, sizeof err);
     if (!p) { cursor_deny("policy error, failing closed"); cJSON_Delete(root); return 0; }
 
-    char why[256] = "", reason[512] = "";
+    char why[256] = "", reason[512] = "", match[160] = "";
     int deny = 0;
+    const char *tool = NULL, *subject = NULL, *app = NULL;
+    next_kind kind = NEXT_TOOL;
+    exempt_ctx ex = {p, NULL, ""};
 
     if (ev && strcmp(ev, "beforeReadFile") == 0) {
+        tool = "Read";
         const char *fp = cjstr(root, "file_path");
+        subject = fp;
         if (fp && kai_path_protected(p, fp, cwd, why, sizeof why)) {
             deny = 1; snprintf(reason, sizeof reason, "protected path (%s)", why);
         }
     } else if (ev && strcmp(ev, "beforeShellExecution") == 0) {
+        tool = "Shell";
         const char *cmd = cjstr(root, "command");
+        subject = cmd;
+        ex.cmd = cmd;
         if (cmd && command_controls_kai(cmd)) {
             deny = 1;
             kai_strlcpy(why, "kai_self_protect", sizeof why);
             snprintf(reason, sizeof reason,
                      "agents may not change Kai's settings; the user can do this themselves");
-        } else if (cmd && kai_command_touches_protected(p, cmd, cwd, why, sizeof why)) {
+        } else if (cmd && (app = command_drives_terminal(cmd, cwd)) &&
+                   !skip_exempt("terminal_control", &ex)) {
+            deny = 1;
+            kai_strlcpy(why, "terminal_control", sizeof why);
+            kai_strlcpy(match, app, sizeof match);
+            snprintf(reason, sizeof reason,
+                     "command makes another app (%s) run commands, outside Kai's checks", app);
+        } else if (cmd && kai_command_touches_protected_skip(p, cmd, cwd, why, sizeof why,
+                                                             skip_exempt, &ex)) {
             deny = 1; snprintf(reason, sizeof reason, "command touches protected path (%s)", why);
-        } else if (cmd && kai_command_looks_like_upload(p, cmd, why, sizeof why)) {
+        } else if (cmd && kai_upload_match(p, cmd, why, sizeof why, match, sizeof match,
+                                           skip_exempt, &ex)) {
             deny = kai_policy_upload_action(p) >= KAI_ACT_BLOCK;
             snprintf(reason, sizeof reason, "looks like data exfiltration (%s)", why);
         }
     } else if (ev && strcmp(ev, "beforeMCPExecution") == 0) {
+        tool = "MCP";
         const char *ti = cjstr(root, "tool_input");
+        subject = ti;
         kai_report rep;
         char *c = kai_scan_text(p, ti ? ti : "", &rep); free(c);
         if (rep.worst >= KAI_ACT_REDACT) {
@@ -377,7 +739,9 @@ static int hook_cursor(const char *json) {
             kai_strlcpy(why, "mcp_arguments", sizeof why);
         }
     } else if (ev && strcmp(ev, "beforeSubmitPrompt") == 0) {
+        kind = NEXT_PROMPT;
         const char *prompt = cjstr(root, "prompt");
+        subject = prompt;
         kai_report rep;
         char *c = kai_scan_text(p, prompt ? prompt : "", &rep); free(c);
         if (rep.worst >= KAI_ACT_REDACT &&
@@ -391,18 +755,33 @@ static int hook_cursor(const char *json) {
             cJSON_AddStringToObject(o, "user_message", msg);
             char *s = cJSON_PrintUnformatted(o);
             printf("%s\n", s); free(s); cJSON_Delete(o);
-            kai_audit("cursor", ev, "block", "prompt", sm);
+            char ctx[KAI_AUDIT_TARGET_MAX];
+            log_context(p, prompt, NULL, ctx, sizeof ctx, NULL, 0);
+            kai_audit_entry e = {"cursor", ev, "block", "prompt", sm, NULL, ctx, NULL, session, cwd};
+            kai_audit_write(&e);
+            follow_up(p, "cursor", session, NEXT_PROMPT, NULL, prompt, cwd, "prompt", ctx);
             kai_policy_free(p); cJSON_Delete(root); return 0;
         }
     }
 
+    char ctx[KAI_AUDIT_TARGET_MAX] = "", mctx[160] = "";
+    if (deny || ex.exempted[0]) log_context(p, subject, match, ctx, sizeof ctx, mctx, sizeof mctx);
     if (deny) {
         cursor_deny(reason);
-        kai_audit("cursor", ev ? ev : "unknown", "block", why, reason);
+        kai_audit_entry e = {"cursor", ev ? ev : "unknown", "block", why, reason,
+                             tool, ctx, mctx, session, cwd};
+        kai_audit_write(&e);
     } else {
+        if (ex.exempted[0]) {
+            kai_audit_entry e = {"cursor", ev ? ev : "unknown", "exempt", ex.exempted,
+                                 "allowed by your exception", tool, ctx, mctx, session, cwd};
+            kai_audit_write(&e);
+        }
         /* explicit allow keeps Cursor's own flow */
         printf("{\"permission\":\"allow\"}\n");
     }
+    if (tool || kind == NEXT_PROMPT)
+        follow_up(p, "cursor", session, kind, tool, subject, cwd, deny ? why : NULL, ctx);
     kai_policy_free(p);
     cJSON_Delete(root);
     return 0;

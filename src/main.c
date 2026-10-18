@@ -13,7 +13,8 @@
  *   kai gateway [--port N]     local AI gateway (see gateway.c)
  *   kai agent-of <pid>         is this process an agent, or under one?
  *   kai sni                    print the TLS server name from a ClientHello on stdin
- *   kai log tail|verify        audit log
+ *   kai log tail|show|verify   audit log (show: in words; see report.c)
+ *   kai report <id>            write a false-positive report
  *   kai version
  */
 #include "internal.h"
@@ -29,6 +30,8 @@ int kai_cmd_install(int argc, char **argv);
 int kai_cmd_uninstall(int argc, char **argv);
 int kai_cmd_status_json(void);
 int kai_cmd_policy(int argc, char **argv);
+int kai_cmd_log_show(int argc, char **argv);
+int kai_cmd_report(int argc, char **argv);
 
 static int cmd_version(void) { printf("kai %s\n", KAI_VERSION); return 0; }
 
@@ -129,7 +132,8 @@ static int cmd_log(int argc, char **argv) {
         printf("FAIL: %s\n", err);
         return 1;
     }
-    /* tail */
+    if (strcmp(sub, "show") == 0) return kai_cmd_log_show(argc - 1, argv + 1);
+    /* tail: the raw records, one JSON object per line */
     size_t n;
     char *txt = kai_read_file(kai_audit_path(), 16 * 1024 * 1024, &n);
     if (!txt) { printf("(no audit log yet)\n"); return 0; }
@@ -197,7 +201,8 @@ static void usage(void) {
         "  kai policy [show|set|add|remove]  view or change the policy safely\n"
         "  kai gateway [--port N]            run the local AI gateway\n"
         "  kai agent-of <pid>                is this process an agent, or under one?\n"
-        "  kai log [tail|verify]             view / verify the audit log\n"
+        "  kai log [tail|show|verify]        audit log: raw, in words, or check it\n"
+        "  kai report <id>                   report a false positive (ids: kai log show)\n"
         "  kai version\n", KAI_VERSION);
 }
 
@@ -222,6 +227,7 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "agent-of") == 0) return cmd_agent_of(rest, restv);
     if (strcmp(cmd, "sni") == 0) return cmd_sni();
     if (strcmp(cmd, "log") == 0) return cmd_log(rest, restv);
+    if (strcmp(cmd, "report") == 0) return kai_cmd_report(rest, restv);
     if (strcmp(cmd, "version") == 0 || strcmp(cmd, "--version") == 0) return cmd_version();
     if (strcmp(cmd, "help") == 0 || strcmp(cmd, "-h") == 0 || strcmp(cmd, "--help") == 0) {
         usage(); return 0;

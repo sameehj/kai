@@ -46,6 +46,11 @@ struct PolicyInfo: Decodable, Equatable {
         let replacement: String?
         let pattern: String
     }
+    /// An exception the user made from the Activity page (or the policy file).
+    struct Exempt: Decodable, Equatable, Hashable {
+        let rule: String
+        let pattern: String
+    }
     let file: String
     let exists: Bool
     let ok: Bool
@@ -56,6 +61,13 @@ struct PolicyInfo: Decodable, Equatable {
     let egressAllow: [String]?
     let terms: [Term]
     let rules: [Rule]
+    let exempt: [Exempt]? // older kai CLIs don't report exceptions
+}
+
+/// Output of `kai report <id> --json`.
+struct ReportInfo: Decodable {
+    let path: String
+    let issueUrl: String
 }
 
 struct CommandResult {

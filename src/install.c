@@ -71,14 +71,35 @@ static cJSON *load_clean(const char *path) {
 /* ----- Claude Code: ~/.claude/settings.json -----
  * hooks.<Event>[] = { matcher, hooks:[{type:command, command:"kai hook claude", _kai:true}] }
  */
-static cJSON *claude_hook_entry(const char *matcher, const char *exe) {
+/* The hook command. A guarded one fails closed: Claude Code and Codex run the
+ * action when a hook fails in any way but exit 2, so if Kai's program is
+ * missing, crashes or can't answer, the shell turns that into exit 2 (block)
+ * with a reason. Only for events where exit 2 means "block" (PreToolUse,
+ * UserPromptSubmit): on Stop it would mean "keep going" and trap the agent. */
+static void hook_command(char *cmd, size_t n, const char *exe, const char *agent, int guard,
+                         const char *settings) {
+    if (!guard) {
+        snprintf(cmd, n, "%s hook %s", exe, agent);
+        return;
+    }
+    snprintf(cmd, n,
+             "%s hook %s || { echo \"Kai couldn't check this: its program is missing or failed. "
+             "Reinstall Kai, or remove Kai's entries from %s.\" >&2; exit 2; }",
+             exe, agent, settings);
+}
+
+static int fails_closed(const char *event) {
+    return !strcmp(event, "PreToolUse") || !strcmp(event, "UserPromptSubmit");
+}
+
+static cJSON *claude_hook_entry(const char *matcher, const char *exe, int guard) {
     cJSON *group = cJSON_CreateObject();
     if (matcher) cJSON_AddStringToObject(group, "matcher", matcher);
     cJSON *arr = cJSON_CreateArray();
     cJSON *h = cJSON_CreateObject();
     cJSON_AddStringToObject(h, "type", "command");
-    char cmd[1300];
-    snprintf(cmd, sizeof cmd, "%s hook claude", exe);
+    char cmd[1600];
+    hook_command(cmd, sizeof cmd, exe, "claude", guard, "~/.claude/settings.json");
     cJSON_AddStringToObject(h, "command", cmd);
     cJSON_AddBoolToObject(h, "_kai", 1);
     cJSON_AddItemToArray(arr, h);
@@ -94,7 +115,7 @@ static void ensure_event(cJSON *hooks, const char *event, const char *matcher,
         list = cJSON_CreateArray();
         cJSON_AddItemToObject(hooks, event, list);
     }
-    cJSON_AddItemToArray(list, claude_hook_entry(matcher, exe));
+    cJSON_AddItemToArray(list, claude_hook_entry(matcher, exe, fails_closed(event)));
 }
 
 static int install_claude(const char *exe) {
@@ -111,6 +132,7 @@ static int install_claude(const char *exe) {
     ensure_event(hooks, "PreToolUse", "Bash|Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Glob|LS", exe);
     ensure_event(hooks, "PreToolUse", "mcp__.*", exe);
     ensure_event(hooks, "PostToolUse", NULL, exe);
+    ensure_event(hooks, "Stop", NULL, exe); /* the end of a turn: did the agent give up after a block? */
     char *out = cJSON_Print(root);
     int rc = write_file(path, out);
     free(out); cJSON_Delete(root);
@@ -303,9 +325,9 @@ static int install_codex(const char *exe) {
     }
     /* No matcher: Kai sees every tool (shell, apply_patch, MCP) and decides itself. */
     const char *events[] = {"PreToolUse", "PostToolUse", "UserPromptSubmit"};
-    char cmd[1300];
-    snprintf(cmd, sizeof cmd, "%s hook codex", exe);
+    char cmd[1600];
     for (size_t i = 0; i < sizeof events / sizeof events[0]; i++) {
+        hook_command(cmd, sizeof cmd, exe, "codex", fails_closed(events[i]), path);
         cJSON *list = cJSON_GetObjectItemCaseSensitive(hooks, events[i]);
         if (!cJSON_IsArray(list)) {
             list = cJSON_CreateArray();

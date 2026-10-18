@@ -39,7 +39,7 @@ static void record(kai_report *rep, const char *rule, kai_action a) {
 /* Apply one rule across the whole text, writing cleaned output to out.
  * Returns via in-place rebuild. Used iteratively so later rules see the
  * output of earlier ones. */
-static char *apply_rule(const kai_rule *r, char *text, kai_report *rep) {
+static char *apply_rule(const kai_rule *r, char *text, kai_report *rep, int for_log) {
     regmatch_t m;
     sb_t out;
     sb_init(&out);
@@ -62,10 +62,13 @@ static char *apply_rule(const kai_rule *r, char *text, kai_report *rep) {
             continue;
         }
         record(rep, r->name, r->action);
-        switch (r->action) {
+        /* for the log, anything a rule matched is hidden, block and warn included */
+        kai_action act = for_log && r->action != KAI_ACT_REPLACE ? KAI_ACT_REDACT : r->action;
+        switch (act) {
         case KAI_ACT_REDACT: {
             const char *label = r->name;
             if (strncmp(label, "secret:", 7) == 0) label += 7;
+            if (strncmp(label, "term:", 5) == 0) label = "company term";
             sb_addf(&out, "[REDACTED by Kai: %s]", label);
             break;
         }
@@ -99,7 +102,15 @@ char *kai_scan_text(const kai_policy *p, const char *text, kai_report *rep) {
     char *cur = strdup(text);
     if (!cur) return NULL;
     for (int i = 0; i < p->nrules && cur; i++)
-        cur = apply_rule(&p->rules[i], cur, rep);
+        cur = apply_rule(&p->rules[i], cur, rep, 0);
+    return cur;
+}
+
+char *kai_redact_for_log(const kai_policy *p, const char *text) {
+    if (!p || !text || p->builtin_secrets == KAI_ACT_NONE || strlen(text) > p->max_scan) return NULL;
+    char *cur = strdup(text);
+    for (int i = 0; i < p->nrules && cur; i++)
+        cur = apply_rule(&p->rules[i], cur, NULL, 1);
     return cur;
 }
 
@@ -261,6 +272,20 @@ static int agent_control_path(const char *np, char *why, size_t whylen) {
     return 0;
 }
 
+int kai_rule_is_builtin(const char *rule) {
+    if (!rule || !*rule) return 0;
+    if (!strcmp(rule, "kai_self_protect") || !strcmp(rule, "~/.kai")) return 1;
+    size_t n = strlen(rule);
+    for (size_t i = 0; i < sizeof AGENT_CONTROL / sizeof AGENT_CONTROL[0]; i++) {
+        const char *c = AGENT_CONTROL[i] + 1; /* the name agent_control_path reports */
+        size_t l = strlen(c);
+        if (n >= l && strcmp(rule + n - l, c) == 0) return 1;
+    }
+    /* a custom CODEX_HOME's hook files are reported by full path */
+    return (n >= 10 && !strcmp(rule + n - 10, "hooks.json")) ||
+           (n >= 11 && !strcmp(rule + n - 11, "config.toml"));
+}
+
 int kai_path_protected(const kai_policy *p, const char *path, const char *cwd,
                        char *why, size_t whylen) {
     if (why && whylen) why[0] = '\0';
@@ -294,7 +319,15 @@ typedef struct {
     char *why;
     size_t whylen;
     int hit;
+    kai_skip_fn skip;
+    void *skip_ud;
 } path_scan_t;
+
+/* A protected path was found: it counts unless the user exempted its rule. */
+static int path_hit(path_scan_t *ps, const char *path) {
+    if (!kai_path_protected(ps->p, path, ps->cwd, ps->why, ps->whylen)) return 0;
+    return !(ps->skip && ps->skip(ps->why, ps->skip_ud));
+}
 
 static int path_char(char c) {
     return isalnum((unsigned char)c) || strchr("._/~+@%-", c);
@@ -304,8 +337,7 @@ static int path_char(char c) {
  * inside it (so open('/Users/u/.ssh/id_rsa') or --key=~/.aws/creds count). */
 static void scan_string(path_scan_t *ps, const char *w) {
     if (ps->hit || !w || !*w) return;
-    if (w[0] != '-' && (strchr(w, '/') || w[0] == '~' || strchr(w, '.')) &&
-        kai_path_protected(ps->p, w, ps->cwd, ps->why, ps->whylen)) {
+    if (w[0] != '-' && (strchr(w, '/') || w[0] == '~' || strchr(w, '.')) && path_hit(ps, w)) {
         ps->hit = 1;
         return;
     }
@@ -318,9 +350,7 @@ static void scan_string(path_scan_t *ps, const char *w) {
         char tmp[1024];
         memcpy(tmp, c, n);
         tmp[n] = '\0';
-        if ((strchr(tmp, '/') || tmp[0] == '.') &&
-            kai_path_protected(ps->p, tmp, ps->cwd, ps->why, ps->whylen))
-            ps->hit = 1;
+        if ((strchr(tmp, '/') || tmp[0] == '.') && path_hit(ps, tmp)) ps->hit = 1;
         c = e - 1;
     }
 }
@@ -345,27 +375,57 @@ static void scan_text_paths(const char *text, void *ud) {
     }
 }
 
-int kai_command_touches_protected(const kai_policy *p, const char *cmd,
-                                   const char *cwd, char *why, size_t whylen) {
+int kai_command_touches_protected_skip(const kai_policy *p, const char *cmd, const char *cwd,
+                                       char *why, size_t whylen, kai_skip_fn skip, void *ud) {
     if (why && whylen) why[0] = '\0';
     if (!p || !cmd) return 0;
-    path_scan_t ps = {p, cwd, why, whylen, 0};
+    char scratch[256];
+    if (!why || !whylen) { why = scratch; whylen = sizeof scratch; } /* path_hit reads it */
+    path_scan_t ps = {p, cwd, why, whylen, 0, skip, ud};
     kai_shell_walk(cmd, scan_cmd_words, scan_text_paths, &ps);
+    if (!ps.hit) why[0] = '\0';
     return ps.hit;
+}
+
+int kai_command_touches_protected(const kai_policy *p, const char *cmd,
+                                   const char *cwd, char *why, size_t whylen) {
+    return kai_command_touches_protected_skip(p, cmd, cwd, why, whylen, NULL, NULL);
+}
+
+/* Upload rules match the command view (kai_shell_view), not the raw text:
+ * a heredoc body, a comment or an argument that mentions nc is not nc. */
+int kai_upload_match(const kai_policy *p, const char *cmd, char *why, size_t whylen,
+                     char *match, size_t matchlen, kai_skip_fn skip, void *ud) {
+    if (why && whylen) why[0] = '\0';
+    if (match && matchlen) match[0] = '\0';
+    if (!p || !cmd) return 0;
+    char *view = kai_shell_view(cmd);
+    if (!view) return 0;
+    regmatch_t m;
+    int hit = 0;
+    for (int i = 0; i < p->nupl && !hit; i++) {
+        if (regexec(&p->upl[i].re, view, 1, &m, 0) != 0) continue;
+        if (skip && skip(p->upl[i].name, ud)) continue;
+        hit = 1;
+        if (why) kai_strlcpy(why, p->upl[i].name, whylen);
+        if (match && matchlen) {
+            /* the command itself, without the "| " a pattern anchors on */
+            const char *ms = view + m.rm_so, *me = view + m.rm_eo;
+            while (ms < me && (*ms == '|' || *ms == ' ')) ms++;
+            while (me > ms && me[-1] == ' ') me--;
+            size_t n = (size_t)(me - ms);
+            if (n >= matchlen) n = matchlen - 1;
+            memcpy(match, ms, n);
+            match[n] = '\0';
+        }
+    }
+    free(view);
+    return hit;
 }
 
 int kai_command_looks_like_upload(const kai_policy *p, const char *cmd,
                                    char *why, size_t whylen) {
-    if (why && whylen) why[0] = '\0';
-    if (!p || !cmd) return 0;
-    regmatch_t m;
-    for (int i = 0; i < p->nupl; i++) {
-        if (regexec(&p->upl[i].re, cmd, 1, &m, 0) == 0) {
-            if (why) kai_strlcpy(why, p->upl[i].name, whylen);
-            return 1;
-        }
-    }
-    return 0;
+    return kai_upload_match(p, cmd, why, whylen, NULL, 0, NULL, NULL);
 }
 
 /* ---- prompt-injection assessment ---- */

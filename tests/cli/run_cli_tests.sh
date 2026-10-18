@@ -65,6 +65,31 @@ has "agents listed in json" "$("$KAI" policy show --json)" '"kind":	"team"'
 "$KAI" policy remove agent aider >/dev/null
 hasnt "remove agent drops all its lines" "$(cat "$KAI_HOME/policy")" 'agent aider'
 
+echo "== allowed destinations =="
+for d in artifacts.example.com '*.corp.example.com' db.example.com:5432 10.0.0.0/8 203.0.113.5:22 '[2001:db8::1]:22'; do
+    "$KAI" policy add egress_allow "$d" >/dev/null 2>&1 && pass "egress_allow $d accepted" || fail "egress_allow $d rejected"
+done
+for d in 10.0.0.0/33 1.2.3.4:99999 'host/8' '[1.2.3.4]:22' 'a;b'; do
+    "$KAI" policy add egress_allow "$d" >/dev/null 2>&1 && fail "egress_allow $d accepted" || pass "egress_allow $d rejected"
+done
+has "address entries listed in json" "$("$KAI" policy show --json)" '"203.0.113.5:22"'
+"$KAI" policy remove egress_allow 203.0.113.5:22 >/dev/null
+hasnt "remove egress_allow" "$(cat "$KAI_HOME/policy")" '203.0.113.5:22'
+
+echo "== exceptions =="
+"$KAI" policy add exempt netcat 'python3 tests/*' >/dev/null
+has "add exempt" "$("$KAI" policy show --json)" '"pattern":	"python3 tests/*"'
+"$KAI" policy add exempt netcat 'python3 tests/*' >/dev/null
+[ "$(count "$(cat "$KAI_HOME/policy")" '^exempt')" = 1 ] && pass "add exempt is idempotent" || fail "add exempt duplicated"
+"$KAI" policy add exempt kai_self_protect '*' >/dev/null 2>&1 && fail "self-protection exempted" || pass "self-protection can't be exempted"
+"$KAI" policy add exempt '~/.kai' '*' >/dev/null 2>&1 && fail "kai home exempted" || pass "Kai's files can't be exempted"
+"$KAI" policy add exempt netcat 'a # b' >/dev/null 2>&1 && fail "'#' accepted" || pass "'#' rejected"
+"$KAI" policy remove exempt netcat 'python3 tests/*' >/dev/null
+hasnt "remove exempt" "$(cat "$KAI_HOME/policy")" 'exempt netcat'
+"$KAI" policy set audit_context off >/dev/null
+has "audit_context switch" "$("$KAI" policy show --json)" '"audit_context":	"off"'
+"$KAI" policy set audit_context on >/dev/null
+
 echo "== audit log =="
 ALLOWED='{"hook_event_name":"PreToolUse","cwd":"/tmp","tool_name":"Read","tool_input":{"file_path":"README.md"}}'
 DENIED='{"hook_event_name":"PreToolUse","cwd":"/tmp","tool_name":"Read","tool_input":{"file_path":"~/.ssh/id_rsa"}}'
@@ -104,13 +129,41 @@ sys.exit(0 if b < s*2 + 0.005 else 1)" \
   && pass "append time doesn't grow with the log" || fail "append slows down as the log grows"
 mv "$KAI_HOME/audit.log" "$KAI_HOME/audit.log.junk"
 
+# Run each of Kai's installed hook commands with Kai's program gone. Blocking
+# events must exit 2 (the agent then blocks) with a reason; Stop and
+# PostToolUse must not (exit 2 on Stop would keep the agent from stopping).
+fails_closed() {
+    python3 -I - "$1" "$2" "$KAI" <<'PY'
+import json, subprocess, sys
+path, agent, kai = sys.argv[1:]
+d = json.load(open(path))
+bad = []
+for event, groups in d["hooks"].items():
+    for g in groups:
+        for h in g.get("hooks", []):
+            cmd = h.get("command", "")
+            if " hook " + agent not in cmd:
+                continue
+            gone = cmd.replace(kai, "/nonexistent/kai")
+            r = subprocess.run(["/bin/sh", "-c", gone], input="{}", capture_output=True, text=True)
+            want = event in ("PreToolUse", "UserPromptSubmit")
+            if want and (r.returncode != 2 or "Kai couldn't check this" not in r.stderr):
+                bad.append(f"{event}: exit {r.returncode}")
+            if not want and r.returncode == 2:
+                bad.append(f"{event}: exit 2 would not be harmless")
+print("ok" if not bad else "; ".join(bad))
+PY
+}
+
 echo "== install / uninstall =="
 mkdir -p "$HOME/.claude"
 printf '{"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}' > "$HOME/.claude/settings.json"
 "$KAI" install claude >/dev/null
 "$KAI" install claude >/dev/null
-[ "$(count "$(cat "$HOME/.claude/settings.json")" 'hook claude')" = 4 ] && pass "install twice adds hooks once" || fail "install duplicated hooks"
+[ "$(count "$(cat "$HOME/.claude/settings.json")" 'hook claude')" = 5 ] && pass "install twice adds hooks once" || fail "install duplicated hooks"
+has "install keeps the user's own Stop hook" "$(cat "$HOME/.claude/settings.json")" 'echo mine'
 has "status: claude installed" "$("$KAI" status --json)" '"installed":	true'
+has "claude hooks fail closed when Kai is missing (not on Stop)" "$(fails_closed "$HOME/.claude/settings.json" claude)" 'ok'
 "$KAI" uninstall claude >/dev/null
 s=$(cat "$HOME/.claude/settings.json")
 hasnt "uninstall removes kai hooks" "$s" 'hook claude'
@@ -130,6 +183,7 @@ printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","co
 s=$(cat "$CODEX_HOME/hooks.json")
 [ "$(count "$s" 'hook codex')" = 3 ] && pass "install codex twice adds hooks once" || fail "codex hooks duplicated ($(count "$s" 'hook codex'))"
 hasnt "codex entries carry no _kai marker" "$s" '_kai'
+has "codex hooks fail closed when Kai is missing" "$(fails_closed "$CODEX_HOME/hooks.json" codex)" 'ok'
 has "status: codex installed" "$(codex_installed)" "True"
 has "doctor reports codex" "$("$KAI" doctor)" 'codex hooks: installed'
 "$KAI" uninstall codex >/dev/null

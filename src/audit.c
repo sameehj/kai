@@ -74,9 +74,27 @@ static void last_hash(int fd, char out[65]) {
     free(buf);
 }
 
+/* Add ,"key":"value" if value is set, cut to max bytes on a UTF-8 boundary. */
+static void opt_field(sb_t *b, const char *key, const char *value, size_t max) {
+    if (!value || !*value) return;
+    size_t n = strlen(value);
+    char *cut = NULL;
+    if (n > max) {
+        n = max;
+        while (n && ((unsigned char)value[n] & 0xC0) == 0x80) n--;
+        cut = malloc(n + 4);
+        if (!cut) return;
+        memcpy(cut, value, n);
+        memcpy(cut + n, "\xE2\x80\xA6", 4); /* … */
+        value = cut;
+    }
+    sb_addf(b, ",\"%s\":", key);
+    esc(b, value);
+    free(cut);
+}
+
 /* Write one hash-chained record to fd, which the caller holds locked. */
-static int append_record(int fd, const char *source, const char *event, const char *decision,
-                         const char *rule, const char *detail) {
+static int append_record(int fd, const kai_audit_entry *e) {
     char prev[65];
     last_hash(fd, prev);
 
@@ -90,11 +108,16 @@ static int append_record(int fd, const char *source, const char *event, const ch
     sb_t body;
     sb_init(&body);
     sb_adds(&body, "{\"ts\":"); esc(&body, ts);
-    sb_adds(&body, ",\"source\":"); esc(&body, source);
-    sb_adds(&body, ",\"event\":"); esc(&body, event);
-    sb_adds(&body, ",\"decision\":"); esc(&body, decision);
-    sb_adds(&body, ",\"rule\":"); esc(&body, rule ? rule : "");
-    sb_adds(&body, ",\"detail\":"); esc(&body, detail ? detail : "");
+    sb_adds(&body, ",\"source\":"); esc(&body, e->source);
+    sb_adds(&body, ",\"event\":"); esc(&body, e->event);
+    sb_adds(&body, ",\"decision\":"); esc(&body, e->decision);
+    sb_adds(&body, ",\"rule\":"); esc(&body, e->rule ? e->rule : "");
+    sb_adds(&body, ",\"detail\":"); esc(&body, e->detail ? e->detail : "");
+    opt_field(&body, "tool", e->tool, 64);
+    opt_field(&body, "target", e->target, KAI_AUDIT_TARGET_MAX);
+    opt_field(&body, "match", e->match, 160);
+    opt_field(&body, "session", e->session, 128);
+    opt_field(&body, "cwd", e->cwd, 512);
     sb_adds(&body, ",\"prev\":"); esc(&body, prev);
     char *bodystr = sb_take(&body);
 
@@ -136,6 +159,11 @@ static int open_locked(const char *path) {
 
 int kai_audit(const char *source, const char *event, const char *decision,
               const char *rule, const char *detail) {
+    kai_audit_entry e = {source, event, decision, rule, detail, NULL, NULL, NULL, NULL, NULL};
+    return kai_audit_write(&e);
+}
+
+int kai_audit_write(const kai_audit_entry *e) {
     ensure_home();
     const char *path = kai_audit_path();
     int fd = open_locked(path);
@@ -157,11 +185,13 @@ int kai_audit(const char *source, const char *event, const char *decision,
             if (fd < 0) return -1;
             char note[200];
             snprintf(note, sizeof note, "previous log %s.1 ended with %s", "audit.log", ended);
-            append_record(fd, "kai", "rotate", "allow", "audit.log.1", note); /* "allow": bookkeeping, not an event */
+            /* "allow": bookkeeping, not an event */
+            kai_audit_entry r = {"kai", "rotate", "allow", "audit.log.1", note, NULL, NULL, NULL, NULL, NULL};
+            append_record(fd, &r);
         }
     }
 
-    int rc = append_record(fd, source, event, decision, rule, detail);
+    int rc = append_record(fd, e);
     flock(fd, LOCK_UN);
     close(fd);
     return rc;

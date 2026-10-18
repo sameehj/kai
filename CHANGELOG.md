@@ -1,9 +1,54 @@
 # Changelog
 
 ## Unreleased
-- Escape suite (`tests/escape`, `make escape`): 33 ways an agent might reach
+- Fail-closed hooks: Claude Code and Codex `PreToolUse`/`UserPromptSubmit`
+  hooks now block (exit 2, with a reason) when Kai's program is missing,
+  crashes or can't answer; they used to let the action run. `Stop` and
+  `PostToolUse` are left as they were. Re-run `kai install` (the app does it
+  after an update) to upgrade existing hooks.
+- `terminal_control`: agents can't make Terminal, iTerm, System Events or
+  another terminal app run commands for them (`osascript … do script`,
+  keystrokes, a piped-in or file script, `open -a Terminal x.sh`,
+  `open x.command`). Those commands ran outside the agent's process tree,
+  past the hooks and the network wall. Exemptable like any rule.
+- Network wall: `egress_allow` takes IP addresses, CIDR ranges and `:port`
+  (`10.0.0.0/8`, `203.0.113.5:22`, `db.example.com:5432`); loopback is always
+  allowed. In Block mode a connection with no host name on a port other than
+  80/443 is now dropped unless an address entry allows it (it was only
+  logged). The app's "Allow" works for such `ip:port` notices too.
+- Security validation (`docs/SECURITY-VALIDATION.md`, `make validation`): a
+  measured verdict (BLOCKED / BYPASSABLE / DETECTED / NOT SUPPORTED) for ten
+  risks, from the escape suite, now 56 cases including destroying work,
+  databases, MCP tools, planted README instructions and Kai not running. Each
+  local case is also replayed for real without Kai in a throwaway home with
+  fake secrets, with a control run proving its check can tell.
+  `tests/network/run_network_check.py` records a live network-wall run.
+  First findings: Block mode drops an agent's web connections to unknown
+  hosts; DNS, no-hostname connections on other ports and processes that leave
+  the agent's tree get through; Claude Code and Codex hooks failed open when
+  Kai's program was missing (fixed above); no rule for destructive commands
+  yet.
+- Activity you can act on:
+  - Audit records carry the tool, a redacted excerpt of the command, path or
+    prompt, the part that matched, the session and folder (`audit_context
+    on|off`). After a block, the session's next event adds a note: retried,
+    did something else, or stopped (Claude Code's `Stop` hook is installed).
+  - `kai log show` prints decisions in words; `kai report <id>` writes a
+    false-positive report and a GitHub issue link without sending anything.
+  - `exempt <rule> <glob>` exceptions (`kai policy add|remove exempt`): one
+    rule skips one command, other checks still run, each use is logged, and
+    Kai's own protection can't be exempted.
+  - App: the Activity page shows what was blocked, the match highlighted,
+    what the agent did next, and "Not a threat" (exception, allow the file,
+    or report); notifications are merged per rule; notification permission
+    is asked when first needed, not at launch.
+- Upload rules match commands, not mentions: they run on a per-pipeline view
+  of the command (heredoc bodies, comments and arguments that only mention
+  `nc` no longer block), echoed text piped into a shell is read too, and the
+  old default patterns in existing policy files are upgraded automatically.
+- Escape suite (`tests/escape`, `make escape`): ways an agent might reach
   a secret, send data out or switch Kai off, with what the hooks do today
-  (14 stopped) and which layer is meant to close the rest. Runs in
+  and which layer is meant to close the rest. Runs in
   `make test`; results published in `docs/ESCAPES.md`.
 - README leads with what Kai does for you and its current security status;
   roadmap reordered (escape suite, Block mode, notarized build, then the

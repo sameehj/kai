@@ -50,12 +50,14 @@ final class FilterDataProvider: NEFilterDataProvider {
 
         let (ip, port) = Engine.endpoint(sf)
         let proto = sf.socketProtocol
+        // This Mac (loopback) and allowed addresses or ranges need no name.
+        if engine.isAllowed(host: nil, ip: ip, port: port) { return .allow() }
         // The flow's own name can be a CDN alias (api3.cursor.sh.cdn.cloudflare.net
         // for api3.cursor.sh). Use it to allow quickly; otherwise read the name
         // the client actually asked for (TLS SNI / HTTP Host) before deciding.
         var hint: String? = nil
         if let host = sf.remoteHostname, !host.isEmpty, !Engine.isIPLiteral(host) {
-            if engine.isAllowed(host) { return .allow() }
+            if engine.isAllowed(host: host, ip: ip, port: port) { return .allow() }
             hint = host
         }
         if proto == IPPROTO_UDP && port == "443" {
@@ -72,10 +74,11 @@ final class FilterDataProvider: NEFilterDataProvider {
         if let hint { // not web traffic, but the flow named its host
             return engine.decide(host: hint, agent: agent, ip: ip, port: port) ? .allow() : .drop()
         }
-        // Other ports (ssh, databases, ...) carry no hostname we can read yet.
-        // Logged, never dropped, until DNS correlation lands (docs/WALLS.md).
-        engine.note(agent: agent, ip: ip, port: port)
-        return .allow()
+        // Other ports (ssh, databases, ...) with no name: only the address can
+        // decide. Allow it with `egress_allow <ip>[:port]` or a range.
+        return engine.decide(host: nil, agent: agent, ip: ip, port: port,
+                             what: "Port \(port) connection")
+            ? .allow() : .drop()
     }
 
     override func handleOutboundData(from flow: NEFilterFlow, readBytesStartOffset offset: Int,
@@ -86,7 +89,7 @@ final class FilterDataProvider: NEFilterDataProvider {
         case .host(let host):
             engine.forget(flow)
             // allowed if either the requested name or the flow's name is listed
-            if let h = ctx.hint, engine.isAllowed(h) { return .allow() }
+            if let h = ctx.hint, engine.isAllowed(host: h, ip: ctx.ip, port: ctx.port) { return .allow() }
             return engine.decide(host: host, agent: ctx.agent, ip: ctx.ip, port: ctx.port) ? .allow() : .drop()
         case .needMore where offset + readBytes.count < 16384:
             return NEFilterDataVerdict(passBytes: 0, peekBytes: offset + readBytes.count + 4096)
@@ -198,13 +201,13 @@ final class Engine {
         flows[flow.identifier] = FlowContext(agent: agent, ip: ip, port: port, hint: hint)
     }
 
-    /// Is this host on the allowlist? (No logging: used for fast paths.)
-    func isAllowed(_ host: String) -> Bool {
+    /// Is this connection on the allowlist? (No logging: used for fast paths.)
+    func isAllowed(host: String?, ip: String, port: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
         reloadLocked(force: false)
         guard let p = policy else { return true }
         var why = [CChar](repeating: 0, count: 256)
-        return kai_egress_allowed(p, host, &why, why.count) == 1
+        return kai_egress_endpoint_allowed(p, host, ip, Int32(port) ?? 0, &why, why.count) == 1
     }
 
     func context(for flow: NEFilterFlow) -> FlowContext? {
@@ -225,10 +228,8 @@ final class Engine {
         guard let p = policy else { return true }
         let mode = kai_policy_egress_mode(p)
         if mode == KAI_EGRESS_OFF { return true }
-        if let host {
-            var why = [CChar](repeating: 0, count: 256)
-            if kai_egress_allowed(p, host, &why, why.count) == 1 { return true }
-        }
+        var why = [CChar](repeating: 0, count: 256)
+        if kai_egress_endpoint_allowed(p, host, ip, Int32(port) ?? 0, &why, why.count) == 1 { return true }
         let target = host ?? "\(ip):\(port)"
         let block = mode == KAI_EGRESS_BLOCK
         let detail = host == nil
@@ -236,14 +237,6 @@ final class Engine {
             : "connection to \(host!) (\(ip):\(port)) is not on the allowlist"
         auditLocked(agent: agent, decision: block ? "block" : "log", target: target, detail: detail)
         return !block
-    }
-
-    /// Unknown port and no hostname: always allowed for now, but recorded.
-    func note(agent: String, ip: String, port: String) {
-        lock.lock(); defer { lock.unlock() }
-        guard let p = policy, kai_policy_egress_mode(p) != KAI_EGRESS_OFF else { return }
-        auditLocked(agent: agent, decision: "log", target: "\(ip):\(port)",
-                    detail: "connection to \(ip):\(port) (port \(port), host unknown, not filtered yet)")
     }
 
     /// One audit record per agent+target+decision every 10 minutes, so a

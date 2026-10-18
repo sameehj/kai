@@ -7,7 +7,9 @@
  */
 #include "internal.h"
 
+#include <arpa/inet.h>
 #include <ctype.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* host == entry, or host ends with "." + entry. Case-insensitive. */
@@ -19,11 +21,159 @@ static int host_covered(const char *host, const char *entry) {
     return hl == el || host[hl - el - 1] == '.';
 }
 
+/* An allowlist entry, split: a host name, or an address with a prefix
+ * length (a single address is a full-length prefix), and an optional port.
+ *   example.com   example.com:5432   10.0.0.0/8   203.0.113.5:22
+ *   2001:db8::/32   [2001:db8::1]:22 */
+typedef struct {
+    char host[256];      /* host name, or "" for an address entry */
+    unsigned char addr[16];
+    int family;          /* AF_INET / AF_INET6 for an address entry */
+    int bits;            /* prefix length */
+    int port;            /* 0 = any port */
+} egress_entry;
+
+static int parse_port(const char *s) {
+    char *end;
+    long v = strtol(s, &end, 10);
+    return (*s && !*end && v > 0 && v < 65536) ? (int)v : -1;
+}
+
+/* Parse an address with an optional /bits. Returns 1 on success. */
+static int parse_addr(const char *s, egress_entry *e) {
+    char buf[64];
+    if (strlen(s) >= sizeof buf) return 0;
+    kai_strlcpy(buf, s, sizeof buf);
+    char *slash = strchr(buf, '/');
+    if (slash) *slash = '\0';
+    if (inet_pton(AF_INET, buf, e->addr) == 1) e->family = AF_INET, e->bits = 32;
+    else if (inet_pton(AF_INET6, buf, e->addr) == 1) e->family = AF_INET6, e->bits = 128;
+    else return 0;
+    if (slash) {
+        char *end;
+        long b = strtol(slash + 1, &end, 10);
+        if (!slash[1] || *end || b < 0 || b > e->bits) return 0;
+        e->bits = (int)b;
+    }
+    return 1;
+}
+
+static int valid_hostname(const char *s) {
+    if (!*s || strlen(s) > 253) return 0;
+    for (const char *c = s; *c; c++)
+        if (!isalnum((unsigned char)*c) && *c != '-' && *c != '.' && *c != '_') return 0;
+    return 1;
+}
+
+static int parse_entry(const char *s, egress_entry *e) {
+    memset(e, 0, sizeof *e);
+    char buf[300];
+    if (!s || !*s || strlen(s) >= sizeof buf) return 0;
+    kai_strlcpy(buf, s, sizeof buf);
+    char *port = NULL;
+    if (buf[0] == '[') { /* [v6] or [v6/bits], then an optional :port */
+        char *close = strchr(buf, ']');
+        if (!close) return 0;
+        *close = '\0';
+        if (close[1] == ':') port = close + 2;
+        else if (close[1]) return 0;
+        if (!parse_addr(buf + 1, e) || e->family != AF_INET6) return 0;
+    } else {
+        char *colon = strchr(buf, ':');
+        if (colon && strchr(colon + 1, ':')) { /* bare IPv6: no port possible */
+            if (!parse_addr(buf, e) || e->family != AF_INET6) return 0;
+        } else {
+            if (colon) *colon = '\0', port = colon + 1;
+            if (parse_addr(buf, e)) {
+                if (e->family != AF_INET) return 0;
+            } else if (!strchr(buf, '/') && valid_hostname(buf)) {
+                kai_strlcpy(e->host, buf, sizeof e->host);
+            } else {
+                return 0;
+            }
+        }
+    }
+    if (port && (e->port = parse_port(port)) < 0) return 0;
+    return 1;
+}
+
+int kai_egress_entry_valid(const char *entry) {
+    egress_entry e;
+    return parse_entry(entry, &e);
+}
+
+static int prefix_match(const unsigned char *a, const unsigned char *b, int bits) {
+    int full = bits / 8, rest = bits % 8;
+    if (memcmp(a, b, (size_t)full) != 0) return 0;
+    if (!rest) return 1;
+    unsigned char mask = (unsigned char)(0xff << (8 - rest));
+    return (a[full] & mask) == (b[full] & mask);
+}
+
+/* ip is the flow's address as the network extension prints it: dotted IPv4,
+ * or IPv6 with or without brackets. Fills addr/family; 0 if unreadable. */
+static int read_ip(const char *ip, unsigned char *addr, int *family) {
+    char buf[64];
+    if (!ip) return 0;
+    if (ip[0] == '[') ip++;
+    if (strlen(ip) >= sizeof buf) return 0;
+    kai_strlcpy(buf, ip, sizeof buf);
+    char *close = strchr(buf, ']');
+    if (close) *close = '\0';
+    char *zone = strchr(buf, '%'); /* fe80::1%en0 */
+    if (zone) *zone = '\0';
+    if (inet_pton(AF_INET, buf, addr) == 1) { *family = AF_INET; return 1; }
+    if (inet_pton(AF_INET6, buf, addr) == 1) {
+        static const unsigned char v4mapped[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+        if (memcmp(addr, v4mapped, 12) == 0) { /* ::ffff:1.2.3.4 is IPv4 */
+            memmove(addr, addr + 12, 4);
+            *family = AF_INET;
+        } else {
+            *family = AF_INET6;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static int is_loopback(const unsigned char *addr, int family) {
+    static const unsigned char v6lo[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+    return family == AF_INET ? addr[0] == 127 : memcmp(addr, v6lo, 16) == 0;
+}
+
+int kai_egress_endpoint_allowed(const kai_policy *p, const char *host, const char *ip, int port,
+                                char *why, size_t whylen) {
+    if (why && whylen) why[0] = '\0';
+    if (!p) return 0;
+    unsigned char addr[16];
+    int family = 0, have_ip = read_ip(ip, addr, &family);
+    if (have_ip && is_loopback(addr, family)) {
+        if (why) kai_strlcpy(why, "this Mac (loopback)", whylen);
+        return 1;
+    }
+    for (int i = 0; i < p->negress; i++) {
+        egress_entry e;
+        if (!parse_entry(p->egress_allow[i], &e)) continue;
+        if (e.port && e.port != port) continue;
+        int hit = e.host[0] ? (host && *host && host_covered(host, e.host))
+                            : (have_ip && e.family == family && prefix_match(addr, e.addr, e.bits));
+        if (hit) {
+            if (why) kai_strlcpy(why, p->egress_allow[i], whylen);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int kai_egress_allowed(const kai_policy *p, const char *host, char *why, size_t whylen) {
     if (why && whylen) why[0] = '\0';
     if (!p || !host || !*host) return 0;
     for (int i = 0; i < p->negress; i++) {
-        if (host_covered(host, p->egress_allow[i])) {
+        egress_entry e;
+        /* any-port host entries only: a port or address entry needs the
+         * connection's details (kai_egress_endpoint_allowed) */
+        if (!parse_entry(p->egress_allow[i], &e) || !e.host[0] || e.port) continue;
+        if (host_covered(host, e.host)) {
             if (why) kai_strlcpy(why, p->egress_allow[i], whylen);
             return 1;
         }

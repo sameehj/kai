@@ -314,10 +314,50 @@ private struct ProtectionPage: View {
             SwitchRow(key: "injection", title: "Prompt injection in tool results",
                       help: "Tells the agent the text is untrusted. Never blocks.",
                       options: [("warn", "Warn agent", "Add a caution"), ("off", "Off", "Don't look")])
+            SwitchRow(key: "audit_context", title: "Show what was blocked",
+                      help: "Keep the command, file or part of the prompt in the activity log so you can see why. Secrets in it are hidden first.",
+                      options: [("on", "Keep an excerpt", "Command, path or prompt, redacted"),
+                                ("off", "Rule only", "Just the rule and reason")])
+            ExceptionsCard()
             if let p = model.policy, !p.ok {
                 Text(p.error).font(.system(size: 12)).foregroundStyle(Theme.coral)
             }
         }
+    }
+}
+
+/// Exceptions made with "Not a threat" on the Activity page.
+private struct ExceptionsCard: View {
+    @EnvironmentObject var model: AppModel
+    var body: some View {
+        Card(padding: 14) {
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Your exceptions").font(.system(size: 14, weight: .semibold))
+                    Text("Commands you marked “Not a threat”. Each one skips only the rule named, and every use is still logged.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                }
+                let items = model.policy?.exempt ?? []
+                if items.isEmpty {
+                    Text("None yet. Add one from a blocked command on the Activity page.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                }
+                ForEach(items, id: \.self) { x in
+                    HStack(spacing: 10) {
+                        Text(x.rule).font(.system(size: 12, weight: .semibold)).frame(width: 110, alignment: .leading)
+                        Text(x.pattern).font(Theme.mono).foregroundStyle(Theme.soft)
+                            .lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Button { model.removeExempt(x) } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.plain).foregroundStyle(Theme.muted)
+                            .accessibilityLabel("Remove exception for \(x.rule)")
+                    }
+                    .padding(.horizontal, 10).frame(height: 30)
+                    .background(Theme.ink, in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        }
+        .disabled(model.busy || model.policy == nil)
     }
 }
 
@@ -367,9 +407,11 @@ private struct NetworkPage: View {
                     .disabled(model.busy || model.policy == nil)
             }
             hosts
-            EditableList(kind: "egress_allow", title: "Your allowed hosts",
-                         help: "Each also covers its subdomains. Model APIs, GitHub and package registries are built in.",
-                         items: model.policy?.egressAllow ?? [], placeholder: "artifacts.yourcompany.com")
+            EditableList(kind: "egress_allow", title: "Your allowed destinations",
+                         help: "A host (also covers its subdomains), an IP address or range, optionally with :port: "
+                             + "db.yourcompany.com:5432, 10.0.0.0/8, 203.0.113.5:22. This Mac, model APIs, GitHub "
+                             + "and package registries are built in.",
+                         items: model.policy?.egressAllow ?? [], placeholder: "artifacts.yourcompany.com or 10.0.0.0/8")
         }
         .onAppear { wall.refresh() }
     }
@@ -509,11 +551,24 @@ private struct CompanyPage: View {
 private struct ActivityPage: View {
     @EnvironmentObject var model: AppModel
     @State private var verifyResult: String?
+    @AppStorage("activityFilter") private var filter = "all"
+    @State private var expanded: Set<String> = []
+
+    private var shown: [AuditEvent] {
+        model.events.filter { e in
+            guard !e.isNote else { return false } // shown under their block
+            switch filter {
+            case "agents": return !e.isNetwork
+            case "network": return e.isNetwork
+            default: return true
+            }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             PageHeader(icon: "waveform.path.ecg", title: "Activity",
-                       subtitle: "Everything Kai blocked, cleaned or noticed. The log never stores secret values.")
+                       subtitle: "What Kai blocked, cleaned or noticed, what it was, and what the agent did next. Secrets are never stored.")
             Card(padding: 14) {
                 HStack(spacing: 10) {
                     if let a = model.status?.audit {
@@ -529,27 +584,183 @@ private struct ActivityPage: View {
                 }
             }
             if let v = verifyResult { Text(v).font(.system(size: 12)).foregroundStyle(Theme.muted) }
-            if model.events.isEmpty {
-                Text("No blocks, warnings or noticed hosts yet.").font(.system(size: 13)).foregroundStyle(Theme.muted)
-            }
-            ForEach(model.events.prefix(150)) { e in
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: e.isBlock ? "hand.raised.fill" : (e.decision == "log" ? "eye" : "exclamationmark.triangle.fill"))
-                        .foregroundStyle(e.isBlock ? Theme.coral : (e.decision == "log" ? Theme.muted : Theme.amber))
-                        .frame(width: 18)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(e.summary).font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
-                        HStack(spacing: 6) {
-                            if let d = e.date { Text(d, style: .relative) + Text(" ago") }
-                            if !e.rule.isEmpty { Text("· \(e.rule)") }
-                        }
-                        .font(.system(size: 11)).foregroundStyle(Theme.muted)
+            if let n = model.notice {
+                Card(padding: 12, stroke: Color(hex: 0x3A4420)) {
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.lime)
+                        Text(n).font(.system(size: 13))
+                        Spacer()
+                        Button { model.notice = nil } label: { Image(systemName: "xmark") }
+                            .buttonStyle(.plain).foregroundStyle(Theme.muted).accessibilityLabel("Dismiss")
                     }
-                    Spacer()
                 }
-                .padding(10)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+            }
+            Picker("Show", selection: $filter) {
+                Text("Everything").tag("all")
+                Text("Agent actions").tag("agents")
+                Text("Network").tag("network")
+            }
+            .pickerStyle(.segmented).labelsHidden().frame(width: 360)
+            if shown.isEmpty {
+                Text(filter == "network" ? "No connections noticed yet." : "No blocks, warnings or noticed hosts yet.")
+                    .font(.system(size: 13)).foregroundStyle(Theme.muted)
+            }
+            ForEach(shown.prefix(150)) { e in
+                ActivityRow(event: e, followUp: model.followUp(for: e), expanded: expanded.contains(e.id)) {
+                    if expanded.contains(e.id) { expanded.remove(e.id) } else { expanded.insert(e.id) }
+                }
             }
         }
+    }
+}
+
+/// One decision: what it was about, why, and what the agent did next.
+/// Click to open the details and "Not a threat".
+private struct ActivityRow: View {
+    @EnvironmentObject var model: AppModel
+    let event: AuditEvent
+    let followUp: AuditEvent?
+    let expanded: Bool
+    let toggle: () -> Void
+    @State private var report: ReportInfo?
+
+    private var color: Color {
+        if event.isBlock { return Theme.coral }
+        if event.isExempt || event.decision == "log" { return Theme.muted }
+        if event.decision == "redact" || event.decision == "replace" { return Theme.lime }
+        return Theme.amber
+    }
+    private var icon: String {
+        if event.isBlock { return "hand.raised.fill" }
+        if event.isExempt { return "checkmark.circle" }
+        if event.decision == "log" { return "eye" }
+        if event.decision == "redact" || event.decision == "replace" { return "wand.and.stars" }
+        return "exclamationmark.triangle.fill"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button(action: toggle) { header }.buttonStyle(.plain)
+                .accessibilityHint(expanded ? "Hide details" : "Show details")
+            if let t = event.excerpt { ExcerptView(text: t, match: event.match, expanded: expanded) }
+            if !event.detail.isEmpty {
+                Text(event.detail).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let n = followUp {
+                Label(n.detail, systemImage: "arrow.turn.down.right")
+                    .font(.system(size: 12)).foregroundStyle(Theme.soft)
+            }
+            if expanded { details }
+        }
+        .padding(12)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(expanded ? Theme.border : .clear))
+        .alert("False-positive report written", isPresented: Binding(get: { report != nil },
+                                                                    set: { if !$0 { report = nil } })) {
+            Button("Open GitHub issue") { if let r = report, let u = URL(string: r.issueUrl) { NSWorkspace.shared.open(u) } }
+            Button("Show report") { if let r = report { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: r.path)]) } }
+            Button("Done", role: .cancel) {}
+        } message: {
+            Text("It holds the rule, the reason and the excerpt above, with secrets hidden. Nothing has been sent: review it, then open the issue page to file it if you want to.")
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: icon).foregroundStyle(color).frame(width: 18)
+            Text(event.verb).font(.system(size: 13, weight: .semibold))
+            + Text(" · \(event.agentName)").font(.system(size: 13))
+            + Text(event.actionLabel.map { " · \($0)" } ?? "").font(.system(size: 13)).foregroundColor(Theme.muted)
+            Spacer()
+            if let d = event.date { Text(ago(d)).font(.system(size: 11)).foregroundStyle(Theme.muted) }
+            Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                .font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.muted)
+        }
+        .contentShape(Rectangle())
+    }
+
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider().overlay(Theme.border)
+            VStack(alignment: .leading, spacing: 4) {
+                if !event.rule.isEmpty { fact("Rule", event.rule) }
+                if let c = event.cwd, !c.isEmpty { fact("Folder", c) }
+                if let s = event.session, !s.isEmpty { fact("Session", String(s.prefix(12))) }
+                fact("Record", String(event.id.prefix(10)))
+            }
+            if event.excerpt == nil && !event.isNetwork {
+                Text("No excerpt was kept for this record (older record, or “Show what was blocked” is off).")
+                    .font(.system(size: 11)).foregroundStyle(Theme.muted)
+            }
+            HStack(spacing: 8) {
+                if event.isBlock || event.decision == "warn" { notAThreat }
+                Button("Copy details") { model.copyDetails(event) }.buttonStyle(GhostButtonStyle())
+            }
+        }
+    }
+
+    @ViewBuilder private var notAThreat: some View {
+        Menu("Not a threat") {
+            if event.isBuiltinRule {
+                Text("Kai's own protection can't be switched off from here")
+            }
+            if event.canExemptCommand {
+                Button("Allow this exact command (\(event.rule) only)") { model.exempt(event) }
+            }
+            if let p = event.allowablePath {
+                Button("Always allow \(p)") { model.allowFile(event) }
+            }
+            Divider()
+            Button("Report a false positive…") {
+                Task { report = await model.report(event) }
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .padding(.horizontal, 12).frame(minHeight: 32)
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Theme.border))
+        .disabled(model.busy)
+    }
+
+    private func fact(_ k: String, _ v: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(k).font(.system(size: 11)).foregroundStyle(Theme.muted).frame(width: 64, alignment: .leading)
+            Text(v).font(Theme.mono).textSelection(.enabled).lineLimit(2).truncationMode(.middle)
+        }
+    }
+}
+
+/// The recorded command, path or prompt excerpt, with the part a rule
+/// matched highlighted and hidden secrets dimmed.
+private struct ExcerptView: View {
+    let text: String
+    let match: String?
+    let expanded: Bool
+
+    private var styled: AttributedString {
+        var a = AttributedString(text)
+        a.foregroundColor = Theme.soft
+        let ns = text as NSString
+        if let re = try? NSRegularExpression(pattern: #"\[REDACTED by Kai: [^\]]*\]"#) {
+            for m in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+                if let r = Range(m.range, in: a) { a[r].foregroundColor = Theme.muted }
+            }
+        }
+        if let m = match, !m.isEmpty, let r = a.range(of: m) ?? a.range(of: String(m.split(separator: " ").first ?? "")) {
+            a[r].foregroundColor = Color(hex: 0xFFB4AC)
+            a[r].backgroundColor = Theme.coral.opacity(0.18)
+        }
+        return a
+    }
+
+    var body: some View {
+        Text(styled)
+            .font(Theme.mono)
+            .lineLimit(expanded ? nil : 3)
+            .textSelection(.enabled)
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.ink, in: RoundedRectangle(cornerRadius: 8))
     }
 }

@@ -19,6 +19,7 @@ mistake with the developer's full privileges.
 | Agent edits Kai's own policy/log | `~/.kai` is always protected | path rules |
 | Agent disables its own hooks (edits `~/.claude/settings.json`, `.cursor/hooks.json`, `.codex/hooks.json`/`config.toml`, project copies) | built-in protected paths, not overridable by policy | `PreToolUse` (Edit/Write/MultiEdit/NotebookEdit, Bash), `beforeShellExecution` |
 | Agent runs Kai's settings commands (`k=kai; $k uninstall`, `sh -c '…'`) | shell reader looks at executed commands | `PreToolUse` Bash, `beforeShellExecution` |
+| Agent makes Terminal (or iTerm, System Events, …) run a command, outside its own process tree (`osascript … do script`, `open -a Terminal x.sh`, `open x.command`) | `terminal_control`: the script text, a piped-in script or a script file names a terminal app | `PreToolUse` Bash, `beforeShellExecution` |
 
 ## What v0.1 does NOT stop (documented limits)
 
@@ -45,8 +46,25 @@ mistake with the developer's full privileges.
   term/secret redaction) block. Pattern/ML detection only flags.
 - **Fail closed on policy, configurable elsewhere.** A broken policy denies
   agent actions. For normal operation, secrets fail closed; low-risk unknowns
-  can warn rather than block (policy setting).
-- **No secrets at rest.** The audit log records rule names and counts, never the
-  matched secret.
+  can warn rather than block (policy setting). Hooks are installed
+  fail-closed: if Kai's program is missing or crashes, Claude Code, Codex and
+  Cursor block the action (for Claude Code and Codex only on `PreToolUse` and
+  `UserPromptSubmit`; exit 2 on `Stop` would keep the agent from stopping).
+  **Not yet true:** the network wall allows all traffic when it can't read the
+  policy (traced in [SECURITY-VALIDATION.md](SECURITY-VALIDATION.md)).
+- **No secrets at rest.** The audit log records rule names and reasons, never
+  the matched secret. Decisions also keep an excerpt of what was blocked (the
+  command, path or part of the prompt, up to 300 characters) so a person can
+  see why; every rule match in it is replaced by `[REDACTED by Kai: …]` first.
+  That redaction is only as good as the detectors: a secret Kai doesn't
+  recognize stays in the excerpt. The log is local and readable only by you
+  (0600, under `~/.kai`, which agents can't read); `audit_context off` keeps
+  just rules and reasons, and with secret detection off no excerpt is kept.
+- **Exceptions are narrow and visible.** "Not a threat" adds
+  `exempt <rule> <glob>`: that one rule skips that one command, every other
+  check still runs, every use is logged, and Kai's own protection can't be
+  exempted. Agents can't add exceptions (`kai policy` is self-protected).
+- **Reports are never sent.** `kai report` writes a local file and a GitHub
+  issue link; nothing leaves the machine unless the user opens it and submits.
 - **Least surprise.** Kai touches only agent process actions and AI traffic;
   everything else on the machine is untouched.

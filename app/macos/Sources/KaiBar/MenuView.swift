@@ -223,7 +223,9 @@ struct BlockedHero: View {
             .shadow(color: Theme.coral.opacity(0.4), radius: 24)
             .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever()) { pulse = true } }
             Text("Kai stopped \(event.agentName)").font(Theme.display(22)).multilineTextAlignment(.center)
-            Text("Nothing left your Mac.").font(.system(size: 13)).foregroundStyle(Theme.soft)
+            Text(event.isPrompt ? "The prompt wasn't sent." : event.isNetwork ? "The connection was dropped."
+                                                             : "The action didn't run.")
+                .font(.system(size: 13)).foregroundStyle(Theme.soft)
 
             Card(stroke: Color(hex: 0x4A2A27)) {
                 VStack(alignment: .leading, spacing: 10) {
@@ -232,10 +234,13 @@ struct BlockedHero: View {
                         Spacer()
                         if let d = event.date { Text(ago(d)).font(.system(size: 12)).foregroundStyle(Theme.muted) }
                     }
-                    Text(event.detail.isEmpty ? event.rule : event.detail)
-                        .font(Theme.mono).foregroundStyle(Color(hex: 0xFFB4AC))
+                    Text(event.excerpt ?? (event.detail.isEmpty ? event.rule : event.detail))
+                        .font(Theme.mono).foregroundStyle(Color(hex: 0xFFB4AC)).lineLimit(4)
                         .padding(10).frame(maxWidth: .infinity, alignment: .leading)
                         .background(Theme.ink, in: RoundedRectangle(cornerRadius: 8))
+                    if event.excerpt != nil && !event.detail.isEmpty {
+                        Text(event.detail).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    }
                     if !event.rule.isEmpty {
                         Label(event.rule, systemImage: "circle.fill")
                             .labelStyle(DotLabelStyle(color: Theme.coral))

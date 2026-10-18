@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
  * Unit tests for libkai. Built and run by `make test`. */
 #include "kai.h"
+#include "../src/internal.h" /* the shell view and exception helpers */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -107,6 +108,39 @@ static void test_command_checks(void) {
           "pipe to shell flagged");
     CHECK(!kai_command_looks_like_upload(p, "npm run build", why, sizeof why),
           "benign command not flagged");
+
+    /* the view upload rules see: one line per pipeline, commands only */
+    char *v = kai_shell_view("FOO=1 sudo /usr/bin/nc -v host 9 < f | tee log; echo done # nc");
+    CHECK(v && strcmp(v, "nc -v host 9 f | tee log\necho done\n") == 0, "view: names, pipes, no comment");
+    free(v);
+    v = kai_shell_view("python3 - <<'EOF'\nimport os  # nc\nEOF\nls");
+    CHECK(v && strcmp(v, "python3 -\nls\n") == 0, "view: heredoc body left out");
+    free(v);
+    v = kai_shell_view("a || b | c");
+    CHECK(v && strcmp(v, "a\nb | c\n") == 0, "view: || is not a pipe");
+    free(v);
+    char match[64];
+    CHECK(kai_upload_match(p, "cat f | nc host 9", why, sizeof why, match, sizeof match, NULL, NULL) &&
+              strcmp(why, "netcat") == 0 && strcmp(match, "nc") == 0,
+          "upload match names the rule and the command");
+
+    /* exceptions: rule + glob, never Kai's own protection */
+    kai_policy *x = kai_policy_from_string("exempt netcat nc localhost *\nexempt kai_self_protect *\n", NULL, 0);
+    CHECK(kai_policy_exempt(x, "netcat", "nc localhost 9000"), "exempt: matching command");
+    CHECK(!kai_policy_exempt(x, "netcat", "nc evil 9000"), "exempt: other command");
+    CHECK(!kai_policy_exempt(x, "curl_upload", "nc localhost 9000"), "exempt: other rule");
+    CHECK(!kai_policy_exempt(x, "kai_self_protect", "kai uninstall"), "exempt: self-protection never");
+    CHECK(kai_rule_is_builtin("/Users/u/proj/.claude/settings.local.json"), "builtin: project hook file");
+    CHECK(!kai_rule_is_builtin("netcat"), "builtin: ordinary rule");
+    kai_policy_free(x);
+
+    /* log redaction hides block/warn matches too, and terms by kind only */
+    kai_policy *t = kai_policy_from_string("term block Project Falcon\n", NULL, 0);
+    char *r = kai_redact_for_log(t, "ship Project Falcon with ghp_abcdefghijklmnopqrstuvwxyz0123");
+    CHECK(r && !strstr(r, "Falcon") && !strstr(r, "ghp_abcdefghij") && strstr(r, "company term"),
+          "log redaction hides terms and secrets");
+    free(r);
+    kai_policy_free(t);
     kai_policy_free(p);
 }
 
@@ -232,6 +266,42 @@ static void test_egress(void) {
     kai_policy *d = kai_policy_from_string(kai_default_policy(), NULL, 0);
     CHECK(kai_policy_egress_mode(d) == KAI_EGRESS_LOG, "default egress is log-only");
     kai_policy_free(d);
+
+    /* connections: addresses, ranges, ports */
+    kai_policy *n = P("egress block\n"
+                      "egress_allow 10.0.0.0/8 203.0.113.5:22 db.example.com:5432 [2001:db8::1]:443\n"
+                      "egress_allow 2001:db8:aa::/48 lan.example.org\n");
+    CHECK(kai_egress_endpoint_allowed(n, NULL, "127.0.0.1", 9000, why, sizeof why), "loopback v4 always");
+    CHECK(kai_egress_endpoint_allowed(n, NULL, "[::1]", 5432, why, sizeof why), "loopback v6 always");
+    CHECK(kai_egress_endpoint_allowed(n, NULL, "10.20.30.40", 22, why, sizeof why), "CIDR range, any port");
+    CHECK(!kai_egress_endpoint_allowed(n, NULL, "11.0.0.1", 22, why, sizeof why), "outside the range");
+    CHECK(kai_egress_endpoint_allowed(n, NULL, "203.0.113.5", 22, why, sizeof why), "ip:port");
+    CHECK(!strcmp(why, "203.0.113.5:22"), "why names the entry");
+    CHECK(!kai_egress_endpoint_allowed(n, NULL, "203.0.113.5", 8080, why, sizeof why), "ip:port, other port");
+    CHECK(kai_egress_endpoint_allowed(n, NULL, "::ffff:10.1.2.3", 80, why, sizeof why), "v4-mapped v6");
+    CHECK(kai_egress_endpoint_allowed(n, NULL, "[2001:db8::1]", 443, why, sizeof why), "[v6]:port");
+    CHECK(!kai_egress_endpoint_allowed(n, NULL, "[2001:db8::1]", 22, why, sizeof why), "[v6]:port, other port");
+    CHECK(kai_egress_endpoint_allowed(n, NULL, "2001:db8:aa:1::9", 22, why, sizeof why), "v6 range");
+    CHECK(kai_egress_endpoint_allowed(n, "db.example.com", "198.51.100.7", 5432, why, sizeof why), "host:port");
+    CHECK(!kai_egress_endpoint_allowed(n, "db.example.com", "198.51.100.7", 22, why, sizeof why), "host:port, other port");
+    CHECK(!kai_egress_allowed(n, "db.example.com", why, sizeof why), "host:port isn't an any-port host");
+    CHECK(kai_egress_endpoint_allowed(n, "x.lan.example.org", "198.51.100.7", 22, why, sizeof why), "host, any port");
+    CHECK(kai_egress_endpoint_allowed(n, "github.com", "140.82.112.3", 443, why, sizeof why), "built-in host");
+    CHECK(!kai_egress_endpoint_allowed(n, NULL, "35.180.86.68", 22, why, sizeof why), "unknown ip refused");
+    CHECK(!kai_egress_endpoint_allowed(n, NULL, "?", 22, why, sizeof why), "unreadable ip refused");
+    kai_policy_free(n);
+    CHECK(kai_egress_entry_valid("example.com"), "valid: host");
+    CHECK(kai_egress_entry_valid("example.com:5432"), "valid: host:port");
+    CHECK(kai_egress_entry_valid("10.0.0.0/8"), "valid: CIDR");
+    CHECK(kai_egress_entry_valid("[2001:db8::1]:22"), "valid: [v6]:port");
+    CHECK(kai_egress_entry_valid("2001:db8::/32"), "valid: v6 CIDR");
+    CHECK(!kai_egress_entry_valid("10.0.0.0/33"), "invalid: prefix too long");
+    CHECK(!kai_egress_entry_valid("1.2.3.4:0"), "invalid: port 0");
+    CHECK(!kai_egress_entry_valid("1.2.3.4:99999"), "invalid: port too big");
+    CHECK(!kai_egress_entry_valid("exa mple.com"), "invalid: space");
+    CHECK(!kai_egress_entry_valid("host/8"), "invalid: host with prefix");
+    CHECK(!kai_egress_entry_valid("[1.2.3.4]:22"), "invalid: v4 in brackets");
+    CHECK(!kai_egress_entry_valid(""), "invalid: empty");
 }
 
 static void test_agents(void) {

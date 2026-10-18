@@ -24,9 +24,9 @@ AI coding agents can read files, run commands and connect to the internet using 
 - ✋ **Stop recognized risky actions.** Apply local rules to supported file reads, shell commands, prompts and tool calls: redact secrets, block uploads, flag likely prompt injection.
 - 👀 **Spot unfamiliar connections (macOS).** See agent connections to destinations outside your trusted list.
 
-Kai runs locally, never stores detected secret values in its audit log, and needs no Kai account.
+Kai runs locally, never stores detected secret values in its audit log (excerpts are redacted first), and needs no Kai account.
 
-**Security status:** agent hooks and local scanning are tested. Network monitoring is verified in Log mode; network blocking is not yet tested. A script the agent writes can still reach files directly; closing that gap is the planned storage wall. The [escape suite](docs/ESCAPES.md) shows exactly what is stopped today and what isn't, and the rest is in [what Kai doesn't promise](#-what-kai-doesnt-promise).
+**Security status:** agent hooks and local scanning are tested. Network blocking works for an agent's own web connections to unknown hosts (live run, macOS 14), but DNS lookups, raw connections to an IP on other ports, and processes that leave the agent's process tree get through. A script the agent writes can still reach files directly; closing that gap is the planned storage wall. [Security validation](docs/SECURITY-VALIDATION.md) gives a measured verdict for each risk, the [escape suite](docs/ESCAPES.md) lists every attempt, and the rest is in [what Kai doesn't promise](#-what-kai-doesnt-promise).
 
 ## ✨ What Kai can do today
 
@@ -39,7 +39,7 @@ Kai runs locally, never stores detected secret values in its audit log, and need
 | **Audit log** | Record decisions in a hash-chained log without storing detected secret values | ✅ Working and tested |
 | **macOS menu-bar app** | Show status, recent activity, protection switches, and policy controls | ✅ Running in development |
 | **Local AI gateway** | Inspect and transform requests explicitly routed through it to supported model APIs | 🧪 Tested with a fake upstream; live-agent testing pending |
-| **Network wall** | Use a signed macOS Network Extension to log or restrict agent connections by destination | ✅ Log mode verified on macOS 14 · 🧪 Block mode not yet tested |
+| **Network wall** | Use a signed macOS Network Extension to log or restrict agent connections by destination | ✅ Log mode verified on macOS 14 · ⚠️ Block mode works for agent web traffic, with [known gaps](docs/SECURITY-VALIDATION.md#network-wall-live-run) |
 | **Storage wall** | Use macOS Endpoint Security for stronger agent file restrictions | 🗓️ Planned; Apple entitlement required |
 
 **Important:** Hooks only see actions exposed by supported agent hook integrations. They are not OS-level sandboxing. The gateway protects only traffic routed through it. See [security boundaries](#-what-kai-doesnt-promise).
@@ -143,7 +143,16 @@ See [`policy/default.policy`](policy/default.policy) for the complete policy gra
 
 ### Review what happened
 
-Kai records its decisions (blocks, redactions, warnings; not the many allowed actions) in a hash-chained audit log that never stores the matched secrets. It rotates at 8 MB and appending stays fast however long it gets. The chain helps detect some unauthorized changes, but it is **not tamper-proof** against an attacker who controls the log and its verification state.
+Kai records its decisions (blocks, redactions, warnings; not the many allowed actions) in a hash-chained audit log that never stores the matched secrets. Each record says what it was about: the tool, a short excerpt of the command, path or prompt with every detected secret replaced by `[REDACTED by Kai: …]`, and the part that matched. After a block, Kai also notes what the agent did next (tried a different command, switched tools, or stopped). Redaction is only as good as the detectors, so `kai policy set audit_context off` keeps just the rule and reason.
+
+```sh
+kai log show          # recent decisions in words, with what the agent did next
+kai report <id>       # a false-positive report: a local file and a GitHub issue link, nothing sent
+```
+
+In the menu-bar app, Activity shows the same timeline. **Not a threat** on a blocked command adds a narrow exception (that rule, that exact command; every other check still runs and each use is logged) or allows a file, and can write a report for us. Kai's own protection can't be exempted. Notifications come once per rule, not once per retry.
+
+The log rotates at 8 MB and appending stays fast however long it gets. The chain helps detect some unauthorized changes, but it is **not tamper-proof** against an attacker who controls the log and its verification state.
 
 ## 💬 AI chats in your browser
 
@@ -199,8 +208,11 @@ The **Network wall** is a signed Network Extension that checks connections made 
 
 **Verified so far (macOS 14, Log mode):** a request from Claude Code to `example.com` was recorded in the audit log; a request to allow-listed `github.com` was not; requests from non-agent apps were not inspected. It also surfaced Claude Code's own telemetry connection, which is the kind of visibility Log mode is for.
 
-- **Destinations are matched by hostname** for web traffic on ports 80 and 443 (TLS server name or HTTP `Host`). Other traffic, such as SSH, is logged but **not blocked**.
-- **Block mode** (`egress block`) is implemented but **not yet tested**. Do not rely on it as egress containment yet.
+**Verified so far (macOS 14, Block mode):** Claude Code's connections to hosts that aren't allowed were dropped and logged, over HTTPS, plain HTTP, another port named by hostname, HTTPS straight to an IP, a Python POST, and a backgrounded child; `github.com` (allowed) went through. `python3 tests/network/run_network_check.py` re-runs this from inside your agent; results are in [security validation](docs/SECURITY-VALIDATION.md#network-wall-live-run).
+
+- **Destinations are matched by hostname** for web traffic on ports 80 and 443 (TLS server name or HTTP `Host`), and by the flow's hostname on other ports. Allow addresses too: `egress_allow 10.0.0.0/8`, `egress_allow 203.0.113.5:22`, `egress_allow db.example.com:5432`; your own Mac (loopback) is always allowed.
+- **Connections with no hostname** on other ports (a raw socket to an IP, SSH to an IP, a database) are only logged by the extension installed so far. The current source blocks them in Block mode unless an address entry allows them; that build isn't installed or measured yet.
+- **Gaps in Block mode today:** DNS lookups always go out; a process handed to `launchd`, or one whose parent shell has exited, is no longer treated as the agent's and isn't filtered; if the wall can't read the policy it allows everything. Don't rely on Block mode as complete egress containment yet.
 - **Turning it on** takes one approval in System Settings → Privacy & Security, plus the "filter network content" prompt.
 
 ```sh
@@ -220,8 +232,8 @@ Kai is a **layer of defense**, not a guarantee against data leakage or malicious
 - Agent hooks can be bypassed by activities that do not pass through them; they do not confine arbitrary agent-spawned processes.
 - The gateway cannot inspect requests that never route through it, nor traffic encrypted end-to-end through an unknown route.
 - Secret and prompt-injection detectors can miss new patterns or produce false positives. Prompt-injection checks weigh evidence (phrasing, whether the text addresses the agent, hidden text) and only **warn**, with a confidence level and a redacted excerpt; they never block, and a warning doesn't mean an attack happened. On Kai's test corpus (`tests/corpus`) they catch 7/7 attack samples with 0/13 false alarms, but that corpus is small and written by us.
-- If Kai can't be reached, nothing passes silently: hooks and the gateway refuse, and the browser extension asks before sending (configurable in its popup).
-- The network wall has been verified in Log mode only; Block mode has not been tested. Non-web traffic is not blocked, and an allowlist cannot stop data sent *to* an allowed host. A process that detaches from its agent (re-parented to `launchd`) is no longer recognized as part of the agent.
+- **If Kai's program is missing or crashes, agent actions are blocked**, with a message saying why: Kai installs Claude Code, Codex and Cursor hooks fail-closed. Installs from before this change need `kai install` again (the app re-applies setup after an update). To remove Kai, run `kai uninstall all` before deleting it. A broken policy file makes the hooks refuse; the gateway refuses when it can't check; the browser extension asks before sending (configurable in its popup).
+- The network wall's Block mode stops an agent's web connections to unknown hosts, but not DNS, not connections with no hostname on ports other than 80/443, and not processes that have left the agent's process tree. An allowlist cannot stop data sent *to* an allowed host.
 - Host-local log hash chaining does not defend against a fully compromised host.
 
 Read [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) before using Kai for sensitive or regulated workflows.
@@ -240,19 +252,21 @@ Read [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) before using Kai for sensiti
 | `kai policy set <switch> <value>` | Change a protection switch |
 | `kai policy add\|remove protect\|allow <path>` | Edit protected or allowed paths |
 | `kai policy add term <action> <text>` | Add a company term rule |
-| `kai policy add egress_allow <host>` | Add an allowed destination and subdomains |
+| `kai policy add egress_allow <destination>` | Allow a host (and subdomains), IP address or range, optionally with `:port` |
 | `kai policy add agent <name> exe\|arg\|team <pattern>` | Recognize another AI agent |
 | `kai gateway [--port N]` | Start the loopback AI gateway |
 | `kai agent-of <pid>` | Identify a recognized agent/descendant process |
-| `kai log [tail\|verify]` | Inspect or verify audit records |
+| `kai policy add\|remove exempt <rule> <command glob>` | Let one rule skip one command it wrongly blocks |
+| `kai log [tail\|show\|verify]` | Raw records, the same in words (`show -n N`), or verify the chain |
+| `kai report <id>` | Write a false-positive report and a GitHub issue link (ids from `kai log show`) |
 
 `kai scan` can also be used as a git pre-commit check (non-zero exit on findings). Kai's hook policy blocks recognized agent attempts to run selected Kai administration commands; this is not protection against every indirect filesystem modification.
 
 ## 🗺️ Roadmap
 
 - **Now — v0.1:** Claude Code/Cursor hooks, Codex hooks (preview), local policy and scanner, hash-chained audit, CLI; development menu-bar app; macOS network wall (Log mode verified); browser extension and gateway (experimental).
-- **Done:** A public [escape suite](docs/ESCAPES.md) (scripts, symlinks, detached processes, `osascript`, ssh-agent, Keychain, exfiltration, switching Kai off) with reproducible results, re-checked by `make test`.
-- **Next:** Verify network-wall Block mode, including connections with no readable hostname; a signed, notarized build that installs on any Mac.
+- **Done:** A public [escape suite](docs/ESCAPES.md) (scripts, symlinks, detached processes, `osascript`, ssh-agent, Keychain, exfiltration, destroying work, databases, MCP, planted README instructions, switching Kai off), each local attempt also replayed for real without Kai, re-checked by `make test`; [security validation](docs/SECURITY-VALIDATION.md) with a verdict per risk; a first live Block-mode run; fail-closed hooks; agents can't make Terminal run commands for them.
+- **Next:** Close the gaps the validation found: DNS and no-hostname connections (address allowlist done in source, to be measured), processes that leave the agent's tree, a destructive-action rule; then a signed, notarized build that installs on any Mac.
 - **Then:** The storage wall (macOS Endpoint Security), with agent attribution that survives detached processes and never blocks commands you type yourself; scoped credentials so agents can do approved work without holding reusable secrets.
 - **Later:** Team policy and fleet management, Linux OS-level enforcement (eBPF/Landlock), Windows support. A decrypting proxy is on hold.
 

@@ -298,6 +298,7 @@ static const struct {
     {"max_scan_bytes", "2000000", {NULL}},
     {"egress", "log", {"log", "block", "off", NULL}},
     {"gateway_port", "8787", {NULL}},
+    {"audit_context", "on", {"on", "off", NULL}},
 };
 #define NSWITCHES (int)(sizeof SWITCHES / sizeof SWITCHES[0])
 
@@ -364,6 +365,7 @@ static int policy_show(int json) {
     cJSON *terms = cJSON_CreateArray(), *rules = cJSON_CreateArray();
     cJSON *egress = cJSON_CreateArray();
     cJSON *agents = cJSON_CreateArray();
+    cJSON *exempt = cJSON_CreateArray();
     for (int i = 0; i < L.n; i++) {
         char dir[32];
         const char *arg;
@@ -409,6 +411,19 @@ static int policy_show(int json) {
             cJSON_AddStringToObject(r, "pattern", pat);
             cJSON_AddItemToArray(rules, r);
             free(pat);
+        } else if (strcmp(dir, "exempt") == 0) {
+            /* exempt <rule> <glob...> */
+            char name[KAI_NAME_MAX];
+            size_t nl = al < sizeof name - 1 ? al : sizeof name - 1;
+            memcpy(name, arg, nl);
+            name[nl] = '\0';
+            char *pat = trimmed(arg + al);
+            if (!pat || !*pat) { free(pat); continue; }
+            cJSON *x = cJSON_CreateObject();
+            cJSON_AddStringToObject(x, "rule", name);
+            cJSON_AddStringToObject(x, "pattern", pat);
+            cJSON_AddItemToArray(exempt, x);
+            free(pat);
         } else if (strcmp(dir, "agent") == 0) {
             /* agent <name> <exe|arg|team> <pattern> */
             char name[32];
@@ -441,6 +456,7 @@ static int policy_show(int json) {
     cJSON_AddItemToObject(o, "terms", terms);
     cJSON_AddItemToObject(o, "rules", rules);
     cJSON_AddItemToObject(o, "agents", agents);
+    cJSON_AddItemToObject(o, "exempt", exempt);
     lines_free(&L);
     print_json(o);
     return 0;
@@ -585,6 +601,14 @@ static int policy_add(int argc, char **argv) {
             lines_free(&L);
             return 1;
         }
+        if (strcmp(kind, "egress_allow") == 0 &&
+            !kai_egress_entry_valid(strncmp(path, "*.", 2) == 0 ? path + 2 : path)) {
+            fprintf(stderr, "kai policy add egress_allow: expected a host, IP address or range, "
+                            "optionally with :port (example.com, db.example.com:5432, "
+                            "10.0.0.0/8, 203.0.113.5:22, [2001:db8::1]:22)\n");
+            lines_free(&L);
+            return 1;
+        }
         for (int i = 0; i < L.n; i++)
             if (line_is(&L, i, kind, path)) {
                 printf("%s %s: already present\n", kind, path);
@@ -623,6 +647,35 @@ static int policy_add(int argc, char **argv) {
         sb_addf(&b, "rule %s %s %s", name, act, pat);
         add_line(&L, "rule", sb_take(&b));
         free(act); free(pat);
+    } else if (strcmp(kind, "exempt") == 0) {
+        /* exempt <rule> <glob>: let a command a rule wrongly blocks through,
+         * for that rule only. Kai's own protection can't be exempted. */
+        if (argc < 3) { lines_free(&L); goto usage; }
+        const char *name = argv[1];
+        char *pat = join_args(argc - 2, argv + 2);
+        if (!pat || !*pat || has_newline(pat) || strchr(pat, '#') || strpbrk(name, " \t#") ||
+            !*name) {
+            fprintf(stderr, "kai policy add exempt: <rule> <command glob>, one line, no '#'\n"
+                            "  (use ? for a '#' or a line break in the command)\n");
+            free(pat); lines_free(&L);
+            return 1;
+        }
+        if (kai_rule_is_builtin(name)) {
+            fprintf(stderr, "kai policy add exempt: %s is Kai's own protection and can't be "
+                            "exempted\n", name);
+            free(pat); lines_free(&L);
+            return 1;
+        }
+        sb_addf(&b, "exempt %s %s", name, pat);
+        char *line = sb_take(&b);
+        for (int i = 0; i < L.n; i++)
+            if (strcmp(L.v[i], line) == 0) {
+                printf("exempt %s: already present\n", name);
+                free(line); free(pat); lines_free(&L);
+                return 0;
+            }
+        add_line(&L, "exempt", line);
+        free(pat);
     } else if (strcmp(kind, "agent") == 0) {
         /* agent <name> exe|arg|team <pattern>: teach Kai to recognize another
          * AI agent (for the network wall and the activity log). */
@@ -663,22 +716,38 @@ usage:
     fprintf(stderr, "usage: kai policy add protect|allow <path>\n"
                     "       kai policy add term <action> <text...>\n"
                     "       kai policy add rule <name> <action> <regex...>\n"
-                    "       kai policy add agent <name> exe|arg|team <pattern>\n");
+                    "       kai policy add agent <name> exe|arg|team <pattern>\n"
+                    "       kai policy add exempt <rule> <command glob...>\n");
     return 1;
+}
+
+/* Does line i hold "exempt <rule> <pattern>" equal to val ("rule pattern")? */
+static int exempt_is(const lines_t *L, int i, const char *val) {
+    char dir[32];
+    const char *arg;
+    size_t al;
+    if (!line_parts(L->v[i], dir, sizeof dir, &arg, &al) || strcmp(dir, "exempt") != 0) return 0;
+    char *t = trimmed(arg);
+    int eq = t && strcmp(t, val) == 0;
+    free(t);
+    return eq;
 }
 
 static int policy_remove(int argc, char **argv) {
     if (argc < 2) goto usage;
     const char *kind = argv[0];
     if (strcmp(kind, "protect") && strcmp(kind, "allow") && strcmp(kind, "term") &&
-        strcmp(kind, "rule") && strcmp(kind, "egress_allow") && strcmp(kind, "agent"))
+        strcmp(kind, "rule") && strcmp(kind, "egress_allow") && strcmp(kind, "agent") &&
+        strcmp(kind, "exempt"))
         goto usage;
     lines_t L;
     if (lines_load(&L) != 0) { fprintf(stderr, "kai policy: cannot read policy\n"); return 1; }
     char *val = join_args(argc - 1, argv + 1);
     int removed = 0;
     for (int i = 0; i < L.n; i++) {
-        int hit = strcmp(kind, "term") == 0 ? term_is(&L, i, val) : line_is(&L, i, kind, val);
+        int hit = strcmp(kind, "term") == 0     ? term_is(&L, i, val)
+                  : strcmp(kind, "exempt") == 0 ? exempt_is(&L, i, val)
+                                                : line_is(&L, i, kind, val);
         if (hit) { lines_remove(&L, i--); removed++; }
     }
     if (!removed) {
@@ -694,7 +763,8 @@ static int policy_remove(int argc, char **argv) {
 usage:
     fprintf(stderr, "usage: kai policy remove protect|allow <path>\n"
                     "       kai policy remove term <text...>\n"
-                    "       kai policy remove rule <name>\n");
+                    "       kai policy remove rule <name>\n"
+                    "       kai policy remove exempt <rule> <command glob...>\n");
     return 1;
 }
 

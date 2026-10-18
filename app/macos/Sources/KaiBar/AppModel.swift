@@ -25,14 +25,22 @@ final class AppModel: ObservableObject {
     @Published private(set) var busy = false
     @Published private(set) var lastBlockAt: Date?
     @Published var errorMessage: String?
+    /// A short confirmation ("Exception added …"), shown on the Activity page.
+    @Published var notice: String?
     @Published var notifyOnBlock: Bool {
-        didSet { UserDefaults.standard.set(notifyOnBlock, forKey: "notifyOnBlock") }
+        didSet {
+            UserDefaults.standard.set(notifyOnBlock, forKey: "notifyOnBlock")
+            // Ask for notification permission when it's turned on, not at launch.
+            if notifyOnBlock { Notifier.requestPermission() }
+        }
     }
 
     let cliPath = KaiCLI.executable?.path
     private var tail: AuditTail?
     private var timer: Timer?
     private var ticks = 0
+    /// When each agent+rule last notified: repeats within 10 minutes stay quiet.
+    private var lastNotified: [String: Date] = [:]
 
     init() {
         notifyOnBlock = UserDefaults.standard.object(forKey: "notifyOnBlock") as? Bool ?? true
@@ -41,7 +49,6 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             Task { @MainActor in self.tick() }
         }
-        if notifyOnBlock { Notifier.requestPermission() }
     }
 
     // MARK: derived state
@@ -133,7 +140,7 @@ final class AppModel: ObservableObject {
 
     var todayCounts: (blocked: Int, warned: Int) {
         let cal = Calendar.current
-        let today = events.filter { $0.date.map(cal.isDateInToday) ?? false }
+        let today = events.filter { !$0.isNote && !$0.isExempt && ($0.date.map(cal.isDateInToday) ?? false) }
         let blocked = today.filter(\.isBlock).count
         return (blocked, today.count - blocked)
     }
@@ -185,10 +192,86 @@ final class AppModel: ObservableObject {
         let blocks = fresh.filter(\.isBlock)
         if !blocks.isEmpty {
             lastBlockAt = Date()
-            if notifyOnBlock {
-                for e in blocks.suffix(3) { Notifier.post(e) }
-            }
+            if notifyOnBlock { notify(blocks) }
         }
+    }
+
+    /// One notification per agent and rule, however many blocks arrived, and
+    /// none for a rule that already notified in the last 10 minutes: an agent
+    /// retrying the same thing shouldn't turn into a stream of banners.
+    private func notify(_ blocks: [AuditEvent]) {
+        var groups: [String: [AuditEvent]] = [:]
+        var order: [String] = []
+        for e in blocks {
+            let key = e.agentName + "|" + e.rule
+            if groups[key] == nil { order.append(key) }
+            groups[key, default: []].append(e)
+        }
+        let now = Date()
+        for key in order {
+            if let t = lastNotified[key], now.timeIntervalSince(t) < 600 { continue }
+            lastNotified[key] = now
+            let g = groups[key]!
+            Notifier.post(g.last!, count: g.count)
+        }
+    }
+
+    // MARK: activity
+
+    /// The "After the block, the agent ..." note for a block: the next
+    /// record from the same session, if that is a note about the same rule.
+    func followUp(for e: AuditEvent) -> AuditEvent? {
+        guard e.isBlock, let s = e.session, !s.isEmpty, let i = events.firstIndex(of: e) else { return nil }
+        // events are newest first, so what came after e is at lower indices
+        for k in stride(from: i - 1, through: 0, by: -1) where events[k].session == s {
+            let n = events[k]
+            return n.isNote && n.rule == e.rule ? n : nil
+        }
+        return nil
+    }
+
+    /// "Not a threat": an exception for exactly this command and rule.
+    func exempt(_ e: AuditEvent) {
+        guard e.canExemptCommand, let pattern = e.exemptPattern else { return }
+        Task {
+            errorMessage = nil
+            await perform(["policy", "add", "exempt", e.rule, pattern])
+            if errorMessage == nil { notice = "Exception added: \(e.rule) won't block this command again." }
+        }
+    }
+
+    /// "Not a threat": always let agents read this file.
+    func allowFile(_ e: AuditEvent) {
+        guard let path = e.allowablePath else { return }
+        Task {
+            errorMessage = nil
+            await perform(["policy", "add", "allow", path])
+            if errorMessage == nil { notice = "\(path) is now allowed." }
+        }
+    }
+
+    func removeExempt(_ x: PolicyInfo.Exempt) {
+        Task { await perform(["policy", "remove", "exempt", x.rule, x.pattern]) }
+    }
+
+    /// Write a false-positive report (nothing is sent). Returns where it is
+    /// and a prefilled GitHub issue link the user can open and review.
+    func report(_ e: AuditEvent) async -> ReportInfo? {
+        let r = await KaiCLI.run(["report", e.id, "--json"])
+        guard r.ok else { errorMessage = r.message; return nil }
+        let d = JSONDecoder()
+        d.keyDecodingStrategy = .convertFromSnakeCase
+        return try? d.decode(ReportInfo.self, from: Data(r.out.utf8))
+    }
+
+    func copyDetails(_ e: AuditEvent) {
+        var lines = ["\(e.verb) \(e.agentName)\(e.actionLabel.map { " · \($0)" } ?? "")", "Reason: \(e.detail)"]
+        if !e.rule.isEmpty { lines.append("Rule: \(e.rule)") }
+        if let t = e.excerpt { lines.append("What: \(t)") }
+        if let n = followUp(for: e) { lines.append("Then: \(n.detail)") }
+        lines.append("When: \(e.ts) · id \(e.id.prefix(10))")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
     }
 
     // MARK: actions
@@ -272,13 +355,19 @@ enum Notifier {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    static func post(_ e: AuditEvent) {
+    /// count > 1: several blocks of the same rule arrived together.
+    static func post(_ e: AuditEvent, count: Int = 1) {
         guard available else { return }
         let c = UNMutableNotificationContent()
-        c.title = "Kai blocked \(e.agentName)"
-        c.body = e.detail.isEmpty ? e.rule : e.detail
+        c.title = "Kai blocked \(e.agentName)" + (count > 1 ? " \(count) times" : "")
+        var body = e.detail.isEmpty ? e.rule : e.detail
+        if let t = e.excerpt { body += "\n" + (t.split(separator: "\n").first.map(String.init) ?? t) }
+        c.body = body
         c.sound = .default
         let req = UNNotificationRequest(identifier: e.id, content: c, trigger: nil)
-        UNUserNotificationCenter.current().add(req)
+        // Asking is a no-op once the user has answered; the first block asks.
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            if granted { UNUserNotificationCenter.current().add(req) }
+        }
     }
 }
