@@ -181,6 +181,13 @@ This is one machine on one day, not a test that runs in CI. Things learned getti
 - The wall writes one record per agent, host and decision every 10 minutes, so a repeat attempt within that window is blocked without a new record. Wait 10 minutes between runs.
 - A run measures the extension that is installed, which can be older than the source.
 
+## Found in live runs with real agents
+
+| Finding | How it was measured |
+|---|---|
+| Codex skips hooks you haven't trusted, and treats a hook whose command changed as new: it is skipped until you trust it again with /hooks. In `codex exec` this happens with no warning. After Kai's hooks became fail-closed, Codex ran Kai's PostToolUse hook but not PreToolUse or UserPromptSubmit, so reading a file in the ssh folder and a prompt with a token both went through. With the hooks trusted (or --dangerously-bypass-hook-trust), Kai blocked both. | Codex CLI 0.162.1, 2026-10-18; `sh tests/codex/run_codex_check.sh` |
+| Kai's own health check can't see Codex's trust: it runs the hook command itself, which works, so `kai status` reports Codex as working while Codex is skipping the hooks. | Same run. Codex keeps its trust records in its own config, which Kai protects from agents. |
+
 ## Found by reading the code (not measured by a test yet)
 
 | Finding | Where |

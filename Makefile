@@ -21,7 +21,7 @@ endif
 
 CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
        src/net.c src/proc.c src/shell.c src/gateway.c third_party/cjson/cJSON.c
-APP  = src/main.c src/hooks.c src/install.c src/manage.c src/browser.c src/native.c src/report.c
+APP  = src/main.c src/hooks.c src/install.c src/manage.c src/browser.c src/native.c src/report.c src/health.c
 
 OBJ      = $(CORE:.c=.o) $(APP:.c=.o)
 COREOBJ  = $(CORE:.c=.o)
@@ -62,6 +62,10 @@ escape: kai
 	python3 -I tests/escape/run_escape.py ./kai --markdown docs/ESCAPES.md --validation docs/SECURITY-VALIDATION.md
 
 validation: escape
+
+# Chrome Web Store upload (no "key", no local test page): build/kai-chrome-<version>.zip
+chrome-zip:
+	python3 -I scripts/package-chrome.py
 
 # macOS app (menu bar + network system extension), via XcodeGen + Xcode.
 #   make app                  ad-hoc signed; menu bar works, the network wall
@@ -109,4 +113,4 @@ clean:
 	rm -f $(OBJ) kai libkai.a tests/run_tests
 	rm -rf build app/macos/Kai.xcodeproj
 
-.PHONY: all asan fuzz test escape validation app app-dev try-app install-app install uninstall clean
+.PHONY: all asan fuzz test escape validation chrome-zip app app-dev try-app install-app install uninstall clean

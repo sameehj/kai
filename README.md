@@ -33,7 +33,7 @@ Kai runs locally, never stores detected secret values in its audit log (excerpts
 | Layer | What it does | Status |
 | --- | --- | --- |
 | **Agent hooks** | Deny protected file reads and suspicious commands in Claude Code and Cursor; examine supported tool and prompt events | ✅ Working and tested |
-| **Codex hooks** | Same checks for OpenAI Codex CLI (shell commands, `apply_patch` edits, MCP arguments, prompts) | 🧪 Implemented, not yet tested with real Codex |
+| **Codex hooks** | Same checks for OpenAI Codex CLI (shell commands, `apply_patch` edits, MCP arguments, prompts) | 🧪 Blocking verified live with Codex CLI 0.162.1 once its hooks are trusted in `/hooks` |
 | **Browser extension** | Check what you paste and send in ChatGPT, Claude.ai, Gemini and other AI chats (Chrome, Brave, Edge) | 🧪 Native host tested; not yet tried on live chat sites |
 | **Policy + scanner** | Redact detected credentials, replace company terms, or block confidential markers | ✅ Working and tested |
 | **Audit log** | Record decisions in a hash-chained log without storing detected secret values | ✅ Working and tested |
@@ -80,9 +80,11 @@ brew install --HEAD kai
 kai init
 kai install claude
 kai install cursor
-kai install codex      # preview; Codex asks you to trust new hooks once
+kai install codex      # preview; then open Codex and trust Kai's hooks in /hooks
 kai doctor
 ```
+
+**Codex runs only hooks you've trusted**, and a hook whose command changed counts as new. Until you trust Kai's hooks in Codex's `/hooks`, Codex skips them without a warning, and `kai status` can't tell. `sh tests/codex/run_codex_check.sh` checks it live.
 
 These commands write the default policy, integrate Kai into the agents' hook settings, and inspect the resulting setup. Kai preserves prior settings via backups when installing its entries. You can enable just one agent if you prefer.
 
@@ -90,7 +92,7 @@ These commands write the default policy, integrate Kai into the agents' hook set
 
 ```sh
 kai scan .env                 # inspect a file for secrets and company terms
-kai status --json            # inspect local status
+kai status --json            # what's on, and whether each hook answers a live check
 kai log tail                 # inspect recent decisions
 kai log verify               # verify the audit hash chain
 ```
@@ -247,7 +249,7 @@ Read [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) before using Kai for sensiti
 | `kai scan [file…]` | Find configured secret/company patterns; stdin if no files |
 | `kai redact` | Apply text-cleaning policy from stdin to stdout |
 | `kai doctor` | Check local configuration and integrations |
-| `kai status --json` | Report status for scripts and app |
+| `kai status --json` | Report status for scripts and app, with a live check of each installed hook and the browser helper |
 | `kai policy show [--json]` | Inspect policy |
 | `kai policy set <switch> <value>` | Change a protection switch |
 | `kai policy add\|remove protect\|allow <path>` | Edit protected or allowed paths |

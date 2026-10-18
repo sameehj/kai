@@ -1,6 +1,20 @@
 # Changelog
 
 ## Unreleased
+- Live health checks: `kai status --json` now runs each installed hook the way
+  the agent would (program present, fail-closed, a test request is denied)
+  and pings the browser helper, reporting `working` and `problem`. Probes
+  aren't recorded. The app shows a broken integration as a problem instead
+  of green, and says "Protection on" rather than "All protected".
+- Codex, measured live (CLI 0.162.1): Kai blocks once its hooks are trusted
+  in Codex's `/hooks`. Codex silently skips untrusted or changed hooks, so
+  after this release's hook change Codex needs Kai's hooks trusted again.
+  `tests/codex/run_codex_check.sh` checks it.
+- Browser extension: a red "!" on the toolbar icon whenever Kai can't be
+  reached (checked at browser start and on every message); Kai's helper
+  accepts a Chrome Web Store ID too (`KAI_STORE_EXTENSION_ID`);
+  `make chrome-zip` builds the store upload; listing and permissions in
+  `docs/CHROME_STORE.md`; privacy policy at `/privacy/` on the site.
 - Fail-closed hooks: Claude Code and Codex `PreToolUse`/`UserPromptSubmit`
   hooks now block (exit 2, with a reason) when Kai's program is missing,
   crashes or can't answer; they used to let the action run. `Stop` and

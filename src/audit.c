@@ -163,7 +163,13 @@ int kai_audit(const char *source, const char *event, const char *decision,
     return kai_audit_write(&e);
 }
 
+/* Health probes (kai status) exercise the hooks with a synthetic request; what
+ * they decide is not something that happened, so it isn't recorded. */
+static int g_suppress;
+void kai_audit_suppress(int on) { g_suppress = on; }
+
 int kai_audit_write(const kai_audit_entry *e) {
+    if (g_suppress) return 0;
     ensure_home();
     const char *path = kai_audit_path();
     int fd = open_locked(path);

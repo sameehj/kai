@@ -5,6 +5,7 @@
  * browser extension can ask `kai` to scan what you type into AI chat sites.
  * The extension itself is loaded from integrations/browser.
  */
+#include "cJSON.h"
 #include "internal.h"
 
 #include <stdio.h>
@@ -151,8 +152,10 @@ int kai_browser_install(const char *exe) {
                     fputc(*c, f);
                 }
                 fprintf(f, "\",\n  \"type\": \"stdio\",\n  \"allowed_origins\": "
-                           "[\"chrome-extension://%s/\"]\n}\n",
-                        KAI_EXTENSION_ID);
+                           "[\"chrome-extension://%s/\"", KAI_EXTENSION_ID);
+                if (KAI_STORE_EXTENSION_ID[0]) /* the Chrome Web Store copy */
+                    fprintf(f, ", \"chrome-extension://%s/\"", KAI_STORE_EXTENSION_ID);
+                fprintf(f, "]\n}\n");
                 fclose(f);
                 printf("Registered Kai with %s (%s)\n", BROWSERS[i].name, path);
                 any = 1;
@@ -196,6 +199,24 @@ int kai_browser_uninstall(void) {
     return 0;
 }
 
+/* The "path" of the first registered host manifest: the program a browser
+ * starts when the extension talks to Kai. NULL if none is registered. */
+char *kai_browser_host_exe(void) {
+    for (size_t i = 0; i < NBROWSERS; i++) {
+        char *path = manifest_path(i);
+        size_t n;
+        char *txt = kai_read_file(path, 65536, &n);
+        free(path);
+        cJSON *o = txt ? cJSON_Parse(txt) : NULL;
+        free(txt);
+        const cJSON *p = cJSON_GetObjectItemCaseSensitive(o, "path");
+        char *exe = cJSON_IsString(p) ? strdup(p->valuestring) : NULL;
+        cJSON_Delete(o);
+        if (exe) return exe;
+    }
+    return NULL;
+}
+
 /* Is the Kai extension loaded in any profile of any browser? Chrome records
  * installed extensions by ID in each profile's (Secure) Preferences file. */
 int kai_browser_extension_loaded(void) {
@@ -209,7 +230,8 @@ int kai_browser_extension_loaded(void) {
                 snprintf(path, sizeof path, "%s/%s/%s", root, profiles[p], files[f]);
                 size_t n;
                 char *s = kai_read_file(path, 32 * 1024 * 1024, &n);
-                int hit = s && strstr(s, KAI_EXTENSION_ID);
+                int hit = s && (strstr(s, KAI_EXTENSION_ID) ||
+                                 (KAI_STORE_EXTENSION_ID[0] && strstr(s, KAI_STORE_EXTENSION_ID)));
                 free(s);
                 if (hit) { free(root); return 1; }
             }

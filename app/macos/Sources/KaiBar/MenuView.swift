@@ -165,7 +165,7 @@ struct StatusHero: View {
 
     private var title: String {
         switch model.health {
-        case .protecting: return "All protected"
+        case .protecting: return "Protection on"
         case .partial: return "Partly protected"
         case .off: return "Protection is off"
         case .unknown: return "Checking…"
@@ -299,6 +299,7 @@ struct AgentCard: View {
     let agent: Agent
 
     private func subtitle(_ info: KaiStatus.Agent) -> String {
+        if info.broken { return "Not working: " + (info.problem ?? "check failed") }
         if info.installed { return agent == .chrome ? "Checking chats" : "Hooks on" }
         return info.detected ? "Not protected" : "Not found on this Mac"
     }
@@ -317,7 +318,9 @@ struct AgentCard: View {
                     } else {
                         Text(subtitle(info))
                             .font(.system(size: 12))
-                            .foregroundStyle(!info.installed && info.detected ? Theme.amber : Theme.muted)
+                            .foregroundStyle(info.broken || (!info.installed && info.detected) ? Theme.amber : Theme.muted)
+                            .lineLimit(2)
+                            .help(info.problem ?? "")
                     }
                 }
                 Spacer()

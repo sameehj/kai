@@ -7,17 +7,37 @@
 const HOST = "io.github.sameehj.kai";
 const STATS_KEY = "kaiStats";
 
+// Every request starts Kai's helper afresh, so there is no connection to
+// lose: once Kai is back (reinstalled, moved, updated), the next request
+// works. What the user needs is to see when it isn't there: a red "!" on the
+// toolbar icon until a request succeeds again.
+function showConnected(ok, error) {
+  chrome.action.setBadgeText({ text: ok ? "" : "!" });
+  if (!ok) chrome.action.setBadgeBackgroundColor({ color: "#d64545" });
+  chrome.action.setTitle({
+    title: ok ? "Kai: connected"
+              : `Kai: not connected (${error}). Messages wait for your decision until Kai is back.`,
+  });
+}
+
 function ask(message) {
   return new Promise((resolve) => {
     chrome.runtime.sendNativeMessage(HOST, message, (reply) => {
       if (chrome.runtime.lastError || !reply) {
-        resolve({ ok: false, error: chrome.runtime.lastError?.message || "no reply from kai" });
+        const error = chrome.runtime.lastError?.message || "no reply from kai";
+        showConnected(false, error);
+        resolve({ ok: false, error });
       } else {
+        showConnected(true);
         resolve(reply);
       }
     });
   });
 }
+
+// Check as soon as the browser (re)starts the extension, not at the first send.
+chrome.runtime.onStartup.addListener(() => ask({ type: "ping" }));
+chrome.runtime.onInstalled.addListener(() => ask({ type: "ping" }));
 
 async function bump(field) {
   const { [STATS_KEY]: s = { checked: 0, cleaned: 0, held: 0 } } = await chrome.storage.local.get(STATS_KEY);

@@ -59,6 +59,7 @@ final class AppModel: ObservableObject {
         guard let s = status else { return cliPath == nil ? .problem : .unknown }
         if !s.policy.ok || !s.audit.intact { return .problem }
         let infos = Agent.allCases.map(agentInfo)
+        if infos.contains(where: \.broken) { return .problem }
         if !infos.contains(where: \.installed) { return .off }
         // Only "partial" if an agent that is actually used here is unprotected.
         let missed = infos.contains { $0.detected && !$0.installed } || chromeNeedsExtension
@@ -87,6 +88,7 @@ final class AppModel: ObservableObject {
         case .problem:
             if cliPath == nil { return "kai command-line tool not found" }
             if let s = status, !s.policy.ok { return "Policy error: agents are blocked" }
+            if let a = brokenAgents.first { return "\(a.title) isn't protected right now" }
             return "Audit log was modified"
         }
     }
@@ -94,6 +96,7 @@ final class AppModel: ObservableObject {
     var detailLine: String? {
         guard let s = status else { return nil }
         if !s.policy.ok { return s.policy.error }
+        if let a = brokenAgents.first { return agentInfo(a).problem }
         if !s.audit.intact { return s.audit.error }
         if health == .partial {
             let missed = Agent.allCases.filter { agentInfo($0).detected && !installed($0) }.map(\.title)
@@ -103,6 +106,9 @@ final class AppModel: ObservableObject {
     }
 
     func installed(_ a: Agent) -> Bool { agentInfo(a).installed }
+
+    /// Integrations that are switched on but failed their live check.
+    var brokenAgents: [Agent] { Agent.allCases.filter { agentInfo($0).broken } }
 
     /// Kai is registered with the browser but the extension isn't loaded yet.
     var chromeNeedsExtension: Bool {

@@ -15,6 +15,11 @@ struct KaiStatus: Decodable, Equatable {
         let detected: Bool
         let config: String
         var extensionLoaded: Bool? = nil // chrome only
+        /// Live check (kai status runs the installed hook): nil from older kai CLIs.
+        var working: Bool? = nil
+        var problem: String? = nil
+        /// Installed, checked, and not working right now.
+        var broken: Bool { installed && working == false }
     }
     struct Audit: Decodable, Equatable {
         let path: String

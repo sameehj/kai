@@ -401,6 +401,12 @@ if val_out:
         lines += ["No live run recorded. Run `python3 tests/network/run_network_check.py` from your agent's "
                   "terminal tool, then `make validation`."]
 
+    if suite.get("live_findings"):
+        lines += ["", "## Found in live runs with real agents", "",
+                  "| Finding | How it was measured |", "|---|---|"]
+        for f in suite["live_findings"]:
+            lines.append(f"| {f['what']} | {f['how']} |")
+
     if suite.get("code_findings"):
         lines += ["", "## Found by reading the code (not measured by a test yet)", "",
                   "| Finding | Where |", "|---|---|"]

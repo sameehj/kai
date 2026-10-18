@@ -88,6 +88,12 @@ int kai_cmd_status_json(void) {
         cJSON *a = cJSON_AddObjectToObject(o, agents[i].name);
         cJSON_AddBoolToObject(a, "installed", on);
         cJSON_AddBoolToObject(a, "detected", detected);
+        if (on) { /* installed isn't working: run what the agent would run */
+            kai_health h;
+            kai_health_agent(agents[i].name, agents[i].rel, &h);
+            cJSON_AddBoolToObject(a, "working", h.ok);
+            cJSON_AddStringToObject(a, "problem", h.problem);
+        }
         char *cfg = kai_expand_home(agents[i].rel);
         cJSON_AddStringToObject(a, "config", cfg);
         free(cfg);
@@ -102,6 +108,14 @@ int kai_cmd_status_json(void) {
         const char *ext = kai_browser_ext_dir();
         cJSON_AddStringToObject(b, "config", ext ? ext : "");
         cJSON_AddBoolToObject(b, "extension_loaded", kai_browser_extension_loaded());
+        if (on) {
+            char *exe = kai_browser_host_exe();
+            kai_health h;
+            kai_health_chrome(exe, &h);
+            cJSON_AddBoolToObject(b, "working", h.ok);
+            cJSON_AddStringToObject(b, "problem", h.problem);
+            free(exe);
+        }
     }
 
     cJSON *au = cJSON_AddObjectToObject(o, "audit");

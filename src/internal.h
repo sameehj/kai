@@ -35,7 +35,11 @@ const char *kai_exe_path(void);
 const char *kai_policy_file(void); /* $KAI_POLICY or <kai home>/policy */
 /* Browser extension (browser.c, native.c) */
 #define KAI_NATIVE_HOST "io.github.sameehj.kai"
-#define KAI_EXTENSION_ID "bfefkchkkleigcefbgligmkknhmdnhee"
+#define KAI_EXTENSION_ID "bfefkchkkleigcefbgligmkknhmdnhee" /* unpacked: manifest "key" */
+/* The Chrome Web Store gives the published extension its own ID (shown in the
+ * developer dashboard after the first upload). Put it here so Kai's helper
+ * also answers the store-installed extension. Empty = not published yet. */
+#define KAI_STORE_EXTENSION_ID ""
 int kai_browser_install(const char *exe);
 int kai_browser_uninstall(void);
 int kai_browser_installed(int *detected);
@@ -82,6 +86,17 @@ int kai_upload_match(const kai_policy *p, const char *cmd, char *why, size_t why
 /* For the activity log: every rule match hidden, whatever its action (scan
  * leaves block/warn matches in place). NULL when secret detection is off,
  * because then nothing can be safely redacted. Caller frees. */
+void kai_audit_suppress(int on);
+
+/* Live health of an integration (src/health.c). ok=1: protection works now.
+ * ok=0 with problem "": not installed. ok=0 with problem: installed, broken. */
+typedef struct {
+    int ok;
+    char problem[300];
+} kai_health;
+void kai_health_agent(const char *agent, const char *config, kai_health *h);
+void kai_health_chrome(const char *exe, kai_health *h);
+char *kai_browser_host_exe(void); /* program the browser starts as Kai's helper */
 char *kai_redact_for_log(const kai_policy *p, const char *text);
 /* Kai's own protection (its settings, the agents' hook files): never exempt. */
 int kai_rule_is_builtin(const char *rule);

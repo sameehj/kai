@@ -449,6 +449,9 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
         return 0;
     }
     const char *ev = cjstr(root, "hook_event_name");
+    /* kai status sends a marked synthetic request to check the hook answers.
+     * Only the agent app writes the top level of this JSON, never the agent. */
+    if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "kai_health_probe"))) kai_audit_suppress(1);
     const char *cwd = cjstr(root, "cwd");
     if (!cwd) cwd = cwd_arg;
     const char *session = session_of(root);
@@ -680,6 +683,9 @@ static int hook_cursor(const char *json) {
     cJSON *root = cJSON_Parse(json);
     if (!root) return 0;
     const char *ev = cjstr(root, "hook_event_name");
+    /* kai status sends a marked synthetic request to check the hook answers.
+     * Only the agent app writes the top level of this JSON, never the agent. */
+    if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "kai_health_probe"))) kai_audit_suppress(1);
     const cJSON *roots = cJSON_GetObjectItemCaseSensitive(root, "workspace_roots");
     const char *cwd = NULL;
     if (cJSON_IsArray(roots) && roots->child && cJSON_IsString(roots->child))

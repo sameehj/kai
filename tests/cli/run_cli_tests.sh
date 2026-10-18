@@ -163,6 +163,32 @@ printf '{"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"
 [ "$(count "$(cat "$HOME/.claude/settings.json")" 'hook claude')" = 5 ] && pass "install twice adds hooks once" || fail "install duplicated hooks"
 has "install keeps the user's own Stop hook" "$(cat "$HOME/.claude/settings.json")" 'echo mine'
 has "status: claude installed" "$("$KAI" status --json)" '"installed":	true'
+claude_health() { "$KAI" status --json | python3 -I -c 'import json,sys; c=json.load(sys.stdin)["claude"]; print(c.get("working"), c.get("problem"))'; }
+n0=$(wc -l < "$KAI_HOME/audit.log" 2>/dev/null || echo 0)
+has "status: claude hook answers a live check" "$(claude_health)" 'True'
+n1=$(wc -l < "$KAI_HOME/audit.log" 2>/dev/null || echo 0)
+[ "$n0" = "$n1" ] && pass "health probes aren't recorded" || fail "health probes wrote $((n1-n0)) audit records"
+# Point the hooks at a copy of kai, then delete it: status must say so.
+mkdir -p "$TMP/gone" && cp "$KAI" "$TMP/gone/kai"
+"$TMP/gone/kai" install claude >/dev/null
+rm "$TMP/gone/kai"
+has "status: missing kai program is a problem" "$(claude_health)" "False Kai's program is missing"
+has "status: says the agent is blocked meanwhile" "$(claude_health)" 'blocked until Kai is reinstalled'
+# An old-style hook (no fail-closed guard) answers but is flagged.
+python3 -I - "$HOME/.claude/settings.json" "$KAI" <<'PY'
+import json, sys
+p, kai = sys.argv[1:]
+d = json.load(open(p))
+for groups in d["hooks"].values():
+    for g in groups:
+        for h in g.get("hooks", []):
+            if " hook claude" in h.get("command", ""):
+                h["command"] = kai + " hook claude"
+json.dump(d, open(p, "w"))
+PY
+has "status: unguarded hooks are flagged" "$(claude_health)" 'older Kai'
+"$KAI" install claude >/dev/null
+has "status: reinstall fixes it" "$(claude_health)" 'True'
 has "claude hooks fail closed when Kai is missing (not on Stop)" "$(fails_closed "$HOME/.claude/settings.json" claude)" 'ok'
 "$KAI" uninstall claude >/dev/null
 s=$(cat "$HOME/.claude/settings.json")
