@@ -171,15 +171,27 @@ final class AppModel: ObservableObject {
     /// without the user flipping switches. Setup is idempotent.
     private var reappliedThisLaunch = false
     private func reapplyIntegrationsIfUpdated(_ s: KaiStatus) async {
-        guard !reappliedThisLaunch else { return }
+        // A toggle also changes hook settings. Never let an update refresh
+        // reinstall hooks while the user is turning that agent off.
+        guard !reappliedThisLaunch && !busy else { return }
         reappliedThisLaunch = true
         let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "") + "/" + s.version
         let key = "integrationsAppliedFor"
         guard UserDefaults.standard.string(forKey: key) != build else { return }
+        busy = true
+        defer { busy = false }
+        var applied = true
         for agent in Agent.allCases where agentInfo(agent).installed {
-            _ = await KaiCLI.run(["install", agent.rawValue])
+            let result = await KaiCLI.run(["install", agent.rawValue])
+            if !result.ok {
+                applied = false
+                errorMessage = "Couldn't refresh \(agent.title): \(result.message)"
+            }
         }
-        UserDefaults.standard.set(build, forKey: key)
+        if applied { UserDefaults.standard.set(build, forKey: key) }
+        if let updated = await KaiCLI.decode(KaiStatus.self, ["status", "--json"]) {
+            status = updated
+        }
     }
 
     private func tick() {
@@ -299,7 +311,13 @@ final class AppModel: ObservableObject {
     }
 
     func setAgent(_ a: Agent, enabled: Bool) {
-        Task { await perform([enabled ? "install" : "uninstall", a.rawValue]) }
+        Task {
+            errorMessage = nil
+            await perform([enabled ? "install" : "uninstall", a.rawValue])
+            if errorMessage == nil && installed(a) != enabled {
+                errorMessage = "\(a.title) did not turn \(enabled ? "on" : "off"). Check its settings or retry."
+            }
+        }
     }
 
     func setSwitch(_ key: String, _ value: String) {

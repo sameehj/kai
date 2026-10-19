@@ -29,11 +29,29 @@
 
 /* ---------- small helpers ---------- */
 
+static int hook_command_present(const cJSON *node, const char *needle) {
+    if (!node) return 0;
+    if (cJSON_IsObject(node)) {
+        const cJSON *command = cJSON_GetObjectItemCaseSensitive(node, "command");
+        if (cJSON_IsString(command) && command->valuestring &&
+            strstr(command->valuestring, needle)) return 1;
+    }
+    if (cJSON_IsObject(node) || cJSON_IsArray(node)) {
+        for (const cJSON *child = node->child; child; child = child->next) {
+            if (hook_command_present(child, needle)) return 1;
+        }
+    }
+    return 0;
+}
+
 static int agent_installed(const char *rel, const char *needle, int *detected) {
     char *path = kai_expand_home(rel);
     size_t n;
     char *s = kai_read_file(path, 4 * 1024 * 1024, &n);
-    int on = s && strstr(s, needle);
+    cJSON *root = s ? cJSON_Parse(s) : NULL;
+    const cJSON *hooks = cJSON_GetObjectItemCaseSensitive(root, "hooks");
+    int on = hook_command_present(hooks, needle);
+    cJSON_Delete(root);
     free(s);
     if (detected) {
         /* the agent's config directory exists = the agent is probably used here */

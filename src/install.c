@@ -24,8 +24,8 @@ static int write_file(const char *path, const char *data) {
     if (!f) return -1;
     size_t len = strlen(data);
     size_t w = fwrite(data, 1, len, f);
-    fclose(f);
-    return w == len ? 0 : -1;
+    int close_rc = fclose(f);
+    return w == len && close_rc == 0 ? 0 : -1;
 }
 
 static void backup(const char *path) {
@@ -55,6 +55,7 @@ static void mkparents(const char *path) {
 }
 
 static cJSON *without_kai(cJSON *node);
+static void strip_legacy_handlers(cJSON *root);
 
 /* Parse an agent settings file, dropping any Kai entries already in it so
  * installing twice never duplicates hooks. */
@@ -65,6 +66,7 @@ static cJSON *load_clean(const char *path) {
     if (!root) return cJSON_CreateObject();
     cJSON *clean = without_kai(root);
     cJSON_Delete(root);
+    strip_legacy_handlers(clean);
     return clean;
 }
 
@@ -228,19 +230,64 @@ static cJSON *without_kai(cJSON *node) {
     return cJSON_Duplicate(node, 1);
 }
 
+/* A Kai command may survive if a settings editor removed its _kai marker.
+ * Remove these handlers only from hook groups, preserving other commands in
+ * the group. */
+static void strip_legacy_handlers(cJSON *root) {
+    cJSON *hooks = cJSON_GetObjectItemCaseSensitive(root, "hooks");
+    if (!cJSON_IsObject(hooks)) return;
+    for (cJSON *event = hooks->child; event; event = event->next) {
+        if (!cJSON_IsArray(event)) continue;
+        cJSON *group = event->child;
+        while (group) {
+            cJSON *next_group = group->next;
+            cJSON *handlers = cJSON_GetObjectItemCaseSensitive(group, "hooks");
+            if (cJSON_IsArray(handlers)) {
+                cJSON *handler = handlers->child;
+                while (handler) {
+                    cJSON *next_handler = handler->next;
+                    cJSON *command = cJSON_GetObjectItemCaseSensitive(handler, "command");
+                    if (cJSON_IsString(command) && command->valuestring &&
+                        (strstr(command->valuestring, " hook claude") ||
+                         strstr(command->valuestring, " hook cursor"))) {
+                        cJSON_Delete(cJSON_DetachItemViaPointer(handlers, handler));
+                    }
+                    handler = next_handler;
+                }
+                if (!handlers->child) cJSON_Delete(cJSON_DetachItemViaPointer(event, group));
+            }
+            group = next_group;
+        }
+    }
+}
+
 static int uninstall_file(const char *rel) {
     char *path = kai_expand_home(rel);
-    char *cur = read_or_empty(path);
+    size_t n;
+    char *cur = kai_read_file(path, 8 * 1024 * 1024, &n);
+    if (!cur) {
+        struct stat st;
+        int exists = stat(path, &st) == 0;
+        if (exists) fprintf(stderr, "Can't read %s; Kai hooks were not removed.\n", path);
+        free(path);
+        return exists ? 1 : 0;
+    }
     if (!*cur) { free(cur); free(path); return 0; }
     cJSON *root = cJSON_Parse(cur);
     free(cur);
-    if (!root) { free(path); return 0; }
+    if (!root) {
+        fprintf(stderr, "Can't parse %s; Kai hooks were not removed.\n", path);
+        free(path);
+        return 1;
+    }
     cJSON *clean = without_kai(root);
     cJSON_Delete(root);
+    strip_legacy_handlers(clean);
     char *out = cJSON_Print(clean);
     int rc = write_file(path, out);
     free(out); cJSON_Delete(clean);
     if (rc == 0) printf("Removed Kai hooks from %s\n", path);
+    else fprintf(stderr, "Can't write %s; Kai hooks were not removed.\n", path);
     free(path);
     (void)strip_kai;
     return rc;
