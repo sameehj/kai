@@ -25,17 +25,35 @@ final class StorageClient {
     private let lock = NSLock()
     private var agents: [pid_t: String] = [:]     // pid -> agent name, tagged at exec
     private var policyLoadedAt = Date.distantPast
+    private var sawAgentOpen = false              // diagnostics: did any agent open reach us
 
     var modeName: String { mode == KAI_STORAGE_BLOCK ? "block" : "log" }
+
+    // Development diagnostics: the extension runs as root with no readable
+    // logs here, so append a world-readable status line to /tmp. This exists
+    // only in the dev storage build and lets `cat /tmp/kai-storage.log` show
+    // what the client actually did (es_new_client result, mode, decisions).
+    private func dlog(_ s: String) {
+        let line = ISO8601DateFormatter().string(from: Date()) + " " + s + "\n"
+        let path = "/tmp/kai-storage.log"
+        if let fh = FileHandle(forWritingAtPath: path) {
+            fh.seekToEndOfFile(); fh.write(Data(line.utf8)); try? fh.close()
+        } else {
+            try? line.write(toFile: path, atomically: false, encoding: .utf8)
+        }
+        chmod(path, 0o666)
+    }
 
     func start() throws {
         adoptConsoleUser()   // read/write the logged-in user's policy and audit log, not root's
         reloadPolicy(force: true)
+        dlog("start: euid=\(geteuid()) adoptedUID=\(userUID) home=\(ProcessInfo.processInfo.environment["HOME"] ?? "?") mode=\(modeName) policyLoaded=\(policy != nil)")
 
         var c: OpaquePointer?
         let res = es_new_client(&c) { [weak self] _, msg in
             self?.handle(msg)
         }
+        dlog("es_new_client result=\(res.rawValue) (success=\(res == ES_NEW_CLIENT_RESULT_SUCCESS))")
         guard res == ES_NEW_CLIENT_RESULT_SUCCESS, let c else {
             throw NSError(domain: "kai.storage", code: Int(res.rawValue),
                           userInfo: [NSLocalizedDescriptionKey:
@@ -57,7 +75,9 @@ final class StorageClient {
         events.append(ES_EVENT_TYPE_NOTIFY_OPEN) // observe only; never deny
         #endif
 
-        guard es_subscribe(c, events, UInt32(events.count)) == ES_RETURN_SUCCESS else {
+        let sub = es_subscribe(c, events, UInt32(events.count))
+        dlog("es_subscribe result=\(sub.rawValue) events=\(events.count) (AUTH_OPEN compiled-in)")
+        guard sub == ES_RETURN_SUCCESS else {
             throw NSError(domain: "kai.storage", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: "es_subscribe failed"])
         }
@@ -128,7 +148,8 @@ final class StorageClient {
         lock.lock()
         guard let agent = agents[p] else { lock.unlock(); return true } // not an agent: never touched
         let pol = policy
-        lock.unlock()
+        if !sawAgentOpen { sawAgentOpen = true; lock.unlock(); dlog("first agent open observed from \(agent) (pid \(p))") }
+        else { lock.unlock() }
 
         let path = String(cString: msg.pointee.event.open.file.pointee.path.data)
         let write = (msg.pointee.event.open.fflag & Int32(FWRITE)) != 0
@@ -140,11 +161,11 @@ final class StorageClient {
 
         let reason = String(cString: why)
         if enforce && mode == KAI_STORAGE_BLOCK {
-            NSLog("kai storage: BLOCK %@ (pid %d) %@ (%@)", agent, p, path, reason)
+            dlog("BLOCK \(agent) pid \(p) \(path) (\(reason))")
             audit(decision: "block", agent: agent, path: path, why: reason)
             return false
         }
-        NSLog("kai storage: would block %@ (pid %d) %@ (%@)", agent, p, path, reason)
+        dlog("would-block \(agent) pid \(p) \(path) (\(reason)) [mode=\(modeName)]")
         audit(decision: "would-block", agent: agent, path: path, why: reason)
         return true
     }

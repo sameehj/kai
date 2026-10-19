@@ -3,14 +3,15 @@ import AppKit
 import SwiftUI
 
 enum SettingsPage: String, CaseIterable, Identifiable {
-    case general, protection, files, network, company, activity
+    case general, protection, files, network, storage, company, activity
     var id: String { rawValue }
     var title: String {
         switch self {
         case .general: return "General"
-        case .protection: return "Protection"
+        case .protection: return "Agent hooks"
         case .files: return "Protected files"
-        case .network: return "Network"
+        case .network: return "Network wall"
+        case .storage: return "Storage wall"
         case .company: return "Company data"
         case .activity: return "Activity"
         }
@@ -21,6 +22,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .protection: return "shield"
         case .files: return "folder"
         case .network: return "globe"
+        case .storage: return "externaldrive"
         case .company: return "doc.text"
         case .activity: return "waveform.path.ecg"
         }
@@ -99,6 +101,7 @@ struct SettingsView: View {
         case .protection: ProtectionPage()
         case .files: FilesPage()
         case .network: NetworkPage()
+        case .storage: StoragePage()
         case .company: CompanyPage()
         case .activity: ActivityPage()
         }
@@ -297,7 +300,8 @@ private struct ProtectionPage: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            PageHeader(icon: "shield", title: "Protection", subtitle: "What Kai does when it finds something sensitive.")
+            PageHeader(icon: "shield", title: "Agent hooks",
+                       subtitle: "What the agent hooks (Claude Code, Cursor, Codex) do when they find something sensitive in a tool call or prompt. These check the agents' own actions; the network and storage walls cover everything else.")
             SwitchRow(key: "secrets", title: "Secrets found in text",
                       help: "API keys, tokens, private keys, passwords and database URLs.",
                       options: [("redact", "Redact", "Replace with a marker"), ("block", "Block", "Stop the request"),
@@ -416,7 +420,6 @@ private struct NetworkPage: View {
                              + "db.yourcompany.com:5432, 10.0.0.0/8, 203.0.113.5:22. This Mac, model APIs, GitHub "
                              + "and package registries are built in.",
                          items: model.policy?.egressAllow ?? [], placeholder: "artifacts.yourcompany.com or 10.0.0.0/8")
-            StorageWallCard()
         }
         .onAppear { wall.refresh() }
     }
@@ -484,21 +487,39 @@ private struct NetworkPage: View {
 /// The storage wall is implemented (its decision engine is tested) but needs
 /// Apple's Endpoint Security entitlement to actually block file opens, so it
 /// ships off. This card says so rather than pretending the control is live.
-private struct StorageWallCard: View {
+private struct StoragePage: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var storage: StorageWall
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("When an agent opens a file your policy protects")
-                .font(.system(size: 13)).foregroundStyle(Theme.muted)
-            ChoiceCards(options: [("log", "Watch", "Log what it would block. Never blocks."),
-                                  ("block", "Block", "Deny agents those files."),
-                                  ("off", "Off", "The wall is paused.")],
-                        selected: model.policy?.switches["storage"] ?? "off") { model.setSwitch("storage", $0) }
-                .disabled(model.busy || model.policy == nil)
-            Text("Stops agents opening protected files at all, not just through their tools. Turn the wall "
-               + "on in the menu (one approval in System Settings), then choose Watch or Block here. "
-               + "Needs Apple's Endpoint Security entitlement for distribution — until then it runs only "
-               + "in development builds. Preview without loading it: sudo kai storaged --run")
+        VStack(alignment: .leading, spacing: 18) {
+            PageHeader(icon: "externaldrive", title: "Storage wall",
+                       subtitle: "Stops agents opening protected files at all — even from a script, which the agent hooks can't catch. Machine-wide (every agent). macOS Endpoint Security.")
+            Card(padding: 14) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Storage wall").font(.system(size: 14, weight: .semibold))
+                        Text(storage.summary).font(.system(size: 12))
+                            .foregroundStyle(storage.isOn ? Theme.lime : Theme.muted)
+                    }
+                    Spacer()
+                    Toggle("Storage wall", isOn: Binding(get: { storage.isOn },
+                                                         set: { $0 ? storage.turnOn() : storage.turnOff() }))
+                        .toggleStyle(KaiToggleStyle()).labelsHidden()
+                        .disabled(storage.state == .activating || storage.state == .checking)
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Text("When an agent opens a file your policy protects")
+                    .font(.system(size: 13)).foregroundStyle(Theme.muted)
+                ChoiceCards(options: [("log", "Watch", "Log what it would block. Never blocks."),
+                                      ("block", "Block", "Deny agents those files."),
+                                      ("off", "Off", "The wall is paused.")],
+                            selected: model.policy?.switches["storage"] ?? "off") { model.setSwitch("storage", $0) }
+                    .disabled(model.busy || model.policy == nil)
+            }
+            Text("Needs Apple's Endpoint Security entitlement for distribution — until then it runs only in "
+               + "development builds. Preview the decisions without loading it: sudo kai storaged --run")
                 .font(.system(size: 12)).foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
