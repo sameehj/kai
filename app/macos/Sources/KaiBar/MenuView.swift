@@ -89,9 +89,13 @@ struct MenuView: View {
 
     private var protection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            CapsLabel("Protection")
+            CapsLabel("Agents")
             ForEach(Agent.allCases) { AgentCard(agent: $0) }
+            CapsLabel("System protection").padding(.top, 4)
+            Text("Covers every agent on this Mac.")
+                .font(.system(size: 11)).foregroundStyle(Theme.muted)
             NetworkCard()
+            StorageCard()
         }
     }
 
@@ -300,7 +304,7 @@ struct AgentCard: View {
 
     private func subtitle(_ info: KaiStatus.Agent) -> String {
         if info.broken { return "Not working: " + (info.problem ?? "check failed") }
-        if info.installed { return agent == .chrome ? "Checking chats" : "Hooks on" }
+        if info.installed { return agent == .chrome ? "Checking chats" : "Protected" }
         return info.detected ? "Not protected" : "Not found on this Mac"
     }
 
@@ -371,6 +375,55 @@ struct NetworkCard: View {
                                                  set: { $0 ? wall.turnOn() : wall.turnOff() }))
                 .toggleStyle(KaiToggleStyle()).labelsHidden()
                 .disabled(wall.state == .activating || wall.state == .checking)
+        }
+        .padding(10)
+        .background(LinearGradient(colors: [Theme.surface, Color(hex: 0x1D2318)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color(hex: 0x3A4420)))
+    }
+}
+
+struct StorageCard: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var storage: StorageWall
+
+    private var subtitle: String {
+        switch storage.state {
+        case .off: return "Off: agents can still open protected files directly"
+        case .on:
+            switch model.policy?.switches["storage"] ?? "off" {
+            case "block": return "Block mode · protected files denied to agents"
+            case "log": return "Watching · logs what it would block"
+            default: return "On"
+            }
+        default: return storage.summary
+        }
+    }
+
+    private var warn: Bool {
+        if case .needsApproval = storage.state { return true }
+        if case .failed = storage.state { return true }
+        return false
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "externaldrive")
+                .font(.system(size: 15)).foregroundStyle(Theme.lime)
+                .frame(width: 32, height: 32)
+                .background(Theme.lime.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Storage wall").font(.system(size: 14, weight: .semibold))
+                Text(subtitle).font(.system(size: 12))
+                    .foregroundStyle(warn ? Theme.amber : Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Toggle("Storage wall", isOn: Binding(get: { storage.isOn },
+                                                 set: { $0 ? storage.turnOn() : storage.turnOff() }))
+                .toggleStyle(KaiToggleStyle()).labelsHidden()
+                .disabled(storage.state == .activating || storage.state == .checking)
         }
         .padding(10)
         .background(LinearGradient(colors: [Theme.surface, Color(hex: 0x1D2318)],

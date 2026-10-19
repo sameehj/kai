@@ -7,12 +7,14 @@ struct KaiBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
     @StateObject private var wall = NetworkWall()
+    @StateObject private var storage = StorageWall()
 
     var body: some Scene {
         MenuBarExtra {
             MenuView()
                 .environmentObject(model)
                 .environmentObject(wall)
+                .environmentObject(storage)
         } label: {
             Image(systemName: model.menuBarSymbol)
                 .accessibilityLabel("Kai: \(model.headline)")
@@ -23,6 +25,7 @@ struct KaiBarApp: App {
             SettingsView()
                 .environmentObject(model)
                 .environmentObject(wall)
+                .environmentObject(storage)
         }
         .windowResizability(.contentSize)
     }

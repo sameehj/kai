@@ -213,7 +213,7 @@ wall's, then approve it in System Settings.
 | Egress allowlist (`egress`, `egress_allow`) | Done, tested |
 | SNI parser (`kai_tls_sni`) | Done, fuzz-style tests under ASan |
 | AI gateway (`kai gateway`) | Done, end-to-end tests with a fake upstream |
-| Network extension (Xcode project, signing) | Next, needs the paid account's signing set up |
+| Network extension (Xcode project, signing) | Built, signed, installed; log + block verified live on macOS 14 (team KD446VDTM2) |
 | Storage-wall decision (`kai_storage_open_allowed`, `kai storaged`) | Done, tested; previewable via eslogger |
 | Endpoint Security extension (`app/macos/Storage`, `make app-storage`) | Builds and links (notify mode); dev entitlement assigned; not yet load-tested on device |
 | Storage-wall enforcement (AUTH deny) | Gated behind `KAI_STORAGE_ENFORCE`; VM-test before use; distribution pending Apple |

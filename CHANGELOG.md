@@ -1,6 +1,16 @@
 # Changelog
 
 ## Unreleased
+- Storage wall can now be loaded and enforce on a dev machine: the ES
+  extension is embedded by the storage build (`make try-app-storage`), the
+  menu has a Storage wall on/off (one System Settings approval), and the
+  app's Advanced settings pick Watch (notify, logs would-block) or Block
+  (deny). Enforcement is compiled in for that build; distribution still
+  excludes the extension until Apple approves, so it can't ship yet. Load in
+  Watch first; move to Block only after it looks right.
+- Simpler main screen: per-agent "Protected" on/off (no "hooks" jargon), with
+  a "System protection (all agents)" section for the network and storage
+  walls, which are machine-wide. Response/mode granularity stays in Settings.
 - Storage wall, OS client: an Endpoint Security system extension
   (`app/macos/Storage`, built with `make app-storage`) that tags agent
   processes at exec and checks their file opens against the same decision

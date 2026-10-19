@@ -102,6 +102,20 @@ app-storage: kai
 	  -derivedDataPath build/dd -allowProvisioningUpdates DEVELOPMENT_TEAM=$(KAI_TEAM) $(XCODE_EXTRA) -quiet build
 	@echo "Built KaiStorage (notify mode). See docs/WALLS.md to load it for local testing."
 
+# Build the app WITH the storage extension embedded, install to /Applications,
+# and open it, so the storage wall can be activated from the menu. Development
+# only (needs the ES dev entitlement); the extension is approved once in
+# System Settings. Keep `storage` at log first; switch to block only after.
+try-app-storage: kai
+	@test -n "$(KAI_TEAM)" || { echo "set KAI_TEAM to your Apple team ID"; exit 1; }
+	cd app/macos && KAI_TEAM=$(KAI_TEAM) xcodegen generate --quiet --spec storage.yml
+	xcodebuild $(XCODE_FLAGS) -allowProvisioningUpdates DEVELOPMENT_TEAM=$(KAI_TEAM) $(XCODE_EXTRA) -quiet build
+	@pkill -x Kai || true
+	rm -rf build/Kai.app && cp -R build/dd/Build/Products/Release/Kai.app build/Kai.app
+	$(MAKE) install-app
+	open /Applications/Kai.app
+	@echo "Approve the storage extension in System Settings, keep storage=log, then watch Activity."
+
 # Build signed, install to /Applications, quit any running copy, and open it.
 try-app: app-dev
 	@pkill -x Kai || true
@@ -128,4 +142,4 @@ clean:
 	rm -f $(OBJ) kai libkai.a tests/run_tests
 	rm -rf build app/macos/Kai.xcodeproj
 
-.PHONY: all asan fuzz test escape validation chrome-zip app app-dev app-storage try-app install-app install uninstall clean
+.PHONY: all asan fuzz test escape validation chrome-zip app app-dev app-storage try-app-storage try-app install-app install uninstall clean

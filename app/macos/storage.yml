@@ -16,6 +16,12 @@ include:
   - project.yml
 
 targets:
+  # Embed the storage extension in the app so it can be activated. xcodegen
+  # appends to the base dependencies from project.yml, so list only the extra.
+  Kai:
+    dependencies:
+      - target: KaiStorage
+
   KaiStorage:
     type: system-extension
     platform: macOS
@@ -48,6 +54,9 @@ targets:
         PRODUCT_MODULE_NAME: KaiStorage
         SWIFT_INCLUDE_PATHS: $(SRCROOT)/KaiCore
         SKIP_INSTALL: YES
-        # Distribution stays off until Apple approves; notify mode is the
-        # default. Define KAI_STORAGE_ENFORCE to compile the blocking path.
         KAI_STORAGE_VERSION: "1"
+        # Compile the blocking (AUTH) path. It still only engages when the
+        # policy is `storage block`; `log`/`off` stay notify-only. Distribution
+        # is excluded regardless (this target isn't in project.yml), so Apple
+        # approval still gates shipping.
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: KAI_STORAGE_ENFORCE

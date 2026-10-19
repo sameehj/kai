@@ -485,24 +485,22 @@ private struct NetworkPage: View {
 /// Apple's Endpoint Security entitlement to actually block file opens, so it
 /// ships off. This card says so rather than pretending the control is live.
 private struct StorageWallCard: View {
+    @EnvironmentObject var model: AppModel
     var body: some View {
-        Card(padding: 14) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Image(systemName: "externaldrive.badge.xmark").foregroundStyle(Theme.muted)
-                    Text("Storage wall").font(.system(size: 14, weight: .semibold))
-                    Text("Pending Apple approval").font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Theme.muted)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Theme.muted.opacity(0.12), in: Capsule())
-                }
-                Text("Stops agents from opening protected files at all, not just through their tools — "
-                   + "closing the gap where a script reads a file directly. It needs Apple's Endpoint "
-                   + "Security entitlement, so it's off until that's granted. Developers can preview the "
-                   + "decisions now with: sudo eslogger open | kai storaged")
-                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        VStack(alignment: .leading, spacing: 8) {
+            Text("When an agent opens a file your policy protects")
+                .font(.system(size: 13)).foregroundStyle(Theme.muted)
+            ChoiceCards(options: [("log", "Watch", "Log what it would block. Never blocks."),
+                                  ("block", "Block", "Deny agents those files."),
+                                  ("off", "Off", "The wall is paused.")],
+                        selected: model.policy?.switches["storage"] ?? "off") { model.setSwitch("storage", $0) }
+                .disabled(model.busy || model.policy == nil)
+            Text("Stops agents opening protected files at all, not just through their tools. Turn the wall "
+               + "on in the menu (one approval in System Settings), then choose Watch or Block here. "
+               + "Needs Apple's Endpoint Security entitlement for distribution — until then it runs only "
+               + "in development builds. Preview without loading it: sudo kai storaged --run")
+                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
