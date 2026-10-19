@@ -16,6 +16,7 @@
 import EndpointSecurity
 import Foundation
 import KaiCore
+import SystemConfiguration
 
 final class StorageClient {
     private var client: OpaquePointer?
@@ -28,6 +29,7 @@ final class StorageClient {
     var modeName: String { mode == KAI_STORAGE_BLOCK ? "block" : "log" }
 
     func start() throws {
+        adoptConsoleUser()   // read/write the logged-in user's policy and audit log, not root's
         reloadPolicy(force: true)
 
         var c: OpaquePointer?
@@ -44,13 +46,13 @@ final class StorageClient {
         // Tag agents by watching process lifecycle (notify: no deadline).
         var events: [es_event_type_t] = [ES_EVENT_TYPE_NOTIFY_EXEC, ES_EVENT_TYPE_NOTIFY_EXIT]
         // Blocking is gated at compile time so a released/notify build can
-        // never subscribe AUTH_OPEN by accident.
+        // never deny. When compiled in, subscribe AUTH_OPEN regardless of the
+        // current mode: the handler allows (and logs "would block") unless the
+        // policy is `block`, so switching Watch<->Block takes effect live, with
+        // no restart. Non-block answers are immediate, so there's no added
+        // deadline risk beyond the (fast) agent lookup.
         #if KAI_STORAGE_ENFORCE
-        if mode == KAI_STORAGE_BLOCK {
-            events.append(ES_EVENT_TYPE_AUTH_OPEN)
-        } else {
-            events.append(ES_EVENT_TYPE_NOTIFY_OPEN)
-        }
+        events.append(ES_EVENT_TYPE_AUTH_OPEN)
         #else
         events.append(ES_EVENT_TYPE_NOTIFY_OPEN) // observe only; never deny
         #endif
@@ -147,8 +149,31 @@ final class StorageClient {
         return true
     }
 
+    // The logged-in user, so we read their policy and write their audit log
+    // (we run as root, whose ~/.kai is not the user's).
+    private var userUID: uid_t = 0
+    private var userGID: gid_t = 0
+
+    private func adoptConsoleUser() {
+        var uid: uid_t = 0, gid: gid_t = 0
+        let name = SCDynamicStoreCopyConsoleUser(nil, &uid, &gid)
+        guard name != nil, uid >= 501 else { return }   // a real logged-in user, not loginwindow
+        userUID = uid
+        userGID = gid
+        if let pw = getpwuid(uid), let home = pw.pointee.pw_dir {
+            setenv("HOME", home, 1)        // kai_policy_load / kai_home() now resolve to the user's ~/.kai
+        }
+    }
+
     private func audit(decision: String, agent: String, path: String, why: String) {
         kai_audit("storage", agent, decision, why, "agent open of a protected file")
+        // We run as root; keep the user's audit log owned by the user so their
+        // CLI/app can read and extend it (the network extension does the same).
+        if userUID >= 501 {
+            let log = String(cString: kai_audit_path())
+            chown(log, userUID, userGID)
+            chown((log as NSString).deletingLastPathComponent, userUID, userGID)
+        }
     }
 
     deinit {
