@@ -509,6 +509,29 @@ private struct StoragePage: View {
                         .disabled(storage.state == .activating || storage.state == .checking)
                 }
             }
+            if storage.needsFullDiskAccess {
+                Card(padding: 14, stroke: Theme.amber.opacity(0.5)) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("One more step: Full Disk Access").font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.amber)
+                        Text("macOS requires Full Disk Access for the storage wall. Turn on Kai in the list, "
+                           + "then it starts on its own within a few seconds — no need to come back here.")
+                            .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Open Full Disk Access settings") { storage.openFullDiskAccessSettings() }
+                            .buttonStyle(LimeButtonStyle())
+                    }
+                }
+            } else if case .needsApproval = storage.state {
+                Card(padding: 14, stroke: Theme.amber.opacity(0.5)) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Approve the Kai system extension").font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.amber)
+                        Button("Open extension settings") { storage.openExtensionApprovalSettings() }
+                            .buttonStyle(LimeButtonStyle())
+                    }
+                }
+            }
             VStack(alignment: .leading, spacing: 8) {
                 Text("When an agent opens a file your policy protects")
                     .font(.system(size: 13)).foregroundStyle(Theme.muted)
@@ -523,6 +546,8 @@ private struct StoragePage: View {
                 .font(.system(size: 12)).foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .onAppear { storage.refreshRuntime() }
+        .onReceive(Timer.publish(every: 3, on: .main, in: .common).autoconnect()) { _ in storage.refreshRuntime() }
     }
 }
 

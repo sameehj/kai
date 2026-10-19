@@ -9,6 +9,7 @@
 // The extension is present only in a storage build (make try-app-storage).
 // In a normal build activation fails with "extension not found", which we
 // surface rather than pretend the control works.
+import AppKit
 import Foundation
 import SystemExtensions
 
@@ -48,6 +49,46 @@ final class StorageWall: NSObject, ObservableObject {
     func turnOff() {
         turningOff = true
         submit(activate: false)
+    }
+
+    // MARK: making the two required approvals one-click
+
+    /// The extension can't start until the user grants Full Disk Access
+    /// (es_new_client returns NOT_PERMITTED). It records that in its status
+    /// file; read the latest state so the UI can show exactly what's left and
+    /// flip to "on" by itself once the grant lands.
+    @Published private(set) var needsFullDiskAccess = false
+    @Published private(set) var runtimeNote = ""
+
+    func refreshRuntime() {
+        guard let text = try? String(contentsOfFile: "/tmp/kai-storage.log", encoding: .utf8) else {
+            needsFullDiskAccess = false; runtimeNote = ""; return
+        }
+        let lines = text.split(separator: "\n").suffix(40).map(String.init)
+        // The most recent of these outcomes wins.
+        var enforcing = false, notPermitted = false
+        for l in lines {
+            if l.contains("enforcing in mode") { enforcing = true; notPermitted = false }
+            else if l.contains("NOT_PERMITTED") { notPermitted = true; enforcing = false }
+        }
+        needsFullDiskAccess = notPermitted && !enforcing
+        if enforcing { runtimeNote = "Endpoint Security client running." }
+        else if notPermitted { runtimeNote = "Waiting for Full Disk Access." }
+        else { runtimeNote = "" }
+    }
+
+    /// Open System Settings straight to the Full Disk Access list.
+    func openFullDiskAccessSettings() {
+        if let u = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles") {
+            NSWorkspace.shared.open(u)
+        }
+    }
+
+    /// Open the system-extension approval pane (Login Items & Extensions / Privacy & Security).
+    func openExtensionApprovalSettings() {
+        if let u = URL(string: "x-apple.systempreferences:com.apple.ExtensionsPreferences") {
+            NSWorkspace.shared.open(u)
+        }
     }
 
     private func submit(activate: Bool) {

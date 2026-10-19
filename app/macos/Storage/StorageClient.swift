@@ -107,6 +107,22 @@ final class StorageClient {
         pid_t(bitPattern: proc.pointee.audit_token.val.5)
     }
 
+    private func esString(_ t: es_string_token_t) -> String {
+        guard let d = t.data, t.length > 0 else { return "" }
+        return String(decoding: UnsafeRawBufferPointer(start: d, count: t.length), as: UTF8.self)
+    }
+
+    /// Kai's own signed binaries (CLI, hooks, the extensions) must never be
+    /// blocked from reading ~/.kai — otherwise enabling the wall breaks Kai's
+    /// own policy loading. They are descendants of the agent, so agent tagging
+    /// would catch them; exempt them by code signature (our team / bundle id),
+    /// which an agent-dropped binary can't forge.
+    private func isKaiOwnProcess(_ proc: UnsafeMutablePointer<es_process_t>) -> Bool {
+        let team = esString(proc.pointee.team_id)
+        let signing = esString(proc.pointee.signing_id)
+        return team == "KD446VDTM2" || signing.hasPrefix("io.github.sameehj.kai") || signing == "kai"
+    }
+
     private func handle(_ msg: UnsafePointer<es_message_t>) {
         switch msg.pointee.event_type {
         case ES_EVENT_TYPE_NOTIFY_EXEC:
@@ -131,6 +147,7 @@ final class StorageClient {
     private func tagExec(_ msg: UnsafePointer<es_message_t>) {
         let target = msg.pointee.event.exec.target
         let p = pid(target)
+        if isKaiOwnProcess(target) { return }   // Kai's own tools are never blockable agents
         reloadPolicy(force: false)
         lock.lock()
         let pol = policy
@@ -149,6 +166,7 @@ final class StorageClient {
     /// Returns true to allow. Logs would-block in notify mode; in auth mode the
     /// caller turns false into a deny.
     private func decide(_ msg: UnsafePointer<es_message_t>, enforce: Bool) -> Bool {
+        if isKaiOwnProcess(msg.pointee.process) { return true }  // never block Kai reading its own files
         let p = pid(msg.pointee.process)
         lock.lock()
         guard let agent = agents[p] else { lock.unlock(); return true } // not an agent: never touched
