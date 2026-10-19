@@ -12,10 +12,5 @@
 import Foundation
 
 let client = StorageClient()
-do {
-    try client.start()
-    NSLog("kai storage extension: started (%@ mode)", client.modeName)
-} catch {
-    NSLog("kai storage extension: failed to start: %@", String(describing: error))
-}
+client.start()   // self-retries if Full Disk Access isn't granted yet
 dispatchMain()

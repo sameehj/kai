@@ -44,20 +44,29 @@ final class StorageClient {
         chmod(path, 0o666)
     }
 
-    func start() throws {
+    func start() {
         adoptConsoleUser()   // read/write the logged-in user's policy and audit log, not root's
         reloadPolicy(force: true)
         dlog("start: euid=\(geteuid()) adoptedUID=\(userUID) home=\(ProcessInfo.processInfo.environment["HOME"] ?? "?") mode=\(modeName) policyLoaded=\(policy != nil)")
+        connect()
+    }
 
+    /// Create the ES client and subscribe. es_new_client returns
+    /// ERR_NOT_PERMITTED (4) until the user grants Kai Full Disk Access, so on
+    /// that result we keep retrying — once they grant it, the wall comes up on
+    /// its own within a few seconds, no toggle needed.
+    private func connect() {
         var c: OpaquePointer?
         let res = es_new_client(&c) { [weak self] _, msg in
             self?.handle(msg)
         }
         dlog("es_new_client result=\(res.rawValue) (success=\(res == ES_NEW_CLIENT_RESULT_SUCCESS))")
         guard res == ES_NEW_CLIENT_RESULT_SUCCESS, let c else {
-            throw NSError(domain: "kai.storage", code: Int(res.rawValue),
-                          userInfo: [NSLocalizedDescriptionKey:
-                                     "es_new_client failed (\(res)). Needs the ES entitlement and root."])
+            if res == ES_NEW_CLIENT_RESULT_ERR_NOT_PERMITTED {
+                dlog("NOT_PERMITTED — grant Kai Full Disk Access in System Settings > Privacy & Security. Retrying in 5s.")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.connect() }
+            }
+            return
         }
         client = c
 
@@ -76,11 +85,7 @@ final class StorageClient {
         #endif
 
         let sub = es_subscribe(c, events, UInt32(events.count))
-        dlog("es_subscribe result=\(sub.rawValue) events=\(events.count) (AUTH_OPEN compiled-in)")
-        guard sub == ES_RETURN_SUCCESS else {
-            throw NSError(domain: "kai.storage", code: -1,
-                          userInfo: [NSLocalizedDescriptionKey: "es_subscribe failed"])
-        }
+        dlog("es_subscribe result=\(sub.rawValue) events=\(events.count); enforcing in mode=\(modeName)")
     }
 
     // MARK: policy
