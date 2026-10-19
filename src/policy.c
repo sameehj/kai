@@ -50,6 +50,7 @@ static const char DEFAULT_POLICY[] =
     "injection warn\n"
     "max_scan_bytes 2000000\n"
     "egress log\n"
+    "storage off\n"
     "audit_context on\n"
     "rule_upload curl_upload (^|\\| )(curl|wget) .*(-d|--data|-T|--upload-file|-F).*@\n"
     "rule_upload pipe_to_shell (^|\\| )(curl|wget) .*\\| (sh|bash|zsh|python[0-9.]*)( |$)\n"
@@ -226,6 +227,7 @@ static kai_policy *policy_new(void) {
     p->injection_on = 1;
     p->max_scan = 2000000;
     p->egress_mode = KAI_EGRESS_LOG;
+    p->storage_mode = KAI_STORAGE_OFF; /* needs Apple's entitlement; off until then */
     p->gateway_port = 8787;
     p->audit_context = 1;
     kai_strlcpy(p->source, "built-in", sizeof p->source);
@@ -319,6 +321,11 @@ static kai_policy *parse(const char *text, const char *source, char *err,
             if (strcmp(v, "block") == 0) p->egress_mode = KAI_EGRESS_BLOCK;
             else if (strcmp(v, "off") == 0) p->egress_mode = KAI_EGRESS_OFF;
             else p->egress_mode = KAI_EGRESS_LOG;
+        } else if (strcmp(d, "storage") == 0) {
+            char *v; if (!next_tok(&cur, &v)) continue;
+            if (strcmp(v, "block") == 0) p->storage_mode = KAI_STORAGE_BLOCK;
+            else if (strcmp(v, "log") == 0) p->storage_mode = KAI_STORAGE_LOG;
+            else p->storage_mode = KAI_STORAGE_OFF;
         } else if (strcmp(d, "egress_allow") == 0) {
             char *v;
             while (next_tok(&cur, &v) && v[0] != '#') {
@@ -524,4 +531,8 @@ int kai_policy_exempt(const kai_policy *p, const char *rule, const char *target)
 }
 kai_egress_mode kai_policy_egress_mode(const kai_policy *p) {
     return p ? p->egress_mode : KAI_EGRESS_OFF;
+}
+
+kai_storage_mode kai_policy_storage_mode(const kai_policy *p) {
+    return p ? p->storage_mode : KAI_STORAGE_OFF;
 }

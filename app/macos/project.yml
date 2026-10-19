@@ -20,9 +20,14 @@ settings:
     CODE_SIGN_STYLE: Automatic
     ENABLE_HARDENED_RUNTIME: YES
     MARKETING_VERSION: "0.1.0"
-    # Bump on every extension change: macOS only replaces an activated
-    # extension when its version differs.
-    CURRENT_PROJECT_VERSION: "5"
+    # The app's build number. Bump freely for app changes (menu bar, signing);
+    # this does NOT touch the network extension, so app updates never replace
+    # it and never drop agents' live connections.
+    CURRENT_PROJECT_VERSION: "6"
+    # The network extension's own build number. Bump ONLY when the extension's
+    # code (app/macos/Network) changes: macOS replaces an activated extension
+    # when this differs, which tears down the content filter.
+    KAI_EXT_VERSION: "6"
     SWIFT_VERSION: "5.9"
 
 targets:
@@ -38,6 +43,7 @@ targets:
       - path: ../../src/sha256.c
       - path: ../../src/audit.c
       - path: ../../src/net.c
+      - path: ../../src/storage.c
       - path: ../../src/proc.c
       - path: ../../src/shell.c
       - path: ../../third_party/cjson/cJSON.c
@@ -65,7 +71,8 @@ targets:
         # macOS only treats the bundle as a system extension with type SYSX.
         CFBundlePackageType: SYSX
         CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Its own version, not the app's: app updates don't replace the extension.
+        CFBundleVersion: $(KAI_EXT_VERSION)
         NSHumanReadableCopyright: GPL-3.0 · The Kai Authors
         NSSystemExtensionUsageDescription: Kai checks where AI agents send data and blocks connections your policy does not allow.
         NetworkExtension:

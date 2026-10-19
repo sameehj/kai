@@ -52,13 +52,38 @@ final class NetworkWall: NSObject, ObservableObject {
         }
     }
 
-    /// When the wall is on, re-submit activation once per launch. If this
-    /// Kai.app carries a newer extension, macOS swaps it in (no new approval
-    /// for the same team); if not, the request just completes.
+    /// The version of the network extension this Kai.app carries, read from the
+    /// embedded .systemextension bundle. It changes only when the extension's
+    /// own code does (its CFBundleVersion is KAI_EXT_VERSION, separate from the
+    /// app's), so an app-only update leaves it unchanged.
+    private var embeddedExtensionVersion: String? {
+        let dir = Bundle.main.bundleURL.appendingPathComponent("Contents/Library/SystemExtensions")
+        guard let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+        else { return nil }
+        for url in items where url.pathExtension == "systemextension" {
+            if let info = NSDictionary(contentsOf: url.appendingPathComponent("Contents/Info.plist")),
+               let v = info["CFBundleVersion"] as? String { return v }
+        }
+        return nil
+    }
+
+    /// Re-submit activation only when the carried extension is actually newer
+    /// than the one macOS is already running. Replacing a system extension
+    /// tears down its content filter, which drops every open connection,
+    /// including agents' live API requests — so we never do it for an
+    /// app-only update. macOS still won't replace same-version extensions, but
+    /// skipping the request avoids even that round-trip and any edge cases.
+    private static let activatedVersionKey = "kaiActivatedExtensionVersion"
     private var updateRequested = false
     private func updateExtensionOnce() {
         guard !updateRequested, Bundle.main.bundlePath.hasPrefix("/Applications/") else { return }
         updateRequested = true
+        guard let carried = embeddedExtensionVersion else { return }
+        // Skip only when we already activated exactly this extension version:
+        // then nothing changed and there is nothing to do. Otherwise submit —
+        // macOS no-ops a same-version request (no filter teardown) and only
+        // replaces, once, when the version genuinely rose.
+        if UserDefaults.standard.string(forKey: Self.activatedVersionKey) == carried { return }
         let req = OSSystemExtensionRequest.activationRequest(forExtensionWithIdentifier: Self.extensionID,
                                                              queue: .main)
         req.delegate = self
@@ -131,7 +156,13 @@ extension NetworkWall: OSSystemExtensionRequestDelegate {
 
     nonisolated func request(_ request: OSSystemExtensionRequest,
                              didFinishWithResult result: OSSystemExtensionRequest.Result) {
-        Task { @MainActor in self.enableFilter() }
+        Task { @MainActor in
+            // Remember what's now running, so we don't reactivate it next launch.
+            if let v = self.embeddedExtensionVersion {
+                UserDefaults.standard.set(v, forKey: Self.activatedVersionKey)
+            }
+            self.enableFilter()
+        }
     }
 
     nonisolated func request(_ request: OSSystemExtensionRequest, didFailWithError error: Error) {

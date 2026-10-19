@@ -48,6 +48,12 @@ egress             log
 # Extra agents, matched by executable path, argument, or signing Team ID:
 # agent  aider  arg  */bin/aider
 
+# ── Storage wall (macOS Endpoint Security) ────────────────────────────
+# Stops agent processes from opening protected files at all (not just
+# through the hooks). off | log | block. Needs Apple's Endpoint Security
+# entitlement, so it does nothing until that ships; leave off.
+storage            off
+
 # ── Company rules ─────────────────────────────────────────────────────
 # term  <action> <text>          exact words, case-insensitive
 # rule  <name> <action> <regex>  POSIX extended regex, case-insensitive

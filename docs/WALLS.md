@@ -121,7 +121,30 @@ Instead:
   can drop that agent's *direct* connections to model APIs, so it can't skip
   the gateway.
 
-## Storage wall (when the entitlement arrives)
+## Storage wall
+
+**The decision is built and tested now; only the OS hookup waits on Apple.**
+`kai_storage_open_allowed` (`src/storage.c`) takes the three facts an ES client
+would gather — is the process an agent, is it a write, the real path — and
+returns allow/deny, reusing `kai_path_protected` so the storage wall and the
+hooks guard the same files. It is off by default (`storage off`); `log` and
+`block` are the other modes. Unit tests in `tests/storage`.
+
+**Preview it today, no entitlement:** `eslogger` reports `open()` events with
+only root (it can observe, never block), so
+
+```sh
+sudo eslogger open | kai storaged
+```
+
+prints the decision the wall would make for every file an agent opens
+(`WOULD BLOCK  claude  pid …  ~/.ssh/id_rsa`). This is how the wall is
+developed and demonstrated before the entitlement arrives.
+
+**The OS client (`app/macos/Storage/StorageProvider.swift`)** is written but
+left out of the Xcode build until the entitlement exists (it would fail to
+sign). It is a thin shell around the C decision; wiring it in is a
+`system-extension` target plus the entitlement. When granted:
 
 - An ES client subscribed to `NOTIFY_EXEC`/`FORK`/`EXIT` builds the process
   tree, tagging agents and their descendants by audit token: pid plus
@@ -161,4 +184,5 @@ Instead:
 | SNI parser (`kai_tls_sni`) | Done, fuzz-style tests under ASan |
 | AI gateway (`kai gateway`) | Done, end-to-end tests with a fake upstream |
 | Network extension (Xcode project, signing) | Next, needs the paid account's signing set up |
-| Endpoint Security extension | After Apple grants the entitlement |
+| Storage-wall decision (`kai_storage_open_allowed`, `kai storaged`) | Done, tested; previewable via eslogger |
+| Endpoint Security extension (enforcement) | Written, out of build until Apple grants the entitlement |

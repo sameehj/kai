@@ -40,7 +40,7 @@ Kai runs locally, never stores detected secret values in its audit log (excerpts
 | **macOS menu-bar app** | Show status, recent activity, protection switches, and policy controls | ✅ Running in development |
 | **Local AI gateway** | Inspect and transform requests explicitly routed through it to supported model APIs | 🧪 Tested with a fake upstream; live-agent testing pending |
 | **Network wall** | Use a signed macOS Network Extension to log or restrict agent connections by destination | ✅ Log mode verified on macOS 14 · ⚠️ Block mode works for agent web traffic, with [known gaps](docs/SECURITY-VALIDATION.md#network-wall-live-run) |
-| **Storage wall** | Use macOS Endpoint Security for stronger agent file restrictions | 🗓️ Planned; Apple entitlement required |
+| **Storage wall** | Stop agents opening protected files at all (macOS Endpoint Security) | 🧪 Decision engine built and tested; enforcement needs Apple's entitlement (off until then) |
 
 **Important:** Hooks only see actions exposed by supported agent hook integrations. They are not OS-level sandboxing. The gateway protects only traffic routed through it. See [security boundaries](#-what-kai-doesnt-promise).
 
@@ -229,7 +229,7 @@ kai log tail                                 # network entries have "source":"ne
 
 Building the extension needs a paid Apple Developer account. A development build only runs on Macs registered to that account.
 
-The planned **Storage wall** uses macOS Endpoint Security and requires an Apple-granted entitlement. Details: [`docs/WALLS.md`](docs/WALLS.md).
+The **Storage wall** stops agents from opening protected files at all, not just through their tools. Its decision engine is built and tested; enforcement needs Apple's Endpoint Security entitlement, so it ships off (`storage off`). Preview the decisions in development with `sudo eslogger open | kai storaged`. Details: [`docs/WALLS.md`](docs/WALLS.md).
 
 ## 🔍 What Kai doesn't promise
 
@@ -262,6 +262,7 @@ Read [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) before using Kai for sensiti
 | `kai policy add agent <name> exe\|arg\|team <pattern>` | Recognize another AI agent |
 | `kai gateway [--port N]` | Start the loopback AI gateway |
 | `kai agent-of <pid>` | Identify a recognized agent/descendant process |
+| `kai storaged` | Preview storage-wall decisions from `eslogger` output (development) |
 | `kai policy add\|remove exempt <rule> <command glob>` | Let one rule skip one command it wrongly blocks |
 | `kai log [tail\|show\|verify]` | Raw records, the same in words (`show -n N`), or verify the chain |
 | `kai report <id>` | Write a false-positive report and a GitHub issue link (ids from `kai log show`) |

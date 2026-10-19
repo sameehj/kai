@@ -20,8 +20,8 @@ LDLIBS   = -lcurl -lpthread -lm
 endif
 
 CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
-       src/net.c src/proc.c src/shell.c src/gateway.c third_party/cjson/cJSON.c
-APP  = src/main.c src/hooks.c src/install.c src/manage.c src/browser.c src/native.c src/report.c src/health.c
+       src/net.c src/storage.c src/proc.c src/shell.c src/gateway.c third_party/cjson/cJSON.c
+APP  = src/main.c src/hooks.c src/install.c src/manage.c src/browser.c src/native.c src/report.c src/health.c src/storaged.c
 
 OBJ      = $(CORE:.c=.o) $(APP:.c=.o)
 COREOBJ  = $(CORE:.c=.o)
@@ -49,6 +49,8 @@ asan: clean kai test
 test: kai
 	$(CC) $(CFLAGS) -o tests/run_tests tests/run_tests.c $(CORE) $(LDLIBS)
 	./tests/run_tests
+	$(CC) $(CFLAGS) -o tests/storage/run_storage_tests tests/storage/run_storage_tests.c $(CORE) $(LDLIBS)
+	./tests/storage/run_storage_tests
 	sh tests/hooks/run_hook_tests.sh ./kai
 	sh tests/cli/run_cli_tests.sh ./kai
 	sh tests/gateway/run_gateway_tests.sh ./kai

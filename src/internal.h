@@ -137,6 +137,8 @@ struct kai_policy {
     kai_egress_mode egress_mode;
     char *egress_allow[KAI_MAX_LIST];
     int negress;
+    /* storage wall */
+    kai_storage_mode storage_mode;
     /* agent identities: "exe", "arg" or "team" patterns */
     struct {
         char name[32];

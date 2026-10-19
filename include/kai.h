@@ -129,6 +129,28 @@ int kai_egress_entry_valid(const char *entry);
  * -1 if more bytes are needed. Never reads past len. */
 int kai_tls_sni(const unsigned char *buf, size_t len, char *host, size_t hostlen);
 
+/* ---- Storage wall: which files agents may open ----
+ * The OS layer (macOS Endpoint Security, when Apple grants the entitlement)
+ * asks this for every open() by an agent process. The decision itself is
+ * plain and testable here, with no OS involved. */
+typedef enum {
+    KAI_STORAGE_OFF = 0,   /* no file control (default)                      */
+    KAI_STORAGE_LOG = 1,   /* allow everything, log agent opens of protected */
+    KAI_STORAGE_BLOCK = 2  /* deny agent opens of protected paths            */
+} kai_storage_mode;
+
+kai_storage_mode kai_policy_storage_mode(const kai_policy *p);
+
+/* May a process open this path? is_agent says the process is an AI agent or a
+ * descendant of one (see kai_process_agent); write says it is opening for
+ * write. Returns 1 (allow) or 0 (deny), and fills why with the matching rule
+ * when it denies. A non-agent is always allowed. With the wall off or in log
+ * mode the answer is always allow (the caller still logs a filled why). Kai's
+ * own files (~/.kai) and agent hook settings are always denied to agents in
+ * block mode, whatever the policy's allow list says. */
+int kai_storage_open_allowed(const kai_policy *p, int is_agent, int write,
+                             const char *path, char *why, size_t whylen);
+
 /* ---- Agent identity ----
  * An agent is matched by executable path, any argv element, or code-signing
  * Team ID, using the policy's `agent` lines. */

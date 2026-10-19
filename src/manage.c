@@ -311,6 +311,7 @@ static const struct {
     {"injection", "warn", {"warn", "off", NULL}},
     {"max_scan_bytes", "2000000", {NULL}},
     {"egress", "log", {"log", "block", "off", NULL}},
+    {"storage", "off", {"off", "log", "block", NULL}},
     {"gateway_port", "8787", {NULL}},
     {"audit_context", "on", {"on", "off", NULL}},
 };

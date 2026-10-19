@@ -1,6 +1,17 @@
 # Changelog
 
 ## Unreleased
+- Storage wall, decision engine: `kai_storage_open_allowed` decides whether an
+  agent process may open a file, reusing the same protected-path rules as the
+  hooks. Off by default (`storage off|log|block`); enforcement needs Apple's
+  Endpoint Security entitlement, so it ships dark. `kai storaged` previews the
+  decisions now from `sudo eslogger open` (observe-only, no entitlement). The
+  ES client (app/macos/Storage) is written but left out of the build until the
+  entitlement arrives. Unit tests in tests/storage.
+- App updates no longer replace the network extension: the extension has its
+  own version (KAI_EXT_VERSION), bumped only when its code changes, so an
+  app-only update never tears down the content filter or drops agents' live
+  connections. The app re-activates the extension only when that version rose.
 - Files the agent reads are checked: before the Read/Grep tools or a reading
   command (`cat`, `grep`, `head`, …), Kai scans the file for secrets, company
   terms and rules. `on_file_secret` (shown in the app, but never applied

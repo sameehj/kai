@@ -416,6 +416,7 @@ private struct NetworkPage: View {
                              + "db.yourcompany.com:5432, 10.0.0.0/8, 203.0.113.5:22. This Mac, model APIs, GitHub "
                              + "and package registries are built in.",
                          items: model.policy?.egressAllow ?? [], placeholder: "artifacts.yourcompany.com or 10.0.0.0/8")
+            StorageWallCard()
         }
         .onAppear { wall.refresh() }
     }
@@ -476,6 +477,32 @@ private struct NetworkPage: View {
             }
             .background(Theme.sidebar, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color(hex: 0x23252B)))
+        }
+    }
+}
+
+/// The storage wall is implemented (its decision engine is tested) but needs
+/// Apple's Endpoint Security entitlement to actually block file opens, so it
+/// ships off. This card says so rather than pretending the control is live.
+private struct StorageWallCard: View {
+    var body: some View {
+        Card(padding: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Image(systemName: "externaldrive.badge.xmark").foregroundStyle(Theme.muted)
+                    Text("Storage wall").font(.system(size: 14, weight: .semibold))
+                    Text("Pending Apple approval").font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.muted)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Theme.muted.opacity(0.12), in: Capsule())
+                }
+                Text("Stops agents from opening protected files at all, not just through their tools — "
+                   + "closing the gap where a script reads a file directly. It needs Apple's Endpoint "
+                   + "Security entitlement, so it's off until that's granted. Developers can preview the "
+                   + "decisions now with: sudo eslogger open | kai storaged")
+                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
