@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static int json_pid(const cJSON *proc) {
     if (!proc) return 0;
@@ -52,9 +53,23 @@ static const char *json_path(const cJSON *root) {
 }
 
 int kai_cmd_storaged(int argc, char **argv) {
-    int do_log = 0;
-    for (int i = 0; i < argc; i++)
+    int do_log = 0, run = 0;
+    for (int i = 0; i < argc; i++) {
         if (!strcmp(argv[i], "--log")) do_log = 1;
+        else if (!strcmp(argv[i], "--run")) run = 1;
+    }
+    /* --run launches eslogger itself (one command, but needs root), instead of
+     * reading its JSON on stdin. eslogger can observe file opens without the ES
+     * entitlement; it just can't block, which is why this is a monitor. */
+    if (run) {
+        if (geteuid() != 0) {
+            fprintf(stderr, "kai storaged --run needs root (eslogger does): sudo kai storaged --run\n");
+            return 1;
+        }
+        FILE *es = popen("eslogger open 2>/dev/null", "r");
+        if (!es) { fprintf(stderr, "kai storaged: could not start eslogger\n"); return 1; }
+        if (dup2(fileno(es), 0) < 0) { pclose(es); return 1; }
+    }
 
     char err[256] = "";
     kai_policy *p = kai_policy_load(NULL, err, sizeof err);
