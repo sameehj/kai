@@ -1,6 +1,16 @@
 # Changelog
 
 ## Unreleased
+- Storage wall, OS client: an Endpoint Security system extension
+  (`app/macos/Storage`, built with `make app-storage`) that tags agent
+  processes at exec and checks their file opens against the same decision
+  engine. It defaults to notify mode (observe and log "would block", no AUTH
+  deadline, can't stall the machine); real blocking is compiled only with
+  KAI_STORAGE_ENFORCE and meant for VM testing first. Built from a separate
+  xcodegen overlay so `make app`, CI and the distribution build never include
+  it or need the ES entitlement. Dev entitlement assigned; distribution
+  pending Apple (request JQJJ3T6Z6V), so it can't ship yet. Compiles and
+  links; not yet load-tested on a device.
 - Storage wall, decision engine: `kai_storage_open_allowed` decides whether an
   agent process may open a file, reusing the same protected-path rules as the
   hooks. Off by default (`storage off|log|block`); enforcement needs Apple's

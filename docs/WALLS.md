@@ -161,6 +161,36 @@ sign). It is a thin shell around the C decision; wiring it in is a
   rule above plus a fast restart, not a lasting rule.
 - Needs Full Disk Access, granted at approval or preset by MDM.
 
+## Endpoint Security entitlement status
+
+`com.apple.developer.endpoint-security.client`, App ID `io.github.sameehj.kai`,
+request `JQJJ3T6Z6V`:
+
+- **Development: assigned** (Oct 19, 2026) — we can build and load the storage
+  extension on our own registered Macs for testing.
+- **Distribution: pending** (submitted Oct 15) — until Apple grants it, the
+  storage extension cannot ship. The release build excludes it entirely: it is
+  built only from the `storage.yml` overlay (`make app-storage`), never from
+  `project.yml` (`make app` / CI / distribution).
+
+### Building and loading it for development
+
+```sh
+make app-storage KAI_TEAM=<team>     # builds Kai.app + the KaiStorage extension
+```
+
+The extension defaults to **notify mode**: it observes opens and logs
+"would block", and cannot stall the machine (no AUTH deadline). Set
+`kai policy set storage block` and rebuild with `KAI_STORAGE_ENFORCE=1`
+(`make app-storage XCODE_EXTRA='GCC_PREPROCESSOR_DEFINITIONS=KAI_STORAGE_ENFORCE=1 OTHER_SWIFT_FLAGS=-DKAI_STORAGE_ENFORCE'`)
+to compile the real blocking path — **do that first on a throwaway VM**, since
+a slow or wrong AUTH handler stalls every file open on the machine.
+
+The overlay does not embed the extension in the app yet, so a stray build
+can't load it. To load it, add `- target: KaiStorage` to the `Kai` target's
+dependencies in `storage.yml` and an activation request alongside the network
+wall's, then approve it in System Settings.
+
 ## Signing and setup
 
 - A paid Apple Developer Program account. The Network Extension capability
@@ -185,4 +215,5 @@ sign). It is a thin shell around the C decision; wiring it in is a
 | AI gateway (`kai gateway`) | Done, end-to-end tests with a fake upstream |
 | Network extension (Xcode project, signing) | Next, needs the paid account's signing set up |
 | Storage-wall decision (`kai_storage_open_allowed`, `kai storaged`) | Done, tested; previewable via eslogger |
-| Endpoint Security extension (enforcement) | Written, out of build until Apple grants the entitlement |
+| Endpoint Security extension (`app/macos/Storage`, `make app-storage`) | Builds and links (notify mode); dev entitlement assigned; not yet load-tested on device |
+| Storage-wall enforcement (AUTH deny) | Gated behind `KAI_STORAGE_ENFORCE`; VM-test before use; distribution pending Apple |

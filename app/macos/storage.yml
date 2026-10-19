@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
+#
+# xcodegen overlay that adds the Endpoint Security storage extension on top of
+# the base project. Kept separate so the normal project (project.yml) — and
+# therefore CI and the distribution build — never include it, and never need
+# the ES entitlement, until Apple approves distribution.
+#
+#   make app-storage KAI_TEAM=<team>      build the app WITH the storage ext
+#
+# The extension defaults to notify mode (observe/log, never block). Real
+# blocking is compiled only with KAI_STORAGE_ENFORCE=1 and should be tried on
+# a VM first. This overlay does NOT embed the extension in the app yet (so a
+# stray build can't load it): to load it, add `- target: KaiStorage` to the
+# Kai target's dependencies and an activation request, per docs/WALLS.md.
+include:
+  - project.yml
+
+targets:
+  KaiStorage:
+    type: system-extension
+    platform: macOS
+    sources: [Storage]
+    dependencies:
+      - target: libkai
+      # Endpoint Security is a dylib (libEndpointSecurity.tbd), not a framework.
+      - sdk: libEndpointSecurity.tbd
+      - sdk: Security.framework
+      - sdk: CoreFoundation.framework
+    info:
+      path: Storage/Info.plist
+      properties:
+        CFBundleDisplayName: Kai Storage
+        CFBundlePackageType: SYSX
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        # Its own version, like the network extension: bump only on ES changes.
+        CFBundleVersion: $(KAI_STORAGE_VERSION)
+        NSHumanReadableCopyright: GPL-3.0 · The Kai Authors
+        NSSystemExtensionUsageDescription: Kai stops AI agents from opening files your policy protects.
+    entitlements:
+      path: Storage/Storage.entitlements
+      properties:
+        com.apple.developer.endpoint-security.client: true
+        com.apple.security.application-groups: [$(TeamIdentifierPrefix)io.github.sameehj.kai]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.sameehj.kai.storage
+        PRODUCT_NAME: io.github.sameehj.kai.storage
+        PRODUCT_MODULE_NAME: KaiStorage
+        SWIFT_INCLUDE_PATHS: $(SRCROOT)/KaiCore
+        SKIP_INSTALL: YES
+        # Distribution stays off until Apple approves; notify mode is the
+        # default. Define KAI_STORAGE_ENFORCE to compile the blocking path.
+        KAI_STORAGE_VERSION: "1"

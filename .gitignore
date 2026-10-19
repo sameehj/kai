@@ -11,7 +11,10 @@ app/macos/Sources/Info.plist
 app/macos/Sources/Kai.entitlements
 app/macos/Network/Info.plist
 app/macos/Network/Network.entitlements
+app/macos/Storage/Info.plist
+app/macos/Storage/Storage.entitlements
 # editor/OS cruft
 .DS_Store
 *.swp
 *.dSYM/
+app/macos/build/
