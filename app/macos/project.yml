@@ -19,6 +19,11 @@ settings:
     DEVELOPMENT_TEAM: ${KAI_TEAM}
     CODE_SIGN_STYLE: Automatic
     ENABLE_HARDENED_RUNTIME: YES
+    # Our app group is Team-ID-prefixed (KD446VDTM2.io.github.sameehj.kai),
+    # which macOS self-provisions. Don't let automatic signing try to register
+    # it in the developer portal: that needs a live login and makes Xcode
+    # report "profile doesn't support the App Groups capability" when it can't.
+    REGISTER_APP_GROUPS: NO
     MARKETING_VERSION: "0.1.0"
     # The app's build number. Bump freely for app changes (menu bar, signing);
     # this does NOT touch the network extension, so app updates never replace
