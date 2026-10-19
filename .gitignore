@@ -18,3 +18,4 @@ app/macos/Storage/Storage.entitlements
 *.swp
 *.dSYM/
 app/macos/build/
+tests/storage/run_storage_tests

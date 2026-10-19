@@ -437,6 +437,8 @@ static void describe_next(next_kind kind, const char *ptool, const char *ptarget
             snprintf(out, outlen, "After the block, the agent ran a different command");
         else if (!strcmp(tool, "Read"))
             snprintf(out, outlen, "After the block, the agent read a different file");
+        else if (!strcmp(tool, "apply_patch"))
+            snprintf(out, outlen, "After the block, the agent submitted a revised patch");
         else
             snprintf(out, outlen, "After the block, the agent used %s on something else", tool);
     } else {
@@ -596,6 +598,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             if (fp && kai_path_protected(p, fp, cwd, why, sizeof why)) hit_path = fp;
         }
         char *cmd = command_text(ti);
+        int is_patch = tool && !strcmp(tool, "apply_patch");
         sb_t all;
         sb_init(&all);
         gather_strings(ti, &all, 0);
@@ -628,7 +631,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             snprintf(reason, sizeof reason, "%s would send this file's contents to the model, and it holds %s",
                      tool, why);
             subject = strdup(first_path);
-        } else if (cmd) {
+        } else if (cmd && !is_patch) {
             if (command_controls_kai(cmd)) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, "kai_self_protect", sizeof rule);
