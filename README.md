@@ -138,8 +138,12 @@ allow   .env.example
 secrets redact
 term replace:"Project X" Project Falcon
 term block CONFIDENTIAL
+term block "Globex Corporation"          # a customer name
+rule zendesk_ticket block zendesk[.]com/agent/tickets/[0-9]+
 rule internal_host redact [a-z0-9-]+\.corp\.example\.com
 ```
+
+These apply to prompts, and to **files the agent reads**: before the agent's Read tool, or `cat`, `grep`, `head` and similar commands, Kai checks the file's contents. A file holding one of your `block` terms or rules is always blocked. A file holding a secret Kai detects follows `on_file_secret`: **ask** (default; Claude Code shows its own approval prompt, Cursor asks for shell commands, Codex and Cursor file reads block), `block` or `warn`. `on_upload ask` works the same way for upload-looking commands. "Not a threat" in the app adds an exception for that one file. Data that reaches the model some other way (a script that prints it, a web page) isn't checked by the hooks; the [gateway](#-optional-ai-gateway) checks whole requests.
 
 See [`policy/default.policy`](policy/default.policy) for the complete policy grammar.
 

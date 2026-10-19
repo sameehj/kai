@@ -305,12 +305,16 @@ private struct ProtectionPage: View {
             SwitchRow(key: "on_prompt_secret", title: "Secret typed into a prompt",
                       help: "Stop the prompt before it reaches the model.",
                       options: [("block", "Block", "Prompt never sent"), ("warn", "Warn", "Log only")])
-            SwitchRow(key: "on_file_secret", title: "Agent reads a file full of secrets",
-                      help: "For files that aren't on the protected list.",
-                      options: [("block", "Block", "Read denied"), ("warn", "Warn", "Log only")])
+            SwitchRow(key: "on_file_secret", title: "Agent reads a file with secrets or customer data",
+                      help: "Secrets, and your blocked terms and rules, in files that aren't on the protected list. "
+                          + "Ask: Claude Code asks you each time; Cursor asks for shell commands; otherwise it's blocked.",
+                      options: [("ask", "Ask me", "You decide each time"), ("block", "Block", "Read denied"),
+                                ("warn", "Warn", "Log only")])
             SwitchRow(key: "on_upload", title: "Command that looks like a data upload",
-                      help: "For example curl -d @file, piping downloads into a shell, nc, scp.",
-                      options: [("block", "Block", "Command denied"), ("ask", "Warn", "Log only")])
+                      help: "For example curl -d @file, piping downloads into a shell, nc, scp. "
+                          + "Ask: Claude Code and Cursor ask you; Codex blocks.",
+                      options: [("block", "Block", "Command denied"), ("ask", "Ask me", "You decide each time"),
+                                ("warn", "Warn", "Log only")])
             SwitchRow(key: "injection", title: "Prompt injection in tool results",
                       help: "Tells the agent the text is untrusted. Never blocks.",
                       options: [("warn", "Warn agent", "Add a caution"), ("off", "Off", "Don't look")])

@@ -87,6 +87,8 @@ int kai_upload_match(const kai_policy *p, const char *cmd, char *why, size_t why
  * leaves block/warn matches in place). NULL when secret detection is off,
  * because then nothing can be safely redacted. Caller frees. */
 void kai_audit_suppress(int on);
+int kai_policy_file_secret_ask(const kai_policy *p);
+int kai_policy_upload_ask(const kai_policy *p);
 
 /* Live health of an integration (src/health.c). ok=1: protection works now.
  * ok=0 with problem "": not installed. ok=0 with problem: installed, broken. */
@@ -127,6 +129,8 @@ struct kai_policy {
     kai_action prompt_action;
     kai_action file_secret_action;
     kai_action upload_action;
+    int file_secret_ask; /* "ask": the agent asks the user (Claude Code), else block */
+    int upload_ask;
     int injection_on;
     size_t max_scan;
     /* network wall */

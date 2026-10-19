@@ -28,8 +28,8 @@ secrets redact
 
 # ── Behaviour switches ───────────────────────────────────────────────
 on_prompt_secret   block   # secret typed into a prompt: block | warn
-on_file_secret     block   # agent tries to read a file full of secrets
-on_upload          block   # command that looks like it exfiltrates data: block | ask
+on_file_secret     ask     # agent reads a file holding secrets or blocked terms: ask | block | warn
+on_upload          block   # command that looks like it exfiltrates data: block | ask | warn
 injection          warn    # prompt-injection text in a tool result: warn | off
 max_scan_bytes     2000000
 

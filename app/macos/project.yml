@@ -22,7 +22,7 @@ settings:
     MARKETING_VERSION: "0.1.0"
     # Bump on every extension change: macOS only replaces an activated
     # extension when its version differs.
-    CURRENT_PROJECT_VERSION: "4"
+    CURRENT_PROJECT_VERSION: "5"
     SWIFT_VERSION: "5.9"
 
 targets:

@@ -171,6 +171,98 @@ static void check_terminal_control(char **argv, int argc, void *ud) {
     }
 }
 
+/* ---------- what a file holds (on_file_secret) ----------
+ * Whatever the agent reads goes to the model. Before its Read tool or a
+ * reading command (cat, grep, ...) runs, check the file's contents against
+ * the policy: secrets, company terms (customer names, codenames), rules
+ * (ticket links, ...). Text files up to max_scan_bytes; binaries skipped.
+ * Returns 0 (nothing), 1 (sensitive: on_file_secret decides) or 2 (one of
+ * your own terms or rules says block: always blocked, never just asked). */
+static int file_holds_sensitive(const kai_policy *p, const char *file, const char *cwd,
+                                char *why, size_t whylen) {
+    char *exp = kai_expand_home(file);
+    char *abs = exp ? kai_normalize_path(exp, cwd) : NULL;
+    free(exp);
+    if (!abs) return 0;
+    struct stat st;
+    int hit = 0;
+    if (stat(abs, &st) == 0 && S_ISREG(st.st_mode) && (size_t)st.st_size <= p->max_scan) {
+        size_t n = 0;
+        char *txt = kai_read_file(abs, p->max_scan, &n);
+        if (txt && n && !memchr(txt, '\0', n)) {
+            kai_report rep;
+            char *clean = kai_scan_text(p, txt, &rep);
+            free(clean);
+            if (rep.worst >= KAI_ACT_REDACT) {
+                hit = 1;
+                for (int i = 0; i < rep.nhits; i++)
+                    if (rep.hits[i].action >= KAI_ACT_BLOCK && strncmp(rep.hits[i].rule, "secret:", 7) != 0)
+                        hit = 2;
+                kai_report_summary(&rep, why, whylen);
+            }
+        }
+        free(txt);
+    }
+    free(abs);
+    return hit;
+}
+
+/* Commands that print (part of) a file's contents. For the ones whose first
+ * operand is a pattern or script, that operand isn't a file. */
+static const struct { const char *name; int pattern_first; } READERS[] = {
+    {"cat", 0}, {"head", 0}, {"tail", 0}, {"less", 0}, {"more", 0}, {"bat", 0}, {"nl", 0},
+    {"tac", 0}, {"cut", 0}, {"sort", 0}, {"uniq", 0}, {"strings", 0}, {"xxd", 0},
+    {"od", 0}, {"hexdump", 0}, {"base64", 0}, {"diff", 0}, {"column", 0}, {"jq", 1},
+    {"grep", 1}, {"egrep", 1}, {"fgrep", 1}, {"rg", 1}, {"ag", 1}, {"awk", 1}, {"sed", 1},
+};
+
+typedef struct {
+    const kai_policy *p;
+    const char *cwd;
+    int checked;
+    int strength; /* file_holds_sensitive's answer for the file found */
+    char file[1024];
+    char why[256];
+} reader_ctx;
+
+static void check_reader(char **argv, int argc, void *ud) {
+    reader_ctx *r = ud;
+    int i = kai_shell_command_start(argv, argc);
+    if (i >= argc || r->file[0]) return;
+    const char *b = strrchr(argv[i], '/') ? strrchr(argv[i], '/') + 1 : argv[i];
+    int pattern_first = -1;
+    for (size_t k = 0; k < sizeof READERS / sizeof READERS[0]; k++)
+        if (!strcmp(b, READERS[k].name)) pattern_first = READERS[k].pattern_first;
+    if (pattern_first < 0) return;
+    int skipped_pattern = !pattern_first;
+    for (int k = i + 1; k < argc && r->checked < 16; k++) {
+        const char *a = argv[k];
+        if (a[0] == '-' && a[1]) {
+            /* -e/-f give the pattern/script explicitly: no operand to skip */
+            if (!strcmp(a, "-e") || !strcmp(a, "-f")) { skipped_pattern = 1; k++; }
+            continue;
+        }
+        if (!skipped_pattern) { skipped_pattern = 1; continue; }
+        r->checked++;
+        if ((r->strength = file_holds_sensitive(r->p, a, r->cwd, r->why, sizeof r->why))) {
+            kai_strlcpy(r->file, a, sizeof r->file);
+            return;
+        }
+    }
+}
+
+/* The first file a shell command would print that holds sensitive data:
+ * returns file_holds_sensitive's answer for it (0 = none). */
+static int command_reads_sensitive(const kai_policy *p, const char *cmd, const char *cwd,
+                                   char *file, size_t filelen, char *why, size_t whylen) {
+    reader_ctx r = {p, cwd, 0, 0, "", ""};
+    kai_shell_walk(cmd, check_reader, NULL, &r);
+    if (!r.file[0]) return 0;
+    kai_strlcpy(file, r.file, filelen);
+    kai_strlcpy(why, r.why, whylen);
+    return r.strength;
+}
+
 /* Returns the app the command drives, or NULL. */
 static const char *command_drives_terminal(const char *cmd, const char *cwd) {
     term_ctx t = {cwd, 0, NULL};
@@ -459,6 +551,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
     kai_policy *p = kai_policy_load(NULL, err, sizeof err);
 
     kai_action decision = KAI_ACT_NONE;
+    int ask = 0; /* a block the user decides in the agent's own approval prompt */
     char reason[512] = "";
     char rule[KAI_NAME_MAX] = "";
     char exempted[KAI_NAME_MAX] = "";
@@ -509,6 +602,11 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
         char *alltext = sb_take(&all);
         exempt_ctx ex = {p, cmd, ""};
         const char *app = NULL;
+        /* Claude Code can ask the user itself (permissionDecision "ask").
+         * Codex isn't known to support it, and an answer it doesn't support
+         * lets the tool run, so it gets deny. */
+        int can_ask = strcmp(source, "claude") == 0;
+        int strength = 0;
         if (hit_path) {
             decision = KAI_ACT_BLOCK;
             kai_strlcpy(rule, why, sizeof rule);
@@ -520,6 +618,16 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             kai_strlcpy(rule, why, sizeof rule);
             snprintf(reason, sizeof reason, "patch edits protected path (%s)", why);
             subject = strdup(alltext);
+        } else if (first_path && tool && (!strcmp(tool, "Read") || !strcmp(tool, "Grep")) &&
+                   (strength = file_holds_sensitive(p, first_path, cwd, why, sizeof why)) &&
+                   !skip_exempt("file_contents", &(exempt_ctx){p, first_path, ""})) {
+            decision = strength == 2 || kai_policy_file_secret_action(p) >= KAI_ACT_BLOCK
+                           ? KAI_ACT_BLOCK : KAI_ACT_WARN;
+            ask = strength == 1 && can_ask && kai_policy_file_secret_ask(p);
+            kai_strlcpy(rule, "file_contents", sizeof rule);
+            snprintf(reason, sizeof reason, "%s would send this file's contents to the model, and it holds %s",
+                     tool, why);
+            subject = strdup(first_path);
         } else if (cmd) {
             if (command_controls_kai(cmd)) {
                 decision = KAI_ACT_BLOCK;
@@ -538,10 +646,19 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, why, sizeof rule);
                 snprintf(reason, sizeof reason, "command touches protected path (%s)", why);
+            } else if ((strength = command_reads_sensitive(p, cmd, cwd, match, sizeof match, why, sizeof why)) &&
+                       !skip_exempt("file_contents", &ex)) {
+                decision = strength == 2 || kai_policy_file_secret_action(p) >= KAI_ACT_BLOCK
+                               ? KAI_ACT_BLOCK : KAI_ACT_WARN;
+                ask = strength == 1 && can_ask && kai_policy_file_secret_ask(p);
+                kai_strlcpy(rule, "file_contents", sizeof rule);
+                snprintf(reason, sizeof reason,
+                         "command would send %s to the model, and it holds %s", match, why);
             } else if (kai_upload_match(p, cmd, why, sizeof why, match, sizeof match,
                                         skip_exempt, &ex)) {
                 decision = kai_policy_upload_action(p) >= KAI_ACT_BLOCK
                                ? KAI_ACT_BLOCK : KAI_ACT_WARN;
+                ask = can_ask && kai_policy_upload_ask(p);
                 kai_strlcpy(rule, why, sizeof rule);
                 snprintf(reason, sizeof reason, "command looks like data exfiltration (%s)", why);
             }
@@ -615,16 +732,20 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
         return 0;
     }
 
-    const char *dec_str = (decision >= KAI_ACT_BLOCK) ? "block" : "warn";
+    if (!(ev && strcmp(ev, "PreToolUse") == 0)) ask = 0;
+    const char *dec_str = ask ? "ask" : (decision >= KAI_ACT_BLOCK) ? "block" : "warn";
     if (decision >= KAI_ACT_BLOCK) {
         /* PreToolUse uses permissionDecision; prompt/other use top-level decision */
         if (ev && strcmp(ev, "PreToolUse") == 0) {
             cJSON *o = cJSON_CreateObject();
             cJSON *h = cJSON_CreateObject();
             cJSON_AddStringToObject(h, "hookEventName", "PreToolUse");
-            cJSON_AddStringToObject(h, "permissionDecision", "deny");
+            cJSON_AddStringToObject(h, "permissionDecision", ask ? "ask" : "deny");
             char msg[600];
-            snprintf(msg, sizeof msg, "Blocked by Kai: %s", reason);
+            if (ask)
+                snprintf(msg, sizeof msg, "Kai: %s. Allow it this time?", reason);
+            else
+                snprintf(msg, sizeof msg, "Blocked by Kai: %s", reason);
             cJSON_AddStringToObject(h, "permissionDecisionReason", msg);
             cJSON_AddItemToObject(o, "hookSpecificOutput", h);
             char *s = cJSON_PrintUnformatted(o);
@@ -658,7 +779,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
     }
     if (ev && (!strcmp(ev, "PreToolUse") || !strcmp(ev, "UserPromptSubmit")))
         follow_up(p, source, session, kind, tool, subject, cwd,
-                  decision >= KAI_ACT_BLOCK ? rule : NULL, ctx);
+                  decision >= KAI_ACT_BLOCK && !ask ? rule : NULL, ctx);
     free(subject);
     kai_policy_free(p);
     cJSON_Delete(root);
@@ -697,7 +818,9 @@ static int hook_cursor(const char *json) {
     if (!p) { cursor_deny("policy error, failing closed"); cJSON_Delete(root); return 0; }
 
     char why[256] = "", reason[512] = "", match[160] = "";
-    int deny = 0;
+    int deny = 0, cursor_ask = 0; /* ask: Cursor shows its own approval prompt (shell only) */
+    int strength = 0;             /* what a read file holds (file_holds_sensitive) */
+    char held[256] = "";
     const char *tool = NULL, *subject = NULL, *app = NULL;
     next_kind kind = NEXT_TOOL;
     exempt_ctx ex = {p, NULL, ""};
@@ -708,6 +831,13 @@ static int hook_cursor(const char *json) {
         subject = fp;
         if (fp && kai_path_protected(p, fp, cwd, why, sizeof why)) {
             deny = 1; snprintf(reason, sizeof reason, "protected path (%s)", why);
+        } else if (fp && (strength = file_holds_sensitive(p, fp, cwd, held, sizeof held)) &&
+                   (strength == 2 || kai_policy_file_secret_action(p) >= KAI_ACT_BLOCK) &&
+                   !skip_exempt("file_contents", &(exempt_ctx){p, fp, ""})) {
+            /* Cursor's file reads can only be allowed or denied: "ask" blocks */
+            deny = 1;
+            kai_strlcpy(why, "file_contents", sizeof why);
+            snprintf(reason, sizeof reason, "this file would go to the model, and it holds %s", held);
         }
     } else if (ev && strcmp(ev, "beforeShellExecution") == 0) {
         tool = "Shell";
@@ -729,9 +859,18 @@ static int hook_cursor(const char *json) {
         } else if (cmd && kai_command_touches_protected_skip(p, cmd, cwd, why, sizeof why,
                                                              skip_exempt, &ex)) {
             deny = 1; snprintf(reason, sizeof reason, "command touches protected path (%s)", why);
+        } else if (cmd && (strength = command_reads_sensitive(p, cmd, cwd, match, sizeof match,
+                                                              held, sizeof held)) &&
+                   (strength == 2 || kai_policy_file_secret_action(p) >= KAI_ACT_BLOCK) &&
+                   !skip_exempt("file_contents", &ex)) {
+            deny = 1;
+            cursor_ask = strength == 1 && kai_policy_file_secret_ask(p);
+            kai_strlcpy(why, "file_contents", sizeof why);
+            snprintf(reason, sizeof reason, "command would send %s to the model, and it holds %s", match, held);
         } else if (cmd && kai_upload_match(p, cmd, why, sizeof why, match, sizeof match,
                                            skip_exempt, &ex)) {
             deny = kai_policy_upload_action(p) >= KAI_ACT_BLOCK;
+            cursor_ask = deny && kai_policy_upload_ask(p);
             snprintf(reason, sizeof reason, "looks like data exfiltration (%s)", why);
         }
     } else if (ev && strcmp(ev, "beforeMCPExecution") == 0) {
@@ -772,7 +911,20 @@ static int hook_cursor(const char *json) {
 
     char ctx[KAI_AUDIT_TARGET_MAX] = "", mctx[160] = "";
     if (deny || ex.exempted[0]) log_context(p, subject, match, ctx, sizeof ctx, mctx, sizeof mctx);
-    if (deny) {
+    if (deny && cursor_ask) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "permission", "ask");
+        char msg[600];
+        snprintf(msg, sizeof msg, "Kai: %s. Allow it this time?", reason);
+        cJSON_AddStringToObject(o, "user_message", msg);
+        cJSON_AddStringToObject(o, "agent_message", msg);
+        char *s = cJSON_PrintUnformatted(o);
+        printf("%s\n", s);
+        free(s); cJSON_Delete(o);
+        kai_audit_entry e = {"cursor", ev ? ev : "unknown", "ask", why, reason,
+                             tool, ctx, mctx, session, cwd};
+        kai_audit_write(&e);
+    } else if (deny) {
         cursor_deny(reason);
         kai_audit_entry e = {"cursor", ev ? ev : "unknown", "block", why, reason,
                              tool, ctx, mctx, session, cwd};
@@ -787,7 +939,7 @@ static int hook_cursor(const char *json) {
         printf("{\"permission\":\"allow\"}\n");
     }
     if (tool || kind == NEXT_PROMPT)
-        follow_up(p, "cursor", session, kind, tool, subject, cwd, deny ? why : NULL, ctx);
+        follow_up(p, "cursor", session, kind, tool, subject, cwd, deny && !cursor_ask ? why : NULL, ctx);
     kai_policy_free(p);
     cJSON_Delete(root);
     return 0;

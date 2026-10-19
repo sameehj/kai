@@ -3,7 +3,8 @@ const $ = (id) => document.getElementById(id);
 
 chrome.runtime.sendMessage({ type: "ping" }, (r) => {
   const ok = r && r.ok;
-  $("state").textContent = ok ? `Protecting AI chats · kai ${r.version}` : "Not connected to Kai";
+  $("state").textContent = ok ? `Protecting AI chats · kai ${r.version}`
+                              : `Not connected to Kai (${(r && r.error) || "no reply"})`;
   $("state").className = ok ? "ok" : "bad";
   $("help").style.display = ok ? "none" : "block";
 });

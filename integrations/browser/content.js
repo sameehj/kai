@@ -101,6 +101,20 @@
     }
   });
   const scan = (text) => ask({ type: "scan", text, site: SITE });
+
+  // Why Kai couldn't check, in words, with the one thing that fixes it.
+  function whyUnreachable(error) {
+    const e = String(error || "");
+    if (/context invalidated|Receiving end does not exist|Extension context/i.test(e))
+      return "Kai's extension was updated or reloaded while this page stayed open. Reload this page.";
+    if (/host not found/i.test(e))
+      return "Kai isn't set up for this browser. Open the Kai app and turn Chrome on, or run: kai install chrome";
+    if (/forbidden/i.test(e))
+      return "Kai doesn't recognize this copy of the extension. Run: kai install chrome, then reload the extension.";
+    if (/exited|disconnected/i.test(e))
+      return "Kai's helper stopped unexpectedly. Reinstall Kai if this keeps happening.";
+    return `Kai isn't reachable on this computer (${e || "no reply"}). Open the Kai app, or run its Chrome setup again.`;
+  }
   const decide = (action, summary) => ask({ type: "decision", site: SITE, action, summary });
 
   const FRIENDLY = {
@@ -137,7 +151,7 @@
       // the popup, or we ask on this message.
       const { kaiFailMode = "ask" } = await chrome.storage.local.get("kaiFailMode").catch(() => ({}));
       if (kaiFailMode === "send") {
-        toast("warn", "Sent without a Kai check", "Kai isn't reachable on this computer.");
+        toast("warn", "Sent without a Kai check", whyUnreachable(r.error));
         lastApproved = text;
         triggerSend(composer);
         return;
@@ -145,8 +159,7 @@
       panel({
         tone: "redact",
         title: "Kai can't check this message",
-        body: "Kai isn't reachable on this computer, so nothing was checked. Open the Kai app, " +
-              "or run its Chrome setup again.",
+        body: "Nothing was checked. " + whyUnreachable(r.error),
         actions: [
           { label: "Edit", primary: true, run: () => composer.focus() },
           { label: "Send unchecked", run: () => { lastApproved = text; triggerSend(composer); } },
@@ -228,7 +241,7 @@
       // A paste stays on this computer until it's sent, and sending is
       // checked (or asked about) separately, so paste it but say so.
       document.execCommand("insertText", false, text);
-      toast("warn", "Kai can't check pastes right now", "Kai isn't reachable on this computer.");
+      toast("warn", "Kai can't check pastes right now", whyUnreachable(r.error));
       return;
     }
     if (r.worst === "none" || r.worst === "allow" || r.worst === "warn") {

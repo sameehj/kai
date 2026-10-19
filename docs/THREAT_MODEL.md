@@ -12,6 +12,7 @@ mistake with the developer's full privileges.
 | Agent reads `~/.ssh`, `.env`, cloud keys via a tool | `protect` path rules | Claude `PreToolUse`, Cursor `beforeReadFile` |
 | Agent reads a protected path via a shell command | path scan of the command line | `PreToolUse` Bash, `beforeShellExecution` |
 | Data exfiltration (`curl -d @file`, `… | sh`, `nc`, `scp`) | upload patterns | `PreToolUse` Bash, `beforeShellExecution` |
+| Agent reads a file holding secrets, customer names or other blocked data (Read tool, `cat`, `grep`, …), sending it to the model | contents checked against secrets, `term`, `rule` (`on_file_secret`: ask / block / warn; your `block` terms always block) | `PreToolUse` Read/Grep/Bash, `beforeReadFile`, `beforeShellExecution` |
 | Secret typed/pasted into a prompt | secret detectors | `UserPromptSubmit`, `beforeSubmitPrompt` |
 | Company codename / confidential marker in a prompt | `term` / `rule` | same |
 | Secret passed as an MCP tool argument | scan of tool input | `PreToolUse` `mcp__*`, `beforeMCPExecution` |

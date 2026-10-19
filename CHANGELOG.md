@@ -1,6 +1,18 @@
 # Changelog
 
 ## Unreleased
+- Files the agent reads are checked: before the Read/Grep tools or a reading
+  command (`cat`, `grep`, `head`, …), Kai scans the file for secrets, company
+  terms and rules. `on_file_secret` (shown in the app, but never applied
+  before) now works, with a new default: **ask**. Claude Code shows its own
+  approval prompt; Cursor asks for shell commands; Codex and Cursor file
+  reads block. Your own `block` terms and rules always block. "Not a threat"
+  on such a block adds a `file_contents` exception for that file.
+- `on_upload ask` now asks (Claude Code, Cursor) or blocks (Codex). It used
+  to mean "warn" and let the command run.
+- Browser extension: when Kai can't check a message, it says why and what
+  fixes it (reload this page, set Kai up for this browser, ...), and the
+  popup shows the error.
 - Live health checks: `kai status --json` now runs each installed hook the way
   the agent would (program present, fail-closed, a test request is denied)
   and pings the browser helper, reporting `working` and `problem`. Probes

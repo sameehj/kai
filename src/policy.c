@@ -45,7 +45,7 @@ static const char DEFAULT_POLICY[] =
     "allow .env.sample\n"
     "secrets redact\n"
     "on_prompt_secret block\n"
-    "on_file_secret block\n"
+    "on_file_secret ask\n"
     "on_upload block\n"
     "injection warn\n"
     "max_scan_bytes 2000000\n"
@@ -221,6 +221,7 @@ static kai_policy *policy_new(void) {
     p->builtin_secrets = KAI_ACT_REDACT;
     p->prompt_action = KAI_ACT_BLOCK;
     p->file_secret_action = KAI_ACT_BLOCK;
+    p->file_secret_ask = 1;
     p->upload_action = KAI_ACT_BLOCK;
     p->injection_on = 1;
     p->max_scan = 2000000;
@@ -295,10 +296,17 @@ static kai_policy *parse(const char *text, const char *source, char *err,
             char *rep; p->prompt_action = parse_action(v, &rep); free(rep);
         } else if (strcmp(d, "on_file_secret") == 0) {
             char *v; if (!next_tok(&cur, &v)) continue;
-            char *rep; p->file_secret_action = parse_action(v, &rep); free(rep);
+            /* ask: block, but where the agent can ask the user, let them decide */
+            p->file_secret_ask = strcmp(v, "ask") == 0;
+            char *rep;
+            p->file_secret_action = p->file_secret_ask ? KAI_ACT_BLOCK : parse_action(v, &rep);
+            if (!p->file_secret_ask) free(rep);
         } else if (strcmp(d, "on_upload") == 0) {
             char *v; if (!next_tok(&cur, &v)) continue;
-            char *rep; p->upload_action = parse_action(v, &rep); free(rep);
+            p->upload_ask = strcmp(v, "ask") == 0;
+            char *rep;
+            p->upload_action = p->upload_ask ? KAI_ACT_BLOCK : parse_action(v, &rep);
+            if (!p->upload_ask) free(rep);
         } else if (strcmp(d, "injection") == 0) {
             char *v; if (!next_tok(&cur, &v)) continue;
             p->injection_on = strcmp(v, "off") != 0;
@@ -501,6 +509,8 @@ const char *kai_policy_source(const kai_policy *p) {
 kai_action kai_policy_prompt_action(const kai_policy *p) { return p->prompt_action; }
 kai_action kai_policy_file_secret_action(const kai_policy *p) { return p->file_secret_action; }
 kai_action kai_policy_upload_action(const kai_policy *p) { return p->upload_action; }
+int kai_policy_file_secret_ask(const kai_policy *p) { return p ? p->file_secret_ask : 0; }
+int kai_policy_upload_ask(const kai_policy *p) { return p ? p->upload_ask : 0; }
 int kai_policy_audit_context(const kai_policy *p) { return p && p->audit_context; }
 
 /* '*' and '?' span anything, '/' and newlines included: the pattern is over

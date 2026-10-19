@@ -61,6 +61,7 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
         case "block": return "Blocked"
         case "log": return "Noticed"
         case "exempt": return "Allowed by your exception"
+        case "ask": return "Asked you"
         case "redact", "replace": return "Cleaned"
         default: return "Warning"
         }
@@ -94,7 +95,7 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
     /// An exception for this exact command is possible: a shell command
     /// blocked by an upload or protected-path rule.
     var canExemptCommand: Bool {
-        (isBlock || decision == "warn") && isShell && excerpt != nil && !rule.isEmpty && !isBuiltinRule
+        (isBlock || decision == "warn" || decision == "ask") && isShell && excerpt != nil && !rule.isEmpty && !isBuiltinRule
     }
 
     /// The glob `kai policy add exempt` gets: the command as recorded, with
@@ -117,7 +118,8 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
     /// The file a file-tool block was about, as a policy path (absolute,
     /// ~ for home), for an "allow" exception. nil when that isn't possible.
     var allowablePath: String? {
-        guard isBlock, isFileTool, !isBuiltinRule, var p = excerpt, !p.contains("REDACTED") else { return nil }
+        guard isBlock || decision == "ask", isFileTool, !isBuiltinRule, var p = excerpt,
+              !p.contains("REDACTED") else { return nil }
         if !p.hasPrefix("/") && !p.hasPrefix("~") {
             guard let cwd, !cwd.isEmpty else { return nil }
             p = (cwd as NSString).appendingPathComponent(p)

@@ -249,10 +249,18 @@ final class AppModel: ObservableObject {
     /// "Not a threat": always let agents read this file.
     func allowFile(_ e: AuditEvent) {
         guard let path = e.allowablePath else { return }
+        // A protected path is lifted with "allow"; a file stopped for what it
+        // holds gets an exception for that check only, on its full path.
+        let contents = e.rule == "file_contents"
+        let args = contents
+            ? ["policy", "add", "exempt", "file_contents", (path as NSString).expandingTildeInPath]
+            : ["policy", "add", "allow", path]
         Task {
             errorMessage = nil
-            await perform(["policy", "add", "allow", path])
-            if errorMessage == nil { notice = "\(path) is now allowed." }
+            await perform(args)
+            if errorMessage == nil {
+                notice = contents ? "Agents may now read \(path), whatever it holds." : "\(path) is now allowed."
+            }
         }
     }
 

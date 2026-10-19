@@ -306,8 +306,8 @@ static const struct {
 } SWITCHES[] = {
     {"secrets", "redact", {"redact", "block", "warn", "off", NULL}},
     {"on_prompt_secret", "block", {"block", "warn", NULL}},
-    {"on_file_secret", "block", {"block", "warn", NULL}},
-    {"on_upload", "block", {"block", "ask", NULL}},
+    {"on_file_secret", "ask", {"ask", "block", "warn", NULL}},
+    {"on_upload", "block", {"block", "ask", "warn", NULL}},
     {"injection", "warn", {"warn", "off", NULL}},
     {"max_scan_bytes", "2000000", {NULL}},
     {"egress", "log", {"log", "block", "off", NULL}},
