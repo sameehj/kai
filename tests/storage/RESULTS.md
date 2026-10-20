@@ -37,6 +37,22 @@ Real workloads (wall-clock):
 OFF baseline (extension deactivated): NOT YET MEASURED — run bench.py /
 workload.py with the Storage wall toggled off.
 
+### Path-check latency fix (commit bd0f29a) — scope correction
+
+`kai_path_protected` was measured at ~178 µs/call in a standalone microbench
+whose cwd was the VM shared folder. Root cause: the allow loop re-normalized
+each allow entry per call, and a RELATIVE allow entry (default `.env.sample` /
+`.env.example`) made `kai_normalize_path` call `getcwd()`, which is ~90 µs on
+this shared/networked filesystem. Fixed by matching allow entries with
+`path_matches` only (symmetric with the protect loop). Post-fix: **2.1 µs**
+(non-protected path) / **0.95 µs** (protected path) on the full default policy.
+
+Honest scope: this cost is only paid by callers whose cwd lives in the slow
+filesystem — the **CLI and the hooks**. The storage **extension runs with
+cwd `/`** (fast `getcwd`), so this was **not** the source of the ~2× workload
+overhead in the table above; that overhead is the ES authorization round-trip,
+still to be attributed via the OFF baseline. The microbench conflated the two.
+
 ## v10, filter=process : NOT YET TESTED
 Needs: write `process` to the storage-filter file under Kai's home, reactivate
 (toggle off/on). Then rerun breadth_probe (esp. process-mute invalidation /
