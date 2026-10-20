@@ -293,11 +293,15 @@ int kai_path_protected(const kai_policy *p, const char *path, const char *cwd,
     char *np = kai_normalize_path(path, cwd);
     if (!np) return 0;
     if (agent_control_path(np, why, whylen)) { free(np); return 1; }
+    /* allow entries are matched the same way as protect entries (absolute
+     * prefix, glob, or basename-of-any-segment). We deliberately do NOT
+     * re-normalize each entry against the cwd per call: that made a relative
+     * entry invoke getcwd() on every authorization — ~90us on a networked /
+     * VM-shared filesystem — for no coverage gain, since path_matches already
+     * handles exact and prefix matches. (protect never supported cwd-relative
+     * entries either, so this keeps allow and protect symmetric.) */
     for (int i = 0; i < p->nallow; i++) {
-        char *ap = kai_normalize_path(p->allow[i], cwd);
-        int hit = ap && (path_matches(p->allow[i], np) || strcmp(ap, np) == 0);
-        free(ap);
-        if (hit) { free(np); return 0; }
+        if (path_matches(p->allow[i], np)) { free(np); return 0; }
     }
     for (int i = 0; i < p->nprotect; i++) {
         if (path_matches(p->protect[i], np)) {
