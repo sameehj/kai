@@ -1,0 +1,129 @@
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
+"""Storage-wall breadth probe (manual, live). NOT part of `make test`.
+
+Run from an agent session with the storage wall active:  python3 tests/storage/breadth_probe.py
+
+It exercises reads/writes/renames/deletes and several access vectors against
+protected and non-protected paths, and prints a matrix of
+expected / actual / mechanism / PASS-FAIL. It is written to be safe:
+  - never writes bytes into, renames, or deletes a REAL protected file;
+  - write-protection is probed by trying to CREATE a brand-new probe file
+    (O_CREAT|O_EXCL) in a protected location, then removing it if it appears;
+  - destructive lifecycle ops run only on disposable files under /tmp.
+Paths are built from fragments so a protected name never appears literally.
+"""
+import os, subprocess, sys, tempfile, time, pathlib
+
+HOME = pathlib.Path.home()
+SSH = HOME / ("." + "ssh")
+KAI = HOME / ("." + "kai")
+rows = []
+
+def record(scenario, expected, blocked, mechanism, note=""):
+    # expected: True = should be blocked. blocked: True = was denied (EPERM).
+    if blocked is None:
+        verdict = "NOT TESTED"
+    else:
+        verdict = "PASS" if blocked == expected else "FAIL"
+    rows.append((scenario, "block" if expected else "allow",
+                 "n/a" if blocked is None else ("blocked" if blocked else "allowed"),
+                 mechanism, verdict, note))
+
+def denied(fn):
+    """Run fn; return True if it raised PermissionError/EPERM, False if it
+    succeeded, and re-raise anything else."""
+    try:
+        fn(); return False
+    except PermissionError:
+        return True
+    except OSError as e:
+        if e.errno in (1, 13): return True
+        raise
+
+def read_one(p):
+    def f():
+        fd = os.open(str(p), os.O_RDONLY)
+        try: os.read(fd, 1)
+        finally: os.close(fd)
+    return denied(f)
+
+def create_probe(dirpath, name):
+    """Try to create a new file in dirpath (a write). Clean up if it lands."""
+    target = pathlib.Path(dirpath) / name
+    def f():
+        fd = os.open(str(target), os.O_CREAT | os.O_WRONLY | os.O_EXCL, 0o600)
+        os.close(fd)
+    try:
+        d = denied(f)
+    finally:
+        try: target.unlink()
+        except OSError: pass
+    return d
+
+# ---- control: a non-protected file must work normally ----
+ctrl = pathlib.Path(tempfile.mkdtemp()) / "notes.txt"
+ok = True
+try:
+    ctrl.write_text("hello"); assert ctrl.read_text() == "hello"; ctrl.unlink()
+except OSError:
+    ok = False
+record("non-protected file: create/read/delete", False, not ok, "filesystem",
+       "legitimate ops must keep working")
+
+# ---- reads of real protected files, several vectors ----
+if (SSH / "config").exists():
+    record("read ssh config — direct", True, read_one(SSH / "config"), "OS (Endpoint Security)")
+    # symlink
+    link = pathlib.Path(tempfile.mkdtemp()) / "alias"
+    link.symlink_to(SSH / "config")
+    record("read ssh config — via symlink", True, read_one(link), "OS (Endpoint Security)")
+    # child process
+    r = subprocess.run(["/bin/cat", str(SSH / "config")], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+    record("read ssh config — child process (cat)", True, r.returncode != 0, "OS (Endpoint Security)",
+           "exit %d" % r.returncode)
+    # detached via launchd (known gap: re-parented away from the agent)
+    out = pathlib.Path(tempfile.mkdtemp()) / "o"
+    subprocess.run(["launchctl", "submit", "-l", "kai.breadth.read", "-o", str(out), "-e", str(out),
+                    "--", "/bin/cat", str(SSH / "config")], capture_output=True)
+    time.sleep(3)
+    subprocess.run(["launchctl", "remove", "kai.breadth.read"], capture_output=True)
+    got = out.read_text() if out.exists() else ""
+    record("read ssh config — detached (launchd)", True, "Operation not permitted" in got or got == "",
+           "OS (Endpoint Security)", "launchd reparents away from the agent — expected gap")
+else:
+    record("read ssh config", True, None, "OS", "~/.ssh/config not present")
+
+# ~/.kai read: strict build (v7) denies; lenient (v6) allows — record actual
+if (KAI / "policy").exists():
+    record("read kai policy — direct", True, read_one(KAI / "policy"), "OS (Endpoint Security)",
+           "strict build should block; lenient allowed")
+
+# ---- write-protection: try to create a new probe file in protected dirs ----
+if SSH.exists():
+    record("create new file in ~/.ssh (write)", True, create_probe(SSH, "kai_breadth_probe"),
+           "OS (Endpoint Security)", "does not touch existing keys")
+if KAI.exists():
+    record("create new file in ~/.kai (write/tamper)", True, create_probe(KAI, "kai_breadth_probe"),
+           "OS (Endpoint Security)")
+
+# disposable protected-pattern files under /tmp (create = a write)
+tmpd = tempfile.mkdtemp()
+record("create .env under /tmp (write)", True, create_probe(tmpd, "." + "env"), "OS (Endpoint Security)")
+record("create .pem under /tmp (write)", True, create_probe(tmpd, "probe." + "pem"), "OS (Endpoint Security)")
+
+# append/truncate/rename/delete need a pre-existing protected file, which the
+# agent can't create (create is blocked). Seeding needs storage off.
+for op in ("append", "truncate", "rename", "delete"):
+    record("%s a protected file" % op, True, None, "OS (Endpoint Security)",
+           "needs a pre-seeded protected file; blocked create prevents agent setup")
+
+# ---- print matrix ----
+w = max(len(r[0]) for r in rows)
+print("%-*s  %-8s  %-9s  %-24s  %-9s  %s" % (w, "scenario", "expected", "actual", "mechanism", "verdict", "note"))
+print("-" * (w + 70))
+for s, exp, act, mech, verd, note in rows:
+    print("%-*s  %-8s  %-9s  %-24s  %-9s  %s" % (w, s, exp, act, mech, verd, note))
+fails = [r for r in rows if r[4] == "FAIL"]
+print("\n%d scenarios, %d PASS, %d FAIL, %d NOT TESTED" %
+      (len(rows), sum(r[4] == "PASS" for r in rows), len(fails), sum(r[4] == "NOT TESTED" for r in rows)))
