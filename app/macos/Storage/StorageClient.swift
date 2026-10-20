@@ -183,6 +183,10 @@ final class StorageClient {
         if !protected { return true }
 
         let reason = String(cString: why)
+        // Reading Kai's own config (~/.kai, hook settings) is allowed — those
+        // aren't secrets and Kai itself must read them; only writes (tamper)
+        // are blocked. Secrets (user protect rules) are blocked either way.
+        if !write && kai_rule_is_builtin(reason) == 1 { return true }
         if enforce && mode == KAI_STORAGE_BLOCK {
             dlog("BLOCK \(agent) pid \(p) \(path) (\(reason))")
             audit(decision: "block", agent: agent, path: path, why: reason)

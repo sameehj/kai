@@ -2,9 +2,11 @@
 #include "internal.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <fnmatch.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 /* Upload patterns from earlier default policies, matched against raw command
  * text, and their replacements for the command view (kai_shell_view). A
@@ -473,15 +475,24 @@ kai_policy *kai_policy_load(const char *path, char *err, size_t errlen) {
         chosen = strdup(path);
     } else {
         const char *def = kai_policy_file();
-        FILE *f = fopen(def, "rb");
-        if (f) { fclose(f); chosen = strdup(def); }
+        /* Distinguish "no policy file" (use built-in defaults) from "file is
+         * there but we can't read it" (an error — never silently run on
+         * defaults when the user has a policy). The storage wall denies
+         * unsigned processes from reading ~/.kai, which is how this happens. */
+        struct stat st;
+        if (stat(def, &st) == 0) chosen = strdup(def);
+        else if (errno != ENOENT) {
+            if (err && errlen) snprintf(err, errlen, "cannot access policy file: %s (%s)", def, strerror(errno));
+            return NULL;
+        }
     }
     if (!chosen) return parse(DEFAULT_POLICY, "built-in", err, errlen);
 
     size_t len = 0;
     char *txt = kai_read_file(chosen, 4000000, &len);
     if (!txt) {
-        snprintf(err, errlen, "cannot read policy file: %s", chosen);
+        if (err && errlen)
+            snprintf(err, errlen, "policy file exists but can't be read: %s (%s)", chosen, strerror(errno));
         free(chosen);
         return NULL;
     }

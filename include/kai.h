@@ -124,6 +124,11 @@ int kai_egress_endpoint_allowed(const kai_policy *p, const char *host, const cha
 /* Is entry a valid egress_allow value (one of the forms above)? */
 int kai_egress_entry_valid(const char *entry);
 
+/* Is this protected-path rule one of Kai's built-in self-protection rules
+ * (its own ~/.kai, the agents' hook settings) rather than a user secret rule?
+ * `rule` is the value kai_path_protected / the storage wall fill into `why`. */
+int kai_rule_is_builtin(const char *rule);
+
 /* Extract the server name (SNI) from the start of a TLS ClientHello.
  * Returns 1 and fills host if found, 0 if this is not TLS or carries no SNI,
  * -1 if more bytes are needed. Never reads past len. */

@@ -20,6 +20,10 @@ static int may(const kai_policy *p, int agent, const char *path) {
     char why[256];
     return kai_storage_open_allowed(p, agent, 0, path, why, sizeof why);
 }
+static int mayWrite(const kai_policy *p, int agent, const char *path) {
+    char why[256];
+    return kai_storage_open_allowed(p, agent, 1, path, why, sizeof why);
+}
 
 static kai_policy *mk(const char *text) {
     char err[256] = "";
@@ -64,7 +68,9 @@ int main(void) {
     CHECK(p != NULL, "policy built");
     CHECK(kai_policy_storage_mode(p) == KAI_STORAGE_BLOCK, "storage block parsed");
 
-    CHECK(may(p, 1, "/work/.ssh/id_rsa") == 0, "agent denied an ssh key");
+    /* Secrets (user protect rules): denied to agents both reading and writing. */
+    CHECK(may(p, 1, "/work/.ssh/id_rsa") == 0, "agent denied reading an ssh key");
+    CHECK(mayWrite(p, 1, "/work/.ssh/id_rsa") == 0, "agent denied writing an ssh key");
     CHECK(may(p, 1, "/work/project/.env") == 0, "agent denied .env");
     CHECK(may(p, 1, "/work/project/.env.example") == 1, "allow-listed .env.example permitted");
     CHECK(may(p, 1, "/work/project/main.c") == 1, "agent may read ordinary file");
@@ -72,10 +78,12 @@ int main(void) {
     /* A non-agent process is never constrained. */
     CHECK(may(p, 0, "/work/.ssh/id_rsa") == 1, "non-agent reads anything");
 
-    /* Kai's own files and hook settings: always denied to agents in block
-     * mode, even without an explicit protect rule. */
-    CHECK(may(p, 1, "/work/.claude/settings.json") == 0, "agent denied Claude hook settings");
-    CHECK(may(p, 1, "/work/repo/.cursor/hooks.json") == 0, "agent denied project Cursor hooks");
+    /* Kai's own files and hook settings aren't secret: agents may READ them
+     * (so Kai's tools can load the policy) but may not WRITE them (tamper). */
+    CHECK(may(p, 1, "/work/.claude/settings.json") == 1, "agent may read Claude hook settings");
+    CHECK(mayWrite(p, 1, "/work/.claude/settings.json") == 0, "agent denied writing Claude hook settings");
+    CHECK(may(p, 1, "/work/repo/.cursor/hooks.json") == 1, "agent may read project Cursor hooks");
+    CHECK(mayWrite(p, 1, "/work/repo/.cursor/hooks.json") == 0, "agent denied writing Cursor hooks");
 
     why[0] = '\0';
     kai_storage_open_allowed(p, 1, 0, "/work/.ssh/id_rsa", why, sizeof why);
