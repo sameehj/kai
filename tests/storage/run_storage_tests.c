@@ -78,11 +78,12 @@ int main(void) {
     /* A non-agent process is never constrained. */
     CHECK(may(p, 0, "/work/.ssh/id_rsa") == 1, "non-agent reads anything");
 
-    /* Kai's own files and hook settings aren't secret: agents may READ them
-     * (so Kai's tools can load the policy) but may not WRITE them (tamper). */
-    CHECK(may(p, 1, "/work/.claude/settings.json") == 1, "agent may read Claude hook settings");
+    /* Kai's own files and hook settings: denied to agents both ways. Only
+     * Kai's own code-signed process is let through, by the ES client before
+     * this function — the engine itself blocks every agent. */
+    CHECK(may(p, 1, "/work/.claude/settings.json") == 0, "agent denied reading Claude hook settings");
     CHECK(mayWrite(p, 1, "/work/.claude/settings.json") == 0, "agent denied writing Claude hook settings");
-    CHECK(may(p, 1, "/work/repo/.cursor/hooks.json") == 1, "agent may read project Cursor hooks");
+    CHECK(may(p, 1, "/work/repo/.cursor/hooks.json") == 0, "agent denied reading project Cursor hooks");
     CHECK(mayWrite(p, 1, "/work/repo/.cursor/hooks.json") == 0, "agent denied writing Cursor hooks");
 
     why[0] = '\0';

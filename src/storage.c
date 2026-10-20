@@ -23,12 +23,11 @@ int kai_storage_open_allowed(const kai_policy *p, int is_agent, int write,
      * untouched. A read of a non-protected path is the common case. */
     if (!p || !is_agent || !path) return 1;
     if (!kai_path_protected(p, path, NULL, why, whylen)) return 1;
-    /* Kai's own control/config files (~/.kai, the agents' hook settings) are
-     * not secret: agents may READ them, but must not WRITE them (that's how an
-     * agent would disable Kai). Blocking reads here would also stop Kai's own
-     * tools and any reader from loading the policy. Real secrets (the user's
-     * protect rules, e.g. ~/.ssh) are denied both ways. */
-    if (!write && kai_rule_is_builtin(why)) return 1;
-    /* Protected. Off / log: allow (the caller logs why). Block: deny. */
+    (void)write;
+    /* Every protected path is denied to agents, reads and writes alike —
+     * including Kai's own ~/.kai and the agents' hook settings. The only
+     * processes allowed through are Kai's own code-signed components, which
+     * the caller (the ES client) lets past before reaching here by verifying
+     * the code signature — never by executable name. */
     return p->storage_mode == KAI_STORAGE_BLOCK ? 0 : 1;
 }

@@ -118,9 +118,15 @@ final class StorageClient {
     /// would catch them; exempt them by code signature (our team / bundle id),
     /// which an agent-dropped binary can't forge.
     private func isKaiOwnProcess(_ proc: UnsafeMutablePointer<es_process_t>) -> Bool {
-        let team = esString(proc.pointee.team_id)
-        let signing = esString(proc.pointee.signing_id)
-        return team == "KD446VDTM2" || signing.hasPrefix("io.github.sameehj.kai") || signing == "kai"
+        // Trust only a real code signature from Kai's Apple Developer team, and
+        // require the platform/code-signing to be valid (no ad-hoc). An agent
+        // can set a binary's *name* or ad-hoc *signing id* to "kai", but it
+        // cannot sign with this team's certificate. Never trust the name.
+        let flags = proc.pointee.codesigning_flags
+        let csValid: UInt32 = 0x1          // CS_VALID
+        let csAdhoc: UInt32 = 0x2          // CS_ADHOC
+        guard (flags & csValid) != 0, (flags & csAdhoc) == 0 else { return false }
+        return esString(proc.pointee.team_id) == "KD446VDTM2"
     }
 
     private func handle(_ msg: UnsafePointer<es_message_t>) {
@@ -183,10 +189,7 @@ final class StorageClient {
         if !protected { return true }
 
         let reason = String(cString: why)
-        // Reading Kai's own config (~/.kai, hook settings) is allowed — those
-        // aren't secrets and Kai itself must read them; only writes (tamper)
-        // are blocked. Secrets (user protect rules) are blocked either way.
-        if !write && kai_rule_is_builtin(reason) == 1 { return true }
+        _ = write  // every protected path is denied to non-Kai agents, read or write
         if enforce && mode == KAI_STORAGE_BLOCK {
             dlog("BLOCK \(agent) pid \(p) \(path) (\(reason))")
             audit(decision: "block", agent: agent, path: path, why: reason)

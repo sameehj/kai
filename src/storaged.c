@@ -95,12 +95,9 @@ int kai_cmd_storaged(int argc, char **argv) {
             if (kai_process_agent(p, pid, name, sizeof name, NULL)) {
                 agent_opens++;
                 char why[256] = "";
-                /* ask block mode's answer regardless of the current mode, so
-                 * "off" still previews what turning it on would do. Reads of
-                 * Kai's own config are allowed (not secret); eslogger doesn't
-                 * give us the open flags, so preview as a read. */
-                int prot = kai_path_protected(p, path, NULL, why, sizeof why);
-                int allow = (!prot || kai_rule_is_builtin(why)) ? 1 : 0;
+                /* preview block mode's answer regardless of the current mode,
+                 * so "off" still shows what turning it on would do */
+                int allow = kai_path_protected(p, path, NULL, why, sizeof why) ? 0 : 1;
                 if (!allow) {
                     would_block++;
                     printf("WOULD BLOCK  %-12s pid %d  %s  (%s)\n", name, pid, path, why);
