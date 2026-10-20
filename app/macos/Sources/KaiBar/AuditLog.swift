@@ -27,11 +27,13 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
     var isExempt: Bool { decision == "exempt" }
     var isNotable: Bool { decision != "allow" }
     var isNetwork: Bool { source == "network" || source == "gateway" }
+    var isStorage: Bool { source == "storage" }
     var isPrompt: Bool { event == "UserPromptSubmit" || event == "beforeSubmitPrompt" }
 
-    /// Network and gateway records name the agent in `event`.
+    /// Network, gateway and storage records name the agent in `event`; hook
+    /// records put it in `source`.
     var agentName: String {
-        let who = isNetwork ? event : source
+        let who = (isNetwork || isStorage) ? event : source
         switch who {
         case "claude": return "Claude Code"
         case "cursor": return "Cursor"
@@ -45,6 +47,7 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
     var actionLabel: String? {
         if isPrompt { return "Prompt" }
         if isNetwork { return "Connection" }
+        if isStorage { return "Protected file (storage wall)" }
         switch tool ?? "" {
         case "Bash", "Shell", "shell": return "Command"
         case "Read": return "File read"

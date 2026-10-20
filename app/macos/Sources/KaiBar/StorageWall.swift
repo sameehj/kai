@@ -108,12 +108,21 @@ extension StorageWall: OSSystemExtensionRequestDelegate {
     }
 
     nonisolated func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
-        Task { @MainActor in self.state = .needsApproval }
+        Task { @MainActor in
+            self.state = .needsApproval
+            // Open the approval pane for them, like macOS's own "Open Settings".
+            self.openExtensionApprovalSettings()
+        }
     }
 
     nonisolated func request(_ request: OSSystemExtensionRequest,
                              didFinishWithResult result: OSSystemExtensionRequest.Result) {
-        Task { @MainActor in self.state = self.turningOff ? .off : .on }
+        Task { @MainActor in
+            self.state = self.turningOff ? .off : .on
+            // Approved as an extension, but ES also needs Full Disk Access;
+            // take them straight there so the wall can actually start.
+            if !self.turningOff { self.refreshRuntime(); self.openFullDiskAccessSettings() }
+        }
     }
 
     nonisolated func request(_ request: OSSystemExtensionRequest, didFailWithError error: Error) {
