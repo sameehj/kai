@@ -152,6 +152,48 @@ if SSH.exists():
 record("inherited fd (open in non-agent, read in agent)", True, None, "OS — not expressible via ES",
        "ES has no event for reading an already-open fd; needs a non-agent opener")
 
+# directory enumeration of a protected dir (AUTH_READDIR + AUTH_OPEN of the dir)
+if SSH.exists():
+    def list_ssh():
+        import os as _os
+        fd = _os.open(str(SSH), _os.O_RDONLY | _os.O_DIRECTORY)
+        try: _os.listdir(fd)
+        finally: _os.close(fd)
+    record("enumerate ~/.ssh directory (readdir)", True, denied(list_ssh), "OS (Endpoint Security)",
+           "AUTH_READDIR + AUTH_OPEN of the dir")
+
+# ---- exec-transition / attribution race family (point 7) ----
+import subprocess as _sp
+def _py(code):
+    r = _sp.run(["python3", "-c", code], capture_output=True, text=True)
+    return (r.stdout + r.stderr)
+
+ssh_cfg = str(SSH / "config") if (SSH / "config").exists() else ""
+if ssh_cfg:
+    # child exec then read: a freshly exec'd child of this agent reads a secret
+    out = _py("import os,sys\n"
+              "try:\n fd=os.open(%r,os.O_RDONLY); os.read(fd,1); os.close(fd); print('OPENED')\n"
+              "except OSError as e: print('DENIED',e.errno)" % ssh_cfg)
+    record("child exec then read secret", True, "DENIED" in out, "OS (Endpoint Security)", out.strip()[:40])
+
+    # rapid read immediately on process start (minimal time for classification)
+    out = _py("import os\n"
+              "try:\n open(%r,'rb').read(1); print('OPENED')\n"
+              "except OSError as e: print('DENIED',e.errno)" % ssh_cfg)
+    record("rapid post-exec read (classification race)", True, "DENIED" in out, "OS (Endpoint Security)",
+           "first op of a brand-new pid")
+
+    # same-pid re-exec: python execs cat, which reads the secret (identity kept pid)
+    out = _py("import os\n"
+              "os.execv('/bin/cat',['cat',%r])" % ssh_cfg)
+    record("same-pid re-exec (execv cat secret)", True, "Operation not permitted" in out or out.strip() == "",
+           "OS (Endpoint Security)", "exec-transition; empty/EPERM = blocked")
+
+# process-mute invalidation on exec is only meaningful with filter=process; this
+# harness records it NOT TESTED under optimization=none and is rerun per mode.
+record("process-mute invalidation on re-exec", True, None, "OS (Endpoint Security)",
+       "only under filter=process; rerun this harness with ~/.kai/storage_filter=process")
+
 # append/truncate/rename/delete need a pre-existing protected file, which the
 # agent can't create (create is blocked). Seeding needs storage off.
 for op in ("append", "truncate", "rename", "delete"):

@@ -41,12 +41,15 @@ final class StorageClient {
     private var filter: Filter = .none
     private var fsSubscribed = false              // are the file auth events live?
 
-    // Filesystem auth events the wall authorizes. (No AUTH_READDIR exists in
-    // Endpoint Security; directory listing goes through AUTH_OPEN of the dir.)
+    // Filesystem auth events the wall authorizes. ES_EVENT_TYPE_AUTH_READDIR
+    // exists (verified in the SDK), so directory enumeration is authorized in
+    // its own right, not only via AUTH_OPEN of the directory.
     private let fileEvents: [es_event_type_t] = [
         ES_EVENT_TYPE_AUTH_OPEN, ES_EVENT_TYPE_AUTH_CREATE, ES_EVENT_TYPE_AUTH_RENAME,
         ES_EVENT_TYPE_AUTH_UNLINK, ES_EVENT_TYPE_AUTH_TRUNCATE, ES_EVENT_TYPE_AUTH_LINK,
         ES_EVENT_TYPE_AUTH_CLONE, ES_EVENT_TYPE_AUTH_EXCHANGEDATA,
+        ES_EVENT_TYPE_AUTH_COPYFILE,   // copying a secret out
+        ES_EVENT_TYPE_AUTH_READDIR,    // enumerating a protected directory
     ]
     private let lifecycleEvents: [es_event_type_t] = [
         ES_EVENT_TYPE_NOTIFY_EXEC, ES_EVENT_TYPE_NOTIFY_FORK, ES_EVENT_TYPE_NOTIFY_EXIT,
@@ -263,6 +266,13 @@ final class StorageClient {
             return authorize(msg, paths: [path(e.clone.source), joined(e.clone.target_dir, e.clone.target_name)], op: "clone", enforce: true)
         case ES_EVENT_TYPE_AUTH_EXCHANGEDATA:
             return authorize(msg, paths: [path(e.exchangedata.file1), path(e.exchangedata.file2)], op: "exchangedata", enforce: true)
+        case ES_EVENT_TYPE_AUTH_READDIR:
+            return authorize(msg, paths: [path(e.readdir.target)], op: "readdir", enforce: true)
+        case ES_EVENT_TYPE_AUTH_COPYFILE:
+            var paths = [path(e.copyfile.source)]
+            if let tf = e.copyfile.target_file { paths.append(path(tf)) }
+            else { paths.append(joined(e.copyfile.target_dir, e.copyfile.target_name)) }
+            return authorize(msg, paths: paths, op: "copyfile", enforce: true)
         default:
             return true
         }
