@@ -112,6 +112,46 @@ tmpd = tempfile.mkdtemp()
 record("create .env under /tmp (write)", True, create_probe(tmpd, "." + "env"), "OS (Endpoint Security)")
 record("create .pem under /tmp (write)", True, create_probe(tmpd, "probe." + "pem"), "OS (Endpoint Security)")
 
+# ---- adversarial write-side vectors (no seeding, no real secret touched) ----
+def cleanup(path):
+    try: os.unlink(path)
+    except OSError: pass
+
+# atomic replacement: create a plain temp file, rename it ONTO a protected name
+plain = os.path.join(tmpd, "plain.txt"); open(plain, "w").write("x")
+dest = os.path.join(tmpd, "." + "env")
+d = denied(lambda: os.rename(plain, dest)); cleanup(dest); cleanup(plain)
+record("atomic replace: rename plain -> .env (dest protected)", True, d, "OS (Endpoint Security)")
+
+# hard link a REAL secret to an alias (would expose its contents under a new name)
+if (SSH / "config").exists():
+    alias = os.path.join(tmpd, "hardlink")
+    d = denied(lambda: os.link(str(SSH / "config"), alias)); cleanup(alias)
+    record("hard link ~/.ssh/config -> alias (source protected)", True, d, "OS (Endpoint Security)")
+    # clonefile of a real secret
+    clone = os.path.join(tmpd, "clone")
+    def do_clone():
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.clonefile(str(SSH / "config").encode(), clone.encode(), 0) != 0:
+            raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
+    d = denied(do_clone); cleanup(clone)
+    record("clonefile ~/.ssh/config -> clone (source protected)", True, d, "OS (Endpoint Security)")
+
+# hard link a plain file INTO ~/.ssh (target dir protected -> write/tamper)
+if SSH.exists():
+    src = os.path.join(tmpd, "linksrc.txt"); open(src, "w").write("x")
+    tgt = str(SSH / "kai_breadth_link")
+    d = denied(lambda: os.link(src, tgt))
+    cleanup(tgt); cleanup(src)
+    record("hard link plain -> ~/.ssh/ (target protected)", True, d, "OS (Endpoint Security)")
+
+# inherited file descriptor: ES authorizes open(), not read() on an already-open
+# fd, and a non-agent opener is needed to demonstrate it — can't be built from a
+# single agent session. Documented limitation.
+record("inherited fd (open in non-agent, read in agent)", True, None, "OS — not expressible via ES",
+       "ES has no event for reading an already-open fd; needs a non-agent opener")
+
 # append/truncate/rename/delete need a pre-existing protected file, which the
 # agent can't create (create is blocked). Seeding needs storage off.
 for op in ("append", "truncate", "rename", "delete"):
