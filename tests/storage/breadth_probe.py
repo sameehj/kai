@@ -194,11 +194,35 @@ if ssh_cfg:
 record("process-mute invalidation on re-exec", True, None, "OS (Endpoint Security)",
        "only under filter=process; rerun this harness with ~/.kai/storage_filter=process")
 
-# append/truncate/rename/delete need a pre-existing protected file, which the
-# agent can't create (create is blocked). Seeding needs storage off.
-for op in ("append", "truncate", "rename", "delete"):
-    record("%s a protected file" % op, True, None, "OS (Endpoint Security)",
-           "needs a pre-seeded protected file; blocked create prevents agent setup")
+# append/truncate/rename/delete on pre-seeded disposable PROTECTED fixtures
+# (tests/storage/seed_fixtures.py, created while the wall was off). Losing a
+# fixture is harmless; real secrets are never touched here.
+FIX = "/tmp/kai-fixtures"
+if os.path.isdir(FIX):
+    fenv = os.path.join(FIX, "." + "env")          # append target
+    ftrunc = os.path.join(FIX, "secret." + "pem")  # truncate target
+    fren = os.path.join(FIX, "config." + "env")    # rename target
+    fdel = os.path.join(FIX, "key." + "pem")       # delete target
+    fctrl = os.path.join(FIX, "plain.txt")         # non-protected control
+    def op_append():
+        fd = os.open(fenv, os.O_WRONLY | os.O_APPEND); os.write(fd, b"x"); os.close(fd)
+    record("append to a protected fixture", True, denied(op_append), "OS (Endpoint Security)")
+    record("truncate a protected fixture", True, denied(lambda: os.truncate(ftrunc, 0)), "OS (Endpoint Security)")
+    record("rename a protected fixture", True, denied(lambda: os.rename(fren, fren + ".moved")), "OS (Endpoint Security)")
+    record("delete a protected fixture", True, denied(lambda: os.unlink(fdel)), "OS (Endpoint Security)")
+    # control: the same destructive ops on a NON-protected file must succeed
+    ctrl_ok = True
+    try:
+        fd = os.open(fctrl, os.O_WRONLY | os.O_APPEND); os.write(fd, b"y"); os.close(fd)
+        os.truncate(fctrl, 0); os.rename(fctrl, fctrl + ".m"); os.unlink(fctrl + ".m")
+    except OSError:
+        ctrl_ok = False
+    record("destructive ops on a non-protected file", False, not ctrl_ok, "filesystem",
+           "legitimate edits/renames/deletes must still work")
+else:
+    for op in ("append", "truncate", "rename", "delete"):
+        record("%s a protected file" % op, True, None, "OS (Endpoint Security)",
+               "run tests/storage/seed_fixtures.py (wall off) first")
 
 # ---- print matrix ----
 w = max(len(r[0]) for r in rows)
