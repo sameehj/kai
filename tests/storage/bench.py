@@ -1,48 +1,49 @@
 # SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
-"""Storage-wall overhead benchmark (manual). NOT part of `make test`.
+"""Storage-wall overhead micro-benchmark (manual). NOT part of `make test`.
 
-Times ordinary, non-protected file operations from an agent session so we can
-measure the per-operation cost the Endpoint Security authorization adds. Run it
-twice to compare — once with the wall on (storage=log or block) and once off
-(storage=off, or the extension deactivated) — and diff the medians:
+Times ordinary, non-protected file operations from an agent session and
+reports avg / p95 / p99 per-op latency and throughput, so we can measure the
+cost the Endpoint Security authorization adds. Run with the wall ON (extension
+active) and OFF (Storage wall toggled off, so the extension deactivates and
+stops intercepting) and diff.
 
-    python3 tests/storage/bench.py
+Note: `storage=off` is NOT the same as the wall being off — the extension
+stays subscribed and still authorizes every open while allowing it. To get a
+true OFF baseline, deactivate the extension (Storage wall toggle off).
 
-It never touches a protected path, so it measures the common case: the wall
-sees the event, finds the process is not an attributable agent (or the path
-isn't protected), and allows. That is the cost paid by every file op on the
-machine, which is what "near-zero overhead" has to be judged against.
+`stat` is a control: Endpoint Security does not authorize it, so it shows the
+non-ES floor on this machine.
 """
 import os, statistics, tempfile, time
 
-N = 20000
 d = tempfile.mkdtemp()
-
-def timed(label, fn):
-    # warm up, then time N iterations, reporting per-op microseconds.
-    for _ in range(1000): fn()
-    samples = []
-    for _ in range(5):
-        t0 = time.perf_counter()
-        for _ in range(N): fn()
-        samples.append((time.perf_counter() - t0) / N * 1e6)
-    med = statistics.median(samples)
-    print(f"  {label:28} {med:8.2f} µs/op   ({N} ops x5, min {min(samples):.2f})")
-    return med
-
-print(f"storage-wall overhead benchmark  ({N} iterations each)")
 f = os.path.join(d, "plain.txt")
 open(f, "w").write("hello\n")
+
+def percentiles(label, fn, n=8000):
+    for _ in range(1000): fn()               # warm up
+    lat = []
+    for _ in range(n):
+        t0 = time.perf_counter_ns()
+        fn()
+        lat.append(time.perf_counter_ns() - t0)
+    lat.sort()
+    avg = sum(lat) / len(lat) / 1000.0
+    p95 = lat[int(n * 0.95)] / 1000.0
+    p99 = lat[int(n * 0.99)] / 1000.0
+    thr = 1e6 / avg
+    print(f"  {label:26} avg {avg:7.2f}  p95 {p95:7.2f}  p99 {p99:7.2f} µs   {thr:9.0f} ops/s")
 
 def op_open():
     fd = os.open(f, os.O_RDONLY); os.close(fd)
 def op_create_unlink():
     p = os.path.join(d, "c"); fd = os.open(p, os.O_CREAT | os.O_WRONLY, 0o600); os.close(fd); os.unlink(p)
 def op_stat():
-    os.stat(f)   # stat is not an ES auth event: a control for non-ES overhead
+    os.stat(f)
 
-timed("open+close (AUTH_OPEN)", op_open)
-timed("create+unlink (AUTH x2)", op_create_unlink)
-timed("stat (no ES auth event)", op_stat)
-print("\nRun with the wall on and off and compare the medians; stat is the "
-      "control (ES doesn't authorize it).")
+print("storage-wall overhead  (per-op latency; lower is better)")
+percentiles("open+close (AUTH_OPEN)", op_open)
+percentiles("create+unlink (2 AUTH)", op_create_unlink)
+percentiles("stat (control, no ES)", op_stat)
+print("\nActive extension version is what this measures; run ON vs OFF (deactivate the")
+print("Storage wall) to get the delta. stat is the non-ES floor.")
