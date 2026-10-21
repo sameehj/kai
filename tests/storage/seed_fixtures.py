@@ -23,7 +23,7 @@ os.makedirs(os.path.join(D, "nested"))
 names = {
     "append":   "." + "env",
     "truncate": "secret." + "pem",
-    "rename":   "config." + "env",
+    "rename":   ".env." + "local",   # matches the .env.* protect rule
     "delete":   "key." + "pem",
     "read":     "nested/." + "env",
 }

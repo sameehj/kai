@@ -201,7 +201,7 @@ FIX = "/tmp/kai-fixtures"
 if os.path.isdir(FIX):
     fenv = os.path.join(FIX, "." + "env")          # append target
     ftrunc = os.path.join(FIX, "secret." + "pem")  # truncate target
-    fren = os.path.join(FIX, "config." + "env")    # rename target
+    fren = os.path.join(FIX, ".env." + "local")    # rename target (matches .env.*)
     fdel = os.path.join(FIX, "key." + "pem")       # delete target
     fctrl = os.path.join(FIX, "plain.txt")         # non-protected control
     def op_append():
