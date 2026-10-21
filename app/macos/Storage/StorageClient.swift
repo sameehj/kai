@@ -75,13 +75,24 @@ final class StorageClient {
     // MARK: diagnostics (dev build only; root has no readable logs here)
     private func dlog(_ s: String) {
         let line = ISO8601DateFormatter().string(from: Date()) + " " + s + "\n"
-        let path = "/tmp/kai-storage.log"
-        if let fh = FileHandle(forWritingAtPath: path) {
-            fh.seekToEndOfFile(); fh.write(Data(line.utf8)); try? fh.close()
-        } else {
-            try? line.write(toFile: path, atomically: false, encoding: .utf8)
+        writeFileNoFollow("/tmp/kai-storage.log", Array(line.utf8), append: true)
+    }
+
+    /// Write bytes to a fixed path owned by this root process in a world-
+    /// writable directory, refusing to follow a symlink an attacker may have
+    /// planted there (O_NOFOLLOW on the final component) and setting the mode
+    /// through the descriptor, never a path that could be redirected between
+    /// calls. Used for both the diagnostic log and the timing snapshot.
+    private func writeFileNoFollow(_ path: String, _ bytes: [UInt8], append: Bool) {
+        var flags = O_WRONLY | O_CREAT | O_NOFOLLOW
+        flags |= append ? O_APPEND : O_TRUNC
+        let fd = open(path, flags, 0o644)
+        if fd < 0 { return }                       // ELOOP if a symlink is there
+        fchmod(fd, 0o644)
+        bytes.withUnsafeBytes { raw in
+            if let base = raw.baseAddress, raw.count > 0 { _ = write(fd, base, raw.count) }
         }
-        chmod(path, 0o666)
+        close(fd)
     }
 
     // MARK: lifecycle
@@ -126,10 +137,10 @@ final class StorageClient {
 
     private func exportTiming() {
         var buf = [CChar](repeating: 0, count: 4096)
-        _ = kai_prof_export_json(&buf, buf.count)
-        let path = "/tmp/kai-storage-timing.json"
-        try? String(cString: buf).write(toFile: path, atomically: true, encoding: .utf8)
-        chmod(path, 0o644)
+        let need = kai_prof_export_json(&buf, buf.count)
+        let len = min(need, buf.count - 1)
+        let bytes = buf.prefix(len).map { UInt8(bitPattern: $0) }
+        writeFileNoFollow("/tmp/kai-storage-timing.json", Array(bytes), append: false)
     }
 
     private func connect() {
