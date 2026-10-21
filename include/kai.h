@@ -10,6 +10,7 @@
 #define KAI_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -155,6 +156,32 @@ kai_storage_mode kai_policy_storage_mode(const kai_policy *p);
  * block mode, whatever the policy's allow list says. */
 int kai_storage_open_allowed(const kai_policy *p, int is_agent, int write,
                              const char *path, char *why, size_t whylen);
+
+/* ---- Storage ES-handler profiler (dev/benchmark only; default OFF) ----
+ * Lock-free, fixed-size, zero-allocation aggregation so it can be called from
+ * the Endpoint Security authorization hot path without adding a lock, an
+ * allocation, or blocking I/O. Stages name the work inside one auth callback;
+ * KAI_PROF_DEADLINE records the ES deadline margin (headroom in ns) at the
+ * moment Kai responds. Durations are nanoseconds. Not a user-facing feature. */
+enum kai_prof_stage {
+    KAI_PROF_TOTAL = 0,   /* whole authorization callback                 */
+    KAI_PROF_CLASSIFY,    /* process classification (agent or not)        */
+    KAI_PROF_PATH,        /* extracting path(s) from the ES event         */
+    KAI_PROF_POLICY,      /* kai_path_protected evaluation                */
+    KAI_PROF_RESPOND,     /* the es_respond_* call                        */
+    KAI_PROF_DEADLINE,    /* ES auth deadline margin (headroom) at respond */
+    KAI_PROF_NSTAGES
+};
+void   kai_prof_set_enabled(int on);          /* default 0; one relaxed flag  */
+int    kai_prof_enabled(void);
+void   kai_prof_record(int stage, uint64_t ns); /* no-op (one branch) if off  */
+void   kai_prof_reset(void);
+/* Serialize the aggregate (per stage: count, avg/p95/p99/max in microseconds)
+ * as JSON into buf. Emits only timing numbers — never a path, a process name,
+ * or any user datum — so it is safe to export without touching protected data.
+ * Returns the full length the JSON needs (excluding the NUL); if that is >=
+ * buflen the output was truncated, so retry with a larger buffer. */
+size_t kai_prof_export_json(char *buf, size_t buflen);
 
 /* ---- Agent identity ----
  * An agent is matched by executable path, any argv element, or code-signing

@@ -20,7 +20,7 @@ LDLIBS   = -lcurl -lpthread -lm
 endif
 
 CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
-       src/net.c src/storage.c src/proc.c src/shell.c src/gateway.c third_party/cjson/cJSON.c
+       src/net.c src/storage.c src/storage_prof.c src/proc.c src/shell.c src/gateway.c third_party/cjson/cJSON.c
 APP  = src/main.c src/hooks.c src/install.c src/manage.c src/browser.c src/native.c src/report.c src/health.c src/storaged.c
 
 OBJ      = $(CORE:.c=.o) $(APP:.c=.o)

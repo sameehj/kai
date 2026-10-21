@@ -40,6 +40,21 @@ final class StorageClient {
     private var userGID: gid_t = 0
     private var filter: Filter = .none
     private var fsSubscribed = false              // are the file auth events live?
+    private var profiling = false                 // ES-handler timing profiler on?
+
+    // Mirror of enum kai_prof_stage (kai.h), as Int32 so we don't depend on how
+    // the C enum imports. Stage timings feed the lock-free C aggregator.
+    private enum ProfStage: Int32 { case total = 0, classify, path, policy, respond, deadline }
+    private static let timebase: mach_timebase_info_data_t = {
+        var t = mach_timebase_info_data_t(); mach_timebase_info(&t); return t
+    }()
+    @inline(__always) private func nowTicks() -> UInt64 { mach_absolute_time() }
+    @inline(__always) private func ticksToNs(_ d: UInt64) -> UInt64 {
+        d &* UInt64(StorageClient.timebase.numer) / UInt64(StorageClient.timebase.denom)
+    }
+    @inline(__always) private func prof(_ s: ProfStage, _ t0: UInt64, _ t1: UInt64) {
+        kai_prof_record(s.rawValue, ticksToNs(t1 &- t0))
+    }
 
     // Filesystem auth events the wall authorizes. ES_EVENT_TYPE_AUTH_READDIR
     // exists (verified in the SDK), so directory enumeration is authorized in
@@ -85,8 +100,36 @@ final class StorageClient {
         case "path": filter = .path
         default: filter = .none
         }
-        dlog("start: euid=\(geteuid()) adoptedUID=\(userUID) mode=\(modeName) filter=\(filter)")
+        // Dev/benchmark ES-handler profiler: on only when ~/.kai/storage_timing
+        // exists (a file, since a launchd sysext inherits no env). Default OFF,
+        // separate from the filter selector above, never auto-enabled.
+        profiling = FileManager.default.fileExists(atPath: home + "/.kai/storage_timing")
+        kai_prof_reset(); kai_prof_set_enabled(profiling ? 1 : 0)
+        dlog("start: euid=\(geteuid()) adoptedUID=\(userUID) mode=\(modeName) filter=\(filter) profiling=\(profiling)")
         connect()
+        scheduleTimingExport()
+    }
+
+    /// Snapshot the aggregate timing to a world-readable JSON file every few
+    /// seconds, OFF the ES hot path (utility queue) — the authorization
+    /// callback itself never does disk I/O for profiling. The file holds only
+    /// timing numbers (no paths, no process names), so exporting it touches no
+    /// protected user data.
+    private func scheduleTimingExport() {
+        guard profiling else { return }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self else { return }
+            self.exportTiming()
+            self.scheduleTimingExport()
+        }
+    }
+
+    private func exportTiming() {
+        var buf = [CChar](repeating: 0, count: 4096)
+        _ = kai_prof_export_json(&buf, buf.count)
+        let path = "/tmp/kai-storage-timing.json"
+        try? String(cString: buf).write(toFile: path, atomically: true, encoding: .utf8)
+        chmod(path, 0o644)
     }
 
     private func connect() {
@@ -234,58 +277,91 @@ final class StorageClient {
         case ES_EVENT_TYPE_NOTIFY_OPEN:
             _ = authorize(msg, paths: [path(msg.pointee.event.open.file)], op: "open", enforce: false)
         case ES_EVENT_TYPE_AUTH_OPEN:
-            let allow = authorize(msg, paths: [path(msg.pointee.event.open.file)], op: "open", enforce: true)
+            let t0 = profiling ? nowTicks() : 0
+            let p = path(msg.pointee.event.open.file)
+            let tPaths = profiling ? nowTicks() : 0
+            let allow = authorize(msg, paths: [p], op: "open", enforce: true, timed: profiling, t0: t0, tPaths: tPaths)
+            let tResp = profiling ? nowTicks() : 0
             if let c = client { es_respond_flags_result(c, msg, allow ? .max : 0, false) }
+            finishTiming(msg, t0: t0, tResp: tResp)
         default:
-            let allow = authorizeFileEvent(msg)
+            let t0 = profiling ? nowTicks() : 0
+            let (paths, op) = extractPaths(msg)
+            let tPaths = profiling ? nowTicks() : 0
+            let allow = authorize(msg, paths: paths, op: op, enforce: true, timed: profiling, t0: t0, tPaths: tPaths)
+            let tResp = profiling ? nowTicks() : 0
             if let c = client { es_respond_auth_result(c, msg, allow ? ES_AUTH_RESULT_ALLOW : ES_AUTH_RESULT_DENY, false) }
+            finishTiming(msg, t0: t0, tResp: tResp)
         }
     }
 
-    private func authorizeFileEvent(_ msg: UnsafePointer<es_message_t>) -> Bool {
+    /// Record RESPOND / TOTAL and the ES deadline margin once the auth result
+    /// is sent. Runs only when profiling; adds nothing otherwise.
+    private func finishTiming(_ msg: UnsafePointer<es_message_t>, t0: UInt64, tResp: UInt64) {
+        guard profiling else { return }
+        let end = nowTicks()
+        prof(.respond, tResp, end)
+        prof(.total, t0, end)
+        let deadline = msg.pointee.deadline            // mach-time absolute
+        if deadline > end { kai_prof_record(ProfStage.deadline.rawValue, ticksToNs(deadline &- end)) }
+    }
+
+    /// Pull the target path(s) and a label out of a file auth event. Returns an
+    /// empty list for event types the wall doesn't gate (authorize then allows).
+    private func extractPaths(_ msg: UnsafePointer<es_message_t>) -> ([String], String) {
         let e = msg.pointee.event
         switch msg.pointee.event_type {
         case ES_EVENT_TYPE_AUTH_CREATE:
             let c = e.create
             let p = c.destination_type == ES_DESTINATION_TYPE_EXISTING_FILE
                 ? path(c.destination.existing_file) : joined(c.destination.new_path.dir, c.destination.new_path.filename)
-            return authorize(msg, paths: [p], op: "create", enforce: true)
+            return ([p], "create")
         case ES_EVENT_TYPE_AUTH_RENAME:
             let r = e.rename
             var paths = [path(r.source)]
             paths.append(r.destination_type == ES_DESTINATION_TYPE_EXISTING_FILE
                 ? path(r.destination.existing_file) : joined(r.destination.new_path.dir, r.destination.new_path.filename))
-            return authorize(msg, paths: paths, op: "rename", enforce: true)
+            return (paths, "rename")
         case ES_EVENT_TYPE_AUTH_UNLINK:
-            return authorize(msg, paths: [path(e.unlink.target)], op: "unlink", enforce: true)
+            return ([path(e.unlink.target)], "unlink")
         case ES_EVENT_TYPE_AUTH_TRUNCATE:
-            return authorize(msg, paths: [path(e.truncate.target)], op: "truncate", enforce: true)
+            return ([path(e.truncate.target)], "truncate")
         case ES_EVENT_TYPE_AUTH_LINK:
-            return authorize(msg, paths: [path(e.link.source), joined(e.link.target_dir, e.link.target_filename)], op: "link", enforce: true)
+            return ([path(e.link.source), joined(e.link.target_dir, e.link.target_filename)], "link")
         case ES_EVENT_TYPE_AUTH_CLONE:
-            return authorize(msg, paths: [path(e.clone.source), joined(e.clone.target_dir, e.clone.target_name)], op: "clone", enforce: true)
+            return ([path(e.clone.source), joined(e.clone.target_dir, e.clone.target_name)], "clone")
         case ES_EVENT_TYPE_AUTH_EXCHANGEDATA:
-            return authorize(msg, paths: [path(e.exchangedata.file1), path(e.exchangedata.file2)], op: "exchangedata", enforce: true)
+            return ([path(e.exchangedata.file1), path(e.exchangedata.file2)], "exchangedata")
         case ES_EVENT_TYPE_AUTH_READDIR:
-            return authorize(msg, paths: [path(e.readdir.target)], op: "readdir", enforce: true)
+            return ([path(e.readdir.target)], "readdir")
         case ES_EVENT_TYPE_AUTH_COPYFILE:
             var paths = [path(e.copyfile.source)]
             if let tf = e.copyfile.target_file { paths.append(path(tf)) }
             else { paths.append(joined(e.copyfile.target_dir, e.copyfile.target_name)) }
-            return authorize(msg, paths: paths, op: "copyfile", enforce: true)
+            return (paths, "copyfile")
         default:
-            return true
+            return ([], "other")
         }
     }
 
-    private func authorize(_ msg: UnsafePointer<es_message_t>, paths: [String], op: String, enforce: Bool) -> Bool {
+    private func authorize(_ msg: UnsafePointer<es_message_t>, paths: [String], op: String,
+                           enforce: Bool, timed: Bool = false, t0: UInt64 = 0, tPaths: UInt64 = 0) -> Bool {
+        if timed { prof(.path, t0, tPaths) }
         let proc = msg.pointee.process
-        if isKaiOwnProcess(proc) { return true }
-        guard let agent = classify(proc), !agent.isEmpty else { return true }
+        let tClassify = timed ? nowTicks() : 0
+        if isKaiOwnProcess(proc) {
+            if timed { prof(.classify, tClassify, nowTicks()) }
+            return true
+        }
+        let agentName = classify(proc)
+        if timed { prof(.classify, tClassify, nowTicks()) }
+        guard let agent = agentName, !agent.isEmpty else { return true }
         lock.lock(); let pol = policy; lock.unlock()
         var why = [CChar](repeating: 0, count: 256)
+        let tPolicy = timed ? nowTicks() : 0
         for p in paths where !p.isEmpty {
             if kai_path_protected(pol, p, nil, &why, why.count) == 1 {
+                if timed { prof(.policy, tPolicy, nowTicks()) }
                 let reason = String(cString: why)
                 if enforce && mode == KAI_STORAGE_BLOCK {
                     dlog("BLOCK \(op) \(agent) pid \(pid(proc)) \(p) (\(reason))")
@@ -297,6 +373,7 @@ final class StorageClient {
                 return true
             }
         }
+        if timed { prof(.policy, tPolicy, nowTicks()) }
         return true
     }
 
@@ -307,7 +384,7 @@ final class StorageClient {
         let name = SCDynamicStoreCopyConsoleUser(nil, &uid, &gid)
         guard name != nil, uid >= 501 else { return }
         userUID = uid; userGID = gid
-        if let pw = getpwuid(uid), let home = pw.pointee.pw_dir { setenv("HOME", home, 1) }
+        if let pwent = getpwuid(uid), let home = pwent.pointee.pw_dir { setenv("HOME", home, 1) }
     }
 
     private func audit(decision: String, agent: String, op: String, path: String, why: String) {

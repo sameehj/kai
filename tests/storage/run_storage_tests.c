@@ -8,6 +8,8 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <time.h>
 
 static int failures;
 #define CHECK(cond, msg) do { \
@@ -30,6 +32,73 @@ static kai_policy *mk(const char *text) {
     kai_policy *p = kai_policy_from_string(text, err, sizeof err);
     if (!p) { fprintf(stderr, "policy parse failed: %s\n", err); }
     return p;
+}
+
+/* Monotonic nanoseconds, for the profiler-cost microbench only. */
+static uint64_t now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+/* Exercise the ES-handler profiler: default off, enable, record, export JSON
+ * that carries only numbers, reset, and measure its own per-call cost enabled
+ * vs disabled (requirement: profiler must be cheap and leak no user data). */
+static void test_profiler(void) {
+    printf("storage profiler\n");
+
+    kai_prof_reset();
+    CHECK(kai_prof_enabled() == 0, "profiler is off by default");
+
+    /* Disabled: record must be a no-op (nothing counted). */
+    kai_prof_record((int)KAI_PROF_TOTAL, 1234);
+    char buf[2048];
+    size_t n = kai_prof_export_json(buf, sizeof buf);
+    CHECK(n > 0 && n < sizeof buf, "export returns a bounded length");
+    CHECK(strstr(buf, "\"total\":{\"count\":0") != NULL, "disabled record counts nothing");
+    CHECK(strstr(buf, "\"enabled\":0") != NULL, "export reports disabled state");
+
+    /* Enable and record a known distribution across stages. */
+    kai_prof_set_enabled(1);
+    CHECK(kai_prof_enabled() == 1, "profiler enables");
+    for (int i = 0; i < 1000; i++) kai_prof_record((int)KAI_PROF_POLICY, 1000);  /* 1us each */
+    kai_prof_record((int)KAI_PROF_POLICY, 1000000);                              /* one 1ms outlier */
+    n = kai_prof_export_json(buf, sizeof buf);
+    CHECK(strstr(buf, "\"policy\":{\"count\":1001") != NULL, "counts every recorded sample");
+    CHECK(strstr(buf, "\"max\":1000.000") != NULL, "max is exact (1000us = 1ms outlier)");
+
+    /* Export must never leak a path or a process name — numbers only. */
+    CHECK(strstr(buf, "/") == NULL, "export contains no path separators");
+    CHECK(strstr(buf, ".ssh") == NULL && strstr(buf, ".env") == NULL, "export names no protected file");
+
+    /* Truncation contract: a short buffer truncates safely and reports the
+     * full length needed. */
+    char small[16];
+    size_t need = kai_prof_export_json(small, sizeof small);
+    CHECK(need >= sizeof small, "short buffer reports full length needed");
+    CHECK(small[sizeof small - 1] == '\0', "short buffer stays NUL-terminated");
+
+    /* Reset clears everything. */
+    kai_prof_reset();
+    n = kai_prof_export_json(buf, sizeof buf);
+    CHECK(strstr(buf, "\"policy\":{\"count\":0") != NULL, "reset clears counts");
+
+    /* Profiler-cost microbench: per-call time enabled vs disabled. Informational
+     * (printed, not asserted) so it never flakes CI, but it documents that the
+     * hot-path cost of recording is small. */
+    const int N = 2000000;
+    kai_prof_set_enabled(0);
+    uint64_t t0 = now_ns();
+    for (int i = 0; i < N; i++) kai_prof_record((int)KAI_PROF_TOTAL, 500);
+    uint64_t off = now_ns() - t0;
+    kai_prof_set_enabled(1);
+    t0 = now_ns();
+    for (int i = 0; i < N; i++) kai_prof_record((int)KAI_PROF_TOTAL, 500);
+    uint64_t on = now_ns() - t0;
+    kai_prof_set_enabled(0);
+    kai_prof_reset();
+    printf("  info profiler cost: disabled %.2f ns/call, enabled %.2f ns/call\n",
+           (double)off / N, (double)on / N);
 }
 
 int main(void) {
@@ -94,6 +163,8 @@ int main(void) {
     CHECK(kai_storage_open_allowed(p, 1, 0, NULL, why, sizeof why) == 1, "NULL path allowed, no crash");
     CHECK(kai_storage_open_allowed(NULL, 1, 0, "/x", why, sizeof why) == 1, "NULL policy allowed, no crash");
     kai_policy_free(p);
+
+    test_profiler();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

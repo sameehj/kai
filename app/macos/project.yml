@@ -49,6 +49,7 @@ targets:
       - path: ../../src/audit.c
       - path: ../../src/net.c
       - path: ../../src/storage.c
+      - path: ../../src/storage_prof.c
       - path: ../../src/proc.c
       - path: ../../src/shell.c
       - path: ../../third_party/cjson/cJSON.c
