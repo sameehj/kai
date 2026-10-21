@@ -19,6 +19,22 @@ SSH = HOME / ("." + "ssh")
 KAI = HOME / ("." + "kai")
 rows = []
 
+def agent_attribution():
+    """Confirm, via Kai's own classifier, that THIS probe process is attributed
+    to an agent. The storage wall only constrains agent-attributable processes,
+    so a run from a non-agent process would record false 'allowed' results. We
+    print this before the matrix so security results are only trusted when the
+    probe is genuinely agent-attributed (run it from an agent session)."""
+    pid = os.getpid()
+    try:
+        r = subprocess.run(["kai", "agent-of", str(pid)], capture_output=True,
+                           text=True, timeout=10)
+        return r.returncode == 0, (r.stdout.strip() or r.stderr.strip() or "?")
+    except Exception as e:  # noqa: BLE001 - diagnostic only
+        return False, "kai agent-of failed: %s" % e
+
+ATTR_IS_AGENT, ATTR_TEXT = agent_attribution()
+
 def record(scenario, expected, blocked, mechanism, note=""):
     # expected: True = should be blocked. blocked: True = was denied (EPERM).
     if blocked is None:
@@ -225,6 +241,13 @@ else:
                "run tests/storage/seed_fixtures.py (wall off) first")
 
 # ---- print matrix ----
+print("ATTRIBUTION: probe pid %d is %s -> %s" % (
+    os.getpid(), "AGENT-ATTRIBUTED" if ATTR_IS_AGENT else "NOT AN AGENT", ATTR_TEXT))
+if not ATTR_IS_AGENT:
+    print("WARNING: this process is NOT agent-attributed. The storage wall does "
+          "not apply to it, so every 'expected block' below is INVALID as a "
+          "security result. Re-run from an agent session.")
+print()
 w = max(len(r[0]) for r in rows)
 print("%-*s  %-8s  %-9s  %-24s  %-9s  %s" % (w, "scenario", "expected", "actual", "mechanism", "verdict", "note"))
 print("-" * (w + 70))
