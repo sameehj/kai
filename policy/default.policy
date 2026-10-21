@@ -21,6 +21,15 @@ protect id_rsa
 protect id_ed25519
 allow   .env.example           # safe to share
 allow   .env.sample
+# Public CA trust bundles are not secrets: agents read them to verify TLS, and
+# blocking them is noise that can break HTTPS. These exempt the well-known
+# public bundles only; private keys (*.key, id_rsa, privkey.pem, etc.) stay
+# protected by the rules above. cacert.pem is always a bundle (exempt anywhere);
+# the ambiguous cert.pem is exempted only at the known system/brew locations.
+allow   cacert.pem
+allow   /etc/ssl/cert.pem
+allow   /usr/local/etc/ca-certificates/cert.pem
+allow   /opt/homebrew/etc/ca-certificates/cert.pem
 
 # ── Built-in secret detectors ────────────────────────────────────────
 # action for anything the detectors below match: redact | block | warn | off
