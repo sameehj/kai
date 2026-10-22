@@ -119,7 +119,96 @@ final class StorageClient {
         dlog("start: euid=\(geteuid()) adoptedUID=\(userUID) mode=\(modeName) filter=\(filter) profiling=\(profiling)")
         connect()
         scheduleTimingExport()
+        #if KAI_STORAGE_ENFORCE
+        openGrantStore()
+        #endif
     }
+
+    #if KAI_STORAGE_ENFORCE
+    // MARK: Scoped Approvals (M4) — grants can allow a SOFT-protected op when a
+    // valid, human-approved grant matches. Active only when an approval key
+    // exists (otherwise nil => no behaviour change: protected still denies).
+    private var grantStore: OpaquePointer?            // kai_approval_store*
+    private var pendingSeen = Set<String>()           // dedup approval requests
+
+    private func openGrantStore() {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        let keyPath = home + "/.kai/approval.key"
+        guard let key = FileManager.default.contents(atPath: keyPath), !key.isEmpty else {
+            dlog("grants: no approval key; scoped approvals disabled"); return
+        }
+        let gdir = home + "/.kai/grants"
+        key.withUnsafeBytes { raw in
+            if let base = raw.bindMemory(to: UInt8.self).baseAddress {
+                grantStore = kai_approval_store_open(nil, gdir, base, key.count, 2)
+            }
+        }
+        if grantStore != nil { dlog("grants: store opened (\(gdir))"); scheduleGrantReload() }
+    }
+
+    /// Re-read policy+grants on a timer (the store debounces the re-stat), so a
+    /// new/revoked grant reaches the running wall without a restart. Off the ES
+    /// hot path; the store itself is thread-safe.
+    private func scheduleGrantReload() {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, let gs = self.grantStore else { return }
+            _ = kai_approval_store_reload(gs, 0)
+            self.scheduleGrantReload()
+        }
+    }
+
+    private func opCode(_ op: String) -> Int32 {
+        switch op { case "open", "readdir": return 0 /* read */ default: return 1 /* write */ }
+    }
+
+    /// Does a valid, human-approved grant allow this exact op? The store refuses
+    /// to honor a grant for an un-exemptable control path, verifies the HMAC,
+    /// checks expiry, binds identity to pid+pidversion, and consumes one-shots.
+    private func grantAllows(_ proc: UnsafeMutablePointer<es_process_t>,
+                             path p: String, agent: String, opStr: String) -> Bool {
+        guard let gs = grantStore else { return false }
+        let flags = proc.pointee.codesigning_flags
+        let strong = (flags & 0x1) != 0 && (flags & 0x2) == 0  // valid, non-adhoc
+        let subjStrength: Int32 = strong ? 2 : 1               // strong : medium
+        let token = proc.pointee.audit_token
+        var ok = false
+        var why = [CChar](repeating: 0, count: 256)
+        agent.withCString { ap in
+            var subj = kai_grant_subject(pid: pid(proc), pidversion: UInt64(token.val.7),
+                                         agent: ap, strength: subjStrength)
+            let now = Int64(Date().timeIntervalSince1970)
+            ok = kai_approval_store_decide(gs, p, nil, opCode(opStr), &subj, now, &why, why.count) == 1
+        }
+        return ok
+    }
+
+    /// Stage an approval request for the app to surface (async; the ES callback
+    /// is never held). Deduped per (pid, op, path). Only KAI-verified fields are
+    /// recorded — the agent name is Kai's classification, not agent-supplied.
+    private func requestApproval(_ proc: UnsafeMutablePointer<es_process_t>,
+                                 path p: String, agent: String, opStr: String) {
+        let dkey = "\(pid(proc)):\(opStr):\(p)"
+        lock.lock()
+        let seen = pendingSeen.contains(dkey)
+        if !seen { if pendingSeen.count > 4096 { pendingSeen.removeAll() }; pendingSeen.insert(dkey) }
+        lock.unlock()
+        if seen { return }
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        let dir = home + "/.kai/pending"
+        mkdir(dir, 0o700)
+        let token = proc.pointee.audit_token
+        let id = "\(pid(proc))-\(UInt64(token.val.7))-\(Int(Date().timeIntervalSince1970))"
+        func esc(_ s: String) -> String {
+            s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        }
+        let json = "{\"id\":\"\(id)\",\"agent\":\"\(esc(agent))\",\"pid\":\(pid(proc))," +
+                   "\"pidversion\":\(UInt64(token.val.7)),\"resource\":\"\(esc(p))\"," +
+                   "\"op\":\"\(esc(opStr))\",\"ts\":\(Int(Date().timeIntervalSince1970))}"
+        let fp = dir + "/" + id + ".json"
+        writeFileNoFollow(fp, Array(json.utf8), append: false)
+        if userUID >= 501 { chown(fp, userUID, userGID); chown(dir, userUID, userGID) }
+    }
+    #endif
 
     /// Snapshot the aggregate timing to a world-readable JSON file every few
     /// seconds, OFF the ES hot path (utility queue) — the authorization
@@ -375,6 +464,17 @@ final class StorageClient {
                 if timed { prof(.policy, tPolicy, nowTicks()) }
                 let reason = String(cString: why)
                 if enforce && mode == KAI_STORAGE_BLOCK {
+                    #if KAI_STORAGE_ENFORCE
+                    // A valid, human-approved grant can allow a soft-protected
+                    // op. The store refuses control paths, so this never widens
+                    // an un-exemptable denial.
+                    if grantAllows(proc, path: p, agent: agent, opStr: op) {
+                        dlog("ALLOW-GRANT \(op) \(agent) pid \(pid(proc)) \(p)")
+                        audit(decision: "allow-grant", agent: agent, op: op, path: p, why: reason)
+                        return true
+                    }
+                    requestApproval(proc, path: p, agent: agent, opStr: op)
+                    #endif
                     dlog("BLOCK \(op) \(agent) pid \(pid(proc)) \(p) (\(reason))")
                     audit(decision: "block", agent: agent, op: op, path: p, why: reason)
                     return false
@@ -423,5 +523,8 @@ final class StorageClient {
     deinit {
         if let c = client { es_unsubscribe_all(c); es_delete_client(c) }
         if let p = policy { kai_policy_free(p) }
+        #if KAI_STORAGE_ENFORCE
+        if let gs = grantStore { kai_approval_store_close(gs) }
+        #endif
     }
 }
