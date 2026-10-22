@@ -399,7 +399,20 @@ final class StorageClient {
     }
 
     private func audit(decision: String, agent: String, op: String, path: String, why: String) {
-        kai_audit("storage", agent, decision, why, "agent \(op) of a protected file")
+        // Record the actual target path (not just the matched rule) via the
+        // richer audit entry, so the activity view and `kai log` show WHICH file
+        // was touched. A path is an identifier, not file contents; the audit
+        // layer still caps target length (KAI_AUDIT_TARGET_MAX).
+        let detail = "agent \(op) of a protected file"
+        "storage".withCString { src in agent.withCString { ev in
+        decision.withCString { dec in why.withCString { rl in
+        detail.withCString { det in op.withCString { tl in
+        path.withCString { tg in
+            var e = kai_audit_entry(source: src, event: ev, decision: dec, rule: rl,
+                                    detail: det, tool: tl, target: tg,
+                                    match: nil, session: nil, cwd: nil)
+            kai_audit_write(&e)
+        }}}}}}}
         if userUID >= 501 {
             let log = String(cString: kai_audit_path())
             chown(log, userUID, userGID)
