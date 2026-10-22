@@ -184,11 +184,15 @@ Self-labelled **experimental / developer preview**.
 | Capability | Status | Notes |
 |---|---|---|
 | **M0 grant engine**: HMAC-signed grants, JSON store, load, match, `kai_storage_decide` gate; builtin paths never grantable; identity bound to pid+pidversion; enforcement-time expiry; exact realpath resource; weak-identity→one-shot | **V (offline, this change)** | 20 unit tests pass |
-| M1 CLI (`kai grant list/revoke/create`) | M (next) | — |
-| M2 bounded storage reload | M (prerequisite) | — |
-| M3 app approval UI + key management | M | — |
-| M4 live wiring behind `KAI_STORAGE_ENFORCE` | M | — |
-| M5 live validation | M (human-gated) | — |
+| M1 CLI `kai grant list/create/revoke` (create = unsigned, not honored) | **V — C-unit + smoke** | — |
+| M2 approval store (rwlock, generations, debounced reload, immediate revoke, atomic one-shot) | **V — C-unit-tested** | incl. 16-thread concurrency + perf |
+| M4 enforcement wiring (`StorageClient`, enforce-gated; async pending + deny; reload) | **compile-verified** (sysext), NOT live | — |
+| M3 approval UI (`approval.key` gen, in-process sign on click, Deny/Allow-once/session, Active grants/Revoke) | **compile-verified** (app), NOT live | — |
+| M5 live validation | M — human-gated, unstarted | — |
+
+Audit of M0–M1 fixed a real one-shot double-consume bug (now an in-memory
+atomic). Signing is reachable **only from a UI button** — no agent-callable
+signing path. Nothing here is live-enforced.
 
 ---
 

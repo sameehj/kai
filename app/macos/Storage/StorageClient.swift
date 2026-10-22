@@ -198,12 +198,15 @@ final class StorageClient {
         mkdir(dir, 0o700)
         let token = proc.pointee.audit_token
         let id = "\(pid(proc))-\(UInt64(token.val.7))-\(Int(Date().timeIntervalSince1970))"
+        let flags = proc.pointee.codesigning_flags
+        let strength = ((flags & 0x1) != 0 && (flags & 0x2) == 0) ? 2 : 1   // strong : medium
         func esc(_ s: String) -> String {
             s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
         }
         let json = "{\"id\":\"\(id)\",\"agent\":\"\(esc(agent))\",\"pid\":\(pid(proc))," +
-                   "\"pidversion\":\(UInt64(token.val.7)),\"resource\":\"\(esc(p))\"," +
-                   "\"op\":\"\(esc(opStr))\",\"ts\":\(Int(Date().timeIntervalSince1970))}"
+                   "\"pidversion\":\(UInt64(token.val.7)),\"strength\":\(strength)," +
+                   "\"resource\":\"\(esc(p))\",\"op\":\"\(esc(opStr))\"," +
+                   "\"ts\":\(Int(Date().timeIntervalSince1970))}"
         let fp = dir + "/" + id + ".json"
         writeFileNoFollow(fp, Array(json.utf8), append: false)
         if userUID >= 501 { chown(fp, userUID, userGID); chown(dir, userUID, userGID) }

@@ -152,6 +152,31 @@ int kai_grant_from_json(const char *json, kai_grant *out) {
     return out->id[0] != '\0';
 }
 
+/* Build + sign a grant from scalar/string fields and return its JSON (caller
+ * frees). For the app's approve action: every field is the app's/human's, and
+ * the identity fields come from the Kai-verified pending request, never from
+ * agent-supplied text. Keeps Swift from having to fill C fixed-size arrays. */
+char *kai_grant_build_json(const char *id, long long created, long long expires,
+                           int pid, unsigned long long pidversion, const char *agent,
+                           int strength, const char *resource, int op, int scope,
+                           const char *approved_by, const unsigned char *key, size_t keylen) {
+    kai_grant g;
+    memset(&g, 0, sizeof g);
+    kai_strlcpy(g.id, id ? id : "", sizeof g.id);
+    g.created_utc = created;
+    g.expires_utc = expires;
+    g.pid = pid;
+    g.pidversion = pidversion;
+    kai_strlcpy(g.agent, agent ? agent : "", sizeof g.agent);
+    g.strength = strength;
+    kai_strlcpy(g.resource, resource ? resource : "", sizeof g.resource);
+    g.op = op;
+    g.scope = scope;
+    kai_strlcpy(g.approved_by, approved_by ? approved_by : "", sizeof g.approved_by);
+    kai_grant_sign(&g, key, keylen);
+    return kai_grant_to_json(&g);
+}
+
 /* ---- load ---- */
 static int ends_with(const char *s, const char *suf) {
     size_t a = strlen(s), b = strlen(suf);

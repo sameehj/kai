@@ -107,6 +107,7 @@ targets:
     sources: [Sources/KaiBar, Sources/Assets.xcassets]
     dependencies:
       - target: KaiNetwork
+      - target: libkai            # Scoped Approvals: sign grants in-process (no agent-callable signing)
       - sdk: NetworkExtension.framework
       - sdk: SystemExtensions.framework
     info:
@@ -130,6 +131,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.sameehj.kai
         PRODUCT_NAME: Kai
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_INCLUDE_PATHS: $(SRCROOT)/KaiCore   # expose libkai's C API as `import KaiCore`
     postBuildScripts:
       # Ship the kai CLI inside the app; the app uses it when none is installed.
       - name: Bundle kai CLI

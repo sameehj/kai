@@ -200,6 +200,12 @@ int  kai_grant_hmac_ok(const kai_grant *g, const unsigned char *key, size_t keyl
 /* JSON (one grant per file). to_json returns a malloc'd string (caller frees). */
 char *kai_grant_to_json(const kai_grant *g);
 int   kai_grant_from_json(const char *json, kai_grant *out); /* 1 ok, 0 parse err */
+/* Build + sign a grant from scalar fields and return its JSON (caller frees).
+ * Used by the app's approve action so Swift need not fill C fixed arrays. */
+char *kai_grant_build_json(const char *id, long long created, long long expires,
+                           int pid, unsigned long long pidversion, const char *agent,
+                           int strength, const char *resource, int op, int scope,
+                           const char *approved_by, const unsigned char *key, size_t keylen);
 
 /* Load every *.json grant under dir (e.g. <home>/grants). Caller free()s *out. */
 int kai_grants_load(const char *dir, kai_grant **out, int *n);

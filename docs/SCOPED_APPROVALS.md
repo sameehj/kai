@@ -571,3 +571,62 @@ negative tests.
 *This document is the Phase 0–1 deliverable. No enforcement code has been
 changed and no live extension touched. Implementation (M0+) begins only on your
 go-ahead, and live activation (M5) only on explicit, separate authorization.*
+
+---
+
+## Implementation progress & audit (M0–M4)
+
+**Verification levels** (kept distinct on purpose):
+- **C-unit-tested** — exercised by `make test` on this machine (real decisions).
+- **compile-verified** — builds clean into the real product (Swift/extension/
+  app) but is **not** runtime-tested; it has never run live.
+- **live** — enforced by the active OS extension. **Nothing below is live.** M5
+  (live validation) is unstarted and gated on explicit human authorization.
+
+| Milestone | What | Verification |
+|---|---|---|
+| **M0** grant engine | `src/grant.c`: HMAC sign/verify, JSON, load, match, `kai_storage_decide` gate (builtin never grantable; pid+pidversion; enforcement-time expiry; exact realpath resource; weak→one-shot) | **C-unit-tested** (20 checks) |
+| **M1** CLI | `kai grant list/create/revoke`; `create` writes an UNSIGNED record (not honored) | C-unit + smoke-tested |
+| **M2** approval store | `src/approval_store.c`: rwlock snapshot, generations, debounced reload, **immediate revocation vs the running engine**, fail-closed on missing dir, **atomic one-shot consume** | **C-unit-tested** (incl. 16-thread concurrency + perf) |
+| **M4** enforcement wiring | `StorageClient.swift` behind `KAI_STORAGE_ENFORCE`: consult the store before denying a soft-protected op; async pending request + deny (callback never held); timer reload; subject strength from code-signing | **compile-verified** (sysext), not live |
+| **M3** approval UI | `Approvals.swift`: `approval.key` gen, **in-process sign only on a button click**, Deny/Allow-once/Allow-for-session, Active grants + Revoke; menu integration | **compile-verified** (app), not live |
+
+### M0–M1 security audit — findings & resolutions
+1. **One-shot double-consume under concurrency (CRITICAL)** — `kai_grant_match`
+   had no consume step. Found by the M2 concurrency test, which also exposed
+   that **this host's `unlink()` is not single-winner under concurrency**. Fixed:
+   one-shot spend is an **in-memory atomic compare-and-set** (FS-independent);
+   the file unlink is best-effort cleanup. **Resolved (M2).**
+2. **Key / human-authorization binding** — a valid HMAC proves *key possession*,
+   not *a human click*. Mitigation: the key is generated and held by the app and
+   signing happens **only in `GrantManager.approve`, reachable only from a UI
+   button**; there is **no CLI/IPC/file signing trigger**, so the storage-wall-
+   exempt `kai` binary gives an agent no signing path. Residual: symmetric HMAC
+   means the verifier (extension) also holds a signing-capable key — acceptable
+   for a first release since both are Kai-signed and expose no sign API;
+   **asymmetric signing is the hardening** for a later milestone.
+3. **Grant security inherits the storage wall** — an agent is kept from reading
+   `approval.key` only by the storage wall's control-path protection. With the
+   wall off there is no storage enforcement to bypass anyway, so the dependency
+   is coherent but **must be documented** (done here).
+4. **realpath TOCTOU** — M4 matches on the **ES-provided target path** (the
+   kernel's resolved file for the actual open) and the pending→grant→match chain
+   carries that same string, avoiding a re-`realpath()` race. Inode/fsid binding
+   is the stronger future option. Residual, documented.
+5. **Process-exit cleanup** — a process-scoped grant can't be *reused* after exit
+   (pidversion changes) but lingers until expiry. **Follow-up:** revoke on ES
+   `NOTIFY_EXIT`. Not a bypass; noted.
+6. **CLI abuse** — `create` is unsigned (not honored); `revoke` only *removes*
+   access; ids are generated and files matched from loaded records (no
+   traversal). OK.
+
+### Remaining limitations (before any security claim / M5)
+- Nothing is live-validated; M4/M3 are compile-verified only.
+- M4 opens its own policy snapshot in the store (separate from the start-only
+  `self.policy`); unify later or confirm they can't diverge in a way that
+  matters.
+- The launchd-detached read remains a demonstrated FAIL and a release blocker;
+  Scoped Approvals fails *closed* in its presence (a detached process sheds the
+  pid-binding and matches no grant), but base attribution is unfixed.
+- Asymmetric signing, inode-based resource binding, and exit-time grant cleanup
+  are identified hardenings, not yet built.

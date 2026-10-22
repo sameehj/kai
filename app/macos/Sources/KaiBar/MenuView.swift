@@ -8,6 +8,7 @@ struct MenuView: View {
     @Environment(\.openWindow) private var openWindow
     @AppStorage("settingsPage") private var settingsPage = SettingsPage.general.rawValue
     @State private var dismissedBlock: String?
+    @StateObject private var grantManager = GrantManager()
 
     private var alert: AuditEvent? {
         guard let b = model.freshBlock, b.id != dismissedBlock else { return nil }
@@ -27,6 +28,7 @@ struct MenuView: View {
                 stats
             }
             protection
+            ApprovalsSection(manager: grantManager)
             recent
             footer
         }
