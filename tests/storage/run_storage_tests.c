@@ -11,6 +11,9 @@
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <sys/stat.h>
+#include <dirent.h>
 
 static int failures;
 #define CHECK(cond, msg) do { \
@@ -244,6 +247,136 @@ static void test_grants(void) {
     kai_policy_free(pol);
 }
 
+/* ---- M2 approval store ---- */
+static void write_grant_file(const char *dir, const kai_grant *g) {
+    char fp[512];
+    snprintf(fp, sizeof fp, "%s/%s.json", dir, g->id);
+    char *js = kai_grant_to_json(g);
+    FILE *f = fopen(fp, "w");
+    if (f && js) { fputs(js, f); fclose(f); }
+    free(js);
+}
+
+typedef struct { kai_approval_store *s; kai_grant_subject sub; int allow; } th_arg;
+static void *decide_thread(void *p) {
+    th_arg *a = p;
+    char why[256];
+    a->allow = kai_approval_store_decide(a->s, "/secrets/data", NULL, KAI_OP_READ,
+                                         &a->sub, 1000, why, sizeof why);
+    return NULL;
+}
+
+static long long now_ns2(void) {
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000ll + ts.tv_nsec;
+}
+
+static void test_approval_store(void) {
+    printf("approval store (M2)\n");
+    char dir[] = "/tmp/kai-store-testXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp for store test"); return; }
+    char gdir[600], polp[600];
+    snprintf(gdir, sizeof gdir, "%s/grants", dir);
+    snprintf(polp, sizeof polp, "%s/policy", dir);
+    mkdir(gdir, 0700);
+    FILE *pf = fopen(polp, "w");
+    if (pf) { fputs("protect /secrets\n", pf); fclose(pf); }
+
+    kai_grant_subject sub = { .pid = 100, .pidversion = 5, .agent = "claude",
+                              .strength = KAI_ID_STRONG };
+    char why[256];
+
+    /* process-scoped grant: repeatable allow */
+    kai_grant pg = mkgrant("/secrets/data", KAI_OP_READ, KAI_GRANT_PROCESS,
+                           KAI_ID_STRONG, 100, 5, 1000000);
+    write_grant_file(gdir, &pg);
+
+    kai_approval_store *s = kai_approval_store_open(polp, gdir, GKEY, GKEYLEN, 0);
+    CHECK(s != NULL, "approval store opens");
+    CHECK(kai_approval_store_count(s) == 1, "store loaded one grant");
+    unsigned long gen0 = kai_approval_store_generation(s);
+
+    CHECK(kai_approval_store_decide(s, "/secrets/data", NULL, KAI_OP_READ, &sub,
+                                    1000, why, sizeof why) == 1, "process grant allows");
+    CHECK(kai_approval_store_decide(s, "/secrets/data", NULL, KAI_OP_READ, &sub,
+                                    1000, why, sizeof why) == 1, "process grant is repeatable");
+    CHECK(kai_approval_store_decide(s, "/secrets/other", NULL, KAI_OP_READ, &sub,
+                                    1000, why, sizeof why) == 0, "store denies a different resource");
+
+    /* immediate revocation against the RUNNING store (no reload) */
+    int rev = kai_approval_store_revoke(s, pg.id);
+    CHECK(rev == 1, "revoke removes the grant");
+    CHECK(kai_approval_store_generation(s) > gen0, "revoke bumps the generation");
+    CHECK(kai_approval_store_decide(s, "/secrets/data", NULL, KAI_OP_READ, &sub,
+                                    1000, why, sizeof why) == 0,
+          "revoked grant denies immediately (no reinitialization)");
+
+    /* reload picks up a newly added grant and bumps the generation */
+    kai_grant pg2 = mkgrant("/secrets/data", KAI_OP_READ, KAI_GRANT_PROCESS,
+                            KAI_ID_STRONG, 100, 5, 1000000);
+    write_grant_file(gdir, &pg2);
+    unsigned long gen1 = kai_approval_store_generation(s);
+    int swapped = kai_approval_store_reload(s, 1);
+    CHECK(swapped == 1, "force reload swaps the snapshot");
+    CHECK(kai_approval_store_generation(s) > gen1, "reload bumps the generation");
+    CHECK(kai_approval_store_decide(s, "/secrets/data", NULL, KAI_OP_READ, &sub,
+                                    1000, why, sizeof why) == 1, "reloaded grant is live");
+    kai_approval_store_revoke(s, pg2.id);
+
+    /* ONE-SHOT atomic consume under concurrency: exactly one winner */
+    kai_grant one = mkgrant("/secrets/data", KAI_OP_READ, KAI_GRANT_ONESHOT,
+                            KAI_ID_STRONG, 100, 5, 1000000);
+    write_grant_file(gdir, &one);
+    kai_approval_store_reload(s, 1);
+    enum { NTH = 16 };
+    pthread_t th[NTH];
+    th_arg args[NTH];
+    for (int i = 0; i < NTH; i++) { args[i].s = s; args[i].sub = sub; args[i].allow = -1;
+        pthread_create(&th[i], NULL, decide_thread, &args[i]); }
+    int wins = 0;
+    for (int i = 0; i < NTH; i++) { pthread_join(th[i], NULL); wins += (args[i].allow == 1); }
+    printf("  info one-shot concurrent winners = %d (expect 1)\n", wins);
+    CHECK(wins == 1, "one-shot grant consumed by exactly one of 16 concurrent deciders");
+    CHECK(kai_approval_store_decide(s, "/secrets/data", NULL, KAI_OP_READ, &sub,
+                                    1000, why, sizeof why) == 0, "one-shot denies after consumption");
+
+    kai_approval_store_close(s);
+
+    /* fail-closed: a store over a nonexistent grants dir denies protected paths */
+    kai_approval_store *s2 = kai_approval_store_open(polp, "/tmp/kai-no-such-dir-xyz",
+                                                     GKEY, GKEYLEN, 0);
+    CHECK(s2 && kai_approval_store_decide(s2, "/secrets/data", NULL, KAI_OP_READ, &sub,
+                                          1000, why, sizeof why) == 0,
+          "missing grants dir fails closed (protected path denied)");
+    CHECK(s2 && kai_approval_store_decide(s2, "/ordinary/file", NULL, KAI_OP_READ, &sub,
+                                          1000, why, sizeof why) == 1,
+          "unprotected path still allowed with no grants");
+    kai_approval_store_close(s2);
+
+    /* perf: decide throughput (read-lock + match), informational */
+    kai_grant pg3 = mkgrant("/secrets/data", KAI_OP_READ, KAI_GRANT_PROCESS,
+                            KAI_ID_STRONG, 100, 5, 1000000);
+    write_grant_file(gdir, &pg3);
+    kai_approval_store *s3 = kai_approval_store_open(polp, gdir, GKEY, GKEYLEN, 60);
+    const int N = 200000;
+    long long t0 = now_ns2();
+    volatile int acc = 0;
+    for (int i = 0; i < N; i++)
+        acc += kai_approval_store_decide(s3, "/secrets/data", NULL, KAI_OP_READ, &sub,
+                                         1000, why, sizeof why);
+    long long dt = now_ns2() - t0;
+    printf("  info store decide (process-grant allow): %.3f us/call\n", (double)dt / N / 1000.0);
+    kai_approval_store_close(s3);
+
+    /* cleanup */
+    DIR *d = opendir(gdir);
+    if (d) { struct dirent *e; char fp[700];
+        while ((e = readdir(d))) { if (e->d_name[0]=='.') continue;
+            snprintf(fp,sizeof fp,"%s/%s",gdir,e->d_name); unlink(fp); } closedir(d); }
+    unlink(polp); rmdir(gdir); rmdir(dir);
+    (void)acc;
+}
+
 int main(void) {
     printf("storage wall decisions\n");
 
@@ -309,6 +442,7 @@ int main(void) {
 
     test_profiler();
     test_grants();
+    test_approval_store();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

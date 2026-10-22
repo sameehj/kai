@@ -51,6 +51,7 @@ targets:
       - path: ../../src/storage.c
       - path: ../../src/storage_prof.c
       - path: ../../src/grant.c
+      - path: ../../src/approval_store.c
       - path: ../../src/proc.c
       - path: ../../src/shell.c
       - path: ../../third_party/cjson/cJSON.c

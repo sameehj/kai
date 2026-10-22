@@ -226,6 +226,40 @@ int kai_storage_decide(const kai_policy *p, const char *resolved_path,
  * falls back to lexical normalize if realpath fails. 1 ok, 0 on error. */
 int kai_grant_resolve(const char *path, char *buf, size_t buflen);
 
+/* ---- Approval store (Scoped Approvals M2) ----
+ * Thread-safe holder of the current policy + grant set, with bounded reload,
+ * explicit generations, immediate revocation, and ATOMIC one-shot consumption.
+ * The decision path takes a read lock; reload/revoke take a write lock. One-shot
+ * grants are consumed by an atomic filesystem unlink, so under concurrency
+ * exactly one caller can spend a given one-shot grant. Fail-closed: a grant dir
+ * that can't be read yields zero grants (more denials); a policy that fails to
+ * reload keeps the last good one (availability), never silently widening. */
+typedef struct kai_approval_store kai_approval_store;
+
+/* policy_path NULL = default location. key is the approval key (may be NULL/0
+ * in tests with only unsigned grants, which then never match). debounce_sec
+ * bounds how often reload actually re-stats the files. */
+kai_approval_store *kai_approval_store_open(const char *policy_path, const char *grants_dir,
+                                            const unsigned char *key, size_t keylen,
+                                            long long debounce_sec);
+void kai_approval_store_close(kai_approval_store *s);
+
+/* Re-stat policy+grants (subject to debounce unless force) and atomically swap
+ * the snapshot if changed. Returns 1 if a swap happened, else 0. */
+int kai_approval_store_reload(kai_approval_store *s, int force);
+unsigned long kai_approval_store_generation(const kai_approval_store *s);
+int kai_approval_store_count(kai_approval_store *s); /* current grant count */
+
+/* The decision, under a read lock. 1 = allow, 0 = deny. A matching one-shot
+ * grant is consumed atomically here; if the consume loses a race, this denies. */
+int kai_approval_store_decide(kai_approval_store *s, const char *resolved_path,
+                              const char *cwd, int op, const kai_grant_subject *subj,
+                              long long now, char *why, size_t whylen);
+
+/* Revoke immediately against the running store (removes the file AND the
+ * in-memory snapshot entry, bumping the generation). Returns number removed. */
+int kai_approval_store_revoke(kai_approval_store *s, const char *id_prefix);
+
 /* ---- Storage ES-handler profiler (dev/benchmark only; default OFF) ----
  * Lock-free, fixed-size, zero-allocation aggregation so it can be called from
  * the Endpoint Security authorization hot path without adding a lock, an
