@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <unistd.h>
 
 static int failures;
 #define CHECK(cond, msg) do { \
@@ -101,6 +102,148 @@ static void test_profiler(void) {
            (double)off / N, (double)on / N);
 }
 
+/* ---- Scoped Approvals (grant engine) ---- */
+static const unsigned char GKEY[] = "test-approval-key-0123456789abcdef";
+#define GKEYLEN (sizeof GKEY - 1)
+
+static kai_grant mkgrant(const char *res, int op, int scope, int strength,
+                         int pid, unsigned long long pv, long long expires) {
+    kai_grant g;
+    memset(&g, 0, sizeof g);
+    snprintf(g.id, sizeof g.id, "grant-%d-%d", pid, op);
+    g.created_utc = 1000;
+    g.expires_utc = expires;
+    g.pid = pid;
+    g.pidversion = pv;
+    snprintf(g.agent, sizeof g.agent, "claude");
+    g.strength = strength;
+    snprintf(g.resource, sizeof g.resource, "%s", res);
+    g.op = op;
+    g.scope = scope;
+    snprintf(g.approved_by, sizeof g.approved_by, "console-user");
+    kai_grant_sign(&g, GKEY, GKEYLEN);
+    return g;
+}
+
+static void test_grants(void) {
+    printf("scoped approvals (grant engine)\n");
+    const long long NOW = 1000;
+    kai_policy *pol = mk("protect /secrets\n");
+    CHECK(pol != NULL, "grant test policy built");
+
+    kai_grant_subject sub = { .pid = 100, .pidversion = 5, .agent = "claude",
+                              .strength = KAI_ID_STRONG };
+    char why[256];
+
+    /* HMAC sign/verify + tamper detection */
+    kai_grant g = mkgrant("/secrets/data", KAI_OP_READ, KAI_GRANT_PROCESS,
+                          KAI_ID_STRONG, 100, 5, 1000000);
+    CHECK(kai_grant_hmac_ok(&g, GKEY, GKEYLEN) == 1, "signed grant verifies");
+    kai_grant tampered = g; tampered.op = KAI_OP_WRITE; /* field changed, old mac */
+    CHECK(kai_grant_hmac_ok(&tampered, GKEY, GKEYLEN) == 0, "tampered grant fails HMAC");
+    kai_grant wrongkey = g;
+    CHECK(kai_grant_hmac_ok(&wrongkey, (const unsigned char *)"nope", 4) == 0,
+          "grant signed with another key fails HMAC");
+
+    /* 1. no grant -> soft-protected path denied */
+    CHECK(kai_storage_decide(pol, "/secrets/data", NULL, KAI_OP_READ, &sub,
+                             NULL, 0, NOW, GKEY, GKEYLEN, why, sizeof why) == 0,
+          "unauthorized read of protected path denied");
+
+    /* 2. a matching grant allows exactly that resource+op */
+    CHECK(kai_storage_decide(pol, "/secrets/data", NULL, KAI_OP_READ, &sub,
+                             &g, 1, NOW, GKEY, GKEYLEN, why, sizeof why) == 1,
+          "grant permits the intended resource+op");
+
+    /* 3. unrelated protected resource stays denied (exact match, symlink-safe) */
+    CHECK(kai_storage_decide(pol, "/secrets/other", NULL, KAI_OP_READ, &sub,
+                             &g, 1, NOW, GKEY, GKEYLEN, why, sizeof why) == 0,
+          "grant does not cover a different protected file");
+
+    /* 4. op mismatch denied */
+    CHECK(kai_storage_decide(pol, "/secrets/data", NULL, KAI_OP_WRITE, &sub,
+                             &g, 1, NOW, GKEY, GKEYLEN, why, sizeof why) == 0,
+          "grant for read does not allow write");
+
+    /* 5. expiry (enforcement-time) */
+    kai_grant expg = mkgrant("/secrets/data", KAI_OP_READ, KAI_GRANT_PROCESS,
+                             KAI_ID_STRONG, 100, 5, 500 /* already past at NOW=1000 */);
+    CHECK(kai_storage_decide(pol, "/secrets/data", NULL, KAI_OP_READ, &sub,
+                             &expg, 1, NOW, GKEY, GKEYLEN, why, sizeof why) == 0,
+          "expired grant denied");
+
+    /* 6/7/8. different process (reuse / child / concurrent session) cannot reuse */
+    kai_grant_subject other = { .pid = 999, .pidversion = 5, .agent = "claude",
+                                .strength = KAI_ID_STRONG };
+    CHECK(kai_storage_decide(pol, "/secrets/data", NULL, KAI_OP_READ, &other,
+                             &g, 1, NOW, GKEY, GKEYLEN, why, sizeof why) == 0,
+          "a different pid cannot reuse the grant");
+    kai_grant_subject reused = { .pid = 100, .pidversion = 6, .agent = "claude",
+                                 .strength = KAI_ID_STRONG };
+    CHECK(kai_storage_decide(pol, "/secrets/data", NULL, KAI_OP_READ, &reused,
+                             &g, 1, NOW, GKEY, GKEYLEN, why, sizeof why) == 0,
+          "same pid, new pidversion (reuse/re-exec) cannot reuse the grant");
+
+    /* 11. agent-forged grant (bad HMAC) is never honored */
+    kai_grant forged = mkgrant("/secrets/data", KAI_OP_READ, KAI_GRANT_PROCESS,
+                               KAI_ID_STRONG, 100, 5, 1000000);
+    snprintf(forged.hmac, sizeof forged.hmac,
+             "0000000000000000000000000000000000000000000000000000000000000000");
+    CHECK(kai_storage_decide(pol, "/secrets/data", NULL, KAI_OP_READ, &sub,
+                             &forged, 1, NOW, GKEY, GKEYLEN, why, sizeof why) == 0,
+          "grant with a forged HMAC is not honored");
+
+    /* builtin/control path: NO grant can override it */
+    kai_grant ctrl = mkgrant("/home/u/.claude/settings.json", KAI_OP_READ,
+                             KAI_GRANT_PROCESS, KAI_ID_STRONG, 100, 5, 1000000);
+    CHECK(kai_storage_decide(pol, "/home/u/.claude/settings.json", NULL, KAI_OP_READ,
+                             &sub, &ctrl, 1, NOW, GKEY, GKEYLEN, why, sizeof why) == 0,
+          "a grant cannot override an un-exemptable control path");
+
+    /* weak identity: eligible for one-shot only, never process scope */
+    kai_grant_subject weak = { .pid = 100, .pidversion = 5, .agent = "claude",
+                               .strength = KAI_ID_WEAK };
+    kai_grant wkproc = mkgrant("/secrets/data", KAI_OP_READ, KAI_GRANT_PROCESS,
+                               KAI_ID_WEAK, 100, 5, 1000000);
+    CHECK(kai_storage_decide(pol, "/secrets/data", NULL, KAI_OP_READ, &weak,
+                             &wkproc, 1, NOW, GKEY, GKEYLEN, why, sizeof why) == 0,
+          "weak identity cannot hold a process-scoped grant");
+    kai_grant wkone = mkgrant("/secrets/data", KAI_OP_READ, KAI_GRANT_ONESHOT,
+                              KAI_ID_WEAK, 100, 5, 1000000);
+    CHECK(kai_storage_decide(pol, "/secrets/data", NULL, KAI_OP_READ, &weak,
+                             &wkone, 1, NOW, GKEY, GKEYLEN, why, sizeof why) == 1,
+          "weak identity may hold a one-shot grant");
+
+    /* JSON round-trip preserves fields and HMAC validity */
+    char *js = kai_grant_to_json(&g);
+    CHECK(js != NULL, "grant serializes to JSON");
+    kai_grant back;
+    CHECK(js && kai_grant_from_json(js, &back) == 1, "grant parses back from JSON");
+    CHECK(kai_grant_hmac_ok(&back, GKEY, GKEYLEN) == 1, "round-tripped grant still verifies");
+    free(js);
+
+    /* load from a directory */
+    char dir[] = "/tmp/kai-grant-testXXXXXX";
+    if (mkdtemp(dir)) {
+        char fp[512];
+        snprintf(fp, sizeof fp, "%s/g.json", dir);
+        char *j2 = kai_grant_to_json(&g);
+        FILE *f = fopen(fp, "w");
+        if (f && j2) { fputs(j2, f); fclose(f); }
+        free(j2);
+        kai_grant *loaded = NULL; int ln = 0;
+        kai_grants_load(dir, &loaded, &ln);
+        CHECK(ln == 1, "grants load from directory");
+        CHECK(ln == 1 && kai_grant_match(loaded, ln, &sub, "/secrets/data",
+                                         KAI_OP_READ, NOW, GKEY, GKEYLEN) == 0,
+              "loaded grant matches the subject");
+        free(loaded);
+        unlink(fp); rmdir(dir);
+    }
+
+    kai_policy_free(pol);
+}
+
 int main(void) {
     printf("storage wall decisions\n");
 
@@ -165,6 +308,7 @@ int main(void) {
     kai_policy_free(p);
 
     test_profiler();
+    test_grants();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

@@ -82,12 +82,16 @@ static void sha256_final(sha256_ctx *c, uint8_t out[32]) {
     }
 }
 
-void kai_sha256_hex(const void *data, size_t n, char out[65]) {
+void kai_sha256(const void *data, size_t n, uint8_t out[32]) {
     sha256_ctx c;
-    uint8_t d[32];
     sha256_init(&c);
     sha256_update(&c, data, n);
-    sha256_final(&c, d);
+    sha256_final(&c, out);
+}
+
+void kai_sha256_hex(const void *data, size_t n, char out[65]) {
+    uint8_t d[32];
+    kai_sha256(data, n, d);
     static const char hx[] = "0123456789abcdef";
     for (int i = 0; i < 32; i++) { out[i*2]=hx[d[i]>>4]; out[i*2+1]=hx[d[i]&15]; }
     out[64] = '\0';

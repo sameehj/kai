@@ -157,6 +157,75 @@ kai_storage_mode kai_policy_storage_mode(const kai_policy *p);
 int kai_storage_open_allowed(const kai_policy *p, int is_agent, int write,
                              const char *path, char *why, size_t whylen);
 
+/* ---- Scoped Approvals (M0 engine) ----
+ * A grant narrows an existing denial for one verified identity, one resource,
+ * one operation, for a bounded time. It can turn a SOFT-protected path into
+ * allow, but NEVER an un-exemptable (builtin/control) path such as ~/.kai or an
+ * agent's hook config. A grant is honored only if its HMAC verifies under the
+ * approval key — which lives in a control-path-protected file the agent cannot
+ * read — so an agent that writes a grant file cannot forge consent. See
+ * docs/SCOPED_APPROVALS.md. Nothing here changes a wall's live state. */
+typedef enum { KAI_OP_READ = 0, KAI_OP_WRITE = 1, KAI_OP_CONNECT = 2 } kai_grant_op;
+typedef enum { KAI_GRANT_PROCESS = 0, KAI_GRANT_ONESHOT = 1 } kai_grant_scope;
+typedef enum { KAI_ID_WEAK = 0, KAI_ID_MEDIUM = 1, KAI_ID_STRONG = 2 } kai_identity_strength;
+
+#define KAI_GRANT_RES_MAX 1024
+typedef struct {
+    char id[40];
+    long long created_utc;      /* epoch seconds                               */
+    long long expires_utc;      /* epoch seconds; checked at enforcement time  */
+    int pid;                    /* subject process                             */
+    unsigned long long pidversion; /* audit-token pidversion (defeats pid reuse) */
+    char agent[64];             /* classified agent name                       */
+    int strength;               /* kai_identity_strength at issue time         */
+    char resource[KAI_GRANT_RES_MAX]; /* canonical abs path (realpath) or endpoint */
+    int op;                     /* kai_grant_op                                */
+    int scope;                  /* kai_grant_scope                             */
+    char approved_by[32];       /* "console-user" | "cli" (informational)      */
+    char hmac[65];              /* hex HMAC-SHA256 over the canonical form      */
+} kai_grant;
+
+/* The requesting process, at enforcement time. */
+typedef struct {
+    int pid;
+    unsigned long long pidversion;
+    const char *agent;          /* classified name, or NULL                    */
+    int strength;               /* kai_identity_strength                       */
+} kai_grant_subject;
+
+/* Sign / verify a grant's canonical form with the approval key (raw bytes). */
+void kai_grant_sign(kai_grant *g, const unsigned char *key, size_t keylen);
+int  kai_grant_hmac_ok(const kai_grant *g, const unsigned char *key, size_t keylen);
+
+/* JSON (one grant per file). to_json returns a malloc'd string (caller frees). */
+char *kai_grant_to_json(const kai_grant *g);
+int   kai_grant_from_json(const char *json, kai_grant *out); /* 1 ok, 0 parse err */
+
+/* Load every *.json grant under dir (e.g. <home>/grants). Caller free()s *out. */
+int kai_grants_load(const char *dir, kai_grant **out, int *n);
+
+/* Index of a grant that authorizes (subject, resolved_path, op) at time `now`
+ * with a valid HMAC, not expired, and identity bound (pid+pidversion+agent);
+ * weak identities are eligible only for one-shot scope. Else -1. Resource match
+ * is EXACT on the canonical path, so a symlink to another file cannot widen it. */
+int kai_grant_match(const kai_grant *grants, int n, const kai_grant_subject *s,
+                    const char *resolved_path, int op, long long now,
+                    const unsigned char *key, size_t keylen);
+
+/* The storage enforcement gate WITH grants. Returns 1 = allow, 0 = deny.
+ * not-protected -> allow; un-exemptable (builtin/control) -> deny (no grant can
+ * override); soft-protected with a matching valid grant -> allow; else deny.
+ * Fills why with the matched rule (or "scoped grant" when a grant allowed it). */
+int kai_storage_decide(const kai_policy *p, const char *resolved_path,
+                       const char *cwd, int op, const kai_grant_subject *s,
+                       const kai_grant *grants, int ngrants, long long now,
+                       const unsigned char *key, size_t keylen,
+                       char *why, size_t whylen);
+
+/* realpath() wrapper (resolves symlinks) to canonicalize before store/match;
+ * falls back to lexical normalize if realpath fails. 1 ok, 0 on error. */
+int kai_grant_resolve(const char *path, char *buf, size_t buflen);
+
 /* ---- Storage ES-handler profiler (dev/benchmark only; default OFF) ----
  * Lock-free, fixed-size, zero-allocation aggregation so it can be called from
  * the Endpoint Security authorization hot path without adding a lock, an
