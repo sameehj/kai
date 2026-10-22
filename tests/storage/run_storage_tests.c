@@ -14,6 +14,7 @@
 #include <pthread.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <stdint.h>
 
 static int failures;
 #define CHECK(cond, msg) do { \
@@ -281,6 +282,42 @@ static long long now_ns2(void) {
     return (long long)ts.tv_sec * 1000000000ll + ts.tv_nsec;
 }
 
+/* Concurrency-during-mutation: deciders race a mutator that rewrites the policy
+ * file, churns a grant file, and force-reloads. Shared context (single test). */
+static struct { kai_approval_store *s; char polp[600]; char gdir[600]; volatile int stop; } MUT;
+
+static void *mut_decider(void *p) {   /* returns count of ILLEGAL control-path allows */
+    long ctrl_allowed = 0;
+    kai_grant_subject sub = { .pid = 100, .pidversion = 5, .agent = "claude", .strength = KAI_ID_STRONG };
+    char why[256];
+    for (int i = 0; i < 4000; i++) {
+        long long now = (long long)time(NULL);
+        kai_approval_store_decide(MUT.s, "/secrets/data", NULL, KAI_OP_READ, &sub, now, why, sizeof why);
+        /* a builtin/control path must NEVER be granted, even mid-mutation */
+        if (kai_approval_store_decide(MUT.s, "/home/u/.claude/settings.json", NULL,
+                                      KAI_OP_READ, &sub, now, why, sizeof why) == 1) ctrl_allowed++;
+    }
+    (void)p;
+    return (void *)(intptr_t)ctrl_allowed;
+}
+
+static void *mut_mutator(void *p) {
+    (void)p;
+    kai_grant churn = mkgrant("/secrets/churn", KAI_OP_READ, KAI_GRANT_PROCESS,
+                              KAI_ID_STRONG, 100, 5, (long long)time(NULL) + 3600);
+    char fp[700];
+    snprintf(fp, sizeof fp, "%s/%s.json", MUT.gdir, churn.id);
+    for (int i = 0; !MUT.stop && i < 100000; i++) {
+        FILE *f = fopen(MUT.polp, "w");                 /* rewrite policy (mtime churn) */
+        if (f) { fputs((i & 1) ? "protect /secrets\nprotect /other\n" : "protect /secrets\n", f); fclose(f); }
+        if (i & 1) { char *js = kai_grant_to_json(&churn); FILE *g = fopen(fp, "w");
+                     if (g && js) { fputs(js, g); fclose(g); } free(js); }
+        else unlink(fp);
+        kai_approval_store_reload(MUT.s, 1);            /* concurrent atomic snapshot swaps */
+    }
+    return NULL;
+}
+
 static void test_approval_store(void) {
     printf("approval store (M2)\n");
     char dir[] = "/tmp/kai-store-testXXXXXX";
@@ -420,6 +457,27 @@ static void test_approval_store(void) {
     long long dt = now_ns2() - t0;
     printf("  info store decide (process-grant allow): %.3f us/call\n", (double)dt / N / 1000.0);
     kai_approval_store_close(s3);
+
+    /* item 2: deliberate policy + grant mutation DURING concurrent decisions.
+     * Invariants: no crash, and a hard-deny (control) path is NEVER granted even
+     * while the policy file is being rewritten (incl. torn reads) and grants
+     * churn under concurrent force-reloads. The store fails safe to last-good on
+     * an unparseable policy; control detection is policy-independent. */
+    kai_grant mg = mkgrant("/secrets/data", KAI_OP_READ, KAI_GRANT_PROCESS, KAI_ID_STRONG, 100, 5, FUTURE);
+    write_grant_file(gdir, &mg);
+    kai_approval_store *sm = kai_approval_store_open(polp, gdir, GKEY, GKEYLEN, 0);
+    MUT.s = sm; snprintf(MUT.polp, sizeof MUT.polp, "%s", polp);
+    snprintf(MUT.gdir, sizeof MUT.gdir, "%s", gdir); MUT.stop = 0;
+    pthread_t dth[6], mth;
+    pthread_create(&mth, NULL, mut_mutator, NULL);
+    long ctrl = 0;
+    for (int i = 0; i < 6; i++) pthread_create(&dth[i], NULL, mut_decider, NULL);
+    for (int i = 0; i < 6; i++) { void *r = NULL; pthread_join(dth[i], &r); ctrl += (long)(intptr_t)r; }
+    MUT.stop = 1; pthread_join(mth, NULL);
+    CHECK(ctrl == 0, "hard-deny control path never granted during concurrent policy+grant mutation");
+    kai_approval_store_close(sm);
+    /* restore a clean policy for any later use */
+    { FILE *f = fopen(polp, "w"); if (f) { fputs("protect /secrets\n", f); fclose(f); } }
 
     /* cleanup */
     DIR *d = opendir(gdir);

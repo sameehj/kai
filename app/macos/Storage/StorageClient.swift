@@ -132,18 +132,27 @@ final class StorageClient {
     private var pendingSeen = Set<String>()           // dedup approval requests
 
     private func openGrantStore() {
+        // Open the authorization snapshot ALWAYS (even with no key): it is the
+        // single coherent (policy + grants) snapshot, reloaded atomically, that
+        // both the protect gate and the grant decision read -- so there is no
+        // self.policy/grant-policy divergence, and a protect rule added after
+        // start IS enforced. Without a key, grants simply can't be honored
+        // (HMAC can't verify), so the store is policy-only.
         let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
-        let keyPath = home + "/.kai/approval.key"
-        guard let key = FileManager.default.contents(atPath: keyPath), !key.isEmpty else {
-            dlog("grants: no approval key; scoped approvals disabled"); return
-        }
         let gdir = home + "/.kai/grants"
-        key.withUnsafeBytes { raw in
-            if let base = raw.bindMemory(to: UInt8.self).baseAddress {
-                grantStore = kai_approval_store_open(nil, gdir, base, key.count, 2)
+        let key = FileManager.default.contents(atPath: home + "/.kai/approval.key") ?? Data()
+        if key.isEmpty {
+            grantStore = kai_approval_store_open(nil, gdir, nil, 0, 2)
+            dlog("grants: store opened policy-only (no approval key; grants not honored)")
+        } else {
+            key.withUnsafeBytes { raw in
+                if let base = raw.bindMemory(to: UInt8.self).baseAddress {
+                    grantStore = kai_approval_store_open(nil, gdir, base, key.count, 2)
+                }
             }
+            dlog("grants: store opened with approval key")
         }
-        if grantStore != nil { dlog("grants: store opened (\(gdir))"); scheduleGrantReload() }
+        if grantStore != nil { scheduleGrantReload() }
     }
 
     /// Re-read policy+grants on a timer (the store debounces the re-stat), so a
@@ -464,7 +473,16 @@ final class StorageClient {
         var why = [CChar](repeating: 0, count: 256)
         let tPolicy = timed ? nowTicks() : 0
         for p in paths where !p.isEmpty {
-            if kai_path_protected(pol, p, nil, &why, why.count) == 1 {
+            // Protect check over the ONE coherent snapshot: the grant store's
+            // reloaded policy when it is open (enforce builds), else self.policy.
+            var hit = false
+            #if KAI_STORAGE_ENFORCE
+            if let gs = grantStore { hit = kai_approval_store_protected(gs, p, nil, &why, why.count) == 1 }
+            else { hit = kai_path_protected(pol, p, nil, &why, why.count) == 1 }
+            #else
+            hit = kai_path_protected(pol, p, nil, &why, why.count) == 1
+            #endif
+            if hit {
                 if timed { prof(.policy, tPolicy, nowTicks()) }
                 let reason = String(cString: why)
                 if enforce && mode == KAI_STORAGE_BLOCK {

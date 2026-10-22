@@ -233,6 +233,15 @@ int kai_approval_store_decide(kai_approval_store *s, const char *resolved_path,
     return allow;
 }
 
+int kai_approval_store_protected(kai_approval_store *s, const char *path,
+                                 const char *cwd, char *why, size_t whylen) {
+    if (!s) return 0;
+    pthread_rwlock_rdlock(&s->lock);
+    int r = kai_path_protected(s->policy, path, cwd, why, whylen);
+    pthread_rwlock_unlock(&s->lock);
+    return r;
+}
+
 int kai_approval_store_revoke(kai_approval_store *s, const char *id_prefix) {
     if (!s || !id_prefix || !*id_prefix) return 0;
     pthread_rwlock_wrlock(&s->lock);

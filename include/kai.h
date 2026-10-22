@@ -276,6 +276,13 @@ int kai_approval_store_decide(kai_approval_store *s, const char *resolved_path,
  * in-memory snapshot entry, bumping the generation). Returns number removed. */
 int kai_approval_store_revoke(kai_approval_store *s, const char *id_prefix);
 
+/* kai_path_protected over the store's CURRENT policy snapshot, under the read
+ * lock. Lets a caller make the "is this protected / which rule" check against
+ * the same coherent, reloaded snapshot the grant decision uses, instead of a
+ * separately-loaded policy. Returns 1 protected (fills why), else 0. */
+int kai_approval_store_protected(kai_approval_store *s, const char *path,
+                                 const char *cwd, char *why, size_t whylen);
+
 /* ---- Storage ES-handler profiler (dev/benchmark only; default OFF) ----
  * Lock-free, fixed-size, zero-allocation aggregation so it can be called from
  * the Endpoint Security authorization hot path without adding a lock, an
