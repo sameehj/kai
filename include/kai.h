@@ -129,6 +129,13 @@ int kai_egress_entry_valid(const char *entry);
  * (its own ~/.kai, the agents' hook settings) rather than a user secret rule?
  * `rule` is the value kai_path_protected / the storage wall fill into `why`. */
 int kai_rule_is_builtin(const char *rule);
+/* True if the matched builtin rule is Kai's own home (~/.kai): reads stay
+ * blocked for agents (it holds the policy, audit log and approval key). */
+int kai_rule_is_kai_home(const char *rule);
+/* True if the matched builtin rule is an agent hook-config control path whose
+ * READS are safe to allow (so the agent can start and Kai's hooks can load);
+ * WRITES to it must still be blocked by the caller (anti-tamper). */
+int kai_control_read_allowed(const char *rule);
 
 /* Extract the server name (SNI) from the start of a TLS ClientHello.
  * Returns 1 and fills host if found, 0 if this is not TLS or carries no SNI,

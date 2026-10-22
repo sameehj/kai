@@ -245,6 +245,14 @@ static void test_grants(void) {
         unlink(fp); rmdir(dir);
     }
 
+    /* read-allow / write-block classification of control paths */
+    CHECK(kai_control_read_allowed(".claude/settings.json") == 1, "agent may READ its Claude hook config");
+    CHECK(kai_control_read_allowed(".cursor/hooks.json") == 1, "agent may READ its Cursor hook config");
+    CHECK(kai_control_read_allowed(".codex/config.toml") == 1, "agent may READ its Codex config");
+    CHECK(kai_control_read_allowed("~/.kai") == 0, "agent may NOT read Kai's home (key/audit/policy)");
+    CHECK(kai_rule_is_kai_home("~/.kai") == 1, "Kai home is recognized");
+    CHECK(kai_control_read_allowed(".env") == 0, "a secret rule is not a readable control path");
+
     kai_policy_free(pol);
 }
 

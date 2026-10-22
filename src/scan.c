@@ -272,6 +272,22 @@ static int agent_control_path(const char *np, char *why, size_t whylen) {
     return 0;
 }
 
+/* Is this matched rule Kai's own home (~/.kai / self-protect)? That tree holds
+ * the policy, audit log and approval key, so agent reads stay blocked. */
+int kai_rule_is_kai_home(const char *rule) {
+    return rule && (!strcmp(rule, "kai_self_protect") || !strcmp(rule, "~/.kai"));
+}
+
+/* A builtin control path whose READS are safe to allow an agent: its own hook
+ * config (.claude/settings.json, .cursor/hooks.json, codex hooks/config, the
+ * native host manifest) -- an agent must read these to start, Kai's hooks live
+ * there,
+ * so blocking the read is self-defeating. WRITES to them are still blocked by
+ * the caller (anti-tamper). Kai's own home is excluded (reads stay blocked). */
+int kai_control_read_allowed(const char *rule) {
+    return kai_rule_is_builtin(rule) && !kai_rule_is_kai_home(rule);
+}
+
 int kai_rule_is_builtin(const char *rule) {
     if (!rule || !*rule) return 0;
     if (!strcmp(rule, "kai_self_protect") || !strcmp(rule, "~/.kai")) return 1;

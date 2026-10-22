@@ -56,6 +56,12 @@ final class StorageClient {
         kai_prof_record(s.rawValue, ticksToNs(t1 &- t0))
     }
 
+    /// Does this open() carry write intent? Read-only opens of an agent's own
+    /// hook config are allowed; writes to it are blocked (anti-tamper).
+    @inline(__always) private func openIsWrite(_ fflag: Int32) -> Bool {
+        (fflag & O_ACCMODE) != O_RDONLY || (fflag & (O_CREAT | O_TRUNC | O_APPEND)) != 0
+    }
+
     // Filesystem auth events the wall authorizes. ES_EVENT_TYPE_AUTH_READDIR
     // exists (verified in the SDK), so directory enumeration is authorized in
     // its own right, not only via AUTH_OPEN of the directory.
@@ -388,12 +394,13 @@ final class StorageClient {
             let p = pid(msg.pointee.process)
             lock.lock(); agentCache[p] = nil; lock.unlock()
         case ES_EVENT_TYPE_NOTIFY_OPEN:
-            _ = authorize(msg, paths: [path(msg.pointee.event.open.file)], op: "open", enforce: false)
+            _ = authorize(msg, paths: [path(msg.pointee.event.open.file)], op: "open", enforce: false, write: false)
         case ES_EVENT_TYPE_AUTH_OPEN:
             let t0 = profiling ? nowTicks() : 0
             let p = path(msg.pointee.event.open.file)
             let tPaths = profiling ? nowTicks() : 0
-            let allow = authorize(msg, paths: [p], op: "open", enforce: true, timed: profiling, t0: t0, tPaths: tPaths)
+            let w = openIsWrite(msg.pointee.event.open.fflag)
+            let allow = authorize(msg, paths: [p], op: "open", enforce: true, write: w, timed: profiling, t0: t0, tPaths: tPaths)
             let tResp = profiling ? nowTicks() : 0
             if let c = client { es_respond_flags_result(c, msg, allow ? .max : 0, false) }
             finishTiming(msg, t0: t0, tResp: tResp)
@@ -401,7 +408,9 @@ final class StorageClient {
             let t0 = profiling ? nowTicks() : 0
             let (paths, op) = extractPaths(msg)
             let tPaths = profiling ? nowTicks() : 0
-            let allow = authorize(msg, paths: paths, op: op, enforce: true, timed: profiling, t0: t0, tPaths: tPaths)
+            // readdir is a read; every other gated event mutates the target.
+            let allow = authorize(msg, paths: paths, op: op, enforce: true, write: op != "readdir",
+                                  timed: profiling, t0: t0, tPaths: tPaths)
             let tResp = profiling ? nowTicks() : 0
             if let c = client { es_respond_auth_result(c, msg, allow ? ES_AUTH_RESULT_ALLOW : ES_AUTH_RESULT_DENY, false) }
             finishTiming(msg, t0: t0, tResp: tResp)
@@ -458,7 +467,8 @@ final class StorageClient {
     }
 
     private func authorize(_ msg: UnsafePointer<es_message_t>, paths: [String], op: String,
-                           enforce: Bool, timed: Bool = false, t0: UInt64 = 0, tPaths: UInt64 = 0) -> Bool {
+                           enforce: Bool, write: Bool = true,
+                           timed: Bool = false, t0: UInt64 = 0, tPaths: UInt64 = 0) -> Bool {
         if timed { prof(.path, t0, tPaths) }
         let proc = msg.pointee.process
         let tClassify = timed ? nowTicks() : 0
@@ -485,6 +495,11 @@ final class StorageClient {
             if hit {
                 if timed { prof(.policy, tPolicy, nowTicks()) }
                 let reason = String(cString: why)
+                // An agent READING its own hook config (not Kai's home, not a
+                // secret) is allowed: it must to start, and Kai's hooks live
+                // there, so blocking the read is self-defeating. WRITES to it are
+                // still blocked below (anti-tamper); Kai's home stays read-blocked.
+                if !write && kai_control_read_allowed(why) == 1 { return true }
                 if enforce && mode == KAI_STORAGE_BLOCK {
                     #if KAI_STORAGE_ENFORCE
                     // A valid, human-approved grant can allow a soft-protected

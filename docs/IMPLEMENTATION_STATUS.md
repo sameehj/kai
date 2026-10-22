@@ -88,7 +88,7 @@ All of §2 is pure C and covered by `tests/run_tests` (106 checks, 0 failures).
 | Audit now records the **file path** (not just the rule) | V | `StorageClient.swift` v12 |
 | In-handler stage profiler (lock-free, default off) | V | `storage_prof.c` |
 | **Everything fails OPEN** (unresolved path / nil client / classification fail / policy load fail → allow) | V | by design, `main.swift:9-11` |
-| Read vs write **not distinguished** (`write` param ignored) | V | `storage.c:26` |
+| Read vs write: agent hook-config control paths are **write-blocked, read-allowed** (Claude/Cursor/Codex can start + Kai's hooks load); `~/.kai` and secrets stay read+write blocked | V / U | `scan.c kai_control_read_allowed`, `StorageClient.swift openIsWrite` (v15) |
 | Path handling is **lexical only** — no realpath/lstat; symlink/hardlink/inode not resolved | V/M | `util.c:120-153` |
 | **Live policy reload** (reloadPolicy called only at start; no re-poll) | P/M | `StorageClient.swift:102` |
 | ES deadline overrun protection (margin measured, not enforced) | M | — |
