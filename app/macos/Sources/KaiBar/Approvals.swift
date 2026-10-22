@@ -121,14 +121,22 @@ final class GrantManager: ObservableObject {
         let fp = grantsDir + "/" + gid + ".json"
         if FileManager.default.createFile(atPath: fp, contents: Data(json.utf8),
                                           attributes: [.posixPermissions: 0o600]) {
+            kai_grant_audit("approved", gid, req.agent, req.resource, opCode,
+                            "sign", "approved by console user")
             clearPending(req)
         }
         refresh()
     }
 
-    func deny(_ req: PendingRequest) { clearPending(req); refresh() }
+    func deny(_ req: PendingRequest) {
+        let opCode: Int32 = (req.op == "open" || req.op == "readdir") ? 0 : 1
+        kai_grant_audit("denied", req.id, req.agent, req.resource, opCode, "deny", "denied by user")
+        clearPending(req); refresh()
+    }
 
     func revoke(_ grant: ActiveGrant) {
+        kai_grant_audit("revoked", grant.id, grant.agent, grant.resource, Int32(grant.op),
+                        "revoke", "revoked by user")
         try? FileManager.default.removeItem(atPath: grantsDir + "/" + grant.id + ".json")
         refresh()
     }

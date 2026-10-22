@@ -23,9 +23,11 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -91,6 +93,32 @@ static void load_snapshot(kai_approval_store *s, int first) {
     kai_grant *ng = NULL;
     int nn = 0;
     kai_grants_load(s->grants_dir, &ng, &nn); /* missing dir => 0 grants */
+
+    /* Cleanup pass (off the hot path, under the write lock): drop and AUDIT any
+     * grant with an invalid signature or past its expiry, and unlink its file so
+     * it isn't re-audited next reload. Expiry is thus recorded at reload/cleanup
+     * time, NOT at the instant the TTL elapses -- there is no background expiry
+     * worker; a grant also simply fails to match once expired (checked again at
+     * decision time). Auditing here is a side effect and never affects whether a
+     * grant is dropped (fail-closed regardless). */
+    long long now = (long long)time(NULL);
+    int kept = 0;
+    for (int i = 0; i < nn; i++) {
+        int bad = (s->keylen && !kai_grant_hmac_ok(&ng[i], s->key, s->keylen));
+        int expired = (!bad && ng[i].expires_utc != 0 && now >= ng[i].expires_utc);
+        if (bad || expired) {
+            kai_grant_audit(bad ? "rejected" : "expired", ng[i].id, ng[i].agent,
+                            ng[i].resource, ng[i].op, bad ? "reject" : "expire",
+                            bad ? "invalid signature" : "ttl elapsed");
+            char fp[PATH_MAX];
+            if (snprintf(fp, sizeof fp, "%s/%s.json", s->grants_dir, ng[i].id) < (int)sizeof fp)
+                unlink(fp);
+            continue;
+        }
+        ng[kept++] = ng[i];
+    }
+    nn = kept;
+
     free(s->grants);
     free(s->consumed);
     s->grants = ng;
@@ -164,10 +192,18 @@ int kai_approval_store_count(kai_approval_store *s) {
  * reload. Called under the read lock; the atomic flag is safe there. 1 = we won. */
 static int consume_oneshot(kai_approval_store *s, int idx) {
     unsigned char prev = atomic_exchange_explicit(&s->consumed[idx], 1, memory_order_acq_rel);
-    if (prev != 0) return 0;                 /* already spent by another decider */
+    if (prev != 0) return 0;                 /* already spent in-process by another decider */
+    /* Persist the spend BEFORE allowing, so it is durable across reload/restart
+     * (kai_grants_load skips a grant whose ".used" marker exists). The in-memory
+     * atomic above only serializes concurrent deciders within this process; this
+     * marker is the durable single-use record. */
     char fp[PATH_MAX];
+    if (snprintf(fp, sizeof fp, "%s/%s.used", s->grants_dir, s->grants[idx].id) < (int)sizeof fp) {
+        int fd = open(fp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+        if (fd >= 0) { time_t t = time(NULL); dprintf(fd, "%lld\n", (long long)t); close(fd); }
+    }
     if (snprintf(fp, sizeof fp, "%s/%s.json", s->grants_dir, s->grants[idx].id) < (int)sizeof fp)
-        unlink(fp);                          /* best-effort; not the invariant */
+        unlink(fp);                          /* best-effort cleanup of the grant file */
     return 1;
 }
 
@@ -207,6 +243,8 @@ int kai_approval_store_revoke(kai_approval_store *s, const char *id_prefix) {
             char fp[PATH_MAX];
             if (snprintf(fp, sizeof fp, "%s/%s.json", s->grants_dir, s->grants[i].id) < (int)sizeof fp)
                 unlink(fp);
+            kai_grant_audit("revoked", s->grants[i].id, s->grants[i].agent,
+                            s->grants[i].resource, s->grants[i].op, "revoke", "revoked by user");
             int tail = s->ngrants - i - 1;
             memmove(&s->grants[i], &s->grants[i + 1], (size_t)tail * sizeof s->grants[0]);
             if (s->consumed)   /* keep the parallel one-shot flags aligned */

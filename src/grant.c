@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 void kai_sha256(const void *data, size_t n, uint8_t out[32]); /* src/sha256.c */
 
@@ -152,6 +153,28 @@ int kai_grant_from_json(const char *json, kai_grant *out) {
     return out->id[0] != '\0';
 }
 
+/* Write a structured grant lifecycle audit record. Logs only identifiers (grant
+ * id, resource path, agent name, action, outcome, short reason) -- never a key,
+ * file contents, or credential. source="grant"; the hash chain covers it like
+ * any other record. Auditing is a side effect: it never gates a decision. */
+void kai_grant_audit(const char *action, const char *id, const char *agent,
+                     const char *resource, int op, const char *outcome, const char *reason) {
+    const char *ops = op == KAI_OP_WRITE ? "write" : op == KAI_OP_CONNECT ? "connect" : "read";
+    char detail[512];
+    snprintf(detail, sizeof detail, "grant %s id=%s agent=%s%s%s",
+             action ? action : "?", id ? id : "?", agent ? agent : "?",
+             (reason && *reason) ? " " : "", (reason && *reason) ? reason : "");
+    kai_audit_entry e;
+    memset(&e, 0, sizeof e);
+    e.source = "grant";
+    e.event = action ? action : "grant";
+    e.decision = outcome ? outcome : "note";
+    e.rule = ops;
+    e.detail = detail;
+    e.target = resource;
+    kai_audit_write(&e);
+}
+
 /* Build + sign a grant from scalar/string fields and return its JSON (caller
  * frees). For the app's approve action: every field is the app's/human's, and
  * the identity fields come from the Kai-verified pending request, never from
@@ -183,6 +206,20 @@ static int ends_with(const char *s, const char *suf) {
     return a >= b && strcmp(s + a - b, suf) == 0;
 }
 
+/* A one-shot grant that has been spent leaves a durable "<dir>/<id>.used"
+ * marker (written by the store on consume). A grant whose marker exists is
+ * treated as already consumed and is NOT loaded, so a spent one-shot stays
+ * spent across reload, extension restart, and replay of the signed file under a
+ * new name (the marker is keyed by the grant id inside the JSON, not the
+ * filename). This is what makes one-shot single-use durable rather than only
+ * in-memory. */
+int kai_grant_is_consumed(const char *dir, const char *id) {
+    char fp[PATH_MAX];
+    if (snprintf(fp, sizeof fp, "%s/%s.used", dir, id) >= (int)sizeof fp) return 0;
+    struct stat st;
+    return stat(fp, &st) == 0;
+}
+
 int kai_grants_load(const char *dir, kai_grant **out, int *n) {
     *out = NULL; *n = 0;
     DIR *d = opendir(dir);
@@ -201,6 +238,7 @@ int kai_grants_load(const char *dir, kai_grant **out, int *n) {
         int ok = kai_grant_from_json(txt, &g);
         free(txt);
         if (!ok) continue;
+        if (kai_grant_is_consumed(dir, g.id)) continue; /* spent one-shot: stays spent */
         if (count == cap) {
             int ncap = cap ? cap * 2 : 8;
             kai_grant *na = realloc(arr, (size_t)ncap * sizeof *na);

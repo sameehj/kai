@@ -210,6 +210,7 @@ final class StorageClient {
         let fp = dir + "/" + id + ".json"
         writeFileNoFollow(fp, Array(json.utf8), append: false)
         if userUID >= 501 { chown(fp, userUID, userGID); chown(dir, userUID, userGID) }
+        kai_grant_audit("requested", id, agent, p, opCode(opStr), "request", "awaiting approval")
     }
     #endif
 
@@ -474,6 +475,7 @@ final class StorageClient {
                     if grantAllows(proc, path: p, agent: agent, opStr: op) {
                         dlog("ALLOW-GRANT \(op) \(agent) pid \(pid(proc)) \(p)")
                         audit(decision: "allow-grant", agent: agent, op: op, path: p, why: reason)
+                        kai_grant_audit("used", "(granted)", agent, p, opCode(op), "allow", "scoped grant")
                         return true
                     }
                     requestApproval(proc, path: p, agent: agent, opStr: op)

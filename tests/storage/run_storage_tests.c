@@ -113,7 +113,7 @@ static kai_grant mkgrant(const char *res, int op, int scope, int strength,
                          int pid, unsigned long long pv, long long expires) {
     kai_grant g;
     memset(&g, 0, sizeof g);
-    snprintf(g.id, sizeof g.id, "grant-%d-%d", pid, op);
+    snprintf(g.id, sizeof g.id, "grant-%d-%d-%d", pid, op, scope); /* scope in id: one-shot marker won't poison process-grant tests */
     g.created_utc = 1000;
     g.expires_utc = expires;
     g.pid = pid;
@@ -257,6 +257,16 @@ static void write_grant_file(const char *dir, const kai_grant *g) {
     free(js);
 }
 
+static int file_contains(const char *path, const char *needle) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    char buf[65536];
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    return strstr(buf, needle) != NULL;
+}
+
 typedef struct { kai_approval_store *s; kai_grant_subject sub; int allow; } th_arg;
 static void *decide_thread(void *p) {
     th_arg *a = p;
@@ -281,6 +291,12 @@ static void test_approval_store(void) {
     mkdir(gdir, 0700);
     FILE *pf = fopen(polp, "w");
     if (pf) { fputs("protect /secrets\n", pf); fclose(pf); }
+    // KAI_HOME was pointed at a temp dir in main(); audit lands there, hermetic.
+    const char *kaihome = getenv("KAI_HOME");
+    char alog[700]; snprintf(alog, sizeof alog, "%s/audit.log", kaihome ? kaihome : dir);
+    // Real future expiry: the store's reload CLEANUP uses wall-clock time(NULL),
+    // so store-test grants must not look expired against it.
+    const long long FUTURE = (long long)time(NULL) + 3600;
 
     kai_grant_subject sub = { .pid = 100, .pidversion = 5, .agent = "claude",
                               .strength = KAI_ID_STRONG };
@@ -288,7 +304,7 @@ static void test_approval_store(void) {
 
     /* process-scoped grant: repeatable allow */
     kai_grant pg = mkgrant("/secrets/data", KAI_OP_READ, KAI_GRANT_PROCESS,
-                           KAI_ID_STRONG, 100, 5, 1000000);
+                           KAI_ID_STRONG, 100, 5, FUTURE);
     write_grant_file(gdir, &pg);
 
     kai_approval_store *s = kai_approval_store_open(polp, gdir, GKEY, GKEYLEN, 0);
@@ -313,7 +329,7 @@ static void test_approval_store(void) {
 
     /* reload picks up a newly added grant and bumps the generation */
     kai_grant pg2 = mkgrant("/secrets/data", KAI_OP_READ, KAI_GRANT_PROCESS,
-                            KAI_ID_STRONG, 100, 5, 1000000);
+                            KAI_ID_STRONG, 100, 5, FUTURE);
     write_grant_file(gdir, &pg2);
     unsigned long gen1 = kai_approval_store_generation(s);
     int swapped = kai_approval_store_reload(s, 1);
@@ -325,7 +341,7 @@ static void test_approval_store(void) {
 
     /* ONE-SHOT atomic consume under concurrency: exactly one winner */
     kai_grant one = mkgrant("/secrets/data", KAI_OP_READ, KAI_GRANT_ONESHOT,
-                            KAI_ID_STRONG, 100, 5, 1000000);
+                            KAI_ID_STRONG, 100, 5, FUTURE);
     write_grant_file(gdir, &one);
     kai_approval_store_reload(s, 1);
     enum { NTH = 16 };
@@ -339,8 +355,21 @@ static void test_approval_store(void) {
     CHECK(wins == 1, "one-shot grant consumed by exactly one of 16 concurrent deciders");
     CHECK(kai_approval_store_decide(s, "/secrets/data", NULL, KAI_OP_READ, &sub,
                                     1000, why, sizeof why) == 0, "one-shot denies after consumption");
-
     kai_approval_store_close(s);
+
+    /* DURABILITY: a spent one-shot stays spent across a store "restart" (reopen)
+     * because consumption wrote a persistent marker, not just an in-memory flag. */
+    kai_approval_store *sr = kai_approval_store_open(polp, gdir, GKEY, GKEYLEN, 0);
+    CHECK(kai_approval_store_decide(sr, "/secrets/data", NULL, KAI_OP_READ, &sub,
+                                    1000, why, sizeof why) == 0,
+          "spent one-shot stays spent after store restart (durable marker)");
+    /* REPLAY: re-writing the same signed grant file does not resurrect it. */
+    write_grant_file(gdir, &one);
+    kai_approval_store_reload(sr, 1);
+    CHECK(kai_approval_store_decide(sr, "/secrets/data", NULL, KAI_OP_READ, &sub,
+                                    1000, why, sizeof why) == 0,
+          "replayed consumed one-shot is rejected (marker keyed by grant id)");
+    kai_approval_store_close(sr);
 
     /* fail-closed: a store over a nonexistent grants dir denies protected paths */
     kai_approval_store *s2 = kai_approval_store_open(polp, "/tmp/kai-no-such-dir-xyz",
@@ -353,9 +382,33 @@ static void test_approval_store(void) {
           "unprotected path still allowed with no grants");
     kai_approval_store_close(s2);
 
+    /* AUDIT LIFECYCLE: expired and bad-signature grants are dropped AND audited
+     * during the reload/cleanup pass; the drop happens regardless of audit. */
+    kai_grant exp = mkgrant("/secrets/exp", KAI_OP_READ, KAI_GRANT_PROCESS,
+                            KAI_ID_STRONG, 201, 5, 1 /* epoch 1 => expired */);
+    write_grant_file(gdir, &exp);
+    kai_grant badsig = mkgrant("/secrets/bad", KAI_OP_READ, KAI_GRANT_PROCESS,
+                               KAI_ID_STRONG, 202, 5, FUTURE);
+    badsig.hmac[0] = (badsig.hmac[0] == 'a') ? 'b' : 'a';  // corrupt signature
+    write_grant_file(gdir, &badsig);
+    kai_approval_store *sa = kai_approval_store_open(polp, gdir, GKEY, GKEYLEN, 0); // open => cleanup
+    CHECK(kai_approval_store_decide(sa, "/secrets/exp", NULL, KAI_OP_READ, &sub,
+                                    (long long)time(NULL), why, sizeof why) == 0, "expired grant denied");
+    CHECK(kai_approval_store_decide(sa, "/secrets/bad", NULL, KAI_OP_READ, &sub,
+                                    1000, why, sizeof why) == 0, "bad-signature grant denied");
+    CHECK(file_contains(alog, "\"event\":\"expired\""), "expiry is audited at cleanup");
+    CHECK(file_contains(alog, "\"event\":\"rejected\""), "bad signature is audited");
+    // revoke audits "revoked"
+    kai_grant rv = mkgrant("/secrets/rv", KAI_OP_READ, KAI_GRANT_PROCESS, KAI_ID_STRONG, 203, 5, FUTURE);
+    write_grant_file(gdir, &rv);
+    kai_approval_store_reload(sa, 1);
+    kai_approval_store_revoke(sa, rv.id);
+    CHECK(file_contains(alog, "\"event\":\"revoked\""), "revocation is audited");
+    kai_approval_store_close(sa);
+
     /* perf: decide throughput (read-lock + match), informational */
     kai_grant pg3 = mkgrant("/secrets/data", KAI_OP_READ, KAI_GRANT_PROCESS,
-                            KAI_ID_STRONG, 100, 5, 1000000);
+                            KAI_ID_STRONG, 100, 5, FUTURE);
     write_grant_file(gdir, &pg3);
     kai_approval_store *s3 = kai_approval_store_open(polp, gdir, GKEY, GKEYLEN, 60);
     const int N = 200000;
@@ -373,11 +426,16 @@ static void test_approval_store(void) {
     if (d) { struct dirent *e; char fp[700];
         while ((e = readdir(d))) { if (e->d_name[0]=='.') continue;
             snprintf(fp,sizeof fp,"%s/%s",gdir,e->d_name); unlink(fp); } closedir(d); }
+    unlink(alog);
     unlink(polp); rmdir(gdir); rmdir(dir);
     (void)acc;
 }
 
 int main(void) {
+    /* Hermetic + avoids touching the real audit log: point KAI_HOME at a temp
+     * dir BEFORE anything calls kai_home() (it caches on first use). */
+    static char kh[] = "/tmp/kai-suite-XXXXXX";
+    if (mkdtemp(kh)) setenv("KAI_HOME", kh, 1);
     printf("storage wall decisions\n");
 
     /* Absolute protect paths so the test doesn't depend on ~ expanding to any

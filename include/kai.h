@@ -207,8 +207,18 @@ char *kai_grant_build_json(const char *id, long long created, long long expires,
                            int strength, const char *resource, int op, int scope,
                            const char *approved_by, const unsigned char *key, size_t keylen);
 
-/* Load every *.json grant under dir (e.g. <home>/grants). Caller free()s *out. */
+/* Load every *.json grant under dir (e.g. <home>/grants). Caller free()s *out.
+ * A grant with a durable "<dir>/<id>.used" marker (a spent one-shot) is skipped. */
 int kai_grants_load(const char *dir, kai_grant **out, int *n);
+/* Has this grant id been durably consumed (a "<dir>/<id>.used" marker exists)? */
+int kai_grant_is_consumed(const char *dir, const char *id);
+
+/* Write a structured grant lifecycle audit record (source "grant"). Logs only
+ * identifiers (id, resource path, agent, action, outcome, reason) -- never keys,
+ * file contents, or credentials. A side effect; never gates a decision. action
+ * is e.g. requested|approved|denied|used|expired|revoked|rejected. */
+void kai_grant_audit(const char *action, const char *id, const char *agent,
+                     const char *resource, int op, const char *outcome, const char *reason);
 
 /* Index of a grant that authorizes (subject, resolved_path, op) at time `now`
  * with a valid HMAC, not expired, and identity bound (pid+pidversion+agent);
