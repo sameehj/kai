@@ -66,7 +66,7 @@ struct ActiveGrant: Decodable, Identifiable {
     var expiresEpoch: Int { Int(expires_utc) ?? 0 }
 }
 
-enum GrantScope { case once, session }   // session = process-scoped
+enum GrantScope { case once, process }
 
 final class GrantManager: ObservableObject {
     @Published private(set) var pending: [PendingRequest] = []
@@ -100,10 +100,11 @@ final class GrantManager: ObservableObject {
     func approve(_ req: PendingRequest, scope: GrantScope) {
         guard let key = KaiApprovalKey.ensure() else { return }
         let now = Int(Date().timeIntervalSince1970)
-        let ttl = (scope == .once) ? 120 : 900           // one-shot 2 min, session 15 min
+        let ttl = (scope == .once) ? 120 : 900           // one-shot 2 min, process 15 min
         let expires = now + ttl
         let gid = UUID().uuidString
-        let opCode: Int32 = (req.op == "open" || req.op == "readdir") ? 0 : 1
+        let opCode: Int32 = req.op == "connect" ? 2 :
+                            (req.op == "open" || req.op == "readdir") ? 0 : 1
         let scopeCode: Int32 = (scope == .once) ? 1 : 0
 
         let json: String? = key.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> String? in
@@ -132,7 +133,8 @@ final class GrantManager: ObservableObject {
     }
 
     func deny(_ req: PendingRequest) {
-        let opCode: Int32 = (req.op == "open" || req.op == "readdir") ? 0 : 1
+        let opCode: Int32 = req.op == "connect" ? 2 :
+                            (req.op == "open" || req.op == "readdir") ? 0 : 1
         kai_grant_audit("denied", req.id, req.agent, req.resource, opCode, "deny", "denied by user")
         clearPending(req); refresh()
     }
@@ -152,7 +154,7 @@ final class GrantManager: ObservableObject {
 // MARK: - Views
 
 /// A single access-request card. Shows only Kai-verified fields; the human
-/// chooses Deny / Allow once / Allow for this session.
+/// chooses Deny / Allow once / Allow this process.
 struct ApprovalCard: View {
     let req: PendingRequest
     @ObservedObject var manager: GrantManager
@@ -160,16 +162,20 @@ struct ApprovalCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("KAI — Access Request").font(.headline)
-            Text("\(req.agent) wants to \(req.op.uppercased()) a protected file")
+            Text(req.op == "connect"
+                 ? "\(req.agent) wants to connect to this destination"
+                 : "\(req.agent) wants to \(req.op.uppercased()) a protected file")
             Text(req.resource).font(.system(.caption, design: .monospaced)).lineLimit(2)
             Text("Verified: \(req.agent) · pid \(req.pid) · identity \(req.strengthLabel)")
                 .font(.caption).foregroundColor(.secondary)
-            Text("Allowing does NOT permit sending the contents anywhere — network stays enforced.")
-                .font(.caption2).foregroundColor(.secondary)
+            if req.op != "connect" {
+                Text("Allowing file access does not change the network wall.")
+                    .font(.caption2).foregroundColor(.secondary)
+            }
             HStack {
                 Button("Deny") { manager.deny(req) }
                 Button("Allow once") { manager.approve(req, scope: .once) }
-                Button("Allow for this session") { manager.approve(req, scope: .session) }
+                Button("Allow this process (15 min)") { manager.approve(req, scope: .process) }
             }
         }
         .padding(10)

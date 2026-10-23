@@ -173,6 +173,20 @@ int kai_approval_store_reload(kai_approval_store *s, int force) {
     return 1;
 }
 
+int kai_approval_store_install_key(kai_approval_store *s,
+                                   const unsigned char *key, size_t keylen) {
+    if (!s || !key || keylen == 0 || keylen > sizeof s->key) return 0;
+    pthread_rwlock_wrlock(&s->lock);
+    if (s->keylen) { pthread_rwlock_unlock(&s->lock); return 0; }
+    memcpy(s->key, key, keylen);
+    s->keylen = keylen;
+    /* A signed grant may already be on disk. Validate it with the new key
+     * before the next decision; this runs on the reload worker, not in AUTH. */
+    load_snapshot(s, 0);
+    pthread_rwlock_unlock(&s->lock);
+    return 1;
+}
+
 unsigned long kai_approval_store_generation(const kai_approval_store *s) {
     return s ? s->generation : 0;
 }

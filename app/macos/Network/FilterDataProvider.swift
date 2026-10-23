@@ -130,6 +130,7 @@ final class Engine {
     // M1.4: endpoint (network) grants. A denied flow to a legitimate host can be
     // approved instead of dropped; honored only with a valid HMAC-signed grant.
     private var grantStore: OpaquePointer?     // kai_approval_store*
+    private var approvalKeyInstalled = false
     private var pendingSeen: [String: Date] = [:]
     private var paused = false                 // refreshed on the reload cadence
 
@@ -152,7 +153,7 @@ final class Engine {
         // then can't be honored). Lives under the user's Kai home.
         let gdir = home + "/.kai/grants"
         let key = FileManager.default.contents(atPath: home + "/.kai/approval.key") ?? Data()
-        if key.isEmpty {
+        if key.count != 32 {
             grantStore = kai_approval_store_open(nil, gdir, nil, 0, 2)
         } else {
             key.withUnsafeBytes { raw in
@@ -160,6 +161,7 @@ final class Engine {
                     grantStore = kai_approval_store_open(nil, gdir, base, key.count, 2)
                 }
             }
+            approvalKeyInstalled = grantStore != nil
         }
     }
 
@@ -173,6 +175,17 @@ final class Engine {
     private func reloadLocked(force: Bool) {
         if !force && Date().timeIntervalSince(lastCheck) < 2 { return }
         lastCheck = Date()
+        // The first approval can create the key after this filter starts.
+        // Install it on the existing store so the next flow can use the grant.
+        if let gs = grantStore, !approvalKeyInstalled {
+            let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+            if let key = FileManager.default.contents(atPath: home + "/.kai/approval.key"), key.count == 32 {
+                approvalKeyInstalled = key.withUnsafeBytes { raw -> Bool in
+                    guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return false }
+                    return kai_approval_store_install_key(gs, base, key.count) == 1
+                }
+            }
+        }
         paused = kai_wall_paused("network", Int64(Date().timeIntervalSince1970)) != 0
         let mtime = (try? FileManager.default.attributesOfItem(atPath: policyPath))?[.modificationDate] as? Date
         if !force && mtime == policyMTime && policy != nil { return }

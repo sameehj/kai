@@ -326,7 +326,7 @@ checks.
 
 ## Open questions
 
-- [ ] Which exact path did the storage wall deny when Claude Code lost its settings? Confirm from the audit log.
+- [x] Which exact path did the storage wall deny when Claude Code lost its settings? The Phase 0 audit records `~/.claude/settings.json` and `~/Research/.claude/settings.local.json`.
 - [ ] Was egress switched to block by the user, or did a build ship with block on?
 - [ ] What does a content-filter drop look like to the calling process on current macOS: immediate error or timeout? Measure before promising fast failure.
 - [ ] Does traffic to an allowlisted model host always pass through the AI proxy? Prove with a live test.
@@ -335,6 +335,7 @@ checks.
 - [ ] Notification grouping thresholds and rate cap.
 - [ ] Who maintains agent profiles, and how fast do updates ship after an agent adds a host?
 - [ ] Confirm Codex CLI and Gemini CLI hosts and credential paths.
+- [ ] Codex `.codex/config.toml` writes: keep the present hard deny, or allow writes as untrusted configuration changes that Kai logs and checks for new MCP endpoints? Decide for the Codex profile after a live read-only versus write-open trace. Approval grants must not silently settle this policy question.
 
 ## Sources
 

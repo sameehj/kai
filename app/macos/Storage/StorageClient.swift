@@ -164,6 +164,7 @@ final class StorageClient {
     // valid, human-approved grant matches. Active only when an approval key
     // exists (otherwise nil => no behaviour change: protected still denies).
     private var grantStore: OpaquePointer?            // kai_approval_store*
+    private var approvalKeyInstalled = false
     private var pendingSeen = Set<String>()           // dedup approval requests
 
     private func openGrantStore() {
@@ -176,7 +177,7 @@ final class StorageClient {
         let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
         let gdir = home + "/.kai/grants"
         let key = FileManager.default.contents(atPath: home + "/.kai/approval.key") ?? Data()
-        if key.isEmpty {
+        if key.count != 32 {
             grantStore = kai_approval_store_open(nil, gdir, nil, 0, 2)
             dlog("grants: store opened policy-only (no approval key; grants not honored)")
         } else {
@@ -185,6 +186,7 @@ final class StorageClient {
                     grantStore = kai_approval_store_open(nil, gdir, base, key.count, 2)
                 }
             }
+            approvalKeyInstalled = grantStore != nil
             dlog("grants: store opened with approval key")
         }
         if grantStore != nil { scheduleGrantReload() }
@@ -196,6 +198,19 @@ final class StorageClient {
     private func scheduleGrantReload() {
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) { [weak self] in
             guard let self, let gs = self.grantStore else { return }
+            // The app creates the key on the first approval click. The store
+            // may have started policy-only; install that key off the AUTH path
+            // so the first approved retry works without restarting the wall.
+            if !self.approvalKeyInstalled {
+                let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+                if let key = FileManager.default.contents(atPath: home + "/.kai/approval.key"), key.count == 32 {
+                    let installed = key.withUnsafeBytes { raw -> Bool in
+                        guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return false }
+                        return kai_approval_store_install_key(gs, base, key.count) == 1
+                    }
+                    if installed { self.approvalKeyInstalled = true; self.dlog("grants: first approval key installed") }
+                }
+            }
             _ = kai_approval_store_reload(gs, 0)
             self.scheduleGrantReload()
         }
@@ -589,6 +604,7 @@ final class StorageClient {
         lock.lock(); let pol = policy; lock.unlock()
         var why = [CChar](repeating: 0, count: 256)
         let tPolicy = timed ? nowTicks() : 0
+        let eventOp = (op == "open" && write) ? "write-open" : op
         for p in paths where !p.isEmpty {
             // Protect check over the ONE coherent snapshot: the grant store's
             // reloaded policy when it is open (enforce builds), else self.policy.
@@ -612,20 +628,25 @@ final class StorageClient {
                     // A valid, human-approved grant can allow a soft-protected
                     // op. The store refuses control paths, so this never widens
                     // an un-exemptable denial.
-                    if grantAllows(proc, path: p, agent: agent, opStr: op) {
+                    let grantOp = (op == "open" && write) ? "write" : op
+                    if kai_rule_is_builtin(why) == 0 && grantAllows(proc, path: p, agent: agent, opStr: grantOp) {
                         dlog("ALLOW-GRANT \(op) \(agent) pid \(pid(proc)) \(p)")
-                        audit(decision: "allow-grant", agent: agent, op: op, path: p, why: reason)
-                        kai_grant_audit("used", "(granted)", agent, p, opCode(op), "allow", "scoped grant")
+                        audit(decision: "allow-grant", agent: agent, op: eventOp, path: p, why: reason)
+                        kai_grant_audit("used", "(granted)", agent, p, opCode(grantOp), "allow", "scoped grant")
                         return true
                     }
-                    requestApproval(proc, path: p, agent: agent, opStr: op)
+                    // Built-in control paths cannot be granted. Do not show an
+                    // approval card that promises access the engine will deny.
+                    if kai_rule_is_builtin(why) == 0 {
+                        requestApproval(proc, path: p, agent: agent, opStr: grantOp)
+                    }
                     #endif
-                    dlog("BLOCK \(op) \(agent) pid \(pid(proc)) \(p) (\(reason))")
-                    audit(decision: "block", agent: agent, op: op, path: p, why: reason)
+                    dlog("BLOCK \(eventOp) \(agent) pid \(pid(proc)) \(p) (\(reason))")
+                    audit(decision: "block", agent: agent, op: eventOp, path: p, why: reason)
                     return false
                 }
-                dlog("would-block \(op) \(agent) pid \(pid(proc)) \(p) (\(reason)) [mode=\(modeName)]")
-                audit(decision: "would-block", agent: agent, op: op, path: p, why: reason)
+                dlog("would-block \(eventOp) \(agent) pid \(pid(proc)) \(p) (\(reason)) [mode=\(modeName)]")
+                audit(decision: "would-block", agent: agent, op: eventOp, path: p, why: reason)
                 return true
             }
         }

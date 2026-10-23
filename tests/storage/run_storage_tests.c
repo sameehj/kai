@@ -408,6 +408,18 @@ static void test_approval_store(void) {
                            KAI_ID_STRONG, 100, 5, FUTURE);
     write_grant_file(gdir, &pg);
 
+    /* First approval arrives after the extension opened without a key. */
+    kai_approval_store *late = kai_approval_store_open(polp, gdir, NULL, 0, 0);
+    CHECK(late != NULL, "policy-only store opens before first approval");
+    CHECK(kai_approval_store_decide(late, "/secrets/data", NULL, KAI_OP_READ, &sub,
+                                    1000, why, sizeof why) == 0, "no key denies signed grant");
+    CHECK(kai_approval_store_install_key(late, GKEY, GKEYLEN) == 1,
+          "first approval key installs on running store");
+    CHECK(kai_approval_store_decide(late, "/secrets/data", NULL, KAI_OP_READ, &sub,
+                                    1000, why, sizeof why) == 1,
+          "running store honors grant after key arrives");
+    kai_approval_store_close(late);
+
     kai_approval_store *s = kai_approval_store_open(polp, gdir, GKEY, GKEYLEN, 0);
     CHECK(s != NULL, "approval store opens");
     CHECK(kai_approval_store_count(s) == 1, "store loaded one grant");

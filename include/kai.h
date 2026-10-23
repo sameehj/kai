@@ -291,6 +291,11 @@ void kai_approval_store_close(kai_approval_store *s);
 /* Re-stat policy+grants (subject to debounce unless force) and atomically swap
  * the snapshot if changed. Returns 1 if a swap happened, else 0. */
 int kai_approval_store_reload(kai_approval_store *s, int force);
+/* Install the approval key after the store was opened policy-only. Call off the
+ * authorization path; verifies and reloads grants under the store write lock.
+ * Returns 1 when installed, 0 for an invalid/already installed key. */
+int kai_approval_store_install_key(kai_approval_store *s,
+                                   const unsigned char *key, size_t keylen);
 unsigned long kai_approval_store_generation(const kai_approval_store *s);
 int kai_approval_store_count(kai_approval_store *s); /* current grant count */
 

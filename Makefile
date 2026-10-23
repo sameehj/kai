@@ -92,15 +92,14 @@ app-dev: kai
 # Build the app AND the Endpoint Security storage extension (needs the ES
 # development entitlement on your team). Generates from the storage.yml overlay
 # so the normal project, CI and distribution never include it. The extension
-# defaults to notify mode (observe/log, never blocks). It is not embedded in
-# the app yet; see docs/WALLS.md to load it for local testing.
+# defaults to notify mode (observe/log, never blocks).
 app-storage: kai
 	@test -n "$(KAI_TEAM)" || { echo "set KAI_TEAM to your Apple team ID"; exit 1; }
 	cd app/macos && KAI_TEAM=$(KAI_TEAM) xcodegen generate --quiet --spec storage.yml
 	xcodebuild $(XCODE_FLAGS) -allowProvisioningUpdates DEVELOPMENT_TEAM=$(KAI_TEAM) $(XCODE_EXTRA) -quiet build
-	xcodebuild -project app/macos/Kai.xcodeproj -target KaiStorage -configuration Release \
+	xcodebuild -project app/macos/Kai.xcodeproj -scheme KaiStorage -configuration Release \
 	  -derivedDataPath build/dd -allowProvisioningUpdates DEVELOPMENT_TEAM=$(KAI_TEAM) $(XCODE_EXTRA) -quiet build
-	@echo "Built KaiStorage (notify mode). See docs/WALLS.md to load it for local testing."
+	@echo "Built KaiStorage (mode set by XCODE_EXTRA). See docs/WALLS.md before local activation."
 
 # Build the app WITH the storage extension embedded, install to /Applications,
 # and open it, so the storage wall can be activated from the menu. Development

@@ -6,6 +6,32 @@ authorization.** M5 is the first time grant enforcement runs under the live OS
 extension; everything through M4 is compile-verified only. Activation, reload,
 and live enforcement tests are gated.
 
+## October 23 approval regression to retest
+
+A live Codex request for `~/.codex/config.toml` was approved in the UI at
+16:56:11 UTC, but subsequent opens were still blocked. The extension log shows
+it started policy-only at 16:50:19 UTC, before the first approval created the
+key. The old store never acquired that key. Source now installs a newly created
+key on the reload worker (not in an ES AUTH callback); this has a unit test and
+a compile-only extension build, **not a live retest**.
+
+The same request exposed a separate UX error: Codex's config is a builtin
+control path and grants cannot override it. Future extension builds do not
+stage approval requests for such paths. The storage audit now distinguishes
+read-only `open` from `write-open` so we can tell whether Codex was asking to
+modify its config. The previous audit record did not include the open flags, so
+that detail of the incident remains unknown. The UI now calls its 15-minute
+option **this process**, which is its actual scope; session-wide matching is
+still a separate acceptance item. A pending request or grant from the old
+extension can still be visible until the user clears it in the UI.
+
+Before claiming the first-approval flow works, use a disposable soft-protected
+file: start the extension with no key, let an agent read it and receive a
+pending request, approve in the UI, retry in the same process, and confirm
+`requested → approved → used` without restarting either wall. Separately,
+confirm a control-path denial offers no approval and that a Codex config
+read-only open succeeds while a write-open is denied. Do not use a real secret.
+
 `[YOU]` = human, in your own Terminal / the GUI / System Settings.
 `[ME]` = the agent session, run only after you say go, and only for the
 agent-attributable test steps.
@@ -14,7 +40,7 @@ agent-attributable test steps.
 
 **Build (local, no activation):**
 - `[YOU]` `make try-app-storage KAI_TEAM=KD446VDTM2` builds the embedded,
-  signed storage extension at **v14** and the app (which now links libkai for
+  signed storage extension at **v17** and the app (which now links libkai for
   in-process signing). Do not open/activate yet.
 
 **Rollback paths (verify you can do each before step 1):**
@@ -39,7 +65,7 @@ any grant test.
   Settings → Login Items & Extensions → Endpoint Security; grant **Full Disk
   Access**. Keep policy `storage = block`, filter unset (`none`), profiler off.
 - `[YOU]` Confirm version: `systemextensionsctl list | grep kai.storage` shows
-  `0.1.0/14`.
+  `0.1.0/17`.
 - `[ME]` Baseline: run `tests/storage/breadth_probe.py` from this agent session;
   confirm the attribution banner says AGENT-ATTRIBUTED and the matrix matches
   v10/v11 (the launchd-detached case still **FAIL**).

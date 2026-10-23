@@ -14,6 +14,41 @@ MCP request to innermonkeylabs.com is denied, the user sees why, grants access f
 that one session, Claude retries and completes the task, and every other boundary
 stays intact.
 
+## Status checkpoint — October 23, 2026
+
+This checklist marks a step complete only when its stated acceptance conditions
+are met. Recent M0/M1 code does **not** make the phase acceptance tests pass yet.
+
+| Area | Live | Unit / build | Remaining |
+|---|---|---|---|
+| Phase 0 audit | Oct 22 denials and detached-process gap observed | Component map and 23-problem table written | Drop errno/timing harness; direct-model-flow reproducer; refresh the audit after M0/M1 code |
+| M0 visibility | Network v8 active in macOS, but `kai status` has no network heartbeat; storage v17 installed but inactive | Reason codes, Activity, notifications, `kai why` and `kai denials` built | Full event schema, `--mine` isolation, bounded activity filters, matching policy/grant hashes and attribution counters |
+| M1 approvals | First approval on Oct 23 failed; no successful grant retry observed | Signed grant engine, pid+pidversion matching, first-key reload test, v17/v8 compile | Live first-key, running-grant, restart, new-process, expiry, revoke and Oct 22 replay tests; true session grants |
+| M2/M3 | Not tested | Some basic UI exists | Agent profiles, MCP discovery, gateway routing guarantee, onboarding and full permission manager |
+
+**Interim M1 permission:** the UI now offers “Allow this process (15 min)”. The
+matcher requires **pid and pidversion**, not bare pid (`src/grant.c`), so PID reuse
+alone cannot transfer it. A retry by a new `curl`, shell or MCP server process
+is expected to be denied. M1.2's verified session identity and session-wide
+grant matching remain the target. Record same-process success and new-process
+denial separately in the live report; neither proves the Oct 22 acceptance test.
+
+**M0.4 blocks further approval claims:** the storage extension's snapshot reports
+mode and grant generation but not policy hash or attribution coverage. The
+network extension currently emits no snapshot even though macOS reports v8
+active. Before calling grants live-validated, record the policy and grant
+generation actually loaded by each extension and reconcile macOS activation
+with Kai's measured status. Test a grant created while running, after restart,
+and with the very first key.
+
+**Codex config write policy is undecided:** current builtin protection lets
+agents read `.codex/config.toml` but denies writes, and grants cannot override
+that control path. `codex mcp add` and trust-setting changes may require writes.
+M2's Codex profile must choose deliberately between hard-denying those writes
+or allowing them as untrusted changes with audit and MCP endpoint review. See
+the open question in `docs/walls-ux-evaluation.md`. Do not loosen this rule as
+a test workaround.
+
 ## How to use this plan
 
 Start each session with:
@@ -51,26 +86,26 @@ only. Follow the Rules section. Stop at the phase's human checkpoint and report.
 
 Output: `docs/audit/walls-audit.md`.
 
-- [ ] 0.1 Map the components: libkai, ES extension, NE content filter, NE
+- [x] 0.1 Map the components: libkai, ES extension, NE content filter, NE
   transparent proxy, gateway, menu-bar app, CLI, grant store, hooks, policy
   loader, audit log. For each: entry points, how it reads policy and grants.
-- [ ] 0.2 Answer the five grant questions with evidence: can a live storage denial
+- [x] 0.2 Answer the five grant questions with evidence: can a live storage denial
   be approved and retried? Can a network grant be scoped to one session? Do expiry
   and revocation reach both running extensions, within what bound? Can an
   agent-tree process forge or misuse a grant (file, CLI, XPC, socket)? Can the user
   complete the October 22 task without disabling a wall?
-- [ ] 0.3 Policy and grant refresh: document how each extension reloads policy and
+- [x] 0.3 Policy and grant refresh: document how each extension reloads policy and
   grants; flag differences.
-- [ ] 0.4 Trace October 22: find the code that prints `Rule: <host>` on a no-match
+- [x] 0.4 Trace October 22: find the code that prints `Rule: <host>` on a no-match
   (#3); find from the audit log the exact paths denied when Claude Code lost its
   settings (#7); record shipped defaults.
 - [ ] 0.5 Gateway composition (#20): reproduce whether a tagged process can reach
   an allowlisted model host directly, bypassing the proxy. Do not fix yet.
 - [ ] 0.6 Drop behaviour (#14): harness a tagged connection to a non-allowlisted
   host; record errno and time to failure per filter verdict.
-- [ ] 0.7 Attribution (#15, #19): document how tags are keyed and inherited;
+- [x] 0.7 Attribution (#15, #19): document how tags are keyed and inherited;
   reproduce the launchd-detached gap as a test.
-- [ ] 0.8 Gap table: for each of the 23 problems, Exists / Partial / Missing with
+- [x] 0.8 Gap table: for each of the 23 problems, Exists / Partial / Missing with
   file references.
 
 **Human checkpoint:** review the audit; decide the open questions it surfaced.
