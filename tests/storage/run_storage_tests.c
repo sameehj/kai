@@ -571,6 +571,19 @@ static void test_denial_records(void) {
     CHECK(file_contains(alog, "\"match\":\"*.pem\""), "storage denial: matched rule recorded in match");
 }
 
+static void test_pause(void) {
+    printf("safe pause (M1.7)\n");
+    long long now = (long long)time(NULL);
+    kai_wall_pause_write("storage", 0); kai_wall_pause_write("network", 0); /* clean start */
+    CHECK(kai_wall_paused("storage", now) == 0, "not paused by default");
+    kai_wall_pause_write("storage", 15);
+    CHECK(kai_wall_paused("storage", now) == 1, "paused after pause-write");
+    CHECK(kai_wall_paused("network", now) == 0, "other wall unaffected");
+    CHECK(kai_wall_paused("storage", now + 3600) == 0, "auto-resumes after the window");
+    kai_wall_pause_write("storage", 0);
+    CHECK(kai_wall_paused("storage", now) == 0, "resume clears the pause");
+}
+
 int main(void) {
     /* Hermetic + avoids touching the real audit log: point KAI_HOME at a temp
      * dir BEFORE anything calls kai_home() (it caches on first use). */
@@ -642,6 +655,7 @@ int main(void) {
     test_grants();
     test_approval_store();
     test_denial_records();
+    test_pause();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

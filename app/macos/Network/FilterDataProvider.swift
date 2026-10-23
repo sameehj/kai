@@ -131,6 +131,7 @@ final class Engine {
     // approved instead of dropped; honored only with a valid HMAC-signed grant.
     private var grantStore: OpaquePointer?     // kai_approval_store*
     private var pendingSeen: [String: Date] = [:]
+    private var paused = false                 // refreshed on the reload cadence
 
     // MARK: configuration
 
@@ -172,6 +173,7 @@ final class Engine {
     private func reloadLocked(force: Bool) {
         if !force && Date().timeIntervalSince(lastCheck) < 2 { return }
         lastCheck = Date()
+        paused = kai_wall_paused("network", Int64(Date().timeIntervalSince1970)) != 0
         let mtime = (try? FileManager.default.attributesOfItem(atPath: policyPath))?[.modificationDate] as? Date
         if !force && mtime == policyMTime && policy != nil { return }
         var err = [CChar](repeating: 0, count: 256)
@@ -255,6 +257,7 @@ final class Engine {
         guard let p = policy else { return true }
         let mode = kai_policy_egress_mode(p)
         if mode == KAI_EGRESS_OFF { return true }
+        if paused { return true }   // wall paused (time-boxed, auto-resume): allow
         var why = [CChar](repeating: 0, count: 256)
         if kai_egress_endpoint_allowed(p, host, ip, Int32(port) ?? 0, &why, why.count) == 1 { return true }
         let target = host ?? "\(ip):\(port)"

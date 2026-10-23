@@ -143,7 +143,10 @@ final class StorageClient {
         }
     }
 
+    private var pausedStorage = false   // refreshed off the hot path (health timer)
+
     private func writeHealth() {
+        pausedStorage = kai_wall_paused("storage", Int64(Date().timeIntervalSince1970)) != 0
         var enforcing = false
         var gen: UInt = 0
         #if KAI_STORAGE_ENFORCE
@@ -499,6 +502,7 @@ final class StorageClient {
                            enforce: Bool, write: Bool = true,
                            timed: Bool = false, t0: UInt64 = 0, tPaths: UInt64 = 0) -> Bool {
         if timed { prof(.path, t0, tPaths) }
+        if pausedStorage { return true }   // wall paused (time-boxed, auto-resume): allow
         let proc = msg.pointee.process
         let tClassify = timed ? nowTicks() : 0
         if isKaiOwnProcess(proc) {

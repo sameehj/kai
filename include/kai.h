@@ -236,6 +236,11 @@ int kai_grants_load(const char *dir, kai_grant **out, int *n);
 /* Has this grant id been durably consumed (a "<dir>/<id>.used" marker exists)? */
 int kai_grant_is_consumed(const char *dir, const char *id);
 
+/* Safe pause (M1.7): a wall paused for a bounded window with auto-resume. Read
+ * off the reload path, never in the hot handler. wall is "storage"|"network". */
+int kai_wall_paused(const char *wall, long long now);
+int kai_wall_pause_write(const char *wall, long long minutes); /* <=0 clears */
+
 /* Write a structured grant lifecycle audit record (source "grant"). Logs only
  * identifiers (id, resource path, agent, action, outcome, reason) -- never keys,
  * file contents, or credentials. A side effect; never gates a decision. action

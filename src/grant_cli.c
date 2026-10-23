@@ -165,6 +165,31 @@ static int grant_create(int argc, char **argv) {
     return 0;
 }
 
+/* kai pause <storage|network|all> <minutes> ; kai resume <...> (M1.7). Refuses
+ * agent callers, like grant changes. */
+int kai_cmd_pause(int argc, char **argv) {
+    if (refuse_if_agent("pause")) return 3;
+    if (argc < 1) { fprintf(stderr, "usage: kai pause <storage|network|all> <minutes>\n"); return 2; }
+    long long mins = (argc >= 2) ? strtoll(argv[1], NULL, 10) : 15;
+    const char *wall = argv[0];
+    const char *walls[] = { "storage", "network" };
+    for (int i = 0; i < 2; i++)
+        if (!strcmp(wall, "all") || !strcmp(wall, walls[i]))
+            kai_wall_pause_write(walls[i], mins);
+    printf("paused %s for %lld min (auto-resumes)\n", wall, mins);
+    return 0;
+}
+int kai_cmd_resume(int argc, char **argv) {
+    if (refuse_if_agent("resume")) return 3;
+    const char *wall = argc >= 1 ? argv[0] : "all";
+    const char *walls[] = { "storage", "network" };
+    for (int i = 0; i < 2; i++)
+        if (!strcmp(wall, "all") || !strcmp(wall, walls[i]))
+            kai_wall_pause_write(walls[i], 0);
+    printf("resumed %s\n", wall);
+    return 0;
+}
+
 int kai_cmd_grant(int argc, char **argv) {
     const char *sub = argc > 0 ? argv[0] : "list";
     if (!strcmp(sub, "list")) return grant_list(argc > 1 && !strcmp(argv[1], "--json"));

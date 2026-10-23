@@ -20,12 +20,15 @@
 #include "cJSON.h"
 
 #include <dirent.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
 void kai_sha256(const void *data, size_t n, uint8_t out[32]); /* src/sha256.c */
 
@@ -296,6 +299,39 @@ int kai_grants_load(const char *dir, kai_grant **out, int *n) {
     closedir(d);
     *out = arr; *n = count;
     return count;
+}
+
+/* ---- safe pause (M1.7) ----
+ * A wall can be paused for a bounded window with auto-resume, distinct from a
+ * full disable. The state is a file <home>/pause-<wall> holding an expiry epoch;
+ * it lives under the control-path-protected home (an agent can't write it). The
+ * extensions read it OFF their reload path (never in the hot handler) and resume
+ * automatically once the expiry passes -- no timer needed. */
+int kai_wall_paused(const char *wall, long long now) {
+    if (!wall) return 0;
+    char fp[PATH_MAX];
+    if (snprintf(fp, sizeof fp, "%s/pause-%s", kai_home(), wall) >= (int)sizeof fp) return 0;
+    size_t n = 0;
+    char *t = kai_read_file(fp, 64, &n);
+    if (!t) return 0;
+    long long until = strtoll(t, NULL, 10);
+    free(t);
+    return until > now;              /* expired/absent => not paused (auto-resume) */
+}
+
+/* Write (minutes>0) or clear (minutes<=0) a wall pause. Returns 0 on success. */
+int kai_wall_pause_write(const char *wall, long long minutes) {
+    if (!wall) return -1;
+    char fp[PATH_MAX];
+    mkdir(kai_home(), 0700);
+    if (snprintf(fp, sizeof fp, "%s/pause-%s", kai_home(), wall) >= (int)sizeof fp) return -1;
+    if (minutes <= 0) { unlink(fp); return 0; }       /* resume now */
+    long long until = (long long)time(NULL) + minutes * 60;
+    int fd = open(fp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+    if (fd < 0) return -1;
+    dprintf(fd, "%lld\n", until);
+    close(fd);
+    return 0;
 }
 
 /* ---- match + decide ---- */
