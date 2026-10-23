@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 /* ---------- small helpers ---------- */
@@ -77,6 +78,37 @@ static void print_json(cJSON *o) {
 }
 
 /* ---------- kai status --json ---------- */
+
+static const char *status_storage_mode_name(const kai_policy *p) {
+    if (!p) return "unknown";
+    switch (kai_policy_storage_mode(p)) {
+        case KAI_STORAGE_BLOCK: return "block";
+        case KAI_STORAGE_LOG:   return "log";
+        default:                return "off";
+    }
+}
+static const char *status_egress_mode_name(const kai_policy *p) {
+    if (!p) return "unknown";
+    switch (kai_policy_egress_mode(p)) {
+        case KAI_EGRESS_BLOCK: return "block";
+        case KAI_EGRESS_LOG:   return "log";
+        default:               return "off";
+    }
+}
+
+/* Read an extension's health snapshot if it exists and is fresh (written within
+ * max_age_sec); else NULL (not observed running). Caller owns the returned node. */
+static cJSON *status_read_health(const char *path, long max_age_sec) {
+    struct stat st;
+    if (stat(path, &st) != 0) return NULL;
+    if ((long)(time(NULL) - st.st_mtime) > max_age_sec) return NULL; /* stale */
+    size_t len = 0;
+    char *txt = kai_read_file(path, 1 << 16, &len);
+    if (!txt) return NULL;
+    cJSON *o = cJSON_Parse(txt);
+    free(txt);
+    return o;
+}
 
 int kai_cmd_status_json(void) {
     cJSON *o = cJSON_CreateObject();
@@ -145,6 +177,23 @@ int kai_cmd_status_json(void) {
     cJSON_AddNumberToObject(au, "records", nl);
     cJSON_AddBoolToObject(au, "intact", intact);
     cJSON_AddStringToObject(au, "error", intact ? "" : verr);
+
+    /* Walls: CONFIGURED (from policy) vs OBSERVED (from each extension's health
+     * snapshot). A toggle saying "on" proves nothing; the observed side proves
+     * the extension is actually running, in which mode, and at which grant
+     * generation. A stale/absent snapshot means not observed running. (#18) */
+    cJSON *w = cJSON_AddObjectToObject(o, "walls");
+    cJSON *cfg = cJSON_AddObjectToObject(w, "configured");
+    cJSON_AddStringToObject(cfg, "storage", status_storage_mode_name(p));
+    cJSON_AddStringToObject(cfg, "network", status_egress_mode_name(p));
+    cJSON *obs = cJSON_AddObjectToObject(w, "observed");
+    cJSON *sh = status_read_health("/tmp/kai-storage-health.json", 30);
+    cJSON *so = cJSON_AddObjectToObject(obs, "storage");
+    cJSON_AddBoolToObject(so, "running", sh != NULL);
+    if (sh) cJSON_AddItemToObject(so, "health", sh);
+    cJSON *no = cJSON_AddObjectToObject(obs, "network");
+    cJSON_AddBoolToObject(no, "running", 0);
+    cJSON_AddStringToObject(no, "note", "network health snapshot not yet emitted (TODO)");
 
     print_json(o);
     return 0;

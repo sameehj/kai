@@ -128,6 +128,32 @@ final class StorageClient {
         #if KAI_STORAGE_ENFORCE
         openGrantStore()
         #endif
+        scheduleHealth()
+    }
+
+    /// Write a measured-health snapshot every 5s, OFF the hot path, so `kai
+    /// status` can show OBSERVED state (is the extension actually running, in
+    /// which mode, enforcing, which grant generation) distinct from configured
+    /// state. World-readable timing-only JSON; no paths or secrets.
+    private func scheduleHealth() {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self else { return }
+            self.writeHealth()
+            self.scheduleHealth()
+        }
+    }
+
+    private func writeHealth() {
+        var enforcing = false
+        var gen: UInt = 0
+        #if KAI_STORAGE_ENFORCE
+        enforcing = (mode == KAI_STORAGE_BLOCK)
+        if let gs = grantStore { gen = kai_approval_store_generation(gs) }
+        #endif
+        let json = "{\"wall\":\"storage\",\"mode\":\"\(modeName)\",\"enforcing\":\(enforcing)," +
+                   "\"filter\":\"\(filter)\",\"grant_generation\":\(gen)," +
+                   "\"ts\":\(Int(Date().timeIntervalSince1970))}"
+        writeFileNoFollow("/tmp/kai-storage-health.json", Array(json.utf8), append: false)
     }
 
     #if KAI_STORAGE_ENFORCE
