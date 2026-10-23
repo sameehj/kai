@@ -24,7 +24,7 @@ The installed-build evidence and source commit are recorded in
 | Area | Live | Unit / build | Remaining |
 |---|---|---|---|
 | Phase 0 audit | Oct 22 denials and detached-process gap observed | Component map and 23-problem table written | Drop errno/timing harness; direct-model-flow reproducer; refresh the audit after M0/M1 code |
-| M0 visibility | Network v8 active in macOS, but `kai status` has no network heartbeat; storage v17 installed but inactive | Reason codes, Activity, notifications, `kai why` and `kai denials` built | Full event schema, `--mine` isolation, bounded activity filters, matching policy/grant hashes and attribution counters |
+| M0 visibility | Storage v17 and network v8 active in macOS; fresh storage heartbeat still says log/not enforcing while policy says block; no network heartbeat | Reason codes, Activity, notifications, `kai why` and `kai denials` built | Reconcile loaded mode, full event schema, `--mine` isolation, bounded activity filters, policy/grant hashes and attribution counters |
 | M1 approvals | First approval on Oct 23 failed; no successful grant retry observed | Signed grant engine, pid+pidversion matching, first-key reload test, v17/v8 compile | Live first-key, running-grant, restart, new-process, expiry, revoke and Oct 22 replay tests; true session grants |
 | M2/M3 | Not tested | Some basic UI exists | Agent profiles, MCP discovery, gateway routing guarantee, onboarding and full permission manager |
 
@@ -38,10 +38,13 @@ denial separately in the live report; neither proves the Oct 22 acceptance test.
 **M0.4 blocks further approval claims:** the storage extension's snapshot reports
 mode and grant generation but not policy hash or attribution coverage. The
 network extension currently emits no snapshot even though macOS reports v8
-active. Before calling grants live-validated, record the policy and grant
-generation actually loaded by each extension and reconcile macOS activation
-with Kai's measured status. Test a grant created while running, after restart,
-and with the very first key.
+active. On Oct 23, storage v17 was also active but its fresh snapshot said
+`log`/not enforcing while policy said `block`: `reloadPolicy(force:)` runs only
+at startup, while the grant-store timer reloads the policy snapshot separately.
+Before calling grants live-validated, make mode and policy come from the same
+loaded snapshot, record the policy and grant generation each extension has, and
+reconcile macOS activation with Kai's measured status. Test a grant created
+while running, after restart, and with the very first key.
 
 **Codex config write policy is undecided:** current builtin protection lets
 agents read `.codex/config.toml` but denies writes, and grants cannot override
