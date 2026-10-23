@@ -44,6 +44,7 @@ final class FilterDataProvider: NEFilterDataProvider {
               let token = flow.sourceAppAuditToken else { return .allow() }
         let pid = Engine.pid(fromAuditToken: token)
         guard pid > 0, let agent = engine.agent(pid: pid, token: token) else { return .allow() }
+        let pidv = Engine.pidVersion(fromAuditToken: token)
 
         let mode = engine.mode
         if mode == KAI_EGRESS_OFF { return .allow() }
@@ -63,21 +64,23 @@ final class FilterDataProvider: NEFilterDataProvider {
         if proto == IPPROTO_UDP && port == "443" {
             // QUIC hides the name in an encrypted Initial. Dropping it makes the
             // client fall back to TCP, where the SNI is readable.
-            return engine.decide(host: nil, agent: agent, ip: ip, port: port, what: "QUIC") ? .allow() : .drop()
+            return engine.decide(host: nil, agent: agent, ip: ip, port: port, what: "QUIC",
+                                 pid: pid, pidv: pidv) ? .allow() : .drop()
         }
         if proto == IPPROTO_TCP && (port == "443" || port == "80") {
-            engine.remember(flow, agent: agent, ip: ip, port: port, hint: hint)
+            engine.remember(flow, agent: agent, ip: ip, port: port, hint: hint, pid: pid, pidv: pidv)
             return .filterDataVerdict(withFilterInbound: false, peekInboundBytes: 0,
                                       filterOutbound: true, peekOutboundBytes: 4096)
         }
         if port == "53" { return .allow() } // DNS answers are not exfiltration by themselves
         if let hint { // not web traffic, but the flow named its host
-            return engine.decide(host: hint, agent: agent, ip: ip, port: port) ? .allow() : .drop()
+            return engine.decide(host: hint, agent: agent, ip: ip, port: port,
+                                 pid: pid, pidv: pidv) ? .allow() : .drop()
         }
         // Other ports (ssh, databases, ...) with no name: only the address can
         // decide. Allow it with `egress_allow <ip>[:port]` or a range.
         return engine.decide(host: nil, agent: agent, ip: ip, port: port,
-                             what: "Port \(port) connection")
+                             what: "Port \(port) connection", pid: pid, pidv: pidv)
             ? .allow() : .drop()
     }
 
@@ -90,16 +93,19 @@ final class FilterDataProvider: NEFilterDataProvider {
             engine.forget(flow)
             // allowed if either the requested name or the flow's name is listed
             if let h = ctx.hint, engine.isAllowed(host: h, ip: ctx.ip, port: ctx.port) { return .allow() }
-            return engine.decide(host: host, agent: ctx.agent, ip: ctx.ip, port: ctx.port) ? .allow() : .drop()
+            return engine.decide(host: host, agent: ctx.agent, ip: ctx.ip, port: ctx.port,
+                                 pid: ctx.pid, pidv: ctx.pidv) ? .allow() : .drop()
         case .needMore where offset + readBytes.count < 16384:
             return NEFilterDataVerdict(passBytes: 0, peekBytes: offset + readBytes.count + 4096)
         default:
             engine.forget(flow)
             let what = ctx.port == "443" ? "TLS without server name" : "HTTP without Host"
             if let h = ctx.hint { // fall back to the flow's own name
-                return engine.decide(host: h, agent: ctx.agent, ip: ctx.ip, port: ctx.port) ? .allow() : .drop()
+                return engine.decide(host: h, agent: ctx.agent, ip: ctx.ip, port: ctx.port,
+                                     pid: ctx.pid, pidv: ctx.pidv) ? .allow() : .drop()
             }
-            return engine.decide(host: nil, agent: ctx.agent, ip: ctx.ip, port: ctx.port, what: what)
+            return engine.decide(host: nil, agent: ctx.agent, ip: ctx.ip, port: ctx.port, what: what,
+                                 pid: ctx.pid, pidv: ctx.pidv)
                 ? .allow() : .drop()
         }
     }
@@ -108,7 +114,8 @@ final class FilterDataProvider: NEFilterDataProvider {
 /// Policy, caches and audit logging, shared by the provider callbacks.
 final class Engine {
     enum Found { case host(String), needMore, none }
-    struct FlowContext { let agent: String; let ip: String; let port: String; let hint: String? }
+    struct FlowContext { let agent: String; let ip: String; let port: String; let hint: String?
+                         let pid: pid_t; let pidv: UInt32 }
 
     private let lock = NSLock()
     private var policy: OpaquePointer?
@@ -120,6 +127,10 @@ final class Engine {
     private var recentLogs: [String: Date] = [:]
     private var auditPath = ""
     private var owner: (uid: uid_t, gid: gid_t)?
+    // M1.4: endpoint (network) grants. A denied flow to a legitimate host can be
+    // approved instead of dropped; honored only with a valid HMAC-signed grant.
+    private var grantStore: OpaquePointer?     // kai_approval_store*
+    private var pendingSeen: [String: Date] = [:]
 
     // MARK: configuration
 
@@ -136,6 +147,19 @@ final class Engine {
         }
         auditPath = String(cString: kai_audit_path())
         reloadLocked(force: true)
+        // Open the endpoint-grant store (policy-only if no approval key; grants
+        // then can't be honored). Lives under the user's Kai home.
+        let gdir = home + "/.kai/grants"
+        let key = FileManager.default.contents(atPath: home + "/.kai/approval.key") ?? Data()
+        if key.isEmpty {
+            grantStore = kai_approval_store_open(nil, gdir, nil, 0, 2)
+        } else {
+            key.withUnsafeBytes { raw in
+                if let base = raw.bindMemory(to: UInt8.self).baseAddress {
+                    grantStore = kai_approval_store_open(nil, gdir, base, key.count, 2)
+                }
+            }
+        }
     }
 
     var mode: kai_egress_mode {
@@ -171,7 +195,7 @@ final class Engine {
         return pid_t(bitPattern: token.val.5) // audit_token_to_pid()
     }
 
-    private static func pidVersion(fromAuditToken data: Data) -> UInt32 {
+    static func pidVersion(fromAuditToken data: Data) -> UInt32 {
         guard data.count == MemoryLayout<audit_token_t>.size else { return 0 }
         return data.withUnsafeBytes { $0.load(as: audit_token_t.self) }.val.7
     }
@@ -195,10 +219,12 @@ final class Engine {
 
     // MARK: flows waiting for their first bytes
 
-    func remember(_ flow: NEFilterFlow, agent: String, ip: String, port: String, hint: String?) {
+    func remember(_ flow: NEFilterFlow, agent: String, ip: String, port: String, hint: String?,
+                  pid: pid_t, pidv: UInt32) {
         lock.lock(); defer { lock.unlock() }
         if flows.count > 4096 { flows.removeAll() }
-        flows[flow.identifier] = FlowContext(agent: agent, ip: ip, port: port, hint: hint)
+        flows[flow.identifier] = FlowContext(agent: agent, ip: ip, port: port, hint: hint,
+                                             pid: pid, pidv: pidv)
     }
 
     /// Is this connection on the allowlist? (No logging: used for fast paths.)
@@ -223,7 +249,8 @@ final class Engine {
     // MARK: the decision
 
     /// true = allow. host nil means we could not learn a hostname.
-    func decide(host: String?, agent: String, ip: String, port: String, what: String? = nil) -> Bool {
+    func decide(host: String?, agent: String, ip: String, port: String, what: String? = nil,
+                pid: pid_t = 0, pidv: UInt32 = 0) -> Bool {
         lock.lock(); defer { lock.unlock() }
         guard let p = policy else { return true }
         let mode = kai_policy_egress_mode(p)
@@ -231,12 +258,62 @@ final class Engine {
         var why = [CChar](repeating: 0, count: 256)
         if kai_egress_endpoint_allowed(p, host, ip, Int32(port) ?? 0, &why, why.count) == 1 { return true }
         let target = host ?? "\(ip):\(port)"
+        // M1.4: a valid human-approved endpoint grant allows this destination.
+        if endpointGrantAllows(pid: pid, pidv: pidv, agent: agent, dest: target) {
+            kai_grant_audit("used", "(granted)", agent, target, Int32(KAI_OP_CONNECT.rawValue),
+                            "allow", "scoped egress grant")
+            return true
+        }
         let block = mode == KAI_EGRESS_BLOCK
         let detail = host == nil
             ? "\(what ?? "connection") to \(ip):\(port), host unknown"
             : "connection to \(host!) (\(ip):\(port)) is not on the allowlist"
         auditLocked(agent: agent, decision: block ? "block" : "log", target: target, detail: detail)
+        if block { requestEgressApproval(pid: pid, pidv: pidv, agent: agent, dest: target) }
         return !block
+    }
+
+    /// Does a valid endpoint grant authorize this agent process to reach `dest`?
+    private func endpointGrantAllows(pid: pid_t, pidv: UInt32, agent: String, dest: String) -> Bool {
+        guard let gs = grantStore, pid > 0 else { return false }
+        _ = kai_approval_store_reload(gs, 0)      // debounced; picks up new/revoked grants
+        var ok = false
+        agent.withCString { ap in
+            var subj = kai_grant_subject(pid: Int32(pid), pidversion: UInt64(pidv),
+                                         agent: ap, strength: 1 /* medium */,
+                                         session_id: nil, project: nil)
+            var why = [CChar](repeating: 0, count: 256)
+            ok = kai_approval_store_decide(gs, dest, nil, Int32(KAI_OP_CONNECT.rawValue), &subj,
+                                           Int64(Date().timeIntervalSince1970), &why, why.count) == 1
+        }
+        return ok
+    }
+
+    /// Stage an async approval request for a blocked destination (deduped), so
+    /// the user can approve it instead of the agent only seeing a dead socket.
+    private func requestEgressApproval(pid: pid_t, pidv: UInt32, agent: String, dest: String) {
+        let key = "\(pid):\(dest)"
+        if let last = pendingSeen[key], Date().timeIntervalSince(last) < 600 { return }
+        if pendingSeen.count > 4096 { pendingSeen.removeAll() }
+        pendingSeen[key] = Date()
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        let dir = home + "/.kai/pending"
+        mkdir(dir, 0o700)
+        let id = "net-\(pid)-\(pidv)-\(Int(Date().timeIntervalSince1970))"
+        func esc(_ s: String) -> String {
+            s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        }
+        let json = "{\"id\":\"\(id)\",\"agent\":\"\(esc(agent))\",\"pid\":\(pid)," +
+                   "\"pidversion\":\(pidv),\"strength\":1,\"resource\":\"\(esc(dest))\"," +
+                   "\"op\":\"connect\",\"ts\":\(Int(Date().timeIntervalSince1970))}"
+        let fp = dir + "/" + id + ".json"
+        let fd = open(fp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0o644)
+        if fd >= 0 { fchmod(fd, 0o644); let b = Array(json.utf8)
+                     b.withUnsafeBytes { if let base = $0.baseAddress { _ = write(fd, base, b.count) } }
+                     close(fd) }
+        if let o = owner { chown(fp, o.uid, o.gid); chown(dir, o.uid, o.gid) }
+        kai_grant_audit("requested", id, agent, dest, Int32(KAI_OP_CONNECT.rawValue),
+                        "request", "egress awaiting approval")
     }
 
     /// One audit record per agent+target+decision every 10 minutes, so a
