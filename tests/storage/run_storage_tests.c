@@ -497,6 +497,24 @@ static void test_approval_store(void) {
     (void)acc;
 }
 
+static void test_denial_records(void) {
+    printf("denial records (M0)\n");
+    const char *kh = getenv("KAI_HOME");
+    char alog[700]; snprintf(alog, sizeof alog, "%s/audit.log", kh ? kh : "/tmp");
+    /* network: not-on-allowlist -> reason code in rule, host in target (#3 fix) */
+    kai_denial_audit("network", "claude", "block", "innermonkeylabs.com", "connect",
+                     KAI_REASON_NOT_ALLOWLISTED, NULL, "not on the allowlist");
+    CHECK(file_contains(alog, "\"rule\":\"not_on_allowlist\""), "network denial: rule is a reason code");
+    CHECK(file_contains(alog, "\"target\":\"innermonkeylabs.com\""), "network denial: host is in target");
+    CHECK(!file_contains(alog, "\"rule\":\"innermonkeylabs.com\""),
+          "network denial: host NOT mislabeled as a rule (#3 fixed)");
+    /* storage: protected path -> protected_resource reason + matched rule in match */
+    kai_denial_audit("storage", "codex", "block", "/tmp/x/key", "open",
+                     KAI_REASON_PROTECTED, "*.pem", "agent open of a protected file");
+    CHECK(file_contains(alog, "\"rule\":\"protected_resource\""), "storage denial: rule is protected_resource");
+    CHECK(file_contains(alog, "\"match\":\"*.pem\""), "storage denial: matched rule recorded in match");
+}
+
 int main(void) {
     /* Hermetic + avoids touching the real audit log: point KAI_HOME at a temp
      * dir BEFORE anything calls kai_home() (it caches on first use). */
@@ -567,6 +585,7 @@ int main(void) {
     test_profiler();
     test_grants();
     test_approval_store();
+    test_denial_records();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

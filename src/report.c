@@ -266,3 +266,52 @@ int kai_cmd_report(int argc, char **argv) {
     free_records(&r);
     return 0;
 }
+
+/* kai why <event-id>: explain one decision in plain words (read-only; the
+ * record is already secret-redacted). No grant capability. (M0.5) */
+int kai_cmd_why(int argc, char **argv) {
+    if (argc < 1) { fprintf(stderr, "usage: kai why <event-id>   (ids from: kai denials)\n"); return 2; }
+    const char *id = argv[0];
+    size_t idlen = strlen(id);
+    records_t r = load_records();
+    const cJSON *hit = NULL;
+    for (int i = r.n - 1; i >= 0; i--) {              /* newest first */
+        if (strncmp(jstr(r.v[i], "h"), id, idlen) == 0) { hit = r.v[i]; break; }
+    }
+    if (!hit) { fprintf(stderr, "kai why: no record starting with '%s'\n", id); free_records(&r); return 1; }
+    const char *match = jstr(hit, "match"), *target = jstr(hit, "target"), *detail = jstr(hit, "detail");
+    printf("%s  %s  %s\n", jstr(hit, "ts"), agent_name(hit), jstr(hit, "decision"));
+    printf("  wall:     %s\n", jstr(hit, "source"));
+    if (*target) printf("  resource: %s\n", target);
+    printf("  reason:   %s\n", jstr(hit, "rule"));
+    if (*match) printf("  matched:  %s\n", match);
+    if (*detail) printf("  detail:   %s\n", detail);
+    free_records(&r);
+    return 0;
+}
+
+/* kai denials [-n N] [--source net|storage]: recent blocks/would-blocks with
+ * their event ids, so the user can `kai why <id>` (read-only). (M0.5) */
+int kai_cmd_denials(int argc, char **argv) {
+    int n = 20;
+    const char *src = NULL;
+    for (int i = 0; i < argc; i++) {
+        if (!strcmp(argv[i], "-n") && i + 1 < argc) n = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--source") && i + 1 < argc) src = argv[++i];
+    }
+    records_t r = load_records();
+    int shown = 0;
+    printf("%-10s  %-20s  %-11s  %-11s  %-18s  %s\n", "id", "when", "agent", "decision", "reason", "resource");
+    for (int i = r.n - 1; i >= 0 && shown < n; i--) {
+        const char *dec = jstr(r.v[i], "decision");
+        if (strcmp(dec, "block") && strcmp(dec, "would-block")) continue;
+        if (src && strcmp(jstr(r.v[i], "source"), !strcmp(src, "net") ? "network" : src)) continue;
+        char sid[11]; snprintf(sid, sizeof sid, "%.10s", jstr(r.v[i], "h"));
+        printf("%-10s  %-20s  %-11s  %-11s  %-18s  %s\n", sid, jstr(r.v[i], "ts"),
+               agent_name(r.v[i]), dec, jstr(r.v[i], "rule"), jstr(r.v[i], "target"));
+        shown++;
+    }
+    if (!shown) printf("(no denials recorded)\n");
+    free_records(&r);
+    return 0;
+}

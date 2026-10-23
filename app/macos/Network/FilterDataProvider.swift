@@ -246,7 +246,11 @@ final class Engine {
         if let last = recentLogs[key], Date().timeIntervalSince(last) < 600 { return }
         if recentLogs.count > 4096 { recentLogs.removeAll() }
         recentLogs[key] = Date()
-        kai_audit("network", agent, decision, target, detail)
+        // Structured denial: reason code "not_on_allowlist" goes in `rule`, the
+        // destination in `target`. Fixes the record that read "rule: <host>" as
+        // if a rule matched -- no rule matched; the host was absent from the list.
+        kai_denial_audit("network", agent, decision, target, "connect",
+                         KAI_REASON_NOT_ALLOWLISTED, nil, detail)
         // We run as root: keep the user's audit log owned by the user.
         if let o = owner, !auditPath.isEmpty {
             chown(auditPath, o.uid, o.gid)

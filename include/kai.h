@@ -355,6 +355,24 @@ typedef struct {
     const char *cwd;
 } kai_audit_entry;
 int kai_audit_write(const kai_audit_entry *e);
+
+/* ---- Denial records (M0: make failure visible) ----
+ * A denial's `rule` field carries a REASON CODE from this controlled
+ * vocabulary, never the destination/host (that goes in `target`). A matched
+ * rule pattern goes in `match` ONLY when a rule actually matched. So a
+ * not-on-allowlist drop no longer reads "rule: <host>" as if a rule matched. */
+#define KAI_REASON_NOT_ALLOWLISTED "not_on_allowlist"   /* egress: absent from the allowlist */
+#define KAI_REASON_RULE_DENIED     "rule_denied"        /* a configured rule matched (see match) */
+#define KAI_REASON_PROTECTED       "protected_resource" /* storage: a protected path (see match) */
+#define KAI_REASON_UNATTRIBUTED    "unattributed_process" /* identity could not be established */
+
+/* Write a structured denial record. source "network"|"storage"; event = agent;
+ * decision "block"|"would-block"|"log"; resource = host:port or path (-> target);
+ * op -> tool; reason_code = one of KAI_REASON_*; matched_rule -> match (may be
+ * NULL/"" when no rule matched); detail = the human sentence. Logs no secrets. */
+void kai_denial_audit(const char *source, const char *agent, const char *decision,
+                      const char *resource, const char *op, const char *reason_code,
+                      const char *matched_rule, const char *detail);
 /* Verify the chain. Returns 0 if intact; fills nlines and err. */
 int kai_audit_verify(const char *path, int *nlines, char *err, size_t errlen);
 const char *kai_home(void);       /* $KAI_HOME or ~/.kai */

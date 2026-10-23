@@ -34,6 +34,8 @@ int kai_cmd_log_show(int argc, char **argv);
 int kai_cmd_report(int argc, char **argv);
 int kai_cmd_storaged(int argc, char **argv);
 int kai_cmd_grant(int argc, char **argv);
+int kai_cmd_why(int argc, char **argv);
+int kai_cmd_denials(int argc, char **argv);
 
 static int cmd_version(void) { printf("kai %s\n", KAI_VERSION); return 0; }
 
@@ -233,6 +235,8 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "report") == 0) return kai_cmd_report(rest, restv);
     if (strcmp(cmd, "storaged") == 0) return kai_cmd_storaged(rest, restv);
     if (strcmp(cmd, "grant") == 0) return kai_cmd_grant(rest, restv);
+    if (strcmp(cmd, "why") == 0) return kai_cmd_why(rest, restv);
+    if (strcmp(cmd, "denials") == 0) return kai_cmd_denials(rest, restv);
     if (strcmp(cmd, "version") == 0 || strcmp(cmd, "--version") == 0) return cmd_version();
     if (strcmp(cmd, "help") == 0 || strcmp(cmd, "-h") == 0 || strcmp(cmd, "--help") == 0) {
         usage(); return 0;

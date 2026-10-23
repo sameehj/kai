@@ -163,6 +163,22 @@ int kai_audit(const char *source, const char *event, const char *decision,
     return kai_audit_write(&e);
 }
 
+void kai_denial_audit(const char *source, const char *agent, const char *decision,
+                      const char *resource, const char *op, const char *reason_code,
+                      const char *matched_rule, const char *detail) {
+    kai_audit_entry e;
+    memset(&e, 0, sizeof e);
+    e.source = source;
+    e.event = agent;
+    e.decision = decision ? decision : "block";
+    e.rule = reason_code;                 /* a reason CODE, never the host/path */
+    e.detail = detail;
+    e.tool = op;
+    e.target = resource;                  /* host:port or path */
+    e.match = (matched_rule && *matched_rule) ? matched_rule : NULL; /* only when a rule matched */
+    kai_audit_write(&e);
+}
+
 /* Health probes (kai status) exercise the hooks with a synthetic request; what
  * they decide is not something that happened, so it isn't recorded. */
 static int g_suppress;

@@ -537,20 +537,14 @@ final class StorageClient {
     }
 
     private func audit(decision: String, agent: String, op: String, path: String, why: String) {
-        // Record the actual target path (not just the matched rule) via the
-        // richer audit entry, so the activity view and `kai log` show WHICH file
-        // was touched. A path is an identifier, not file contents; the audit
-        // layer still caps target length (KAI_AUDIT_TARGET_MAX).
+        // Structured denial record: reason code "protected_resource" in `rule`,
+        // the matched protect rule in `match`, and the actual path in `target` --
+        // so the Activity view and `kai why` show WHICH file and WHY, and the
+        // record never mislabels the path as a rule. A path is an identifier, not
+        // file contents; the audit layer caps target length.
         let detail = "agent \(op) of a protected file"
-        "storage".withCString { src in agent.withCString { ev in
-        decision.withCString { dec in why.withCString { rl in
-        detail.withCString { det in op.withCString { tl in
-        path.withCString { tg in
-            var e = kai_audit_entry(source: src, event: ev, decision: dec, rule: rl,
-                                    detail: det, tool: tl, target: tg,
-                                    match: nil, session: nil, cwd: nil)
-            kai_audit_write(&e)
-        }}}}}}}
+        kai_denial_audit("storage", agent, decision, path, op,
+                         KAI_REASON_PROTECTED, why, detail)
         if userUID >= 501 {
             let log = String(cString: kai_audit_path())
             chown(log, userUID, userGID)
