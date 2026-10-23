@@ -24,6 +24,27 @@
 
 static void grants_dir(char *buf, size_t n) { snprintf(buf, n, "%s/grants", kai_home()); }
 
+/* M1.3: an agent-attributed process must never create or revoke grants. Best-
+ * effort: if our own process tree traces to a known agent, refuse. (A human
+ * terminal has no agent ancestor.) */
+static int caller_is_agent(void) {
+    char err[256];
+    kai_policy *p = kai_policy_load(NULL, err, sizeof err);
+    if (!p) return 0;                     /* can't determine: don't block the human */
+    char name[64]; int apid;
+    int hit = kai_process_agent(p, (int)getpid(), name, sizeof name, &apid);
+    kai_policy_free(p);
+    return hit;
+}
+static int refuse_if_agent(const char *verb) {
+    if (caller_is_agent()) {
+        fprintf(stderr, "kai grant %s: refused -- an agent-attributed process may request "
+                        "(write an unsigned record) but never create or revoke grants.\n", verb);
+        return 1;
+    }
+    return 0;
+}
+
 static const char *op_name(int op) {
     return op == KAI_OP_WRITE ? "write" : op == KAI_OP_CONNECT ? "connect" : "read";
 }
@@ -69,6 +90,7 @@ static int grant_list(int json) {
 
 static int grant_revoke(const char *idprefix) {
     if (!idprefix || !*idprefix) { fprintf(stderr, "usage: kai grant revoke <id>\n"); return 2; }
+    if (refuse_if_agent("revoke")) return 3;
     char dir[512]; grants_dir(dir, sizeof dir);
     kai_grant *g = NULL; int n = 0;
     kai_grants_load(dir, &g, &n);
@@ -88,6 +110,7 @@ static int grant_revoke(const char *idprefix) {
 }
 
 static int grant_create(int argc, char **argv) {
+    if (refuse_if_agent("create")) return 3;
     kai_grant g;
     memset(&g, 0, sizeof g);
     g.op = KAI_OP_READ; g.scope = KAI_GRANT_PROCESS; g.strength = KAI_ID_STRONG;

@@ -189,8 +189,14 @@ typedef struct {
     int op;                     /* kai_grant_op                                */
     int scope;                  /* kai_grant_scope                             */
     char approved_by[32];       /* "console-user" | "cli" (informational)      */
+    int grant_version;          /* 1 (v1) or 2 (adds session/project/dest_kind) */
+    char session_id[40];        /* v2: bind to one verified agent session; "" = any */
+    char project[KAI_GRANT_RES_MAX]; /* v2: realpath at root exec; "" = any      */
+    int dest_kind;              /* v2: kai_grant_dest (path | endpoint)          */
     char hmac[65];              /* hex HMAC-SHA256 over the canonical form      */
 } kai_grant;
+
+typedef enum { KAI_DEST_PATH = 0, KAI_DEST_ENDPOINT = 1 } kai_grant_dest;
 
 /* The requesting process, at enforcement time. */
 typedef struct {
@@ -198,6 +204,8 @@ typedef struct {
     unsigned long long pidversion;
     const char *agent;          /* classified name, or NULL                    */
     int strength;               /* kai_identity_strength                       */
+    const char *session_id;     /* v2: current verified session, or NULL        */
+    const char *project;        /* v2: current project (realpath), or NULL      */
 } kai_grant_subject;
 
 /* Sign / verify a grant's canonical form with the approval key (raw bytes). */
@@ -213,6 +221,14 @@ char *kai_grant_build_json(const char *id, long long created, long long expires,
                            int pid, unsigned long long pidversion, const char *agent,
                            int strength, const char *resource, int op, int scope,
                            const char *approved_by, const unsigned char *key, size_t keylen);
+/* v2 variant: also binds session_id, project and dest_kind (sets grant_version
+ * 2). session_id/project may be NULL/"" for "any". */
+char *kai_grant_build_json2(const char *id, long long created, long long expires,
+                            int pid, unsigned long long pidversion, const char *agent,
+                            int strength, const char *resource, int op, int scope,
+                            const char *approved_by, const char *session_id,
+                            const char *project, int dest_kind,
+                            const unsigned char *key, size_t keylen);
 
 /* Load every *.json grant under dir (e.g. <home>/grants). Caller free()s *out.
  * A grant with a durable "<dir>/<id>.used" marker (a spent one-shot) is skipped. */

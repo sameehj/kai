@@ -215,8 +215,11 @@ final class StorageClient {
         var ok = false
         var why = [CChar](repeating: 0, count: 256)
         agent.withCString { ap in
+            // session_id/project are nil until M1.2 mints sessions at agent-root
+            // exec; a v2 session/project-bound grant then won't match (fail-closed).
             var subj = kai_grant_subject(pid: pid(proc), pidversion: UInt64(token.val.7),
-                                         agent: ap, strength: subjStrength)
+                                         agent: ap, strength: subjStrength,
+                                         session_id: nil, project: nil)
             let now = Int64(Date().timeIntervalSince1970)
             ok = kai_approval_store_decide(gs, p, nil, opCode(opStr), &subj, now, &why, why.count) == 1
         }

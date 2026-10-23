@@ -54,12 +54,22 @@ static void hmac_sha256(const unsigned char *key, size_t keylen,
     kai_sha256(outer, sizeof outer, out);
 }
 
-/* Stable canonical form over every field except the HMAC itself. */
+/* Stable canonical form over every field except the HMAC itself. Versioned: a
+ * v1 grant keeps the exact v1 string (so old signatures still verify); a v2
+ * grant prepends "v2" and appends session_id/project/dest_kind, so a v1 record
+ * can never be replayed as v2 or vice-versa. */
 static int grant_canonical(const kai_grant *g, char *buf, size_t n) {
-    int w = snprintf(buf, n, "%s\n%lld\n%lld\n%d\n%llu\n%s\n%d\n%s\n%d\n%d\n%s",
+    int w;
+    if (g->grant_version >= 2) {
+        w = snprintf(buf, n, "v2\n%s\n%lld\n%lld\n%d\n%llu\n%s\n%d\n%s\n%d\n%d\n%s\n%s\n%s\n%d",
                      g->id, g->created_utc, g->expires_utc, g->pid, g->pidversion,
-                     g->agent, g->strength, g->resource, g->op, g->scope,
-                     g->approved_by);
+                     g->agent, g->strength, g->resource, g->op, g->scope, g->approved_by,
+                     g->session_id, g->project, g->dest_kind);
+    } else {
+        w = snprintf(buf, n, "%s\n%lld\n%lld\n%d\n%llu\n%s\n%d\n%s\n%d\n%d\n%s",
+                     g->id, g->created_utc, g->expires_utc, g->pid, g->pidversion,
+                     g->agent, g->strength, g->resource, g->op, g->scope, g->approved_by);
+    }
     return w > 0 && (size_t)w < n;
 }
 
@@ -70,7 +80,7 @@ static void hex32(const uint8_t d[32], char out[65]) {
 }
 
 void kai_grant_sign(kai_grant *g, const unsigned char *key, size_t keylen) {
-    char canon[2048];
+    char canon[4096];
     if (!grant_canonical(g, canon, sizeof canon)) { g->hmac[0] = '\0'; return; }
     uint8_t mac[32];
     hmac_sha256(key, keylen, canon, strlen(canon), mac);
@@ -80,7 +90,7 @@ void kai_grant_sign(kai_grant *g, const unsigned char *key, size_t keylen) {
 /* Constant-time-ish compare of the stored HMAC against a fresh one. */
 int kai_grant_hmac_ok(const kai_grant *g, const unsigned char *key, size_t keylen) {
     if (!g || strlen(g->hmac) != 64) return 0;
-    char canon[2048];
+    char canon[4096];
     if (!grant_canonical(g, canon, sizeof canon)) return 0;
     uint8_t mac[32];
     char hex[65];
@@ -110,6 +120,10 @@ char *kai_grant_to_json(const kai_grant *g) {
     cJSON_AddNumberToObject(o, "op", g->op);
     cJSON_AddNumberToObject(o, "scope", g->scope);
     cJSON_AddStringToObject(o, "approved_by", g->approved_by);
+    cJSON_AddNumberToObject(o, "grant_version", g->grant_version);
+    cJSON_AddStringToObject(o, "session_id", g->session_id);
+    cJSON_AddStringToObject(o, "project", g->project);
+    cJSON_AddNumberToObject(o, "dest_kind", g->dest_kind);
     cJSON_AddStringToObject(o, "hmac", g->hmac);
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
@@ -148,6 +162,10 @@ int kai_grant_from_json(const char *json, kai_grant *out) {
     out->op = num_int(o, "op");
     out->scope = num_int(o, "scope");
     cpy(out->approved_by, sizeof out->approved_by, o, "approved_by");
+    out->grant_version = num_int(o, "grant_version");
+    cpy(out->session_id, sizeof out->session_id, o, "session_id");
+    cpy(out->project, sizeof out->project, o, "project");
+    out->dest_kind = num_int(o, "dest_kind");
     cpy(out->hmac, sizeof out->hmac, o, "hmac");
     cJSON_Delete(o);
     return out->id[0] != '\0';
@@ -196,6 +214,34 @@ char *kai_grant_build_json(const char *id, long long created, long long expires,
     g.op = op;
     g.scope = scope;
     kai_strlcpy(g.approved_by, approved_by ? approved_by : "", sizeof g.approved_by);
+    g.grant_version = 1;
+    kai_grant_sign(&g, key, keylen);
+    return kai_grant_to_json(&g);
+}
+
+char *kai_grant_build_json2(const char *id, long long created, long long expires,
+                            int pid, unsigned long long pidversion, const char *agent,
+                            int strength, const char *resource, int op, int scope,
+                            const char *approved_by, const char *session_id,
+                            const char *project, int dest_kind,
+                            const unsigned char *key, size_t keylen) {
+    kai_grant g;
+    memset(&g, 0, sizeof g);
+    kai_strlcpy(g.id, id ? id : "", sizeof g.id);
+    g.created_utc = created;
+    g.expires_utc = expires;
+    g.pid = pid;
+    g.pidversion = pidversion;
+    kai_strlcpy(g.agent, agent ? agent : "", sizeof g.agent);
+    g.strength = strength;
+    kai_strlcpy(g.resource, resource ? resource : "", sizeof g.resource);
+    g.op = op;
+    g.scope = scope;
+    kai_strlcpy(g.approved_by, approved_by ? approved_by : "", sizeof g.approved_by);
+    g.grant_version = 2;
+    kai_strlcpy(g.session_id, session_id ? session_id : "", sizeof g.session_id);
+    kai_strlcpy(g.project, project ? project : "", sizeof g.project);
+    g.dest_kind = dest_kind;
     kai_grant_sign(&g, key, keylen);
     return kai_grant_to_json(&g);
 }
@@ -266,6 +312,10 @@ int kai_grant_match(const kai_grant *grants, int n, const kai_grant_subject *s,
         if (s->agent && g->agent[0] && strcmp(g->agent, s->agent) != 0) continue;
         if (s->strength < g->strength) continue;            /* downgraded identity */
         if (g->strength <= KAI_ID_WEAK && g->scope != KAI_GRANT_ONESHOT) continue;
+        if (g->grant_version >= 2) {                         /* v2 session/project binding */
+            if (g->session_id[0] && (!s->session_id || strcmp(g->session_id, s->session_id) != 0)) continue;
+            if (g->project[0] && (!s->project || strcmp(g->project, s->project) != 0)) continue;
+        }
         if (strcmp(g->resource, resolved_path) != 0) continue; /* exact canonical */
         return i;
     }

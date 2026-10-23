@@ -108,10 +108,13 @@ final class GrantManager: ObservableObject {
 
         let json: String? = key.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> String? in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return nil }
-            guard let c = kai_grant_build_json(gid, Int64(now), Int64(expires), Int32(req.pid),
-                                               req.pidversion, req.agent, Int32(req.strength),
-                                               req.resource, opCode, scopeCode, "console-user",
-                                               base, key.count) else { return nil }
+            // v2 grant. session_id/project are empty ("any") until M1.2 supplies
+            // the verified session; dest_kind is path for storage ops.
+            let destKind: Int32 = (req.op == "connect") ? 1 : 0
+            guard let c = kai_grant_build_json2(gid, Int64(now), Int64(expires), Int32(req.pid),
+                                                req.pidversion, req.agent, Int32(req.strength),
+                                                req.resource, opCode, scopeCode, "console-user",
+                                                "", "", destKind, base, key.count) else { return nil }
             defer { free(c) }
             return String(cString: c)
         }

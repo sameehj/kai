@@ -129,6 +129,26 @@ static kai_grant mkgrant(const char *res, int op, int scope, int strength,
     return g;
 }
 
+static kai_grant mkgrant2(const char *res, int op, int scope, int strength,
+                          int pid, unsigned long long pv, long long expires,
+                          const char *session, const char *project, int dest) {
+    kai_grant g;
+    memset(&g, 0, sizeof g);
+    snprintf(g.id, sizeof g.id, "g2-%d-%d-%d", pid, op, scope);
+    g.created_utc = 1000; g.expires_utc = expires; g.pid = pid; g.pidversion = pv;
+    snprintf(g.agent, sizeof g.agent, "claude");
+    g.strength = strength;
+    snprintf(g.resource, sizeof g.resource, "%s", res);
+    g.op = op; g.scope = scope;
+    snprintf(g.approved_by, sizeof g.approved_by, "console-user");
+    g.grant_version = 2;
+    if (session) snprintf(g.session_id, sizeof g.session_id, "%s", session);
+    if (project) snprintf(g.project, sizeof g.project, "%s", project);
+    g.dest_kind = dest;
+    kai_grant_sign(&g, GKEY, GKEYLEN);
+    return g;
+}
+
 static void test_grants(void) {
     printf("scoped approvals (grant engine)\n");
     const long long NOW = 1000;
@@ -244,6 +264,42 @@ static void test_grants(void) {
         free(loaded);
         unlink(fp); rmdir(dir);
     }
+
+    /* ---- v2: session + project binding, and endpoint (network) grants ---- */
+    kai_grant_subject s1 = { .pid = 100, .pidversion = 5, .agent = "claude",
+                             .strength = KAI_ID_STRONG, .session_id = "S1", .project = "/proj" };
+    kai_grant_subject s2 = { .pid = 100, .pidversion = 5, .agent = "claude",
+                             .strength = KAI_ID_STRONG, .session_id = "S2", .project = "/proj" };
+    kai_grant_subject s0 = { .pid = 100, .pidversion = 5, .agent = "claude",
+                             .strength = KAI_ID_STRONG }; /* no session/project */
+
+    kai_grant sg = mkgrant2("/secrets/data", KAI_OP_READ, KAI_GRANT_PROCESS, KAI_ID_STRONG,
+                            100, 5, 1000000, "S1", NULL, KAI_DEST_PATH);
+    CHECK(kai_storage_decide(pol, "/secrets/data", NULL, KAI_OP_READ, &s1, &sg, 1,
+                             1000, GKEY, GKEYLEN, why, sizeof why) == 1, "v2 session grant allows the bound session");
+    CHECK(kai_storage_decide(pol, "/secrets/data", NULL, KAI_OP_READ, &s2, &sg, 1,
+                             1000, GKEY, GKEYLEN, why, sizeof why) == 0, "v2 session grant denies a different session");
+    CHECK(kai_storage_decide(pol, "/secrets/data", NULL, KAI_OP_READ, &s0, &sg, 1,
+                             1000, GKEY, GKEYLEN, why, sizeof why) == 0, "v2 session grant denies a process with no session");
+
+    kai_grant pgj = mkgrant2("/secrets/data", KAI_OP_READ, KAI_GRANT_PROCESS, KAI_ID_STRONG,
+                             100, 5, 1000000, NULL, "/proj", KAI_DEST_PATH);
+    CHECK(kai_storage_decide(pol, "/secrets/data", NULL, KAI_OP_READ, &s1, &pgj, 1,
+                             1000, GKEY, GKEYLEN, why, sizeof why) == 1, "v2 project grant allows the bound project");
+    kai_grant_subject sp2 = { .pid = 100, .pidversion = 5, .agent = "claude",
+                              .strength = KAI_ID_STRONG, .project = "/other" };
+    CHECK(kai_storage_decide(pol, "/secrets/data", NULL, KAI_OP_READ, &sp2, &pgj, 1,
+                             1000, GKEY, GKEYLEN, why, sizeof why) == 0, "v2 project grant denies a different project");
+
+    /* endpoint (network) grant: op=connect, resource = host:port, exact match */
+    kai_grant eg = mkgrant2("example.com:443", KAI_OP_CONNECT, KAI_GRANT_PROCESS, KAI_ID_STRONG,
+                            100, 5, 1000000, "S1", NULL, KAI_DEST_ENDPOINT);
+    CHECK(kai_grant_match(&eg, 1, &s1, "example.com:443", KAI_OP_CONNECT, 1000, GKEY, GKEYLEN) == 0,
+          "v2 endpoint grant matches host:port for a connect");
+    CHECK(kai_grant_match(&eg, 1, &s1, "evil.com:443", KAI_OP_CONNECT, 1000, GKEY, GKEYLEN) == -1,
+          "v2 endpoint grant does not match a different host");
+    CHECK(kai_grant_match(&eg, 1, &s1, "example.com:443", KAI_OP_READ, 1000, GKEY, GKEYLEN) == -1,
+          "v2 endpoint grant does not match a different op");
 
     /* read-allow / write-block classification of control paths */
     CHECK(kai_control_read_allowed(".claude/settings.json") == 1, "agent may READ its Claude hook config");
