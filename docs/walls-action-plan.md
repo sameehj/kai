@@ -18,6 +18,8 @@ stays intact.
 
 This checklist marks a step complete only when its stated acceptance conditions
 are met. Recent M0/M1 code does **not** make the phase acceptance tests pass yet.
+The installed-build evidence and source commit are recorded in
+`docs/audit/approval-install-preflight.md`.
 
 | Area | Live | Unit / build | Remaining |
 |---|---|---|---|
