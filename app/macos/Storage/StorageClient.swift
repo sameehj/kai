@@ -215,17 +215,16 @@ final class StorageClient {
         let strong = (flags & 0x1) != 0 && (flags & 0x2) == 0  // valid, non-adhoc
         let subjStrength: Int32 = strong ? 2 : 1               // strong : medium
         let token = proc.pointee.audit_token
+        let sess = sessionFor(pid(proc))
         var ok = false
         var why = [CChar](repeating: 0, count: 256)
-        agent.withCString { ap in
-            // session_id/project are nil until M1.2 mints sessions at agent-root
-            // exec; a v2 session/project-bound grant then won't match (fail-closed).
+        agent.withCString { ap in sess.sid.withCString { sp in sess.project.withCString { pp in
             var subj = kai_grant_subject(pid: pid(proc), pidversion: UInt64(token.val.7),
                                          agent: ap, strength: subjStrength,
-                                         session_id: nil, project: nil)
+                                         session_id: sp, project: pp)
             let now = Int64(Date().timeIntervalSince1970)
             ok = kai_approval_store_decide(gs, p, nil, opCode(opStr), &subj, now, &why, why.count) == 1
-        }
+        }}}
         return ok
     }
 
@@ -258,6 +257,64 @@ final class StorageClient {
         writeFileNoFollow(fp, Array(json.utf8), append: false)
         if userUID >= 501 { chown(fp, userUID, userGID); chown(dir, userUID, userGID) }
         kai_grant_audit("requested", id, agent, p, opCode(opStr), "request", "awaiting approval")
+    }
+
+    // MARK: M1.2 session identity
+    // A session id is minted at a recognized agent's ROOT exec (keyed on its
+    // audit token), inherited by children, and written to a shared file the
+    // network extension can read -- so "Allow for this session" covers the
+    // child processes (ssh, node) that actually open files/connections.
+    private var sessions: [pid_t: (sid: String, project: String)] = [:]
+
+    private func cwdOf(_ p: pid_t) -> String {
+        var info = proc_vnodepathinfo()
+        let sz = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+        guard proc_pidinfo(p, PROC_PIDVNODEPATHINFO, 0, &info, sz) > 0 else { return "" }
+        return withUnsafeBytes(of: &info.pvi_cdir.vip_path) { raw in
+            guard let base = raw.bindMemory(to: CChar.self).baseAddress else { return "" }
+            return String(cString: base)
+        }
+    }
+
+    private func sessionPath(_ p: pid_t) -> String {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        return home + "/.kai/sessions/\(p).json"
+    }
+
+    private func writeSessionFile(pid p: pid_t, pidv: UInt32, sid: String, project: String) {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        let dir = home + "/.kai/sessions"
+        mkdir(dir, 0o700)
+        func esc(_ s: String) -> String {
+            s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        }
+        let json = "{\"pid\":\(p),\"pidversion\":\(pidv),\"session\":\"\(esc(sid))\"," +
+                   "\"project\":\"\(esc(project))\"}"
+        writeFileNoFollow(sessionPath(p), Array(json.utf8), append: false)
+        if userUID >= 501 { chown(sessionPath(p), userUID, userGID); chown(dir, userUID, userGID) }
+    }
+
+    /// Mint (root) or inherit (child) a session for an agent process `proc`.
+    private func mintSession(_ proc: UnsafeMutablePointer<es_process_t>) {
+        let p = pid(proc)
+        let ppid = proc.pointee.ppid
+        let pidv = UInt32(proc.pointee.audit_token.val.7)
+        lock.lock()
+        let entry: (sid: String, project: String) = sessions[ppid] ?? (UUID().uuidString, cwdOf(p))
+        if sessions.count > 8192 { sessions.removeAll() }
+        sessions[p] = entry
+        lock.unlock()
+        writeSessionFile(pid: p, pidv: pidv, sid: entry.sid, project: entry.project)
+    }
+
+    private func sessionFor(_ p: pid_t) -> (sid: String, project: String) {
+        lock.lock(); defer { lock.unlock() }
+        return sessions[p] ?? ("", "")
+    }
+
+    private func dropSession(_ p: pid_t) {
+        lock.lock(); sessions[p] = nil; lock.unlock()
+        try? FileManager.default.removeItem(atPath: sessionPath(p))
     }
     #endif
 
@@ -412,19 +469,36 @@ final class StorageClient {
             let target = msg.pointee.event.exec.target
             let p = pid(target)
             lock.lock(); agentCache[p] = nil; lock.unlock()   // re-exec: drop stale verdict
-            // process filter: suppress file events only for POSITIVELY-classified
-            // non-agents; keep watching agents and never mute unknowns (nil).
-            if filter == .process, !isKaiOwnProcess(target) {
-                if let v = classify(target) { muteFS(target, v.isEmpty) }
+            if !isKaiOwnProcess(target) {
+                let v = classify(target)                      // agent name, "" non-agent, nil unknown
+                if filter == .process, let v { muteFS(target, v.isEmpty) }
+                #if KAI_STORAGE_ENFORCE
+                if let v, !v.isEmpty { mintSession(target) }  // agents get/inherit a session
+                #endif
             }
         case ES_EVENT_TYPE_NOTIFY_FORK:
             let parent = pid(msg.pointee.process)
             let child = pid(msg.pointee.event.fork.child)
-            lock.lock(); if let v = agentCache[parent] { agentCache[child] = v }; lock.unlock()
+            lock.lock()
+            if let v = agentCache[parent] { agentCache[child] = v }
+            #if KAI_STORAGE_ENFORCE
+            let parentSession = sessions[parent]
+            if let s = parentSession { sessions[child] = s }
+            #endif
+            lock.unlock()
+            #if KAI_STORAGE_ENFORCE
+            if let s = parentSession {                        // child shares the session before it execs
+                writeSessionFile(pid: child, pidv: UInt32(msg.pointee.event.fork.child.pointee.audit_token.val.7),
+                                 sid: s.sid, project: s.project)
+            }
+            #endif
             // Do NOT mute the child here: a fresh pid is unknown until it execs.
         case ES_EVENT_TYPE_NOTIFY_EXIT:
             let p = pid(msg.pointee.process)
             lock.lock(); agentCache[p] = nil; lock.unlock()
+            #if KAI_STORAGE_ENFORCE
+            dropSession(p)
+            #endif
         case ES_EVENT_TYPE_NOTIFY_OPEN:
             _ = authorize(msg, paths: [path(msg.pointee.event.open.file)], op: "open", enforce: false, write: false)
         case ES_EVENT_TYPE_AUTH_OPEN:

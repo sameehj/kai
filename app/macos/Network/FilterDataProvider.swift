@@ -280,16 +280,31 @@ final class Engine {
     private func endpointGrantAllows(pid: pid_t, pidv: UInt32, agent: String, dest: String) -> Bool {
         guard let gs = grantStore, pid > 0 else { return false }
         _ = kai_approval_store_reload(gs, 0)      // debounced; picks up new/revoked grants
+        // Resolve the session the storage extension minted for this process tree
+        // (shared via ~/.kai/sessions/<pid>.json), so a session-scoped grant made
+        // for the agent covers the child (ssh/node) that opens the connection.
+        let s = sessionFor(pid: pid, pidv: pidv)
         var ok = false
-        agent.withCString { ap in
+        agent.withCString { ap in s.sid.withCString { sp in s.project.withCString { pp in
             var subj = kai_grant_subject(pid: Int32(pid), pidversion: UInt64(pidv),
                                          agent: ap, strength: 1 /* medium */,
-                                         session_id: nil, project: nil)
+                                         session_id: sp, project: pp)
             var why = [CChar](repeating: 0, count: 256)
             ok = kai_approval_store_decide(gs, dest, nil, Int32(KAI_OP_CONNECT.rawValue), &subj,
                                            Int64(Date().timeIntervalSince1970), &why, why.count) == 1
-        }
+        }}}
         return ok
+    }
+
+    /// The session (and project) the storage extension recorded for this process
+    /// instance, or empty if none / pidversion mismatch (reused pid).
+    private func sessionFor(pid: pid_t, pidv: UInt32) -> (sid: String, project: String) {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        guard let data = FileManager.default.contents(atPath: home + "/.kai/sessions/\(pid).json"),
+              let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let fv = (o["pidversion"] as? NSNumber)?.uint32Value, fv == pidv
+        else { return ("", "") }
+        return (o["session"] as? String ?? "", o["project"] as? String ?? "")
     }
 
     /// Stage an async approval request for a blocked destination (deduped), so
