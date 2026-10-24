@@ -64,14 +64,46 @@ outcome per attack path:
 In every case the live policy must be **unchanged**. C and D additionally leave
 a `~/.kai/pending-policy/*.json` the user would confirm or reject in the app.
 
-### Results (filled after the live run)
+### Results — live run 2026-10-24 (installed signed CLI, storage=block)
 
-- [ ] A direct — result:
-- [ ] B stripped-env — result:
-- [ ] C launchctl — result:
-- [ ] D osascript — result:
-- [ ] policy file unchanged (hash match) — result:
-- [ ] audit shows the attempts with caller chain + signing identity — result:
+Probe `kai policy set storage off` (block->off, loosening) against
+`/Applications/Kai.app/Contents/Resources/kai` (TeamIdentifier KD446VDTM2),
+real `~/.kai/policy`. Policy hashed before/after.
+
+- [x] **A direct** — **REFUSED** (exit 3): "an agent-attributed process cannot
+  change Kai's policy." PASS.
+- [x] **B stripped-env** (`env -i HOME=… PATH=… kai …`) — **REFUSED** (exit 3);
+  clearing the environment does not evade the process-tree attribution. PASS.
+- [x] **C launchctl** (`launchctl submit`, reparented to launchd) — **HELD
+  PENDING**: "would reduce protection … NOT active yet." A pending request was
+  written; its `caller_chain` was `kai(…) <- launchd(1)` — i.e. attribution was
+  genuinely evaded, and the loosening was still blocked from taking effect. PASS.
+- [~] **D osascript → Terminal** — **NOT TESTED**: the environment refused the
+  automation (`-1743 Not authorized to send Apple events to Terminal`). No policy
+  change occurred. Rerun on a machine where Terminal automation is permitted;
+  the expected path (Terminal is launchd-parented, so detached like C) is held
+  pending, same as C.
+- [x] **policy file unchanged (hash match)** — PASS: identical SHA-256 before and
+  after all four attempts (`9b57d9b8…a87363`).
+- [x] **audit shows the attempts with caller chain + signing identity** — PASS:
+  `{"source":"policy","event":"loosen","decision":"pending", … detail:"set
+  storage block->off | caller: kai(32161) <- launchd(1) | signed: KD446VDTM2"}`.
+
+Summary: every path that uses the `kai` CLI ended in **refused or pending with
+the policy unchanged** — the required outcome. The test's pending request (a
+"disable storage wall" proposal) was deleted afterward so it cannot be confirmed
+by accident.
+
+### ES defense-in-depth (#1) — build/compile verified, not live-exercised
+
+The storage extension change (withhold the Kai-signature exemption from an
+agent-tree `kai` writing the control store) compiles under `KAI_STORAGE_ENFORCE`
+and is covered by the `kai_path_is_control_store` engine helper. It was NOT
+live-exercised this run: the active extension is still **storage 0.1.0/17**; the
+rebuilt **v18** (carrying this change) was installed in the app bundle but its
+activation upgrade had not completed, and activating a replacement extension is
+a human-gated step. #4's outcomes above do not depend on it (they are enforced
+by the `kai` binary).
 
 ## Known residual gap (honest limitation)
 
