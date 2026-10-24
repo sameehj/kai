@@ -68,13 +68,35 @@ struct ActiveGrant: Decodable, Identifiable {
 
 enum GrantScope { case once, process }
 
+/// A policy change that would LOOSEN protection, held for the user to confirm
+/// here (U0 hardening). The CLI queues these under ~/.kai/pending-policy instead
+/// of applying them, regardless of caller; only this app — Kai-signed and not in
+/// an agent tree, so exempt from the storage wall — writes the policy file, and
+/// only from a real button click. An agent cannot forge an apply.
+struct PendingPolicyChange: Decodable, Identifiable {
+    let id: String
+    let summary: String
+    let proposedPolicy: String
+    let callerChain: String
+    let callerTeam: String
+    enum CodingKeys: String, CodingKey {
+        case id, summary
+        case proposedPolicy = "proposed_policy"
+        case callerChain = "caller_chain"
+        case callerTeam = "caller_team"
+    }
+}
+
 final class GrantManager: ObservableObject {
     @Published private(set) var pending: [PendingRequest] = []
     @Published private(set) var grants: [ActiveGrant] = []
+    @Published private(set) var pendingPolicy: [PendingPolicyChange] = []
 
     private var home: String { ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory() }
     private var pendingDir: String { home + "/.kai/pending" }
     private var grantsDir: String { home + "/.kai/grants" }
+    private var pendingPolicyDir: String { home + "/.kai/pending-policy" }
+    private var policyPath: String { home + "/.kai/policy" }
     private var timer: Timer?
 
     init() {
@@ -87,6 +109,9 @@ final class GrantManager: ObservableObject {
         pending = loadJSON(dir: pendingDir).compactMap { try? JSONDecoder().decode(PendingRequest.self, from: $0) }
             .sorted { $0.ts < $1.ts }
         grants = loadJSON(dir: grantsDir).compactMap { try? JSONDecoder().decode(ActiveGrant.self, from: $0) }
+            .sorted { $0.id < $1.id }
+        pendingPolicy = loadJSON(dir: pendingPolicyDir)
+            .compactMap { try? JSONDecoder().decode(PendingPolicyChange.self, from: $0) }
             .sorted { $0.id < $1.id }
     }
 
@@ -149,6 +174,31 @@ final class GrantManager: ObservableObject {
     private func clearPending(_ req: PendingRequest) {
         try? FileManager.default.removeItem(atPath: pendingDir + "/" + req.id + ".json")
     }
+
+    /// Apply a loosening policy change the user confirmed. ONLY path that writes
+    /// the policy file for a loosening change. Runs only from a button click in
+    /// a Kai-owned window; the app's Kai signature (and absence from any agent
+    /// tree) is what lets this write past the storage wall. Writes atomically,
+    /// audits, then removes the pending request.
+    func applyPolicy(_ c: PendingPolicyChange) {
+        let url = URL(fileURLWithPath: policyPath)
+        do {
+            try Data(c.proposedPolicy.utf8).write(to: url, options: .atomic)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: policyPath)
+        } catch {
+            return   // leave the pending request in place if the write failed
+        }
+        kai_audit("policy", "confirm", "applied", "", "user confirmed in app: " + c.summary)
+        try? FileManager.default.removeItem(atPath: pendingPolicyDir + "/" + c.id + ".json")
+        refresh()
+    }
+
+    /// Reject a held change: drop the request, audit, apply nothing.
+    func rejectPolicy(_ c: PendingPolicyChange) {
+        kai_audit("policy", "confirm", "rejected", "", "user rejected in app: " + c.summary)
+        try? FileManager.default.removeItem(atPath: pendingPolicyDir + "/" + c.id + ".json")
+        refresh()
+    }
 }
 
 // MARK: - Views
@@ -183,12 +233,43 @@ struct ApprovalCard: View {
     }
 }
 
-/// The approvals section for the menu: pending requests + active grants.
+/// A single pending policy-change card: a change that would reduce protection,
+/// shown with who asked and how, awaiting the user's explicit confirmation.
+struct PendingPolicyCard: View {
+    let change: PendingPolicyChange
+    @ObservedObject var manager: GrantManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("KAI — Confirm policy change").font(.headline)
+            Text("A change that would REDUCE protection is waiting. It is not active.")
+                .font(.caption).foregroundColor(.secondary)
+            Text(change.summary).font(.system(.caption, design: .monospaced)).lineLimit(2)
+            Text("Requested by: \(change.callerChain)")
+                .font(.caption2).foregroundColor(.secondary).lineLimit(2)
+            Text("Code signature: \(change.callerTeam)")
+                .font(.caption2).foregroundColor(.secondary)
+            HStack {
+                Button("Reject") { manager.rejectPolicy(change) }
+                Button("Apply (reduce protection)") { manager.applyPolicy(change) }
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
+    }
+}
+
+/// The approvals section for the menu: pending policy changes, pending access
+/// requests, and active grants.
 struct ApprovalsSection: View {
     @ObservedObject var manager: GrantManager
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if !manager.pendingPolicy.isEmpty {
+                Text("Pending policy changes").font(.caption).foregroundColor(.secondary)
+                ForEach(manager.pendingPolicy) { PendingPolicyCard(change: $0, manager: manager) }
+            }
             if !manager.pending.isEmpty {
                 Text("Pending approvals").font(.caption).foregroundColor(.secondary)
                 ForEach(manager.pending) { ApprovalCard(req: $0, manager: manager) }

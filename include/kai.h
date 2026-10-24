@@ -136,6 +136,11 @@ int kai_rule_is_kai_home(const char *rule);
  * READS are safe to allow (so the agent can start and Kai's hooks can load);
  * WRITES to it must still be blocked by the caller (anti-tamper). */
 int kai_control_read_allowed(const char *rule);
+/* True if `path` is Kai's own control store: the policy file, a file under the
+ * grants dir, or a file under the pending-policy dir. These must never be
+ * writable by an agent-tree process, Kai-signed or not (the storage wall uses
+ * this to withhold the Kai-signature exemption from a tagged `kai` process). */
+int kai_path_is_control_store(const char *path);
 
 /* Extract the server name (SNI) from the start of a TLS ClientHello.
  * Returns 1 and fills host if found, 0 if this is not TLS or carries no SNI,

@@ -465,6 +465,28 @@ const char *kai_policy_file(void) {
     return buf;
 }
 
+/* Path prefix test that resists "/.kai/../" and trailing-slash tricks only at
+ * the textual level; the storage wall already receives canonicalized ES paths,
+ * and the CLI uses this on realpath'd inputs. A match means the path IS `dir`
+ * or lies directly beneath it. */
+static int under_dir(const char *path, const char *dir) {
+    size_t dl = strlen(dir);
+    if (dl == 0) return 0;
+    if (strncmp(path, dir, dl) != 0) return 0;
+    return path[dl] == '\0' || path[dl] == '/';
+}
+
+int kai_path_is_control_store(const char *path) {
+    if (!path || !*path) return 0;
+    if (strcmp(path, kai_policy_file()) == 0) return 1;
+    char dir[1300];
+    snprintf(dir, sizeof dir, "%s/grants", kai_home());
+    if (under_dir(path, dir)) return 1;
+    snprintf(dir, sizeof dir, "%s/pending-policy", kai_home());
+    if (under_dir(path, dir)) return 1;
+    return 0;
+}
+
 kai_policy *kai_policy_from_string(const char *text, char *err, size_t errlen) {
     return parse(text, "string", err, errlen);
 }

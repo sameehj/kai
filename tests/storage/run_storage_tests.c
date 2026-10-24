@@ -618,6 +618,106 @@ static void test_policy_agent_refusal(void) {
     unlink(polp); unlink(outp); rmdir(dir);
 }
 
+/* Testable dispatch (manage.c): runs a policy change with an explicit
+ * caller_is_agent, so the loosen/pending/tighten logic can be exercised in
+ * process even though this test itself runs under an agent. */
+extern int kai_policy_dispatch(int argc, char **argv, int caller_is_agent);
+extern const char *kai_policy_file(void);
+
+/* Does any *.json under `dir` contain `needle`? */
+static int pending_has(const char *dir, const char *needle) {
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    struct dirent *de; int hit = 0;
+    while (!hit && (de = readdir(d))) {
+        size_t nl = strlen(de->d_name);
+        if (nl < 6 || strcmp(de->d_name + nl - 5, ".json")) continue;
+        char p[1200]; snprintf(p, sizeof p, "%s/%s", dir, de->d_name);
+        if (file_contains(p, needle)) hit = 1;
+    }
+    closedir(d);
+    return hit;
+}
+static int count_json(const char *dir) {
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    struct dirent *de; int n = 0;
+    while ((de = readdir(d))) {
+        size_t nl = strlen(de->d_name);
+        if (nl >= 6 && !strcmp(de->d_name + nl - 5, ".json")) n++;
+    }
+    closedir(d);
+    return n;
+}
+
+/* U0 hardening: a change that LOOSENS protection is held pending the user's
+ * confirmation regardless of caller; a TIGHTENING change applies at once;
+ * every change is audited; an agent-attributed caller is refused outright. */
+static void test_policy_pending(void) {
+    printf("policy loosening held pending, tightening applied (U0)\n");
+    char dir[] = "/tmp/kai-pendXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    /* Hermetic home for this test only; set BEFORE these calls cache paths is
+     * not possible (main() already cached kai_home), so write to the real
+     * cached home and a pending dir underneath it. Use KAI_POLICY-independent
+     * absolute paths via kai_policy_file()/kai_home(). */
+    const char *polp = kai_policy_file();
+    const char *home = kai_home();
+    char pend[1100]; snprintf(pend, sizeof pend, "%s/pending-policy", home);
+    char alog[1100]; snprintf(alog, sizeof alog, "%s/audit.log", home);
+    /* Clean slate for pending dir. */
+    { char rmc[1200]; snprintf(rmc, sizeof rmc, "rm -rf '%s'", pend); (void)system(rmc); }
+
+    FILE *f = fopen(polp, "w");
+    if (f) { fputs("storage block\negress block\nsecrets redact\n", f); fclose(f); }
+
+    /* LOOSEN: storage block -> log. Held pending; policy file unchanged. */
+    char *a1[] = {"set", "storage", "log"};
+    int rc1 = kai_policy_dispatch(3, a1, 0);
+    CHECK(rc1 == 0, "loosen (storage block->log) returns ok (queued)");
+    CHECK(file_contains(polp, "storage block") && !file_contains(polp, "storage log"),
+          "loosen did NOT change the live policy");
+    CHECK(pending_has(pend, "storage log"), "loosen wrote a pending request with the proposed change");
+
+    /* TIGHTEN: secrets redact -> block. Applied immediately. */
+    char *a2[] = {"set", "secrets", "block"};
+    int rc2 = kai_policy_dispatch(3, a2, 0);
+    CHECK(rc2 == 0, "tighten (secrets redact->block) returns ok");
+    CHECK(file_contains(polp, "secrets block"), "tighten changed the live policy immediately");
+
+    /* LOOSEN: add allow. Held pending; not in the live policy. */
+    char *a3[] = {"add", "allow", "/work/x"};
+    (void)kai_policy_dispatch(3, a3, 0);
+    CHECK(!file_contains(polp, "allow /work/x"), "add allow did NOT change the live policy");
+    CHECK(pending_has(pend, "allow /work/x"), "add allow is held pending");
+
+    /* TIGHTEN: add protect. Applied immediately. */
+    char *a4[] = {"add", "protect", "/work/z"};
+    (void)kai_policy_dispatch(3, a4, 0);
+    CHECK(file_contains(polp, "protect /work/z"), "add protect applied immediately");
+
+    /* LOOSEN: remove protect. Held pending; still present in the live policy. */
+    char *a5[] = {"remove", "protect", "/work/z"};
+    (void)kai_policy_dispatch(3, a5, 0);
+    CHECK(file_contains(polp, "protect /work/z"), "remove protect did NOT change the live policy");
+
+    /* Audit: both a pending (loosen) and an applied (tighten) record exist,
+     * each carrying the caller chain + signing identity in detail. */
+    CHECK(file_contains(alog, "\"decision\":\"pending\""), "loosening change is audited as pending");
+    CHECK(file_contains(alog, "\"decision\":\"applied\""), "tightening change is audited as applied");
+    CHECK(file_contains(alog, "caller:"), "policy audit records the caller chain");
+    CHECK(file_contains(alog, "signed:"), "policy audit records the code-signing identity");
+
+    /* An agent-attributed caller is refused outright (first line of defense). */
+    char *a6[] = {"set", "storage", "off"};
+    int rc6 = kai_policy_dispatch(3, a6, 1);
+    CHECK(rc6 == 3, "agent-attributed caller is refused");
+    CHECK(file_contains(polp, "storage block"), "refused agent call left the policy unchanged");
+
+    CHECK(count_json(pend) >= 3, "all loosening requests were queued (>=3)");
+    rmdir(dir);
+}
+
 int main(void) {
     /* Hermetic + avoids touching the real audit log: point KAI_HOME at a temp
      * dir BEFORE anything calls kai_home() (it caches on first use). */
@@ -691,6 +791,7 @@ int main(void) {
     test_denial_records();
     test_pause();
     test_policy_agent_refusal();
+    test_policy_pending();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

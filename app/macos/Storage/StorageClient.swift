@@ -596,6 +596,23 @@ final class StorageClient {
         let tClassify = timed ? nowTicks() : 0
         if isKaiOwnProcess(proc) {
             if timed { prof(.classify, tClassify, nowTicks()) }
+            // Kai's signature exempts a process from the wall for its own work —
+            // but NOT when that process is inside an agent tree and writing Kai's
+            // control store (policy file, grant store, pending-policy). An agent
+            // that shells `kai policy set` must not inherit the exemption and
+            // tamper with Kai's own config. Reads stay exempt so an agent-run
+            // `kai denials`/`kai status` still works.
+            if write {
+                let under = classify(proc)   // agent in ancestry? nil/"" = none
+                if let under, !under.isEmpty {
+                    for p in paths where kai_path_is_control_store(p) == 1 {
+                        dlog("BLOCK \(op) kai-signed-under-agent \(under) pid \(pid(proc)) \(p)")
+                        audit(decision: "block", agent: under + " (kai)", op: op, path: p,
+                              why: "kai-control-store")
+                        return false
+                    }
+                }
+            }
             return true
         }
         let agentName = classify(proc)

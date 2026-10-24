@@ -21,6 +21,7 @@
 #include "internal.h"
 
 #include <ctype.h>
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -270,31 +271,35 @@ static char *lines_join(const lines_t *L) {
     return sb_take(&b);
 }
 
-/* Validate, then write via temp file + rename so a reader never sees half a policy. */
-static int lines_save(const lines_t *L) {
+/* Validate the policy text these lines would produce. Returns owned text on
+ * success (caller frees), NULL after printing why it was rejected. */
+static char *lines_validate(const lines_t *L) {
     char *txt = lines_join(L);
     char err[256];
     kai_policy *p = kai_policy_from_string(txt, err, sizeof err);
     if (!p) {
         fprintf(stderr, "kai policy: change rejected, it would break the policy: %s\n", err);
         free(txt);
-        return 2;
+        return NULL;
     }
     kai_policy_free(p);
+    return txt;
+}
 
-    mkdir(kai_home(), 0700);
-    const char *path = kai_policy_file();
-    char tmp[1300];
+/* Write policy text to `path` via temp file + rename so a reader never sees
+ * half a policy. `path` NULL = the live policy file. */
+static int policy_write_text(const char *txt, const char *path) {
+    if (!path) { mkdir(kai_home(), 0700); path = kai_policy_file(); }
+    char tmp[1400];
     snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
     FILE *f = fopen(tmp, "wb");
-    if (!f) { fprintf(stderr, "kai policy: cannot write %s\n", tmp); free(txt); return 1; }
+    if (!f) { fprintf(stderr, "kai policy: cannot write %s\n", tmp); return 1; }
     chmod(tmp, 0600);
     size_t len = strlen(txt);
     int ok = fwrite(txt, 1, len, f) == len;
     ok = (fflush(f) == 0) && ok;
     ok = (fsync(fileno(f)) == 0) && ok;
     ok = (fclose(f) == 0) && ok;
-    free(txt);
     if (!ok || rename(tmp, path) != 0) {
         unlink(tmp);
         fprintf(stderr, "kai policy: cannot write %s\n", path);
@@ -302,6 +307,7 @@ static int lines_save(const lines_t *L) {
     }
     return 0;
 }
+
 
 /* Split a line into directive and the span of its first argument. Returns 0
  * for blank/comment lines. */
@@ -544,6 +550,135 @@ static int policy_show(int json) {
     return 0;
 }
 
+/* ---- loosening classification + pending confirmation (U0 hardening) ----
+ * A change that LOOSENS protection (a wall to a weaker mode, a new allow or
+ * exempt, removing a protect/rule/term/agent) is never applied straight away:
+ * it is held as a pending request for the user to confirm in the Kai app. A
+ * change that TIGHTENS (or leaves protection equal) applies immediately. This
+ * holds regardless of caller, so a process that evades agent attribution (e.g.
+ * one relaunched through launchd) still cannot quietly weaken Kai. */
+
+/* Protection rank for a switch value: higher = more protective, -1 = this
+ * switch does not express a protection level (so a change to it is neutral). */
+static int switch_rank(const char *key, const char *val) {
+    static const struct { const char *key; const char *order[6]; } R[] = {
+        {"secrets",          {"off", "warn", "redact", "block", NULL}},
+        {"on_prompt_secret", {"warn", "block", NULL}},
+        {"on_file_secret",   {"warn", "ask", "block", NULL}},
+        {"on_upload",        {"warn", "ask", "block", NULL}},
+        {"injection",        {"off", "warn", NULL}},
+        {"egress",           {"off", "log", "block", NULL}},
+        {"storage",          {"off", "log", "block", NULL}},
+        {"audit_context",    {"off", "on", NULL}},
+    };
+    for (size_t i = 0; i < sizeof R / sizeof R[0]; i++) {
+        if (strcmp(R[i].key, key) != 0) continue;
+        for (int j = 0; R[i].order[j]; j++)
+            if (strcmp(R[i].order[j], val) == 0) return j;
+        return -1;
+    }
+    return -1;
+}
+
+/* Would setting `key` to `newval` (from `oldval`) loosen protection? */
+static int set_loosens(const char *key, const char *oldval, const char *newval) {
+    if (strcmp(key, "max_scan_bytes") == 0) {
+        long o = strtol(oldval ? oldval : "0", NULL, 10);
+        long n = strtol(newval ? newval : "0", NULL, 10);
+        return n < o;   /* scanning fewer bytes = less protection */
+    }
+    int ro = switch_rank(key, oldval ? oldval : "");
+    int rn = switch_rank(key, newval);
+    if (ro < 0 || rn < 0) return 0;  /* unranked (e.g. gateway_port): neutral */
+    return rn < ro;
+}
+
+/* Build "comm(pid) <- comm(ppid) <- ..." up the process tree and the calling
+ * process's own code-signing Team ID, for the policy-change audit (#3). */
+static void caller_context(char *chain, size_t chainlen, char *team, size_t teamlen) {
+    chain[0] = '\0'; team[0] = '\0';
+    int pid = (int)getpid();
+    sb_t b; sb_init(&b);
+    for (int i = 0; i < 16 && pid > 0; i++) {
+        kai_proc pr;
+        if (kai_proc_read(pid, &pr) != 0) break;
+        const char *base = strrchr(pr.exe, '/');
+        base = base ? base + 1 : pr.exe;
+        if (i) sb_adds(&b, " <- ");
+        sb_addf(&b, "%s(%d)", base[0] ? base : "?", pid);
+        if (i == 0 && pr.team[0]) kai_strlcpy(team, pr.team, teamlen);
+        int parent = pr.ppid;
+        kai_proc_free(&pr);
+        if (parent <= 1 || parent == pid) { if (parent == 1) sb_adds(&b, " <- launchd(1)"); break; }
+        pid = parent;
+    }
+    char *s = sb_take(&b);
+    kai_strlcpy(chain, s, chainlen);
+    free(s);
+}
+
+/* Queue a loosening change for the user to confirm in the Kai app. Writes
+ * <home>/pending-policy/<id>.json with the proposed full policy text, a plain
+ * summary and the caller context. Returns 0 (queued) or 1 (write error). */
+static int policy_queue_pending(const char *summary, const char *proposed_txt,
+                                const char *chain, const char *team) {
+    char dir[1200];
+    snprintf(dir, sizeof dir, "%s/pending-policy", kai_home());
+    mkdir(kai_home(), 0700);
+    mkdir(dir, 0700);
+    static unsigned seq = 0;
+    char id[64];
+    snprintf(id, sizeof id, "%lld-%d-%u", (long long)time(NULL), (int)getpid(), seq++);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "id", id);
+    cJSON_AddNumberToObject(o, "created_utc", (double)time(NULL));
+    cJSON_AddStringToObject(o, "summary", summary);
+    cJSON_AddStringToObject(o, "proposed_policy", proposed_txt);
+    cJSON_AddStringToObject(o, "caller_chain", chain);
+    cJSON_AddStringToObject(o, "caller_team", team[0] ? team : "(unsigned)");
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (!js) return 1;
+    char path[1300];
+    snprintf(path, sizeof path, "%s/%s.json", dir, id);
+    int rc = policy_write_text(js, path);
+    free(js);
+    return rc;
+}
+
+/* Apply a validated change immediately (tightening/neutral) or hold it pending
+ * the user's confirmation (loosening). Audits either way with the caller chain
+ * and code-signing identity (#3). Returns a process exit code. */
+static int policy_commit_or_queue(const lines_t *L, int loosens, const char *summary) {
+    char *txt = lines_validate(L);
+    if (!txt) return 2;
+    char chain[512], team[32];
+    caller_context(chain, sizeof chain, team, sizeof team);
+    char detail[1200];
+    snprintf(detail, sizeof detail, "%s | caller: %s | signed: %s",
+             summary, chain, team[0] ? team : "(unsigned)");
+    kai_audit_entry e = {0};
+    e.source = "policy";
+    e.event = loosens ? "loosen" : "tighten";
+    e.decision = loosens ? "pending" : "applied";
+    e.detail = detail;
+    e.target = summary;
+    if (loosens) {
+        int rc = policy_queue_pending(summary, txt, chain, team);
+        free(txt);
+        kai_audit_write(&e);
+        if (rc != 0) return 1;
+        printf("Held for confirmation: \"%s\" would reduce protection.\n"
+               "Open Kai and confirm it under Pending Changes to apply; it is NOT active yet.\n",
+               summary);
+        return 0;
+    }
+    int rc = policy_write_text(txt, NULL);
+    free(txt);
+    if (rc == 0) kai_audit_write(&e);
+    return rc;
+}
+
 /* ---------- kai policy set ---------- */
 
 static int policy_set(const char *key, const char *val) {
@@ -560,12 +695,15 @@ static int policy_set(const char *key, const char *val) {
     }
     lines_t L;
     if (lines_load(&L) != 0) { fprintf(stderr, "kai policy: cannot read policy\n"); return 1; }
+    char oldval[64]; kai_strlcpy(oldval, SWITCHES[si].def, sizeof oldval);  /* default if absent */
     int found = 0;
     for (int i = 0; i < L.n && !found; i++) {
         char dir[32];
         const char *arg;
         size_t al;
         if (!line_parts(L.v[i], dir, sizeof dir, &arg, &al) || strcmp(dir, key) != 0) continue;
+        size_t on = al < sizeof oldval - 1 ? al : sizeof oldval - 1;
+        memcpy(oldval, arg, on); oldval[on] = '\0';
         /* splice the new value over the old one, keeping layout and comment */
         sb_t b;
         sb_init(&b);
@@ -583,9 +721,12 @@ static int policy_set(const char *key, const char *val) {
         sb_addf(&b, "%s %s", key, val);
         lines_push(&L, sb_take(&b));
     }
-    int rc = lines_save(&L);
+    int loosens = set_loosens(key, oldval, val);
+    char summary[128];
+    snprintf(summary, sizeof summary, "set %s %s->%s", key, oldval, val);
+    int rc = policy_commit_or_queue(&L, loosens, summary);
     lines_free(&L);
-    if (rc == 0) printf("%s = %s\n", key, val);
+    if (rc == 0 && !loosens) printf("%s = %s\n", key, val);
     return rc;
 }
 
@@ -790,9 +931,14 @@ static int policy_add(int argc, char **argv) {
         lines_free(&L);
         goto usage;
     }
-    int rc = lines_save(&L);
+    /* allow / egress_allow / exempt grant access or lift a block => loosening. */
+    int loosens = !strcmp(kind, "allow") || !strcmp(kind, "egress_allow") ||
+                  !strcmp(kind, "exempt");
+    char summary[160];
+    snprintf(summary, sizeof summary, "add %s %s", kind, argc > 1 ? argv[1] : "");
+    int rc = policy_commit_or_queue(&L, loosens, summary);
     lines_free(&L);
-    if (rc == 0) printf("added %s\n", kind);
+    if (rc == 0 && !loosens) printf("added %s\n", kind);
     return rc;
 usage:
     fprintf(stderr, "usage: kai policy add protect|allow <path>\n"
@@ -837,9 +983,15 @@ static int policy_remove(int argc, char **argv) {
         free(val); lines_free(&L);
         return 1;
     }
-    int rc = lines_save(&L);
+    /* Removing a protect/rule/term/agent drops protection => loosening.
+     * Removing an allow/egress_allow/exempt restores a block => tightening. */
+    int loosens = !strcmp(kind, "protect") || !strcmp(kind, "rule") ||
+                  !strcmp(kind, "term") || !strcmp(kind, "agent");
+    char summary[160];
+    snprintf(summary, sizeof summary, "remove %s %s", kind, val);
+    int rc = policy_commit_or_queue(&L, loosens, summary);
     lines_free(&L);
-    if (rc == 0) printf("removed %s %s\n", kind, val);
+    if (rc == 0 && !loosens) printf("removed %s %s\n", kind, val);
     free(val);
     return rc;
 usage:
@@ -865,15 +1017,58 @@ static int policy_caller_is_agent(void) {
     return hit;
 }
 
-int kai_cmd_policy(int argc, char **argv) {
+/* kai policy pending: list loosening changes awaiting the user's confirmation
+ * in the Kai app. Read-only, so any caller (including an agent) may run it. */
+static int policy_pending_list(void) {
+    char dir[1200];
+    snprintf(dir, sizeof dir, "%s/pending-policy", kai_home());
+    DIR *d = opendir(dir);
+    if (!d) { printf("No pending policy changes.\n"); return 0; }
+    struct dirent *de;
+    int n = 0;
+    while ((de = readdir(d))) {
+        size_t nl = strlen(de->d_name);
+        if (nl < 6 || strcmp(de->d_name + nl - 5, ".json") != 0) continue;
+        char path[1400];
+        snprintf(path, sizeof path, "%s/%s", dir, de->d_name);
+        size_t len;
+        char *txt = kai_read_file(path, 4000000, &len);
+        if (!txt) continue;
+        cJSON *o = cJSON_Parse(txt);
+        free(txt);
+        if (o) {
+            const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(o, "id"));
+            const char *sum = cJSON_GetStringValue(cJSON_GetObjectItem(o, "summary"));
+            const char *chain = cJSON_GetStringValue(cJSON_GetObjectItem(o, "caller_chain"));
+            const char *team = cJSON_GetStringValue(cJSON_GetObjectItem(o, "caller_team"));
+            printf("- %s\n    change:  %s\n    from:    %s\n    signed:  %s\n",
+                   id ? id : de->d_name, sum ? sum : "?", chain ? chain : "?",
+                   team ? team : "?");
+            cJSON_Delete(o);
+            n++;
+        }
+    }
+    closedir(d);
+    if (n == 0) printf("No pending policy changes.\n");
+    else printf("\n%d pending change(s). Confirm or reject them in the Kai app; "
+                "none are active yet.\n", n);
+    return 0;
+}
+
+/* Testable core. `caller_is_agent` is supplied by the caller so tests can
+ * exercise the loosen/pending/tighten logic independent of the real process
+ * tree (which, under an agent, would always refuse). Production passes the
+ * result of policy_caller_is_agent(). */
+int kai_policy_dispatch(int argc, char **argv, int caller_is_agent) {
     const char *sub = argc > 0 ? argv[0] : "show";
     if ((!strcmp(sub, "set") || !strcmp(sub, "add") || !strcmp(sub, "remove"))
-        && policy_caller_is_agent()) {
+        && caller_is_agent) {
         fprintf(stderr, "kai policy %s: refused -- an agent-attributed process cannot "
                         "change Kai's policy.\n", sub);
         return 3;
     }
     if (strcmp(sub, "path") == 0) { printf("%s\n", kai_policy_file()); return 0; }
+    if (strcmp(sub, "pending") == 0) return policy_pending_list();
     if (strcmp(sub, "show") == 0)
         return policy_show(argc > 1 && strcmp(argv[1], "--json") == 0);
     if (strcmp(sub, "set") == 0) {
@@ -886,6 +1081,13 @@ int kai_cmd_policy(int argc, char **argv) {
     }
     if (strcmp(sub, "add") == 0) return policy_add(argc - 1, argv + 1);
     if (strcmp(sub, "remove") == 0) return policy_remove(argc - 1, argv + 1);
-    fprintf(stderr, "usage: kai policy [path | show [--json] | set | add | remove]\n");
+    fprintf(stderr, "usage: kai policy [path | show [--json] | pending | set | add | remove]\n");
     return 1;
+}
+
+int kai_cmd_policy(int argc, char **argv) {
+    const char *sub = argc > 0 ? argv[0] : "show";
+    int is_agent = (!strcmp(sub, "set") || !strcmp(sub, "add") || !strcmp(sub, "remove"))
+                   && policy_caller_is_agent();
+    return kai_policy_dispatch(argc, argv, is_agent);
 }
