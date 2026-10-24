@@ -850,8 +850,29 @@ usage:
     return 1;
 }
 
+/* An agent-attributed process must never change Kai's policy (invariant: agent
+ * config can request, never configure enforcement). Best-effort: refuse if our
+ * own process tree traces to a known agent. A human terminal has no agent
+ * ancestor. The ES storage wall additionally hard-denies ~/.kai writes when it
+ * is active; this closes the CLI path even when the wall is off. */
+static int policy_caller_is_agent(void) {
+    char err[256];
+    kai_policy *p = kai_policy_load(NULL, err, sizeof err);
+    if (!p) return 0;                       /* can't determine: don't block the human */
+    char name[64]; int apid;
+    int hit = kai_process_agent(p, (int)getpid(), name, sizeof name, &apid);
+    kai_policy_free(p);
+    return hit;
+}
+
 int kai_cmd_policy(int argc, char **argv) {
     const char *sub = argc > 0 ? argv[0] : "show";
+    if ((!strcmp(sub, "set") || !strcmp(sub, "add") || !strcmp(sub, "remove"))
+        && policy_caller_is_agent()) {
+        fprintf(stderr, "kai policy %s: refused -- an agent-attributed process cannot "
+                        "change Kai's policy.\n", sub);
+        return 3;
+    }
     if (strcmp(sub, "path") == 0) { printf("%s\n", kai_policy_file()); return 0; }
     if (strcmp(sub, "show") == 0)
         return policy_show(argc > 1 && strcmp(argv[1], "--json") == 0);

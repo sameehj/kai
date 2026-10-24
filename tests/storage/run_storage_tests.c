@@ -596,6 +596,28 @@ static void test_pause(void) {
     CHECK(kai_wall_paused("storage", now) == 0, "resume clears the pause");
 }
 
+static void test_policy_agent_refusal(void) {
+    printf("policy change refuses agents (U0)\n");
+    char dir[] = "/tmp/kai-polguardXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char polp[600]; snprintf(polp, sizeof polp, "%s/policy", dir);
+    FILE *f = fopen(polp, "w");
+    if (f) { fputs("agent selftest arg *run_storage_tests*\nstorage off\n", f); fclose(f); }
+    // Run `./kai policy set storage block` as a child. Its ancestor (this test,
+    // argv ~ run_storage_tests) matches the agent rule, so the caller is
+    // agent-attributed and the change must be refused.
+    char outp[650]; snprintf(outp, sizeof outp, "%s/out", dir);
+    char cmd[1400];
+    snprintf(cmd, sizeof cmd,
+             "KAI_HOME='%s' KAI_POLICY='%s' ./kai policy set storage block > '%s' 2>&1",
+             dir, polp, outp);
+    (void)system(cmd);
+    CHECK(file_contains(outp, "refused"), "kai policy set refused for an agent-attributed caller");
+    CHECK(file_contains(polp, "storage off") && !file_contains(polp, "storage block"),
+          "policy was NOT changed by the refused agent call");
+    unlink(polp); unlink(outp); rmdir(dir);
+}
+
 int main(void) {
     /* Hermetic + avoids touching the real audit log: point KAI_HOME at a temp
      * dir BEFORE anything calls kai_home() (it caches on first use). */
@@ -668,6 +690,7 @@ int main(void) {
     test_approval_store();
     test_denial_records();
     test_pause();
+    test_policy_agent_refusal();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");
