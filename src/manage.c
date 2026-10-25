@@ -192,9 +192,10 @@ int kai_cmd_status_json(void) {
     cJSON *so = cJSON_AddObjectToObject(obs, "storage");
     cJSON_AddBoolToObject(so, "running", sh != NULL);
     if (sh) cJSON_AddItemToObject(so, "health", sh);
+    cJSON *nh = status_read_health("/tmp/kai-network-health.json", 30);
     cJSON *no = cJSON_AddObjectToObject(obs, "network");
-    cJSON_AddBoolToObject(no, "running", 0);
-    cJSON_AddStringToObject(no, "note", "network health snapshot not yet emitted (TODO)");
+    cJSON_AddBoolToObject(no, "running", nh != NULL);
+    if (nh) cJSON_AddItemToObject(no, "health", nh);
 
     print_json(o);
     return 0;

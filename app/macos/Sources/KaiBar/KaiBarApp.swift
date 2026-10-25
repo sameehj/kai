@@ -28,13 +28,6 @@ struct KaiBarApp: App {
                 .environmentObject(storage)
         }
         .windowResizability(.contentSize)
-
-        Window("Agents", id: "agents") {
-            AgentsWindow()
-                .environmentObject(model)
-                .environmentObject(wall)
-                .environmentObject(storage)
-        }
     }
 }
 

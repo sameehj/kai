@@ -220,9 +220,44 @@ int kai_cmd_grant(int argc, char **argv) {
 
 static const char *sess_state(const kai_session *s) { return s->ended_utc ? "ended" : "active"; }
 
+static int health_fresh(const char *path, long max_age) {
+    struct stat st;
+    if (stat(path, &st) != 0) return 0;
+    return (long)(time(NULL) - st.st_mtime) <= max_age;
+}
+
+/* Merge the ES registry (authoritative, storage wall active) with the
+ * storage-wall-free process scan, deduped by root pid (registry wins). This is
+ * why sessions are visible even with the storage wall off. Caller frees *out. */
+static int merged_sessions(kai_session **out, int *n) {
+    kai_session *reg = NULL; int nr = 0;
+    kai_sessions_load(&reg, &nr);
+    char err[256];
+    kai_policy *p = kai_policy_load(NULL, err, sizeof err);
+    kai_session *scan = NULL; int ns = 0;
+    if (p) { kai_sessions_scan(p, &scan, &ns); kai_policy_free(p); }
+    kai_session *all = calloc((size_t)(nr + ns + 1), sizeof *all);
+    int c = 0;
+    if (all) {
+        for (int i = 0; i < nr; i++) all[c++] = reg[i];
+        for (int i = 0; i < ns; i++) {
+            int dup = 0;
+            for (int j = 0; j < nr; j++)
+                if (reg[j].root_pid != 0 && reg[j].root_pid == scan[i].root_pid) { dup = 1; break; }
+            if (!dup) all[c++] = scan[i];
+        }
+    }
+    free(reg); free(scan);
+    *out = all; *n = c;
+    return c;
+}
+
 static int sessions_list(int json) {
     kai_session *s = NULL; int n = 0;
-    kai_sessions_load(&s, &n);
+    merged_sessions(&s, &n);
+    int storage_active = health_fresh("/tmp/kai-storage-health.json", 30);
+    int network_active = health_fresh("/tmp/kai-network-health.json", 30);
+    const char *enf = kai_enforcement_label(storage_active, network_active);
     if (json) {
         printf("[");
         for (int i = 0; i < n; i++) {
@@ -231,18 +266,19 @@ static int sessions_list(int json) {
             /* topic is agent-reported + already redacted; shown, never trusted. */
             printf("%s{\"id\":\"%s\",\"agent\":\"%s\",\"topic\":\"%s\",\"topic_reported_by_agent\":true,"
                    "\"project\":\"%s\",\"host_app\":\"%s\",\"started_utc\":%lld,\"ended_utc\":%lld,"
-                   "\"state\":\"%s\"}",
+                   "\"child_count\":%d,\"source\":\"%s\",\"enforcement\":\"%s\",\"state\":\"%s\"}",
                    i ? "," : "", s[i].id, s[i].agent, topic, s[i].project, s[i].host_app,
-                   s[i].started_utc, s[i].ended_utc, sess_state(&s[i]));
+                   s[i].started_utc, s[i].ended_utc, s[i].child_count,
+                   s[i].source == KAI_SESS_SCAN ? "scan" : "es", enf, sess_state(&s[i]));
         }
         printf("]\n");
     } else {
-        printf("%-38s %-8s %-7s %-28s %s\n", "session", "agent", "state", "topic (reported)", "project");
+        printf("%-12s %-8s %-26s %-24s %s\n", "session", "agent", "enforcement", "project", "topic (reported)");
         for (int i = 0; i < n; i++) {
             char topic[128] = "";
             kai_session_report_get(s[i].id, topic, sizeof topic);
-            printf("%-38s %-8s %-7s %-28.28s %s\n", s[i].id, s[i].agent, sess_state(&s[i]),
-                   topic[0] ? topic : "-", s[i].project);
+            printf("%-12s %-8s %-26s %-24.24s %s\n", s[i].id, s[i].agent, enf,
+                   s[i].project, topic[0] ? topic : "-");
         }
         if (n == 0) printf("(no sessions)\n");
     }

@@ -227,7 +227,23 @@ typedef struct {
     long long ended_utc;                 /* 0 while active                            */
     char project[KAI_SESSION_PROJ_MAX];  /* canonical working dir at root exec        */
     char host_app[64];                   /* Terminal, iTerm, Cursor, ...              */
+    int child_count;                     /* processes under the root (scan sessions)   */
+    int source;                          /* kai_session_source: how it was discovered  */
 } kai_session;
+
+/* How a session was discovered. ES is authoritative (storage wall active); SCAN
+ * is the storage-wall-free process scan; both can be present and are merged. */
+typedef enum { KAI_SESS_ES = 0, KAI_SESS_SCAN = 1 } kai_session_source;
+
+/* Storage-wall-free session discovery (S-redesign item 1): scan running
+ * processes for agent ROOT processes (by the policy's agent rules — code
+ * signing / exe / arg), recording start time, working dir, host app and child
+ * count. Works with no storage wall. Caller frees *out. */
+int kai_sessions_scan(const kai_policy *p, kai_session **out, int *n);
+
+/* The enforcement label for a session given which walls are observed active.
+ * Never claims "protected" for a session no active wall can attribute. */
+const char *kai_enforcement_label(int storage_active, int network_active);
 
 /* Create or update a session record (idempotent on id). Returns 0 on success.
  * Called by Kai components only; the control store keeps agents out. */

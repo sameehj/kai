@@ -10,6 +10,7 @@ struct MenuView: View {
     @AppStorage("settingsPage") private var settingsPage = SettingsPage.general.rawValue
     @State private var dismissedBlock: String?
     @StateObject private var grantManager = GrantManager()
+    @StateObject private var agents = AgentsModel()
 
     private var alert: AuditEvent? {
         guard let b = model.freshBlock, b.id != dismissedBlock else { return nil }
@@ -17,19 +18,19 @@ struct MenuView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             header
             if let msg = model.errorMessage { ErrorBanner(message: msg) { model.errorMessage = nil } }
             if let b = alert {
                 BlockedHero(event: b,
                             dismiss: { withAnimation { dismissedBlock = b.id } },
                             details: { open(.activity) })
-            } else {
-                StatusHero()
-                stats
             }
+            statusLine
             protection
-            ApprovalsSection(manager: grantManager)
+            needsYou
+            activeNow
+            permissions
             recent
             footer
         }
@@ -41,8 +42,80 @@ struct MenuView: View {
         .environment(\.colorScheme, .dark)
         .foregroundStyle(Color.white)
         .preferredColorScheme(.dark)
-        .task { await model.refresh(); wall.refresh() }
+        .task { await model.refresh(); wall.refresh(); await agents.refresh() }
     }
+
+    // Item 2: a short status headline + a full second line (no truncation),
+    // from observed enforcement only — replaces the big shield and the weekly
+    // counters (those stay in the window).
+    private var statusLine: some View {
+        let running = agents.sessions.filter { $0.isActive }.count
+        let needs = grantManager.pending.count + grantManager.pendingPolicy.count
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(model.observedHeadline(storageOn: storage.isOn, networkOn: wall.isOn))
+                .font(Theme.display(18))
+                .foregroundStyle(model.health == .problem ? Theme.coral : glow)
+            Text("\(running) agent session\(running == 1 ? "" : "s") running"
+                 + (needs > 0 ? " · \(needs) need\(needs == 1 ? "s" : "") you" : ""))
+                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var needsYou: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !grantManager.pendingPolicy.isEmpty || !grantManager.pending.isEmpty {
+                CapsLabel("Needs you")
+                ForEach(grantManager.pendingPolicy) { PendingPolicyCard(change: $0, manager: grantManager) }
+                ForEach(grantManager.pending) { ApprovalCard(req: $0, manager: grantManager) }
+            }
+        }
+    }
+
+    // Item 2: Active now — one row per running session (opens its detail).
+    private var activeNow: some View {
+        let running = agents.sessions.filter { $0.isActive }
+            .sorted { $0.startedUtc > $1.startedUtc }
+        return VStack(alignment: .leading, spacing: 6) {
+            if !running.isEmpty {
+                HStack {
+                    CapsLabel("Active now")
+                    Spacer()
+                    Button("Open Agent Control") { openAgentControl() }
+                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
+                }
+                ForEach(running.prefix(6)) { s in
+                    let gc = grantManager.grants.filter { $0.session_id == s.id }.count
+                    Button { openAgentControl() } label: { PopoverSessionRow(session: s, grants: gc) }
+                        .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private var permissions: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !grantManager.grantGroups.isEmpty {
+                CapsLabel("Permissions")
+                ForEach(grantManager.grantGroups) { g in
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("\(g.agent) · \(g.opLabel) · \(g.scopeLabel)"
+                                 + (g.count > 1 ? " ×\(g.count)" : "")).font(.system(size: 12))
+                            Text(g.status).font(.system(size: 11))
+                                .foregroundStyle(g.status == "expired" ? Theme.muted : Theme.lime)
+                        }
+                        Spacer()
+                        Button(g.count > 1 ? "Revoke all" : "Revoke") { grantManager.revokeGroup(g) }
+                            .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.coral)
+                    }
+                }
+            }
+        }
+    }
+
+    private func openAgentControl() { open(.agentControl) }
 
     private var glow: Color {
         if alert != nil { return Theme.coral }
@@ -98,7 +171,7 @@ struct MenuView: View {
             HStack {
                 CapsLabel("System protection")
                 Spacer()
-                Button("Agents") { openWindow(id: "agents"); NSApp.activate(ignoringOtherApps: true) }
+                Button("Agents") { open(.agentControl) }
                     .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
             }
             Text("Covers every agent on this Mac.")
@@ -446,6 +519,42 @@ struct StorageCard: View {
 }
 
 /// One line in the menu's recent list.
+/// Item 2: one compact row per running session in the popover's Active now.
+struct PopoverSessionRow: View {
+    let session: SessionRow
+    var grants: Int = 0
+    private var badge: Color {
+        session.enforcementShort == "both walls" ? Theme.lime
+        : session.enforcementShort == "not enforced" ? Theme.muted : Theme.amber
+    }
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().fill(badge).frame(width: 7, height: 7)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(session.agent).font(.system(size: 13, weight: .medium))
+                    Text(session.enforcementShort).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    if grants > 0 {
+                        Text("\(grants) grant\(grants == 1 ? "" : "s")")
+                            .font(.system(size: 11)).foregroundStyle(Theme.lime)
+                    }
+                }
+                Text(session.topic.isEmpty ? session.projectName : session.topic)
+                    .font(.system(size: 11)).foregroundStyle(Theme.soft).lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(session.projectName)
+                    if !session.startedClock.isEmpty { Text("· started \(session.startedClock)") }
+                    if !session.runningFor.isEmpty { Text("· \(session.runningFor)") }
+                }.font(.system(size: 10)).foregroundStyle(Theme.muted).lineLimit(1)
+            }
+            Spacer()
+            Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(Theme.muted)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(Theme.sidebar, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 struct EventLine: View {
     let event: AuditEvent
     var count: Int = 1

@@ -1027,6 +1027,20 @@ static void test_grant_tiers(void) {
     CHECK(kai_storage_decide(pd, "/work/data/x", NULL, KAI_OP_READ, &sub, &sg, 1, NOW,
                              GKEY, GKEYLEN, why, sizeof why) == 0, "session grant expires at session end");
 
+    /* Session-wide matching (S8 prerequisite): a session-scoped grant matches a
+     * DIFFERENT pid in the same session — the whole tree, not one process. */
+    kai_grant_subject child = { .pid = 999, .pidversion = 77, .agent = "claude",
+                                .strength = KAI_ID_STRONG, .session_id = "sess-W" };
+    kai_grant sgw = mkgrant3("/work/data/x", KAI_OP_READ, 200, 9, 1000, 1000000, "sess-W", 0, 0);
+    CHECK(kai_storage_decide(pd, "/work/data/x", NULL, KAI_OP_READ, &child, &sgw, 1, NOW,
+                             GKEY, GKEYLEN, why, sizeof why) == 1,
+          "a session grant covers a different pid in the same session");
+    kai_grant_subject other = { .pid = 999, .pidversion = 77, .agent = "claude",
+                                .strength = KAI_ID_STRONG, .session_id = "sess-OTHER" };
+    CHECK(kai_storage_decide(pd, "/work/data/x", NULL, KAI_OP_READ, &other, &sgw, 1, NOW,
+                             GKEY, GKEYLEN, why, sizeof why) == 0,
+          "a session grant does NOT cover a different session");
+
     /* An unattributed process (no session) never matches a session-bound grant. */
     kai_grant_subject anon = { .pid = 200, .pidversion = 9, .agent = "claude",
                                .strength = KAI_ID_STRONG, .session_id = NULL };
@@ -1050,6 +1064,26 @@ static void test_session_pause(void) {
     CHECK(kai_session_pause_write("sess-P", 0) == 0, "resume clears the pause");
     CHECK(kai_session_paused("sess-P", (long long)time(NULL)) == 0, "the session is no longer paused");
     CHECK(kai_session_pause_write("../escape", 15) == -1, "a traversal session id is refused");
+}
+
+/* Redesign item 1: session enforcement labels, and that the process scan never
+ * claims "protected" for a session no wall can attribute. */
+static void test_enforcement_labels(void) {
+    printf("session enforcement labels (redesign)\n");
+    CHECK(!strcmp(kai_enforcement_label(1, 1), "Enforced by both walls"), "both walls");
+    CHECK(!strcmp(kai_enforcement_label(0, 1), "Network wall only"), "network only");
+    CHECK(!strcmp(kai_enforcement_label(1, 0), "Storage wall only"), "storage only");
+    const char *off = kai_enforcement_label(0, 0);
+    CHECK(strstr(off, "not enforced") != NULL, "no wall: labelled not enforced");
+    CHECK(strcasestr(off, "protect") == NULL, "no wall: never labelled 'protected'");
+    /* The scan runs and returns a bounded, sane result (no crash); the live
+     * session set is verified in the live test. */
+    kai_policy *p = mk("storage block\n");
+    kai_session *s = NULL; int n = 0;
+    int rc = kai_sessions_scan(p, &s, &n);
+    CHECK(rc >= 0 && n >= 0, "process scan returns a sane count");
+    free(s);
+    kai_policy_free(p);
 }
 
 /* S0: the dev-sandbox guard predicate. */
@@ -1153,6 +1187,7 @@ int main(void) {
     test_session_reports();
     test_grant_tiers();
     test_session_pause();
+    test_enforcement_labels();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

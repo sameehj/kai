@@ -173,3 +173,111 @@ int kai_process_agent(const kai_policy *p, int pid, char *name, size_t namelen,
     }
     return 0;
 }
+
+/* ---- storage-wall-free session discovery (S-redesign item 1) ---- */
+#ifdef __APPLE__
+/* Walk up from `pid` to find the terminal/app hosting it. */
+static void find_host_app(int pid, char *out, size_t n) {
+    if (n) out[0] = '\0';
+    static const struct { const char *mark, *name; } apps[] = {
+        {"/Terminal.app/", "Terminal"}, {"/iTerm.app/", "iTerm"},
+        {"/Cursor.app/", "Cursor"}, {"/Visual Studio Code.app/", "VS Code"},
+        {"/WezTerm.app/", "WezTerm"}, {"/Alacritty.app/", "Alacritty"},
+        {"/kitty.app/", "kitty"}, {"/Warp.app/", "Warp"}, {"/Ghostty.app/", "Ghostty"},
+    };
+    for (int depth = 0; pid > 1 && depth < 32; depth++) {
+        kai_proc pr;
+        if (kai_proc_read(pid, &pr) != 0) return;
+        int parent = pr.ppid;
+        for (size_t k = 0; k < sizeof apps / sizeof apps[0]; k++)
+            if (strstr(pr.exe, apps[k].mark)) { kai_strlcpy(out, apps[k].name, n); kai_proc_free(&pr); return; }
+        kai_proc_free(&pr);
+        if (parent <= 1 || parent == pid) return;
+        pid = parent;
+    }
+}
+
+/* Is `pid` a descendant of `root` (root excluded)? Bounded ancestry walk. */
+static int descends_from(int pid, int root) {
+    for (int depth = 0; pid > 1 && depth < 64; depth++) {
+        kai_proc pr;
+        if (kai_proc_read(pid, &pr) != 0) return 0;
+        int parent = pr.ppid;
+        kai_proc_free(&pr);
+        if (parent == root) return 1;
+        if (parent <= 1 || parent == pid) return 0;
+        pid = parent;
+    }
+    return 0;
+}
+
+int kai_sessions_scan(const kai_policy *p, kai_session **out, int *n) {
+    *out = NULL; *n = 0;
+    if (!p) return 0;
+    int bytes = proc_listpids(PROC_ALL_PIDS, 0, NULL, 0);
+    if (bytes <= 0) return 0;
+    int maxp = bytes / (int)sizeof(pid_t) + 32;
+    pid_t *pids = calloc((size_t)maxp, sizeof(pid_t));
+    if (!pids) return 0;
+    int got = proc_listpids(PROC_ALL_PIDS, 0, pids, maxp * (int)sizeof(pid_t));
+    int np = got / (int)sizeof(pid_t);
+
+    kai_session *arr = NULL; int count = 0, cap = 0;
+    for (int i = 0; i < np; i++) {
+        int pid = pids[i];
+        if (pid <= 1) continue;
+        kai_proc pr;
+        if (kai_proc_read(pid, &pr) != 0) continue;
+        char name[64];
+        int is_agent = kai_agent_match(p, pr.exe, (const char *const *)pr.argv, pr.argc,
+                                       pr.team, name, sizeof name);
+        int ppid = pr.ppid;
+        kai_proc_free(&pr);
+        if (!is_agent) continue;
+        /* Root = the topmost process of this agent: its parent is not the same agent. */
+        int parent_same = 0;
+        if (ppid > 1) {
+            kai_proc pp;
+            if (kai_proc_read(ppid, &pp) == 0) {
+                char pname[64];
+                if (kai_agent_match(p, pp.exe, (const char *const *)pp.argv, pp.argc,
+                                    pp.team, pname, sizeof pname) && strcmp(pname, name) == 0)
+                    parent_same = 1;
+                kai_proc_free(&pp);
+            }
+        }
+        if (parent_same) continue;
+
+        kai_session s;
+        memset(&s, 0, sizeof s);
+        snprintf(s.id, sizeof s.id, "scan-%d", pid);     /* stable while the root lives */
+        kai_strlcpy(s.agent, name, sizeof s.agent);
+        s.root_pid = pid;
+        s.source = KAI_SESS_SCAN;
+        struct proc_bsdinfo bi;
+        if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bi, sizeof bi) == (int)sizeof bi)
+            s.started_utc = (long long)bi.pbi_start_tvsec;
+        struct proc_vnodepathinfo vp;
+        if (proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &vp, sizeof vp) > 0)
+            kai_strlcpy(s.project, vp.pvi_cdir.vip_path, sizeof s.project);
+        find_host_app(ppid, s.host_app, sizeof s.host_app);
+        for (int j = 0; j < np; j++)
+            if (pids[j] > 1 && pids[j] != pid && descends_from(pids[j], pid)) s.child_count++;
+
+        if (count == cap) {
+            int nc = cap ? cap * 2 : 8;
+            kai_session *na = realloc(arr, (size_t)nc * sizeof *na);
+            if (!na) break;
+            arr = na; cap = nc;
+        }
+        arr[count++] = s;
+    }
+    free(pids);
+    *out = arr; *n = count;
+    return count;
+}
+#else
+int kai_sessions_scan(const kai_policy *p, kai_session **out, int *n) {
+    (void)p; *out = NULL; *n = 0; return 0;
+}
+#endif

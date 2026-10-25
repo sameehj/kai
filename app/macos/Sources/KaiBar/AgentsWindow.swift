@@ -37,8 +37,30 @@ struct SessionRow: Decodable, Identifiable, Equatable {
     var hostApp: String = ""
     var startedUtc: Int = 0
     var endedUtc: Int = 0
+    var childCount: Int = 0
+    var source: String = "es"
+    var enforcement: String = ""
     var state: String = "active"
     var isActive: Bool { state == "active" }
+    var projectName: String { project.isEmpty ? "—" : (project as NSString).lastPathComponent }
+    var startedClock: String {
+        guard startedUtc > 0 else { return "" }
+        let f = DateFormatter(); f.dateFormat = "HH:mm"
+        return f.string(from: Date(timeIntervalSince1970: TimeInterval(startedUtc)))
+    }
+    var runningFor: String {
+        guard startedUtc > 0, isActive else { return "" }
+        let s = max(0, Int(Date().timeIntervalSince1970) - startedUtc)
+        if s < 3600 { return "\(s / 60)m" }
+        return "\(s / 3600)h \((s % 3600) / 60)m"
+    }
+    /// Never say "protected": the label comes straight from observed enforcement.
+    var enforcementShort: String {
+        if enforcement.hasPrefix("Enforced by both") { return "both walls" }
+        if enforcement.hasPrefix("Network") { return "network only" }
+        if enforcement.hasPrefix("Storage") { return "storage only" }
+        return "not enforced"
+    }
 }
 
 @MainActor
@@ -175,13 +197,20 @@ struct SessionRowView: View {
         HStack(spacing: 8) {
             if needsYou { Circle().fill(Color.orange).frame(width: 7, height: 7) }
             VStack(alignment: .leading, spacing: 1) {
-                HStack {
+                HStack(spacing: 6) {
                     Text(session.agent).fontWeight(.medium)
+                    Text(session.enforcementShort).font(.caption2)
+                        .foregroundStyle(session.enforcementShort == "both walls" ? .green
+                                         : session.enforcementShort == "not enforced" ? .secondary : .orange)
                     if !session.isActive { Text("ended").font(.caption2).foregroundStyle(.secondary) }
                 }
                 Text(session.topic.isEmpty ? "(no topic reported)" : session.topic)
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                Text(session.project).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(session.projectName)
+                    if !session.startedClock.isEmpty { Text("· \(session.startedClock)") }
+                    if !session.runningFor.isEmpty { Text("· \(session.runningFor)") }
+                }.font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
             }
         }.padding(.vertical, 2)
     }
@@ -213,8 +242,11 @@ struct SessionDetail: View {
                     }
                 }
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
+                    detailRow("Enforcement", session.enforcement.isEmpty ? "—" : session.enforcement)
                     detailRow("Project", session.project)
                     detailRow("Host app", session.hostApp.isEmpty ? "-" : session.hostApp)
+                    detailRow("Started", session.startedClock + (session.runningFor.isEmpty ? "" : " · running \(session.runningFor)"))
+                    detailRow("Processes", "\(session.childCount + 1)")
                     detailRow("State", session.state)
                     detailRow("Session id", session.id)
                 }.font(.callout)

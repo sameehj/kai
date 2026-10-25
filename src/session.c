@@ -30,6 +30,13 @@ static void session_path(const char *id, char *out, size_t n) {
     snprintf(out, n, "%s/%s.json", kai_session_dir(), id);
 }
 
+const char *kai_enforcement_label(int storage_active, int network_active) {
+    if (storage_active && network_active) return "Enforced by both walls";
+    if (network_active && !storage_active) return "Network wall only";
+    if (storage_active && !network_active) return "Storage wall only";
+    return "Seen, not enforced: storage wall off";
+}
+
 /* Reject an id that could escape the registry dir or hold a path separator. */
 static int id_ok(const char *id) {
     if (!id || !*id || strlen(id) >= KAI_SESSION_ID_MAX) return 0;
@@ -50,6 +57,8 @@ static int write_session(const kai_session *s) {
     cJSON_AddNumberToObject(o, "ended_utc", (double)s->ended_utc);
     cJSON_AddStringToObject(o, "project", s->project);
     cJSON_AddStringToObject(o, "host_app", s->host_app);
+    cJSON_AddNumberToObject(o, "child_count", s->child_count);
+    cJSON_AddNumberToObject(o, "source", s->source);
     char *js = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (!js) return -1;
@@ -87,7 +96,7 @@ static int read_session(const char *path, kai_session *out) {
 #define NUM(field) do { cJSON *v = cJSON_GetObjectItem(o, #field); \
                         if (cJSON_IsNumber(v)) out->field = v->valuedouble; } while (0)
     STR(agent); STR(agent_version); STR(project); STR(host_app);
-    NUM(root_pid); NUM(started_utc); NUM(ended_utc);
+    NUM(root_pid); NUM(started_utc); NUM(ended_utc); NUM(child_count); NUM(source);
     { cJSON *v = cJSON_GetObjectItem(o, "root_pidversion");
       if (cJSON_IsNumber(v)) out->root_pidversion = (unsigned long long)v->valuedouble; }
 #undef STR

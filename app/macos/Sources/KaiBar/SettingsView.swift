@@ -3,10 +3,11 @@ import AppKit
 import SwiftUI
 
 enum SettingsPage: String, CaseIterable, Identifiable {
-    case general, protection, files, network, storage, permissions, company, activity
+    case agentControl, general, protection, files, network, storage, permissions, company, activity
     var id: String { rawValue }
     var title: String {
         switch self {
+        case .agentControl: return "Agent Control"
         case .general: return "General"
         case .protection: return "Agent hooks"
         case .files: return "Protected files"
@@ -19,6 +20,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     }
     var icon: String {
         switch self {
+        case .agentControl: return "person.2.gobackward"
         case .general: return "gearshape"
         case .protection: return "shield"
         case .files: return "folder"
@@ -33,6 +35,8 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var wall: NetworkWall
+    @EnvironmentObject var storage: StorageWall
     @AppStorage("settingsPage") private var pageRaw = SettingsPage.general.rawValue
     private var page: SettingsPage { SettingsPage(rawValue: pageRaw) ?? .general }
 
@@ -68,7 +72,10 @@ struct SettingsView: View {
                 Image("KaiLogo").resizable().frame(width: 30, height: 30).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 0) {
                     Text("Kai").font(Theme.display(16))
-                    Text(model.health == .protecting ? "All protected" : model.headline)
+                    // Item 4: observed enforcement only, never a blanket "All
+                    // protected" from agent-hook state.
+                    Text(model.health == .problem ? model.headline
+                         : model.observedHeadline(storageOn: storage.isOn, networkOn: wall.isOn))
                         .font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(1)
                 }
             }
@@ -99,6 +106,7 @@ struct SettingsView: View {
 
     @ViewBuilder private var content: some View {
         switch page {
+        case .agentControl: AgentControlPage()
         case .general: GeneralPage()
         case .protection: ProtectionPage()
         case .files: FilesPage()
@@ -623,6 +631,46 @@ private struct CompanyPage: View {
                 }
             }
         }
+    }
+}
+
+// Item 3: Agent Control — the sessions list + per-session detail (grant, revoke,
+// pause), as the first Settings page. Reuses the session views from the Agents
+// window; data from `kai sessions`/`kai agents` (works with the storage wall off).
+private struct AgentControlPage: View {
+    @StateObject private var model = AgentsModel()
+    @StateObject private var grants = GrantManager()
+    @State private var selected: String?
+
+    private var sorted: [SessionRow] {
+        model.sessions.sorted { a, b in
+            if a.isActive != b.isActive { return a.isActive }
+            return a.startedUtc > b.startedUtc
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            PageHeader(icon: "person.2.gobackward", title: "Agent Control",
+                       subtitle: "Every agent session Kai sees — enforced or not — with its permissions. Grant, revoke or pause one session without touching the others. Sessions appear even with the storage wall off.")
+            if sorted.isEmpty {
+                Text("No agent sessions right now.").font(.system(size: 13)).foregroundStyle(Theme.muted)
+            }
+            HSplitView {
+                List(sorted, selection: $selected) { s in
+                    SessionRowView(session: s, needsYou: false).tag(s.id)
+                }.frame(minWidth: 280)
+                Group {
+                    if let id = selected, let s = model.sessions.first(where: { $0.id == id }) {
+                        SessionDetail(session: s, grants: grants)
+                    } else {
+                        VStack { Spacer(); Text("Select a session").foregroundStyle(Theme.muted); Spacer() }
+                            .frame(maxWidth: .infinity)
+                    }
+                }.frame(minWidth: 300)
+            }
+        }
+        .task { await model.refresh() }
     }
 }
 

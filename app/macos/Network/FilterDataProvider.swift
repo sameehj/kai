@@ -22,6 +22,20 @@ private let log = Logger(subsystem: "io.github.sameehj.kai.network", category: "
 
 final class FilterDataProvider: NEFilterDataProvider {
     private let engine = Engine()
+    private var healthTimer: Timer?
+    private let healthPath = "/tmp/kai-network-health.json"
+
+    // Observed-state snapshot (U1/M0.4): a fresh file proves the network wall is
+    // actually running, so `kai status`, the menu headline and session
+    // enforcement labels can say "Network wall only" truthfully instead of
+    // guessing. Holds no flow data.
+    private func writeHealth() {
+        let m = engine.mode
+        let mode = m == KAI_EGRESS_BLOCK ? "block" : (m == KAI_EGRESS_LOG ? "log" : "off")
+        let json = "{\"wall\":\"network\",\"mode\":\"\(mode)\",\"enforcing\":\(m == KAI_EGRESS_BLOCK),"
+                 + "\"running\":true,\"ts\":\(Int(Date().timeIntervalSince1970))}"
+        try? Data(json.utf8).write(to: URL(fileURLWithPath: healthPath))
+    }
 
     override func startFilter(completionHandler: @escaping (Error?) -> Void) {
         engine.configure(filterConfiguration.vendorConfiguration ?? [:])
@@ -31,10 +45,16 @@ final class FilterDataProvider: NEFilterDataProvider {
             if let error { log.error("apply settings failed: \(error.localizedDescription, privacy: .public)") }
             completionHandler(error)
         }
+        writeHealth()
+        healthTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            self?.writeHealth()
+        }
         log.info("Kai network wall started")
     }
 
     override func stopFilter(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        healthTimer?.invalidate(); healthTimer = nil
+        try? FileManager.default.removeItem(atPath: healthPath)   // goes stale -> not running
         log.info("Kai network wall stopped: \(reason.rawValue)")
         completionHandler()
     }

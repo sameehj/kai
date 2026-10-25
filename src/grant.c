@@ -385,13 +385,21 @@ int kai_grant_match(const kai_grant *grants, int n, const kai_grant_subject *s,
         if (!kai_grant_hmac_ok(g, key, keylen)) continue;          /* forged/tampered */
         if (g->op != op) continue;
         if (g->expires_utc != 0 && now >= g->expires_utc) continue; /* expired */
-        if (g->pid != s->pid || g->pidversion != s->pidversion) continue; /* identity */
+        /* Identity binding (S4 session-wide fix): a SESSION-scoped grant (it
+         * carries a session_id) matches ANY process in that verified session —
+         * the whole tree, including children and brand-new processes — because
+         * the session id is Kai-observed and unforgeable. A grant with no
+         * session_id stays bound to the exact pid+pidversion that requested it. */
+        if (g->session_id[0]) {
+            if (!s->session_id || strcmp(g->session_id, s->session_id) != 0) continue;
+        } else {
+            if (g->pid != s->pid || g->pidversion != s->pidversion) continue;
+        }
         if (s->agent && g->agent[0] && strcmp(g->agent, s->agent) != 0) continue;
         if (s->strength < g->strength) continue;            /* downgraded identity */
         if (g->strength <= KAI_ID_WEAK && g->scope != KAI_GRANT_ONESHOT) continue;
-        if (g->grant_version >= 2) {                         /* v2 session/project binding */
-            if (g->session_id[0] && (!s->session_id || strcmp(g->session_id, s->session_id) != 0)) continue;
-            if (g->project[0] && (!s->project || strcmp(g->project, s->project) != 0)) continue;
+        if (g->grant_version >= 2 && g->project[0]) {        /* v2 project binding */
+            if (!s->project || strcmp(g->project, s->project) != 0) continue;
         }
         if (strcmp(g->resource, resolved_path) != 0) continue; /* exact canonical */
         return i;
