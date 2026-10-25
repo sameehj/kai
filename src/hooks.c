@@ -639,10 +639,20 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
         static const char *const PATH_KEYS[] = {"file_path", "path", "notebook_path"};
         const char *hit_path = NULL, *first_path = NULL;
         char why[256];
+        /* U5: an agent READING its own hook config / control path is allowed (it
+         * must, to start — the storage wall allows it too since S0). WRITES to
+         * those stay blocked below (anti-tamper), and Kai's own home + user
+         * secrets are never read-allowed. Read tools: Read/Grep/Glob/LS. */
+        int is_read_tool = tool && (!strcmp(tool, "Read") || !strcmp(tool, "Grep") ||
+                                    !strcmp(tool, "Glob") || !strcmp(tool, "LS") ||
+                                    !strcmp(tool, "NotebookRead"));
         for (size_t k = 0; ti && !hit_path && k < sizeof PATH_KEYS / sizeof PATH_KEYS[0]; k++) {
             const char *fp = cjstr(ti, PATH_KEYS[k]);
             if (fp && !first_path) first_path = fp;
-            if (fp && kai_path_protected(p, fp, cwd, why, sizeof why)) hit_path = fp;
+            if (fp && kai_path_protected(p, fp, cwd, why, sizeof why)) {
+                if (is_read_tool && kai_control_read_allowed(why)) continue; /* own config read: allow */
+                hit_path = fp;
+            }
         }
         char *cmd = command_text(ti);
         int is_patch = tool && !strcmp(tool, "apply_patch");

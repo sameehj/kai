@@ -655,22 +655,37 @@ private struct AgentControlPage: View {
                        subtitle: "Every agent session Kai sees — enforced or not — with its permissions. Grant, revoke or pause one session without touching the others. Sessions appear even with the storage wall off.")
             if sorted.isEmpty {
                 Text("No agent sessions right now.").font(.system(size: 13)).foregroundStyle(Theme.muted)
-            }
-            HSplitView {
-                List(sorted, selection: $selected) { s in
-                    SessionRowView(session: s, needsYou: false).tag(s.id)
-                }.frame(minWidth: 280)
-                Group {
-                    if let id = selected, let s = model.sessions.first(where: { $0.id == id }) {
-                        SessionDetail(session: s, grants: grants)
-                    } else {
-                        VStack { Spacer(); Text("Select a session").foregroundStyle(Theme.muted); Spacer() }
-                            .frame(maxWidth: .infinity)
+                Spacer()
+            } else {
+                // Two-column split that fills the page; the list no longer
+                // collapses onto the header (the bug was a List with no height).
+                HSplitView {
+                    List(sorted, selection: $selected) { s in
+                        SessionRowView(session: s, needsYou: false).tag(s.id)
                     }
-                }.frame(minWidth: 300)
+                    .frame(minWidth: 260, maxHeight: .infinity)
+                    Group {
+                        if let id = selected, let s = model.sessions.first(where: { $0.id == id }) {
+                            SessionDetail(session: s, grants: grants)
+                        } else {
+                            VStack { Spacer(); Text("Select a session").foregroundStyle(Theme.muted); Spacer() }
+                                .frame(maxWidth: .infinity)
+                        }
+                    }.frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .task { await model.refresh() }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .task { await model.refresh(); selectDefault() }
+        .onChange(of: model.sessions) { _ in selectDefault() }
+    }
+
+    /// Select the first session once data arrives, so the detail isn't empty.
+    private func selectDefault() {
+        if selected == nil || !model.sessions.contains(where: { $0.id == selected }) {
+            selected = sorted.first?.id
+        }
     }
 }
 

@@ -22,7 +22,7 @@ private let log = Logger(subsystem: "io.github.sameehj.kai.network", category: "
 
 final class FilterDataProvider: NEFilterDataProvider {
     private let engine = Engine()
-    private var healthTimer: Timer?
+    private var healthTimer: DispatchSourceTimer?
     private let healthPath = "/tmp/kai-network-health.json"
 
     // Observed-state snapshot (U1/M0.4): a fresh file proves the network wall is
@@ -46,14 +46,20 @@ final class FilterDataProvider: NEFilterDataProvider {
             completionHandler(error)
         }
         writeHealth()
-        healthTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            self?.writeHealth()
-        }
+        // A GCD timer, not Timer.scheduledTimer: an NE provider has no run loop
+        // driving a scheduled Timer, so a scheduled Timer fires once and the
+        // snapshot goes stale (it then reads as "not running" and sessions were
+        // mislabelled "storage only"). A dispatch timer fires on its own queue.
+        let t = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        t.schedule(deadline: .now() + 5, repeating: 5)
+        t.setEventHandler { [weak self] in self?.writeHealth() }
+        t.resume()
+        healthTimer = t
         log.info("Kai network wall started")
     }
 
     override func stopFilter(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-        healthTimer?.invalidate(); healthTimer = nil
+        healthTimer?.cancel(); healthTimer = nil
         try? FileManager.default.removeItem(atPath: healthPath)   // goes stale -> not running
         log.info("Kai network wall stopped: \(reason.rawValue)")
         completionHandler()

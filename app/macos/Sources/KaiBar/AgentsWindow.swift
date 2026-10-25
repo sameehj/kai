@@ -43,16 +43,31 @@ struct SessionRow: Decodable, Identifiable, Equatable {
     var state: String = "active"
     var isActive: Bool { state == "active" }
     var projectName: String { project.isEmpty ? "—" : (project as NSString).lastPathComponent }
+    /// Proper product names, not the lowercase classifier.
+    var displayAgent: String {
+        switch agent {
+        case "claude": return "Claude Code"
+        case "codex": return "Codex"
+        case "cursor": return "Cursor"
+        case "gemini": return "Gemini CLI"
+        default: return agent.prefix(1).uppercased() + agent.dropFirst()
+        }
+    }
+    /// Start time: date when it wasn't today (e.g. "Oct 17"), else "HH:mm".
     var startedClock: String {
         guard startedUtc > 0 else { return "" }
-        let f = DateFormatter(); f.dateFormat = "HH:mm"
-        return f.string(from: Date(timeIntervalSince1970: TimeInterval(startedUtc)))
+        let d = Date(timeIntervalSince1970: TimeInterval(startedUtc))
+        let f = DateFormatter()
+        f.dateFormat = Calendar.current.isDateInToday(d) ? "HH:mm" : "MMM d"
+        return f.string(from: d)
     }
+    /// "8d 2h" / "3h 10m" / "12m" — never "190h 8m".
     var runningFor: String {
         guard startedUtc > 0, isActive else { return "" }
         let s = max(0, Int(Date().timeIntervalSince1970) - startedUtc)
-        if s < 3600 { return "\(s / 60)m" }
-        return "\(s / 3600)h \((s % 3600) / 60)m"
+        if s >= 86400 { return "\(s / 86400)d \((s % 86400) / 3600)h" }
+        if s >= 3600 { return "\(s / 3600)h \((s % 3600) / 60)m" }
+        return "\(s / 60)m"
     }
     /// Never say "protected": the label comes straight from observed enforcement.
     var enforcementShort: String {
@@ -200,18 +215,18 @@ struct SessionRowView: View {
             if needsYou { Circle().fill(Color.orange).frame(width: 7, height: 7) }
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
-                    Text(session.agent).fontWeight(.medium)
+                    Text(session.displayAgent).fontWeight(.medium)
                     Text(session.enforcementShort).font(.caption2)
                         .foregroundStyle(session.enforcementShort == "both walls" ? .green
                                          : session.enforcementShort == "not enforced" ? .secondary : .orange)
                     if !session.isActive { Text("ended").font(.caption2).foregroundStyle(.secondary) }
                 }
-                Text(session.topic.isEmpty ? "(no topic reported)" : session.topic)
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                HStack(spacing: 6) {
+                if !session.topic.isEmpty {   // hook-reported topic, or hidden
+                    Text(session.topic).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                HStack(spacing: 6) {          // project shown once, with times
                     Text(session.projectName)
-                    if !session.startedClock.isEmpty { Text("· \(session.startedClock)") }
-                    if !session.runningFor.isEmpty { Text("· \(session.runningFor)") }
+                    if !session.runningFor.isEmpty { Text("· running \(session.runningFor)") }
                 }.font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
             }
         }.padding(.vertical, 2)
@@ -227,7 +242,7 @@ struct SessionDetail: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text(session.agent).font(.title2).fontWeight(.semibold)
+                    Text(session.displayAgent).font(.title2).fontWeight(.semibold)
                     Spacer()
                     if session.isActive {
                         Button("Pause Kai for this session (15 min)") {

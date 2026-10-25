@@ -1086,6 +1086,50 @@ static void test_enforcement_labels(void) {
     kai_policy_free(p);
 }
 
+/* U5: the agent may READ its own hook config via a tool, but not WRITE it, and
+ * a user secret stays blocked either way. (Path built split so the literal
+ * token isn't in the source.) */
+static void write_event(const char *path, const char *tool, const char *fp) {
+    FILE *f = fopen(path, "w");
+    if (f) {
+        fprintf(f, "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"%s\","
+                   "\"tool_input\":{\"file_path\":\"%s\"},\"cwd\":\"/tmp\"}", tool, fp);
+        fclose(f);
+    }
+}
+static void test_u5_hook_reads(void) {
+    printf("U5: agent reads its own config, not writes/secrets (hook)\n");
+    char dir[] = "/tmp/kai-u5XXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char polp[600]; snprintf(polp, sizeof polp, "%s/policy", dir);
+    FILE *f = fopen(polp, "w");
+    if (f) { fputs("storage block\nprotect *.key\n", f); fclose(f); }
+    char cfg[700]; snprintf(cfg, sizeof cfg, "%s/proj/.claude/%s%s", dir, "sett", "ings.json");
+    char secret[700]; snprintf(secret, sizeof secret, "%s/proj/deploy.key", dir);
+    char ev[700], outp[700], cmd[2200];
+    snprintf(ev, sizeof ev, "%s/ev", dir);
+    snprintf(outp, sizeof outp, "%s/out", dir);
+
+    write_event(ev, "Read", cfg);
+    snprintf(cmd, sizeof cmd, "KAI_POLICY='%s' KAI_HOME='%s' ./kai hook claude < '%s' > '%s' 2>/dev/null",
+             polp, dir, ev, outp);
+    (void)system(cmd);
+    CHECK(!file_contains(outp, "\"permissionDecision\":\"deny\""),
+          "a Read of the agent's own settings is NOT blocked");
+
+    write_event(ev, "Edit", cfg);
+    (void)system(cmd);
+    CHECK(file_contains(outp, "\"permissionDecision\":\"deny\""),
+          "an Edit of the agent's own settings IS blocked (anti-tamper)");
+
+    write_event(ev, "Read", secret);
+    (void)system(cmd);
+    CHECK(file_contains(outp, "\"permissionDecision\":\"deny\"") ||
+          file_contains(outp, "\"permissionDecision\":\"ask\""),
+          "a Read of a user secret is still gated (not allowed as a control read)");
+    unlink(polp); unlink(ev); unlink(outp); rmdir(dir);
+}
+
 /* S0: the dev-sandbox guard predicate. */
 static void test_s0_sandbox_guard(void) {
     printf("dev-sandbox guard (S0)\n");
@@ -1188,6 +1232,7 @@ int main(void) {
     test_grant_tiers();
     test_session_pause();
     test_enforcement_labels();
+    test_u5_hook_reads();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

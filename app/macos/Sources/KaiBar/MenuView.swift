@@ -51,14 +51,28 @@ struct MenuView: View {
     private var statusLine: some View {
         let running = agents.sessions.filter { $0.isActive }.count
         let needs = grantManager.pending.count + grantManager.pendingPolicy.count
-        return VStack(alignment: .leading, spacing: 2) {
+        let activeGrants = grantManager.grants.count
+        let blockedToday = model.events.filter {
+            $0.isBlock && ($0.date.map { Calendar.current.isDateInToday($0) } ?? false)
+        }.count
+        return VStack(alignment: .leading, spacing: 3) {
+            // headline from the shared measured status (observed enforcement)
             Text(model.observedHeadline(storageOn: storage.isOn, networkOn: wall.isOn))
-                .font(Theme.display(18))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(model.health == .problem ? Theme.coral : glow)
-            Text("\(running) agent session\(running == 1 ? "" : "s") running"
-                 + (needs > 0 ? " · \(needs) need\(needs == 1 ? "s" : "") you" : ""))
-                .font(.system(size: 12)).foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(running)").font(Theme.display(34)).foregroundStyle(glow)
+                Text("agent session\(running == 1 ? "" : "s") running")
+                    .font(.system(size: 13)).foregroundStyle(Theme.soft)
+            }
+            HStack(spacing: 6) {
+                Text("\(needs) needs you").foregroundStyle(needs > 0 ? Theme.amber : Theme.muted)
+                Text("·").foregroundStyle(Theme.muted)
+                Text("\(activeGrants) active grant\(activeGrants == 1 ? "" : "s")").foregroundStyle(Theme.muted)
+                Text("·").foregroundStyle(Theme.muted)
+                Text("\(blockedToday) blocked today").foregroundStyle(Theme.muted)
+            }.font(.system(size: 11))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -75,8 +89,11 @@ struct MenuView: View {
 
     // Item 2: Active now — one row per running session (opens its detail).
     private var activeNow: some View {
+        // Group sessions under their agent ("Claude Code · 3") so several
+        // sessions don't become a long flat list.
         let running = agents.sessions.filter { $0.isActive }
             .sorted { $0.startedUtc > $1.startedUtc }
+        let groups = Dictionary(grouping: running, by: { $0.displayAgent })
         return VStack(alignment: .leading, spacing: 6) {
             if !running.isEmpty {
                 HStack {
@@ -85,10 +102,15 @@ struct MenuView: View {
                     Button("Open Agent Control") { openAgentControl() }
                         .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
                 }
-                ForEach(running.prefix(6)) { s in
-                    let gc = grantManager.grants.filter { $0.session_id == s.id }.count
-                    Button { openAgentControl() } label: { PopoverSessionRow(session: s, grants: gc) }
-                        .buttonStyle(.plain)
+                ForEach(groups.keys.sorted(), id: \.self) { ag in
+                    let rows = groups[ag] ?? []
+                    Text("\(ag) · \(rows.count)")
+                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.muted)
+                    ForEach(rows.prefix(4)) { s in
+                        let gc = grantManager.grants.filter { $0.session_id == s.id }.count
+                        Button { openAgentControl() } label: { PopoverSessionRow(session: s, grants: gc) }
+                            .buttonStyle(.plain)
+                    }
                 }
             }
         }
@@ -532,20 +554,19 @@ struct PopoverSessionRow: View {
             Circle().fill(badge).frame(width: 7, height: 7)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
-                    Text(session.agent).font(.system(size: 13, weight: .medium))
+                    Text(session.projectName).font(.system(size: 13, weight: .medium))
                     Text(session.enforcementShort).font(.system(size: 11)).foregroundStyle(Theme.muted)
                     if grants > 0 {
                         Text("\(grants) grant\(grants == 1 ? "" : "s")")
                             .font(.system(size: 11)).foregroundStyle(Theme.lime)
                     }
                 }
-                Text(session.topic.isEmpty ? session.projectName : session.topic)
-                    .font(.system(size: 11)).foregroundStyle(Theme.soft).lineLimit(1)
-                HStack(spacing: 6) {
-                    Text(session.projectName)
-                    if !session.startedClock.isEmpty { Text("· started \(session.startedClock)") }
-                    if !session.runningFor.isEmpty { Text("· \(session.runningFor)") }
-                }.font(.system(size: 10)).foregroundStyle(Theme.muted).lineLimit(1)
+                if !session.topic.isEmpty {   // hook topic, or hidden — never the project twice
+                    Text(session.topic).font(.system(size: 11)).foregroundStyle(Theme.soft).lineLimit(1)
+                }
+                if !session.runningFor.isEmpty {
+                    Text("running \(session.runningFor)").font(.system(size: 10)).foregroundStyle(Theme.muted)
+                }
             }
             Spacer()
             Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(Theme.muted)
