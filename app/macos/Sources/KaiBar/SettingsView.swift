@@ -643,7 +643,7 @@ private struct AgentControlPage: View {
     @State private var selected: String?
 
     private var sorted: [SessionRow] {
-        model.sessions.sorted { a, b in
+        model.interactiveSessions.sorted { a, b in
             if a.isActive != b.isActive { return a.isActive }
             return a.startedUtc > b.startedUtc
         }
@@ -653,28 +653,40 @@ private struct AgentControlPage: View {
         VStack(alignment: .leading, spacing: 14) {
             PageHeader(icon: "person.2.gobackward", title: "Agent Control",
                        subtitle: "Every agent session Kai sees — enforced or not — with its permissions. Grant, revoke or pause one session without touching the others. Sessions appear even with the storage wall off.")
-            if sorted.isEmpty {
-                Text("No agent sessions right now.").font(.system(size: 13)).foregroundStyle(Theme.muted)
-                Spacer()
-            } else {
-                // Two-column split that fills the page; the list no longer
-                // collapses onto the header (the bug was a List with no height).
-                HSplitView {
-                    List(sorted, selection: $selected) { s in
-                        SessionRowView(session: s, needsYou: false).tag(s.id)
+            // A plain HStack (not a nested split view, which collapsed inside the
+            // Settings window's own split): a fixed-width list + a detail, both
+            // filling the height.
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 0) {
+                    if sorted.isEmpty {
+                        Text("No agent sessions right now.").font(.system(size: 13))
+                            .foregroundStyle(Theme.muted).padding(10)
                     }
-                    .frame(minWidth: 260, maxHeight: .infinity)
-                    Group {
-                        if let id = selected, let s = model.sessions.first(where: { $0.id == id }) {
-                            SessionDetail(session: s, grants: grants)
-                        } else {
-                            VStack { Spacer(); Text("Select a session").foregroundStyle(Theme.muted); Spacer() }
-                                .frame(maxWidth: .infinity)
+                    List(selection: $selected) {
+                        ForEach(sorted) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
+                        if !model.backgroundServices.isEmpty {
+                            Section("Background services") {
+                                ForEach(model.backgroundServices) { b in
+                                    Text("\(b.displayAgent) — \(b.projectName)")
+                                        .font(.caption).foregroundStyle(Theme.muted)
+                                }
+                            }
                         }
-                    }.frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .frame(maxHeight: .infinity)
+                }
+                .frame(width: 300)
+                Divider()
+                Group {
+                    if let id = selected, let s = model.sessions.first(where: { $0.id == id }) {
+                        SessionDetail(session: s, grants: grants)
+                    } else {
+                        VStack { Spacer(); Text("Select a session").foregroundStyle(Theme.muted); Spacer() }
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task { await model.refresh(); selectDefault() }

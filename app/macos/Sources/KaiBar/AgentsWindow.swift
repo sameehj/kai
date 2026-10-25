@@ -39,9 +39,13 @@ struct SessionRow: Decodable, Identifiable, Equatable {
     var endedUtc: Int = 0
     var childCount: Int = 0
     var source: String = "es"
+    var kind: String = "session"     // session | nested | background service | idle...
+    var tty: String = ""
     var enforcement: String = ""
     var state: String = "active"
     var isActive: Bool { state == "active" }
+    var isSession: Bool { kind == "session" }
+    var window: String { !tty.isEmpty ? tty : (hostApp.isEmpty ? "—" : hostApp) }
     var projectName: String { project.isEmpty ? "—" : (project as NSString).lastPathComponent }
     /// Proper product names, not the lowercase classifier.
     var displayAgent: String {
@@ -86,6 +90,10 @@ final class AgentsModel: ObservableObject {
     @Published var filter: Filter = .running
     @Published var agentFilter: String? = nil
     private var timer: Timer?
+
+    /// Only real interactive sessions (not daemons/nested/orphans).
+    var interactiveSessions: [SessionRow] { sessions.filter { $0.isSession } }
+    var backgroundServices: [SessionRow] { sessions.filter { $0.kind == "background service" } }
 
     init() {
         Task { await refresh() }
@@ -224,8 +232,9 @@ struct SessionRowView: View {
                 if !session.topic.isEmpty {   // hook-reported topic, or hidden
                     Text(session.topic).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-                HStack(spacing: 6) {          // project shown once, with times
+                HStack(spacing: 6) {          // project once, window/tab, time
                     Text(session.projectName)
+                    Text("· \(session.window)")
                     if !session.runningFor.isEmpty { Text("· running \(session.runningFor)") }
                 }.font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
             }
@@ -261,6 +270,7 @@ struct SessionDetail: View {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
                     detailRow("Enforcement", session.enforcement.isEmpty ? "—" : session.enforcement)
                     detailRow("Project", session.project)
+                    detailRow("Window", session.window)
                     detailRow("Host app", session.hostApp.isEmpty ? "-" : session.hostApp)
                     detailRow("Started", session.startedClock + (session.runningFor.isEmpty ? "" : " · running \(session.runningFor)"))
                     detailRow("Processes", "\(session.childCount + 1)")

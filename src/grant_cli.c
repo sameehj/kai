@@ -265,22 +265,36 @@ static int sessions_list(int json) {
             kai_session_report_get(s[i].id, topic, sizeof topic);
             /* topic is agent-reported + already redacted; shown, never trusted. */
             printf("%s{\"id\":\"%s\",\"agent\":\"%s\",\"topic\":\"%s\",\"topic_reported_by_agent\":true,"
-                   "\"project\":\"%s\",\"host_app\":\"%s\",\"started_utc\":%lld,\"ended_utc\":%lld,"
-                   "\"child_count\":%d,\"source\":\"%s\",\"enforcement\":\"%s\",\"state\":\"%s\"}",
-                   i ? "," : "", s[i].id, s[i].agent, topic, s[i].project, s[i].host_app,
+                   "\"project\":\"%s\",\"host_app\":\"%s\",\"tty\":\"%s\",\"started_utc\":%lld,"
+                   "\"ended_utc\":%lld,\"child_count\":%d,\"source\":\"%s\",\"kind\":\"%s\","
+                   "\"enforcement\":\"%s\",\"state\":\"%s\"}",
+                   i ? "," : "", s[i].id, s[i].agent, topic, s[i].project, s[i].host_app, s[i].tty,
                    s[i].started_utc, s[i].ended_utc, s[i].child_count,
-                   s[i].source == KAI_SESS_SCAN ? "scan" : "es", enf, sess_state(&s[i]));
+                   s[i].source == KAI_SESS_SCAN ? "scan" : "es", kai_session_kind_name(s[i].kind),
+                   enf, sess_state(&s[i]));
         }
         printf("]\n");
     } else {
-        printf("%-12s %-8s %-26s %-24s %s\n", "session", "agent", "enforcement", "project", "topic (reported)");
+        int sessions = 0;
+        for (int i = 0; i < n; i++) if (s[i].kind == KAI_KIND_SESSION) sessions++;
+        printf("%-12s %-8s %-10s %-24s %-26s %s\n",
+               "session", "agent", "window", "project", "enforcement", "topic (reported)");
         for (int i = 0; i < n; i++) {
+            if (s[i].kind != KAI_KIND_SESSION) continue;
             char topic[128] = "";
             kai_session_report_get(s[i].id, topic, sizeof topic);
-            printf("%-12s %-8s %-26s %-24.24s %s\n", s[i].id, s[i].agent, enf,
-                   s[i].project, topic[0] ? topic : "-");
+            printf("%-12s %-8s %-10s %-24.24s %-26s %s\n", s[i].id, s[i].agent,
+                   s[i].tty[0] ? s[i].tty : (s[i].host_app[0] ? s[i].host_app : "-"),
+                   s[i].project, enf, topic[0] ? topic : "-");
         }
-        if (n == 0) printf("(no sessions)\n");
+        if (sessions == 0) printf("(no interactive sessions)\n");
+        /* Background services and orphans are listed apart, not counted as sessions. */
+        for (int i = 0; i < n; i++) {
+            if (s[i].kind == KAI_KIND_SESSION) continue;
+            printf("  [%s] %-8s pid %-6d %s\n", kai_session_kind_name(s[i].kind),
+                   s[i].agent, s[i].root_pid, s[i].project);
+        }
+        printf("\n%d interactive session(s).\n", sessions);
     }
     free(s);
     return 0;

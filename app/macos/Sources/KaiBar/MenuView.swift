@@ -49,7 +49,7 @@ struct MenuView: View {
     // from observed enforcement only — replaces the big shield and the weekly
     // counters (those stay in the window).
     private var statusLine: some View {
-        let running = agents.sessions.filter { $0.isActive }.count
+        let running = agents.interactiveSessions.filter { $0.isActive }.count
         let needs = grantManager.pending.count + grantManager.pendingPolicy.count
         let activeGrants = grantManager.grants.count
         let blockedToday = model.events.filter {
@@ -91,7 +91,7 @@ struct MenuView: View {
     private var activeNow: some View {
         // Group sessions under their agent ("Claude Code · 3") so several
         // sessions don't become a long flat list.
-        let running = agents.sessions.filter { $0.isActive }
+        let running = agents.interactiveSessions.filter { $0.isActive }
             .sorted { $0.startedUtc > $1.startedUtc }
         let groups = Dictionary(grouping: running, by: { $0.displayAgent })
         return VStack(alignment: .leading, spacing: 6) {
@@ -564,9 +564,10 @@ struct PopoverSessionRow: View {
                 if !session.topic.isEmpty {   // hook topic, or hidden — never the project twice
                     Text(session.topic).font(.system(size: 11)).foregroundStyle(Theme.soft).lineLimit(1)
                 }
-                if !session.runningFor.isEmpty {
-                    Text("running \(session.runningFor)").font(.system(size: 10)).foregroundStyle(Theme.muted)
-                }
+                HStack(spacing: 6) {
+                    Text(session.window)
+                    if !session.runningFor.isEmpty { Text("· running \(session.runningFor)") }
+                }.font(.system(size: 10)).foregroundStyle(Theme.muted).lineLimit(1)
             }
             Spacer()
             Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(Theme.muted)

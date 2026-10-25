@@ -227,13 +227,29 @@ typedef struct {
     long long ended_utc;                 /* 0 while active                            */
     char project[KAI_SESSION_PROJ_MAX];  /* canonical working dir at root exec        */
     char host_app[64];                   /* Terminal, iTerm, Cursor, ...              */
+    char tty[24];                        /* controlling terminal (window/tab), "" none */
     int child_count;                     /* processes under the root (scan sessions)   */
     int source;                          /* kai_session_source: how it was discovered  */
+    int kind;                            /* kai_session_kind: session/background/orphan */
 } kai_session;
 
 /* How a session was discovered. ES is authoritative (storage wall active); SCAN
  * is the storage-wall-free process scan; both can be present and are merged. */
 typedef enum { KAI_SESS_ES = 0, KAI_SESS_SCAN = 1 } kai_session_source;
+
+/* What a discovered agent process actually is. Only SESSION is counted and
+ * shown as a session; NESTED is folded into its parent session; BACKGROUND is
+ * the agent's supervisor/daemon; ORPHAN is a stale no-tty process. */
+typedef enum {
+    KAI_KIND_SESSION = 0, KAI_KIND_NESTED = 1, KAI_KIND_BACKGROUND = 2, KAI_KIND_ORPHAN = 3
+} kai_session_kind;
+
+/* Pure classifier (testable with fixtures): decide what an agent process is from
+ * its command line, whether it has a controlling tty, whether it reparented to
+ * launchd, its age, and whether an ancestor is the SAME agent (nested). */
+int kai_classify_session(const char *cmdline, int has_tty, int parent_is_launchd,
+                         long long age_sec, int nested_in_same_agent);
+const char *kai_session_kind_name(int kind);
 
 /* Storage-wall-free session discovery (S-redesign item 1): scan running
  * processes for agent ROOT processes (by the policy's agent rules — code

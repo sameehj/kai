@@ -30,6 +30,29 @@ static void session_path(const char *id, char *out, size_t n) {
     snprintf(out, n, "%s/%s.json", kai_session_dir(), id);
 }
 
+int kai_classify_session(const char *cmdline, int has_tty, int parent_is_launchd,
+                         long long age_sec, int nested_in_same_agent) {
+    if (nested_in_same_agent) return KAI_KIND_NESTED;         /* inside another session's tree */
+    const char *c = cmdline ? cmdline : "";
+    /* The agent's own supervisor/daemon: Claude Code runs `claude … daemon run`
+     * and `claude … --bg-pty-host …`; a no-tty process reparented to launchd is
+     * likewise a background service, not an interactive session. */
+    if (strstr(c, "daemon run") || strstr(c, "--bg-pty-host") || strstr(c, "--bg-") ||
+        (parent_is_launchd && !has_tty))
+        return KAI_KIND_BACKGROUND;
+    if (!has_tty && age_sec > 24 * 3600) return KAI_KIND_ORPHAN;  /* idle, possibly orphaned */
+    return KAI_KIND_SESSION;
+}
+
+const char *kai_session_kind_name(int kind) {
+    switch (kind) {
+    case KAI_KIND_NESTED: return "nested";
+    case KAI_KIND_BACKGROUND: return "background service";
+    case KAI_KIND_ORPHAN: return "idle, possibly orphaned";
+    default: return "session";
+    }
+}
+
 const char *kai_enforcement_label(int storage_active, int network_active) {
     if (storage_active && network_active) return "Enforced by both walls";
     if (network_active && !storage_active) return "Network wall only";
@@ -57,8 +80,10 @@ static int write_session(const kai_session *s) {
     cJSON_AddNumberToObject(o, "ended_utc", (double)s->ended_utc);
     cJSON_AddStringToObject(o, "project", s->project);
     cJSON_AddStringToObject(o, "host_app", s->host_app);
+    cJSON_AddStringToObject(o, "tty", s->tty);
     cJSON_AddNumberToObject(o, "child_count", s->child_count);
     cJSON_AddNumberToObject(o, "source", s->source);
+    cJSON_AddNumberToObject(o, "kind", s->kind);
     char *js = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (!js) return -1;
@@ -95,8 +120,8 @@ static int read_session(const char *path, kai_session *out) {
                         if (v) kai_strlcpy(out->field, v, sizeof out->field); } while (0)
 #define NUM(field) do { cJSON *v = cJSON_GetObjectItem(o, #field); \
                         if (cJSON_IsNumber(v)) out->field = v->valuedouble; } while (0)
-    STR(agent); STR(agent_version); STR(project); STR(host_app);
-    NUM(root_pid); NUM(started_utc); NUM(ended_utc); NUM(child_count); NUM(source);
+    STR(agent); STR(agent_version); STR(project); STR(host_app); STR(tty);
+    NUM(root_pid); NUM(started_utc); NUM(ended_utc); NUM(child_count); NUM(source); NUM(kind);
     { cJSON *v = cJSON_GetObjectItem(o, "root_pidversion");
       if (cJSON_IsNumber(v)) out->root_pidversion = (unsigned long long)v->valuedouble; }
 #undef STR

@@ -1130,6 +1130,28 @@ static void test_u5_hook_reads(void) {
     unlink(polp); unlink(ev); unlink(outp); rmdir(dir);
 }
 
+/* Session classification fixtures: interactive vs daemon/supervisor vs nested
+ * vs idle-orphan (the fix for the inflated session count). */
+static void test_session_classify(void) {
+    printf("session classification (count fix)\n");
+    /* interactive: has a tty, normal parent, young */
+    CHECK(kai_classify_session("claude", 1, 0, 120, 0) == KAI_KIND_SESSION, "tty + young = session");
+    /* Claude Code's daemon / bg-pty-host = background service */
+    CHECK(kai_classify_session("claude.exe daemon run --json-path /x", 0, 1, 99999, 0)
+          == KAI_KIND_BACKGROUND, "daemon = background service");
+    CHECK(kai_classify_session("claude.exe --bg-pty-host /tmp/cc", 0, 1, 99999, 0)
+          == KAI_KIND_BACKGROUND, "bg-pty-host = background service");
+    /* a no-tty process reparented to launchd is background too */
+    CHECK(kai_classify_session("claude", 0, 1, 500, 0) == KAI_KIND_BACKGROUND,
+          "no tty + launchd parent = background service");
+    /* an agent started inside another session's tree = nested */
+    CHECK(kai_classify_session("claude", 1, 0, 120, 1) == KAI_KIND_NESTED, "ancestor same agent = nested");
+    /* no tty, not a daemon, stale > 24h = idle/orphaned */
+    CHECK(kai_classify_session("codex", 0, 0, 25 * 3600, 0) == KAI_KIND_ORPHAN,
+          "no tty + stale = idle/orphaned");
+    CHECK(!strcmp(kai_session_kind_name(KAI_KIND_BACKGROUND), "background service"), "kind name");
+}
+
 /* S0: the dev-sandbox guard predicate. */
 static void test_s0_sandbox_guard(void) {
     printf("dev-sandbox guard (S0)\n");
@@ -1233,6 +1255,7 @@ int main(void) {
     test_session_pause();
     test_enforcement_labels();
     test_u5_hook_reads();
+    test_session_classify();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");
