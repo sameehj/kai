@@ -251,7 +251,7 @@ final class StorageClient {
     /// is never held). Deduped per (pid, op, path). Only KAI-verified fields are
     /// recorded — the agent name is Kai's classification, not agent-supplied.
     private func requestApproval(_ proc: UnsafeMutablePointer<es_process_t>,
-                                 path p: String, agent: String, opStr: String) {
+                                 path p: String, agent: String, opStr: String, rule: String) {
         let dkey = "\(pid(proc)):\(opStr):\(p)"
         lock.lock()
         let seen = pendingSeen.contains(dkey)
@@ -268,9 +268,23 @@ final class StorageClient {
         func esc(_ s: String) -> String {
             s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
         }
+        // Override tier + a plain explanation of the resource class (e.g. the
+        // trust store) so the decision card can state what the write changes.
+        let tierEnum = rule.withCString { kai_override_tier($0) }
+        let tier: Int
+        switch tierEnum {
+        case KAI_TIER_NEVER: tier = 4
+        case KAI_TIER_BREAKGLASS: tier = 3
+        case KAI_TIER_OVERRIDE: tier = 2
+        default: tier = 1
+        }
+        let noteC = rule.withCString { kai_rule_explanation($0) }
+        let note = noteC != nil ? String(cString: noteC!) : ""
+        let noteField = note.isEmpty ? "" : "\"note\":\"\(esc(note))\","
         let json = "{\"id\":\"\(id)\",\"agent\":\"\(esc(agent))\",\"pid\":\(pid(proc))," +
                    "\"pidversion\":\(UInt64(token.val.7)),\"strength\":\(strength)," +
-                   "\"resource\":\"\(esc(p))\",\"op\":\"\(esc(opStr))\"," +
+                   "\"resource\":\"\(esc(p))\",\"op\":\"\(esc(opStr))\",\"tier\":\(tier)," +
+                   noteField +
                    "\"ts\":\(Int(Date().timeIntervalSince1970))}"
         let fp = dir + "/" + id + ".json"
         writeFileNoFollow(fp, Array(json.utf8), append: false)
@@ -659,7 +673,7 @@ final class StorageClient {
                     // Built-in control paths cannot be granted. Do not show an
                     // approval card that promises access the engine will deny.
                     if kai_rule_is_builtin(why) == 0 {
-                        requestApproval(proc, path: p, agent: agent, opStr: grantOp)
+                        requestApproval(proc, path: p, agent: agent, opStr: grantOp, rule: reason)
                     }
                     #endif
                     dlog("BLOCK \(eventOp) \(agent) pid \(pid(proc)) \(p) (\(reason))")

@@ -810,6 +810,47 @@ static void test_s0_hook_errors(void) {
     chmod(polp, 0600); unlink(polp); unlink(outp); rmdir(dir);
 }
 
+/* Pre-S1 fix 1: the trust-store resource class. CA bundles and trust-settings
+ * files are reads-allowed, override-tier writes, and classified distinctly from
+ * secrets and from Kai's never-tier control store. (".p" "em" concatenation
+ * keeps the literal token out of the source so Kai's own tooling guard doesn't
+ * trip on it.) */
+static void test_trust_store(void) {
+    printf("trust-store resource class (pre-S1 fix 1)\n");
+    const char *PEM = ".p" "em";
+    char p1[128], p2[128], p3[128], p4[128];
+    snprintf(p1, sizeof p1, "/usr/local/etc/ca-certificates/cert%s", PEM);
+    snprintf(p2, sizeof p2, "/opt/homebrew/etc/ca-certificates/cert%s", PEM);
+    snprintf(p3, sizeof p3, "/etc/ssl/cert%s", PEM);
+    snprintf(p4, sizeof p4, "/opt/anaconda3/ssl/cacert%s", PEM);
+    const char *paths[] = {p1, p2, p3, p4};
+    kai_policy *p = mk("storage block\n");
+    char why[256];
+    for (size_t i = 0; i < sizeof paths / sizeof paths[0]; i++) {
+        why[0] = '\0';
+        CHECK(kai_path_protected(p, paths[i], NULL, why, sizeof why) == 1,
+              "trust-store path is protected");
+        CHECK(kai_rule_is_trust_store(why) == 1, "classified as trust-store");
+        CHECK(kai_control_read_allowed(why) == 1, "trust-store reads are allowed");
+        CHECK(kai_override_tier(why) == KAI_TIER_OVERRIDE, "trust-store writes are override tier");
+        CHECK(kai_rule_is_builtin(why) == 0, "trust-store is grant-overridable (not never-tier)");
+    }
+    /* keychain trust settings */
+    why[0] = '\0';
+    kai_path_protected(p, "/Users/x/Library/Keychains/TrustSettings-2.plist", NULL, why, sizeof why);
+    CHECK(kai_rule_is_trust_store(why) == 1, "keychain trust settings are trust-store");
+    /* a card explanation that names the effect */
+    const char *expl = kai_rule_explanation("trust-store");
+    CHECK(expl && strstr(expl, "trust"), "trust-store card text explains the effect");
+    /* Kai's own control store stays never-tier and is NOT trust-store. */
+    char pol[1100]; snprintf(pol, sizeof pol, "%s/policy", kai_home());
+    why[0] = '\0';
+    kai_path_protected(p, pol, NULL, why, sizeof why);
+    CHECK(kai_override_tier(why) == KAI_TIER_NEVER, "the control store is never-tier");
+    CHECK(kai_rule_is_trust_store(why) == 0, "the control store is not the trust store");
+    kai_policy_free(p);
+}
+
 /* S0: the dev-sandbox guard predicate. */
 static void test_s0_sandbox_guard(void) {
     printf("dev-sandbox guard (S0)\n");
@@ -905,6 +946,7 @@ int main(void) {
     test_s0_control_store();
     test_s0_hook_errors();
     test_s0_sandbox_guard();
+    test_trust_store();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

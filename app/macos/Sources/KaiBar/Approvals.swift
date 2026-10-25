@@ -48,6 +48,8 @@ struct PendingRequest: Decodable, Identifiable {
     let resource: String
     let op: String
     let ts: Int
+    var note: String? = nil     // plain explanation of the resource class (e.g. trust store)
+    var tier: Int? = nil        // kai_override_tier_t: 2 = override, 3 = break-glass, 4 = never
     var strengthLabel: String { strength >= 2 ? "strong" : strength == 1 ? "medium" : "weak" }
 }
 
@@ -216,6 +218,10 @@ struct ApprovalCard: View {
                  ? "\(req.agent) wants to connect to this destination"
                  : "\(req.agent) wants to \(req.op.uppercased()) a protected file")
             Text(req.resource).font(.system(.caption, design: .monospaced)).lineLimit(2)
+            if let note = req.note, !note.isEmpty {
+                Text("This \(note) — requested by \(req.agent).")
+                    .font(.caption).foregroundColor(.orange)
+            }
             Text("Verified: \(req.agent) · pid \(req.pid) · identity \(req.strengthLabel)")
                 .font(.caption).foregroundColor(.secondary)
             if req.op != "connect" {

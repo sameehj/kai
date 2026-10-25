@@ -136,6 +136,28 @@ int kai_rule_is_kai_home(const char *rule);
  * READS are safe to allow (so the agent can start and Kai's hooks can load);
  * WRITES to it must still be blocked by the caller (anti-tamper). */
 int kai_control_read_allowed(const char *rule);
+/* True if `rule` (the value kai_path_protected fills into `why`) is the
+ * trust-store class: CA trust bundles (Homebrew ca-certificates, OpenSSL
+ * cert bundles, certifi cacert), /etc/ssl, and keychain trust-settings files.
+ * Agent READS are allowed (TLS verification needs them); WRITES are blocked but
+ * carry the OVERRIDE tier (grant-overridable), since they change which websites
+ * the Mac trusts. */
+int kai_rule_is_trust_store(const char *rule);
+
+/* How far the user may override Kai's protection of a matched resource. S4 acts
+ * on these; the storage/network walls already make non-builtin protections
+ * grant-overridable (= OVERRIDE/CONFIRM) and builtin ones not (= NEVER). */
+typedef enum {
+    KAI_TIER_CONFIRM = 1,    /* a protected path/host: one confirm in the card  */
+    KAI_TIER_OVERRIDE = 2,   /* policy block, e.g. the trust store: confirm sheet */
+    KAI_TIER_BREAKGLASS = 3, /* private keys / cloud credentials: authentication  */
+    KAI_TIER_NEVER = 4       /* Kai's own control store: never overridable        */
+} kai_override_tier_t;
+/* The override tier for a matched protect rule (the `why` string). */
+kai_override_tier_t kai_override_tier(const char *rule);
+/* A short human explanation of a protected class for a decision card (e.g. the
+ * trust store), or NULL when the rule needs no special wording. */
+const char *kai_rule_explanation(const char *rule);
 /* True if `path` is Kai's own control store: the policy file, a file under the
  * grants dir, or a file under the pending-policy dir. These must never be
  * writable by an agent-tree process, Kai-signed or not (the storage wall uses

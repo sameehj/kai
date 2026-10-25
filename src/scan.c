@@ -272,10 +272,50 @@ static int agent_control_path(const char *np, char *why, size_t whylen) {
     return 0;
 }
 
+/* The trust store: files that decide which certificate authorities (and thus
+ * which websites) this Mac trusts. Agents legitimately READ CA bundles to do
+ * TLS, so reads are allowed; WRITES change the machine's trust and are blocked
+ * but override-tier (a user grant can let a specific write through). Matched by
+ * location, not by the blunt `*.pem` secret rule, so it is classified here and
+ * not as a generic secret. */
+static int trust_store_path(const char *np, char *why, size_t whylen) {
+    const char *base = strrchr(np, '/');
+    base = base ? base + 1 : np;
+    int hit = 0;
+    if (strstr(np, "/ca-certificates/"))                       /* Homebrew bundle dir */
+        hit = 1;
+    else if (strncmp(np, "/etc/ssl/", 9) == 0 ||
+             strncmp(np, "/private/etc/ssl/", 17) == 0)          /* system OpenSSL */
+        hit = 1;
+    else if (strstr(np, "/etc/openssl") && !strcmp(base, "cert.pem")) /* brew openssl */
+        hit = 1;
+    else if (!strcmp(base, "cacert.pem"))                        /* certifi bundle, anywhere */
+        hit = 1;
+    else if (strstr(np, "/Keychains/") && strstr(base, "TrustSettings")) /* keychain trust */
+        hit = 1;
+    if (hit && why) kai_strlcpy(why, "trust-store", whylen);
+    return hit;
+}
+
+int kai_rule_is_trust_store(const char *rule) {
+    return rule && !strcmp(rule, "trust-store");
+}
+
 /* Is this matched rule Kai's own home (~/.kai / self-protect)? That tree holds
  * the policy, audit log and approval key, so agent reads stay blocked. */
 int kai_rule_is_kai_home(const char *rule) {
     return rule && (!strcmp(rule, "kai_self_protect") || !strcmp(rule, "~/.kai"));
+}
+
+kai_override_tier_t kai_override_tier(const char *rule) {
+    if (kai_rule_is_kai_home(rule) || kai_rule_is_builtin(rule)) return KAI_TIER_NEVER;
+    if (kai_rule_is_trust_store(rule)) return KAI_TIER_OVERRIDE;
+    return KAI_TIER_CONFIRM;   /* S4 refines keys/credentials to BREAKGLASS */
+}
+
+const char *kai_rule_explanation(const char *rule) {
+    if (kai_rule_is_trust_store(rule)) return "changes which websites this Mac trusts";
+    return NULL;
 }
 
 /* A builtin control path whose READS are safe to allow an agent: its own hook
@@ -285,6 +325,7 @@ int kai_rule_is_kai_home(const char *rule) {
  * so blocking the read is self-defeating. WRITES to them are still blocked by
  * the caller (anti-tamper). Kai's own home is excluded (reads stay blocked). */
 int kai_control_read_allowed(const char *rule) {
+    if (kai_rule_is_trust_store(rule)) return 1;   /* CA bundles: reads needed for TLS */
     return kai_rule_is_builtin(rule) && !kai_rule_is_kai_home(rule);
 }
 
@@ -309,6 +350,9 @@ int kai_path_protected(const kai_policy *p, const char *path, const char *cwd,
     char *np = kai_normalize_path(path, cwd);
     if (!np) return 0;
     if (agent_control_path(np, why, whylen)) { free(np); return 1; }
+    /* The trust store is classified before `allow`/`protect` so CA bundles get
+     * read-allow + override-tier writes, not a blunt allow or a secret block. */
+    if (trust_store_path(np, why, whylen)) { free(np); return 1; }
     /* allow entries are matched the same way as protect entries (absolute
      * prefix, glob, or basename-of-any-segment). We deliberately do NOT
      * re-normalize each entry against the cwd per call: that made a relative
