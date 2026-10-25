@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 const char *kai_session_dir(void) {
@@ -134,6 +135,121 @@ int kai_session_get(const char *id, kai_session *out) {
     char path[1200];
     session_path(id, path, sizeof path);
     return read_session(path, out);
+}
+
+/* ---- Descriptive session reports (S3) ----
+ * Agent-reported topic, kept APART from the authoritative registry so it never
+ * drives an authorization decision. Written by the signed kai hook (a Kai
+ * component); the topic is redacted through libkai and truncated before it is
+ * stored. A report binds only to an ES session id Kai itself observed, and an
+ * agent session id already bound to a different ES session is rejected+logged.
+ */
+const char *kai_session_reports_dir(void) {
+    static char buf[1100];
+    if (!buf[0]) snprintf(buf, sizeof buf, "%s/reports", kai_home());
+    return buf;
+}
+
+static void report_path(const char *es, char *out, size_t n) {
+    snprintf(out, n, "%s/%s.json", kai_session_reports_dir(), es);
+}
+
+/* Back a byte cut off any partial UTF-8 trailing byte, then cap to <= max. */
+static size_t utf8_trunc(const char *s, size_t max) {
+    size_t n = strlen(s);
+    if (n <= max) return n;
+    n = max;
+    while (n && ((unsigned char)s[n] & 0xC0) == 0x80) n--;
+    return n;
+}
+
+/* Is `agent_session` already recorded under a report other than `es`? */
+static int agent_session_bound_elsewhere(const char *agent_session, const char *es) {
+    if (!agent_session || !*agent_session) return 0;
+    DIR *d = opendir(kai_session_reports_dir());
+    if (!d) return 0;
+    struct dirent *e; int clash = 0;
+    while (!clash && (e = readdir(d))) {
+        size_t nl = strlen(e->d_name);
+        if (e->d_name[0] == '.' || nl < 6 || strcmp(e->d_name + nl - 5, ".json")) continue;
+        char path[1300], esid[KAI_SESSION_ID_MAX] = "";
+        snprintf(path, sizeof path, "%s/%s", kai_session_reports_dir(), e->d_name);
+        size_t len = 0; char *txt = kai_read_file(path, 1 << 16, &len);
+        if (!txt) continue;
+        cJSON *o = cJSON_Parse(txt); free(txt);
+        if (o) {
+            const char *as = cJSON_GetStringValue(cJSON_GetObjectItem(o, "agent_session"));
+            const char *e2 = cJSON_GetStringValue(cJSON_GetObjectItem(o, "es_session"));
+            if (e2) kai_strlcpy(esid, e2, sizeof esid);
+            if (as && strcmp(as, agent_session) == 0 && strcmp(esid, es) != 0) clash = 1;
+            cJSON_Delete(o);
+        }
+    }
+    closedir(d);
+    return clash;
+}
+
+int kai_session_report_topic(const kai_policy *p, const char *es_session,
+                             const char *agent_session, const char *raw_topic) {
+    if (!id_ok(es_session)) return -1;   /* must be a Kai-observed ES session id */
+    if (agent_session_bound_elsewhere(agent_session, es_session)) {
+        kai_audit("session", "bind", "rejected", "",
+                  "agent session id already bound to another Kai session");
+        return -1;
+    }
+    /* Redact the topic through libkai so a secret in the first prompt never
+     * reaches storage; if scanning is off we store a placeholder, never raw. */
+    char topic[128] = "";
+    if (raw_topic && *raw_topic && p) {
+        kai_report rep;
+        char *clean = kai_scan_text(p, raw_topic, &rep);
+        if (clean) {
+            size_t t = utf8_trunc(clean, 80);
+            memcpy(topic, clean, t); topic[t] = '\0';
+            free(clean);
+        } else {
+            kai_strlcpy(topic, "(topic not scanned)", sizeof topic);
+        }
+    }
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "es_session", es_session);
+    cJSON_AddStringToObject(o, "agent_session", agent_session ? agent_session : "");
+    cJSON_AddStringToObject(o, "topic", topic);
+    cJSON_AddNumberToObject(o, "updated_utc", (double)time(NULL));
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (!js) return -1;
+    mkdir(kai_home(), 0700);
+    mkdir(kai_session_reports_dir(), 0700);
+    char path[1200], tmp[1300];
+    report_path(es_session, path, sizeof path);
+    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
+    FILE *f = fopen(tmp, "wb");
+    if (!f) { free(js); return -1; }
+    chmod(tmp, 0600);
+    size_t len = strlen(js);
+    int ok = fwrite(js, 1, len, f) == len;
+    ok = (fflush(f) == 0) && ok;
+    ok = (fclose(f) == 0) && ok;
+    free(js);
+    if (!ok || rename(tmp, path) != 0) { unlink(tmp); return -1; }
+    return 0;
+}
+
+int kai_session_report_get(const char *es_session, char *topic, size_t topiclen) {
+    if (topic && topiclen) topic[0] = '\0';
+    if (!id_ok(es_session)) return 0;
+    char path[1200];
+    report_path(es_session, path, sizeof path);
+    size_t len = 0; char *txt = kai_read_file(path, 1 << 16, &len);
+    if (!txt) return 0;
+    cJSON *o = cJSON_Parse(txt); free(txt);
+    if (!o) return 0;
+    const char *t = cJSON_GetStringValue(cJSON_GetObjectItem(o, "topic"));
+    if (t && topic) kai_strlcpy(topic, t, topiclen);
+    int found = t != NULL;
+    cJSON_Delete(o);
+    return found;
 }
 
 static int by_started_desc(const void *a, const void *b) {

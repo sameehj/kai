@@ -213,17 +213,25 @@ static int sessions_list(int json) {
     kai_sessions_load(&s, &n);
     if (json) {
         printf("[");
-        for (int i = 0; i < n; i++)
-            printf("%s{\"id\":\"%s\",\"agent\":\"%s\",\"project\":\"%s\",\"host_app\":\"%s\","
-                   "\"started_utc\":%lld,\"ended_utc\":%lld,\"state\":\"%s\"}",
-                   i ? "," : "", s[i].id, s[i].agent, s[i].project, s[i].host_app,
+        for (int i = 0; i < n; i++) {
+            char topic[128] = "";
+            kai_session_report_get(s[i].id, topic, sizeof topic);
+            /* topic is agent-reported + already redacted; shown, never trusted. */
+            printf("%s{\"id\":\"%s\",\"agent\":\"%s\",\"topic\":\"%s\",\"topic_reported_by_agent\":true,"
+                   "\"project\":\"%s\",\"host_app\":\"%s\",\"started_utc\":%lld,\"ended_utc\":%lld,"
+                   "\"state\":\"%s\"}",
+                   i ? "," : "", s[i].id, s[i].agent, topic, s[i].project, s[i].host_app,
                    s[i].started_utc, s[i].ended_utc, sess_state(&s[i]));
+        }
         printf("]\n");
     } else {
-        printf("%-38s %-8s %-7s %-20s %s\n", "session", "agent", "state", "host", "project");
-        for (int i = 0; i < n; i++)
-            printf("%-38s %-8s %-7s %-20s %s\n", s[i].id, s[i].agent, sess_state(&s[i]),
-                   s[i].host_app[0] ? s[i].host_app : "-", s[i].project);
+        printf("%-38s %-8s %-7s %-28s %s\n", "session", "agent", "state", "topic (reported)", "project");
+        for (int i = 0; i < n; i++) {
+            char topic[128] = "";
+            kai_session_report_get(s[i].id, topic, sizeof topic);
+            printf("%-38s %-8s %-7s %-28.28s %s\n", s[i].id, s[i].agent, sess_state(&s[i]),
+                   topic[0] ? topic : "-", s[i].project);
+        }
         if (n == 0) printf("(no sessions)\n");
     }
     free(s);
@@ -234,8 +242,11 @@ static int session_show(const char *id) {
     if (!id || !*id) { fprintf(stderr, "usage: kai session show <id>\n"); return 2; }
     kai_session s;
     if (!kai_session_get(id, &s)) { fprintf(stderr, "kai session: no session '%s'\n", id); return 1; }
+    char topic[128] = "";
+    kai_session_report_get(s.id, topic, sizeof topic);
     printf("session   %s\n", s.id);
     printf("agent     %s%s%s\n", s.agent, s.agent_version[0] ? " " : "", s.agent_version);
+    if (topic[0]) printf("topic     %s  (reported by agent)\n", topic);
     printf("state     %s\n", sess_state(&s));
     printf("project   %s\n", s.project);
     printf("host app  %s\n", s.host_app[0] ? s.host_app : "-");

@@ -542,6 +542,39 @@ static int skip_exempt(const char *rule, void *ud) {
  * decision:block). Differences handled here: shell commands may arrive as an
  * argv array, file edits as an apply_patch patch, and the audit source. */
 
+/* S3: find the ES session id Kai observed for this hook's process tree, by
+ * reading the per-pid session files the storage wall writes under
+ * <home>/sessions. Walks up to the agent root. Returns 1 and fills `out` when
+ * found; 0 when this process is in no Kai session (e.g. the wall is off, or the
+ * process is detached) — in which case no topic is bound (the binding rule). */
+static int find_es_session(char *out, size_t n) {
+    if (n) out[0] = '\0';
+    int pid = (int)getpid();
+    for (int i = 0; i < 24 && pid > 1; i++) {
+        char path[640];
+        snprintf(path, sizeof path, "%s/sessions/%d.json", kai_home(), pid);
+        size_t len = 0;
+        char *txt = kai_read_file(path, 1 << 16, &len);
+        if (txt) {
+            cJSON *o = cJSON_Parse(txt);
+            free(txt);
+            if (o) {
+                const char *s = cJSON_GetStringValue(cJSON_GetObjectItem(o, "session"));
+                if (s && *s) kai_strlcpy(out, s, n);
+                cJSON_Delete(o);
+                if (out[0]) return 1;
+            }
+        }
+        kai_proc pr;
+        if (kai_proc_read(pid, &pr) != 0) break;
+        int parent = pr.ppid;
+        kai_proc_free(&pr);
+        if (parent <= 1 || parent == pid) break;
+        pid = parent;
+    }
+    return out[0] != '\0';
+}
+
 static int hook_claude(const char *json, const char *cwd_arg, const char *source) {
     cJSON *root = cJSON_Parse(json);
     if (!root) {
@@ -580,6 +613,14 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
         kind = NEXT_PROMPT;
         const char *prompt = cjstr(root, "prompt");
         subject = strdup(prompt ? prompt : "");
+        /* S3: record the session TOPIC (first prompt), bound to the ES session
+         * Kai observed for this process tree. Descriptive only; redacted and
+         * truncated by kai_session_report_topic. The first prompt wins. */
+        char es[KAI_SESSION_ID_MAX], existing[16];
+        if (prompt && *prompt && find_es_session(es, sizeof es) &&
+            !kai_session_report_get(es, existing, sizeof existing)) {
+            kai_session_report_topic(p, es, session, prompt);
+        }
         kai_report rep;
         char *cleaned = kai_scan_text(p, prompt ? prompt : "", &rep);
         free(cleaned);

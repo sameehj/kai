@@ -919,6 +919,39 @@ static void test_agent_inventory(void) {
     kai_policy_free(q);
 }
 
+/* S3: descriptive session reports — topic redaction and the binding rule. */
+static void test_session_reports(void) {
+    printf("session reports: topic redaction + binding (S3)\n");
+    kai_policy *p = mk("storage block\nsecrets redact\n");
+    char topic[128];
+
+    /* A secret in the first prompt must never reach storage. (Built at runtime
+     * so the literal token isn't in the source.) */
+    char key[32]; snprintf(key, sizeof key, "%s%s", "AKIA", "IOSFODNN7EXAMPLE");
+    char prompt[160]; snprintf(prompt, sizeof prompt, "deploy with key %s now", key);
+    CHECK(kai_session_report_topic(p, "es-1", "conv-1", prompt) == 0, "record topic for es-1");
+    kai_session_report_get("es-1", topic, sizeof topic);
+    CHECK(strstr(topic, key) == NULL, "a secret in the first prompt is NOT stored");
+    CHECK(topic[0] != '\0', "a (redacted) topic is still stored");
+
+    CHECK(kai_session_report_topic(p, "es-2", "conv-2",
+          "update landing pages on innermonkeylabs.com") == 0, "record es-2");
+    kai_session_report_get("es-2", topic, sizeof topic);
+    CHECK(strstr(topic, "landing pages") != NULL, "a benign topic is kept");
+
+    /* Binding: the same agent session id under a different ES session is
+     * rejected and logged; the same ES session may update its own topic. */
+    CHECK(kai_session_report_topic(p, "es-3", "conv-1", "hi") == -1,
+          "agent id already bound elsewhere is rejected");
+    char alog[1100]; snprintf(alog, sizeof alog, "%s/audit.log", kai_home());
+    CHECK(file_contains(alog, "already bound to another"), "binding rejection is logged");
+    CHECK(kai_session_report_topic(p, "es-1", "conv-1", "a new topic") == 0,
+          "the same session may update its own topic");
+
+    CHECK(kai_session_report_topic(p, "../escape", "c", "x") == -1, "a traversal ES id is refused");
+    kai_policy_free(p);
+}
+
 /* S0: the dev-sandbox guard predicate. */
 static void test_s0_sandbox_guard(void) {
     printf("dev-sandbox guard (S0)\n");
@@ -1017,6 +1050,7 @@ int main(void) {
     test_trust_store();
     test_session_registry();
     test_agent_inventory();
+    test_session_reports();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

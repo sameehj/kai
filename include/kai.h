@@ -246,6 +246,19 @@ int kai_session_get(const char *id, kai_session *out);
 /* The registry directory: <home>/registry. */
 const char *kai_session_dir(void);
 
+/* Descriptive, agent-reported session data (S3), kept APART from the registry
+ * so it never drives authorization. Record the session topic (e.g. the first
+ * user prompt): it is redacted through `p` and truncated before storage. A
+ * report binds only to an ES session id Kai observed; an agent session id
+ * already bound to a different ES session is rejected and logged. Returns 0 on
+ * success, -1 on reject. */
+int kai_session_report_topic(const kai_policy *p, const char *es_session,
+                             const char *agent_session, const char *raw_topic);
+/* Read the stored (already redacted) topic for an ES session. 1 if present. */
+int kai_session_report_get(const char *es_session, char *topic, size_t topiclen);
+/* The reports directory: <home>/reports (written by the signed kai hook). */
+const char *kai_session_reports_dir(void);
+
 /* ---- Scoped Approvals (M0 engine) ----
  * A grant narrows an existing denial for one verified identity, one resource,
  * one operation, for a bounded time. It can turn a SOFT-protected path into
