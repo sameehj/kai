@@ -64,7 +64,7 @@ static void read_team(int pid, char *team, size_t teamlen) {
     CFRelease(cfpid);
 }
 
-int kai_proc_read(int pid, kai_proc *out) {
+static int proc_read_impl(int pid, kai_proc *out, int want_team) {
     memset(out, 0, sizeof *out);
     out->pid = pid;
     struct proc_bsdinfo bi;
@@ -91,9 +91,15 @@ int kai_proc_read(int pid, kai_proc *out) {
         }
         free(buf);
     }
-    read_team(pid, out->team, sizeof out->team);
+    /* The code-signing lookup is the expensive part (SecCode verification). Skip
+     * it when the caller does not need the Team ID -- the session scan matches
+     * agents by exe/arg and would otherwise pay it for every process. */
+    if (want_team) read_team(pid, out->team, sizeof out->team);
     return 0;
 }
+
+int kai_proc_read(int pid, kai_proc *out) { return proc_read_impl(pid, out, 1); }
+int kai_proc_read_fast(int pid, kai_proc *out) { return proc_read_impl(pid, out, 0); }
 
 #else /* Linux */
 
@@ -126,6 +132,7 @@ int kai_proc_read(int pid, kai_proc *out) {
     }
     return 0;
 }
+int kai_proc_read_fast(int pid, kai_proc *out) { return kai_proc_read(pid, out); }
 
 #endif
 
@@ -176,40 +183,20 @@ int kai_process_agent(const kai_policy *p, int pid, char *name, size_t namelen,
 
 /* ---- storage-wall-free session discovery (S-redesign item 1) ---- */
 #ifdef __APPLE__
-/* Walk up from `pid` to find the terminal/app hosting it. */
-static void find_host_app(int pid, char *out, size_t n) {
-    if (n) out[0] = '\0';
-    static const struct { const char *mark, *name; } apps[] = {
-        {"/Terminal.app/", "Terminal"}, {"/iTerm.app/", "iTerm"},
-        {"/Cursor.app/", "Cursor"}, {"/Visual Studio Code.app/", "VS Code"},
-        {"/WezTerm.app/", "WezTerm"}, {"/Alacritty.app/", "Alacritty"},
-        {"/kitty.app/", "kitty"}, {"/Warp.app/", "Warp"}, {"/Ghostty.app/", "Ghostty"},
-    };
-    for (int depth = 0; pid > 1 && depth < 32; depth++) {
-        kai_proc pr;
-        if (kai_proc_read(pid, &pr) != 0) return;
-        int parent = pr.ppid;
-        for (size_t k = 0; k < sizeof apps / sizeof apps[0]; k++)
-            if (strstr(pr.exe, apps[k].mark)) { kai_strlcpy(out, apps[k].name, n); kai_proc_free(&pr); return; }
-        kai_proc_free(&pr);
-        if (parent <= 1 || parent == pid) return;
-        pid = parent;
-    }
-}
+/* Session scan (perf-tuned): ONE fast pass over all processes (no per-process
+ * code-signing lookup -- kai_proc_read_fast skips it), building an in-memory
+ * table (pid, parent index, is-agent, exe). Agent roots and their child counts
+ * are then found with in-memory ancestry walks -- no extra syscalls, no O(n^2)
+ * re-reads. The earlier version did a SecCode verification per process and an
+ * O(n^2) syscall child count, which made the machine slow when polled. */
+static const struct { const char *mark, *name; } HOST_APPS[] = {
+    {"/Terminal.app/", "Terminal"}, {"/iTerm.app/", "iTerm"},
+    {"/Cursor.app/", "Cursor"}, {"/Visual Studio Code.app/", "VS Code"},
+    {"/WezTerm.app/", "WezTerm"}, {"/Alacritty.app/", "Alacritty"},
+    {"/kitty.app/", "kitty"}, {"/Warp.app/", "Warp"}, {"/Ghostty.app/", "Ghostty"},
+};
 
-/* Is `pid` a descendant of `root` (root excluded)? Bounded ancestry walk. */
-static int descends_from(int pid, int root) {
-    for (int depth = 0; pid > 1 && depth < 64; depth++) {
-        kai_proc pr;
-        if (kai_proc_read(pid, &pr) != 0) return 0;
-        int parent = pr.ppid;
-        kai_proc_free(&pr);
-        if (parent == root) return 1;
-        if (parent <= 1 || parent == pid) return 0;
-        pid = parent;
-    }
-    return 0;
-}
+typedef struct { int pid, parent; int is_agent; char name[64]; char exe[1024]; } scan_ent;
 
 int kai_sessions_scan(const kai_policy *p, kai_session **out, int *n) {
     *out = NULL; *n = 0;
@@ -221,49 +208,71 @@ int kai_sessions_scan(const kai_policy *p, kai_session **out, int *n) {
     if (!pids) return 0;
     int got = proc_listpids(PROC_ALL_PIDS, 0, pids, maxp * (int)sizeof(pid_t));
     int np = got / (int)sizeof(pid_t);
+    if (np > maxp) np = maxp;
 
-    kai_session *arr = NULL; int count = 0, cap = 0;
+    scan_ent *tab = calloc((size_t)(np > 0 ? np : 1), sizeof *tab);
+    if (!tab) { free(pids); return 0; }
+    int nt = 0;
+    /* One pass: read each process ONCE (fast: no code-signing), classify it. */
     for (int i = 0; i < np; i++) {
         int pid = pids[i];
         if (pid <= 1) continue;
         kai_proc pr;
-        if (kai_proc_read(pid, &pr) != 0) continue;
-        char name[64];
-        int is_agent = kai_agent_match(p, pr.exe, (const char *const *)pr.argv, pr.argc,
-                                       pr.team, name, sizeof name);
-        int ppid = pr.ppid;
+        if (kai_proc_read_fast(pid, &pr) != 0) continue;
+        tab[nt].pid = pid;
+        tab[nt].parent = pr.ppid;                 /* resolved to an index below */
+        kai_strlcpy(tab[nt].exe, pr.exe, sizeof tab[nt].exe);
+        /* Agents are matched by exe/arg (team omitted: the walls still use team;
+         * the display scan doesn't pay the code-signing cost). */
+        tab[nt].is_agent = kai_agent_match(p, pr.exe, (const char *const *)pr.argv,
+                                           pr.argc, "", tab[nt].name, sizeof tab[nt].name);
         kai_proc_free(&pr);
-        if (!is_agent) continue;
-        /* Root = the topmost process of this agent: its parent is not the same agent. */
-        int parent_same = 0;
-        if (ppid > 1) {
-            kai_proc pp;
-            if (kai_proc_read(ppid, &pp) == 0) {
-                char pname[64];
-                if (kai_agent_match(p, pp.exe, (const char *const *)pp.argv, pp.argc,
-                                    pp.team, pname, sizeof pname) && strcmp(pname, name) == 0)
-                    parent_same = 1;
-                kai_proc_free(&pp);
-            }
-        }
-        if (parent_same) continue;
+        nt++;
+    }
+    free(pids);
+
+    /* Resolve each entry's parent to a table index (one O(n^2) integer scan, no
+     * syscalls), so ancestry walks below are O(depth). */
+    for (int i = 0; i < nt; i++) {
+        int ppid = tab[i].parent, idx = -1;
+        for (int j = 0; j < nt; j++) if (tab[j].pid == ppid) { idx = j; break; }
+        tab[i].parent = idx;
+    }
+
+    kai_session *arr = NULL; int count = 0, cap = 0;
+    for (int i = 0; i < nt; i++) {
+        if (!tab[i].is_agent) continue;
+        /* Root = topmost process of this agent: parent (if any) isn't the same agent. */
+        int par = tab[i].parent;
+        if (par >= 0 && tab[par].is_agent && strcmp(tab[par].name, tab[i].name) == 0) continue;
 
         kai_session s;
         memset(&s, 0, sizeof s);
-        snprintf(s.id, sizeof s.id, "scan-%d", pid);     /* stable while the root lives */
-        kai_strlcpy(s.agent, name, sizeof s.agent);
-        s.root_pid = pid;
+        snprintf(s.id, sizeof s.id, "scan-%d", tab[i].pid);
+        kai_strlcpy(s.agent, tab[i].name, sizeof s.agent);
+        s.root_pid = tab[i].pid;
         s.source = KAI_SESS_SCAN;
         struct proc_bsdinfo bi;
-        if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bi, sizeof bi) == (int)sizeof bi)
+        if (proc_pidinfo(tab[i].pid, PROC_PIDTBSDINFO, 0, &bi, sizeof bi) == (int)sizeof bi)
             s.started_utc = (long long)bi.pbi_start_tvsec;
         struct proc_vnodepathinfo vp;
-        if (proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &vp, sizeof vp) > 0)
+        if (proc_pidinfo(tab[i].pid, PROC_PIDVNODEPATHINFO, 0, &vp, sizeof vp) > 0)
             kai_strlcpy(s.project, vp.pvi_cdir.vip_path, sizeof s.project);
-        find_host_app(ppid, s.host_app, sizeof s.host_app);
-        for (int j = 0; j < np; j++)
-            if (pids[j] > 1 && pids[j] != pid && descends_from(pids[j], pid)) s.child_count++;
-
+        /* Host app: walk ancestors via the table (no syscalls). */
+        for (int a = tab[i].parent, depth = 0; a >= 0 && depth < 40; a = tab[a].parent, depth++) {
+            int found = 0;
+            for (size_t k = 0; k < sizeof HOST_APPS / sizeof HOST_APPS[0]; k++)
+                if (strstr(tab[a].exe, HOST_APPS[k].mark)) {
+                    kai_strlcpy(s.host_app, HOST_APPS[k].name, sizeof s.host_app); found = 1; break;
+                }
+            if (found) break;
+        }
+        /* Child count: processes whose ancestry reaches this root (in-memory). */
+        for (int j = 0; j < nt; j++) {
+            if (j == i) continue;
+            for (int a = tab[j].parent, depth = 0; a >= 0 && depth < 64; a = tab[a].parent, depth++)
+                if (a == i) { s.child_count++; break; }
+        }
         if (count == cap) {
             int nc = cap ? cap * 2 : 8;
             kai_session *na = realloc(arr, (size_t)nc * sizeof *na);
@@ -272,10 +281,11 @@ int kai_sessions_scan(const kai_policy *p, kai_session **out, int *n) {
         }
         arr[count++] = s;
     }
-    free(pids);
+    free(tab);
     *out = arr; *n = count;
     return count;
 }
+
 #else
 int kai_sessions_scan(const kai_policy *p, kai_session **out, int *n) {
     (void)p; *out = NULL; *n = 0; return 0;

@@ -165,6 +165,7 @@ typedef struct {
     int argc;
 } kai_proc;
 int kai_proc_read(int pid, kai_proc *out); /* 0 on success */
+int kai_proc_read_fast(int pid, kai_proc *out); /* like kai_proc_read but skips the Team ID (no code-signing lookup) */
 void kai_proc_free(kai_proc *pr);
 
 #endif

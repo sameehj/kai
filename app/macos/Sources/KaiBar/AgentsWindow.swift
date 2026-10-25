@@ -74,7 +74,9 @@ final class AgentsModel: ObservableObject {
 
     init() {
         Task { await refresh() }
-        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+        // The session scan is cheap now, but this model is always alive behind
+        // the menu bar; poll infrequently so it costs almost nothing at rest.
+        timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             Task { await self?.refresh() }
         }
     }
