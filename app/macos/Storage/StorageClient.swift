@@ -148,9 +148,21 @@ final class StorageClient {
     }
 
     private var pausedStorage = false   // refreshed off the hot path (health timer)
+    private var pausedSessions = Set<String>()   // S6: per-session pause, refreshed off the hot path
 
     private func writeHealth() {
-        pausedStorage = kai_wall_paused("storage", Int64(Date().timeIntervalSince1970)) != 0
+        let now = Int64(Date().timeIntervalSince1970)
+        pausedStorage = kai_wall_paused("storage", now) != 0
+        #if KAI_STORAGE_ENFORCE
+        // Refresh the paused-session set from the current sessions (bounded file
+        // reads, off the hot path — authorize() only consults the cached set).
+        lock.lock(); let sids = Set(sessions.values.map { $0.sid }); lock.unlock()
+        var paused = Set<String>()
+        for sid in sids where !sid.isEmpty {
+            if sid.withCString({ kai_session_paused($0, now) }) != 0 { paused.insert(sid) }
+        }
+        lock.lock(); pausedSessions = paused; lock.unlock()
+        #endif
         var enforcing = false
         var gen: UInt = 0
         #if KAI_STORAGE_ENFORCE
@@ -682,6 +694,19 @@ final class StorageClient {
                 if !write && kai_control_read_allowed(why) == 1 { return true }
                 if enforce && mode == KAI_STORAGE_BLOCK {
                     #if KAI_STORAGE_ENFORCE
+                    // S6: a paused session skips enforcement for SOFT-protected
+                    // resources; never-tier (builtin control store) still blocks.
+                    if kai_rule_is_builtin(why) == 0 {
+                        let sid = sessionFor(pid(proc)).sid
+                        if !sid.isEmpty {
+                            lock.lock(); let isPaused = pausedSessions.contains(sid); lock.unlock()
+                            if isPaused {
+                                audit(decision: "would-block", agent: agent, op: eventOp, path: p,
+                                      why: reason + " (session paused)")
+                                return true
+                            }
+                        }
+                    }
                     // A valid, human-approved grant can allow a soft-protected
                     // op. The store refuses control paths, so this never widens
                     // an un-exemptable denial.

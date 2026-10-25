@@ -195,7 +195,17 @@ struct SessionDetail: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text(session.agent).font(.title2).fontWeight(.semibold)
+                HStack {
+                    Text(session.agent).font(.title2).fontWeight(.semibold)
+                    Spacer()
+                    if session.isActive {
+                        Button("Pause Kai for this session (15 min)") {
+                            grants.pauseSession(session.id, minutes: 15)
+                        }
+                        .help("Skips Kai for this session for 15 minutes, then auto-resumes. "
+                              + "Kai's own settings stay protected.")
+                    }
+                }
                 if !session.topic.isEmpty {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(session.topic)

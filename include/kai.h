@@ -259,6 +259,13 @@ int kai_session_report_get(const char *es_session, char *topic, size_t topiclen)
 /* The reports directory: <home>/reports (written by the signed kai hook). */
 const char *kai_session_reports_dir(void);
 
+/* Per-session pause (S6): skip Kai for one session for a time-boxed window,
+ * auto-resuming when it elapses. `minutes<=0` resumes. The caller consults
+ * kai_session_paused only for SOFT-protected resources; never-tier (the control
+ * store) still applies while paused. */
+int kai_session_paused(const char *session, long long now);
+int kai_session_pause_write(const char *session, long long minutes);
+
 /* ---- Scoped Approvals (M0 engine) ----
  * A grant narrows an existing denial for one verified identity, one resource,
  * one operation, for a bounded time. It can turn a SOFT-protected path into

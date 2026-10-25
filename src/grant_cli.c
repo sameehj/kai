@@ -174,7 +174,14 @@ static int grant_create(int argc, char **argv) {
  * agent callers, like grant changes. */
 int kai_cmd_pause(int argc, char **argv) {
     if (refuse_if_agent("pause")) return 3;
-    if (argc < 1) { fprintf(stderr, "usage: kai pause <storage|network|all> <minutes>\n"); return 2; }
+    if (argc < 1) { fprintf(stderr, "usage: kai pause <storage|network|all|session <id>> <minutes>\n"); return 2; }
+    if (!strcmp(argv[0], "session")) {       /* S6: pause one session only */
+        if (argc < 2) { fprintf(stderr, "usage: kai pause session <id> [minutes]\n"); return 2; }
+        long long mins = (argc >= 3) ? strtoll(argv[2], NULL, 10) : 15;
+        if (kai_session_pause_write(argv[1], mins) != 0) { fprintf(stderr, "kai pause: bad session id\n"); return 1; }
+        printf("paused session %s for %lld min (auto-resumes; never-tier still applies)\n", argv[1], mins);
+        return 0;
+    }
     long long mins = (argc >= 2) ? strtoll(argv[1], NULL, 10) : 15;
     const char *wall = argv[0];
     const char *walls[] = { "storage", "network" };
@@ -186,6 +193,11 @@ int kai_cmd_pause(int argc, char **argv) {
 }
 int kai_cmd_resume(int argc, char **argv) {
     if (refuse_if_agent("resume")) return 3;
+    if (argc >= 2 && !strcmp(argv[0], "session")) {
+        kai_session_pause_write(argv[1], 0);
+        printf("resumed session %s\n", argv[1]);
+        return 0;
+    }
     const char *wall = argc >= 1 ? argv[0] : "all";
     const char *walls[] = { "storage", "network" };
     for (int i = 0; i < 2; i++)

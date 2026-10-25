@@ -130,6 +130,41 @@ int kai_session_end(const char *id, long long ended_utc) {
     return write_session(&s);
 }
 
+/* Per-session pause (S6): Kai skips only this session for a time-boxed window,
+ * auto-resuming when it elapses. Mirrors the wall-wide pause: a file
+ * <home>/pause-session-<id> holding an expiry epoch. Never-tier protections
+ * (the control store) still apply while paused — that is enforced by the caller,
+ * which only consults this for soft-protected resources. */
+int kai_session_paused(const char *session, long long now) {
+    if (!id_ok(session)) return 0;
+    char fp[1200];
+    snprintf(fp, sizeof fp, "%s/pause-session-%s", kai_home(), session);
+    size_t n = 0;
+    char *t = kai_read_file(fp, 64, &n);
+    if (!t) return 0;
+    long long until = strtoll(t, NULL, 10);
+    free(t);
+    return until > now;              /* expired/absent => not paused (auto-resume) */
+}
+
+int kai_session_pause_write(const char *session, long long minutes) {
+    if (!id_ok(session)) return -1;
+    mkdir(kai_home(), 0700);
+    char fp[1200];
+    snprintf(fp, sizeof fp, "%s/pause-session-%s", kai_home(), session);
+    if (minutes <= 0) { unlink(fp); return 0; }   /* resume */
+    long long until = (long long)time(NULL) + minutes * 60;
+    char tmp[1300];
+    snprintf(tmp, sizeof tmp, "%s.tmp.%d", fp, (int)getpid());
+    FILE *f = fopen(tmp, "wb");
+    if (!f) return -1;
+    chmod(tmp, 0600);
+    int ok = fprintf(f, "%lld\n", until) > 0;
+    ok = (fclose(f) == 0) && ok;
+    if (!ok || rename(tmp, fp) != 0) { unlink(tmp); return -1; }
+    return 0;
+}
+
 int kai_session_get(const char *id, kai_session *out) {
     if (!id_ok(id) || !out) return 0;
     char path[1200];

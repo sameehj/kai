@@ -1038,6 +1038,20 @@ static void test_grant_tiers(void) {
     kai_policy_free(p); kai_policy_free(pk); kai_policy_free(pd);
 }
 
+/* S6: per-session pause — time-boxed, auto-resume, resume clears it. */
+static void test_session_pause(void) {
+    printf("per-session pause (S6)\n");
+    long long now = 100000;
+    CHECK(kai_session_paused("sess-P", now) == 0, "a session is not paused by default");
+    CHECK(kai_session_pause_write("sess-P", 15) == 0, "pause a session for 15 min");
+    CHECK(kai_session_paused("sess-P", (long long)time(NULL)) == 1, "the session is now paused");
+    CHECK(kai_session_paused("sess-P", (long long)time(NULL) + 16 * 60) == 0,
+          "the pause auto-resumes after the window");
+    CHECK(kai_session_pause_write("sess-P", 0) == 0, "resume clears the pause");
+    CHECK(kai_session_paused("sess-P", (long long)time(NULL)) == 0, "the session is no longer paused");
+    CHECK(kai_session_pause_write("../escape", 15) == -1, "a traversal session id is refused");
+}
+
 /* S0: the dev-sandbox guard predicate. */
 static void test_s0_sandbox_guard(void) {
     printf("dev-sandbox guard (S0)\n");
@@ -1138,6 +1152,7 @@ int main(void) {
     test_agent_inventory();
     test_session_reports();
     test_grant_tiers();
+    test_session_pause();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

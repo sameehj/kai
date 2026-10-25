@@ -257,6 +257,14 @@ final class GrantManager: ObservableObject {
         refresh()
     }
 
+    /// S6: pause Kai for one session (minutes>0) or resume (0). Never-tier
+    /// protections still apply; auto-resumes when the window elapses.
+    func pauseSession(_ id: String, minutes: Int) {
+        _ = id.withCString { kai_session_pause_write($0, Int64(minutes)) }
+        kai_audit("session", "pause", minutes > 0 ? "paused" : "resumed", "",
+                  "session \(id) \(minutes > 0 ? "paused \(minutes)m" : "resumed") by user")
+    }
+
     /// Reject a held change: drop the request, audit, apply nothing.
     func rejectPolicy(_ c: PendingPolicyChange) {
         kai_audit("policy", "confirm", "rejected", "", "user rejected in app: " + c.summary)
@@ -290,10 +298,29 @@ struct ApprovalCard: View {
                 Text("Allowing file access does not change the network wall.")
                     .font(.caption2).foregroundColor(.secondary)
             }
-            HStack {
-                Button("Deny") { manager.deny(req) }
-                Button("Allow once") { manager.approve(req, scope: .once) }
-                Button("Allow this process (15 min)") { manager.approve(req, scope: .process) }
+            // S6: tier-aware actions. never → no buttons; break-glass → Touch ID;
+            // override → confirm; normal/confirm → the usual allow buttons.
+            switch req.tier ?? 1 {
+            case 4:
+                Text("Kai protects its own settings; this can't be approved from here.")
+                    .font(.caption).foregroundColor(.secondary)
+                HStack { Button("Dismiss") { manager.deny(req) } }
+            case 3:
+                HStack {
+                    Button("Deny") { manager.deny(req) }
+                    Button("Override with Touch ID…") { manager.approve(req, scope: .once) }
+                }
+            case 2:
+                HStack {
+                    Button("Deny") { manager.deny(req) }
+                    Button("Override for this session…") { manager.approve(req, scope: .process) }
+                }
+            default:
+                HStack {
+                    Button("Deny") { manager.deny(req) }
+                    Button("Allow once") { manager.approve(req, scope: .once) }
+                    Button("Allow this process (15 min)") { manager.approve(req, scope: .process) }
+                }
             }
         }
         .padding(10)
