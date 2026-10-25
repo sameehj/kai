@@ -3,7 +3,7 @@ import AppKit
 import SwiftUI
 
 enum SettingsPage: String, CaseIterable, Identifiable {
-    case general, protection, files, network, storage, company, activity
+    case general, protection, files, network, storage, permissions, company, activity
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -12,6 +12,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .files: return "Protected files"
         case .network: return "Network wall"
         case .storage: return "Storage wall"
+        case .permissions: return "Permissions"
         case .company: return "Company data"
         case .activity: return "Activity"
         }
@@ -23,6 +24,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .files: return "folder"
         case .network: return "globe"
         case .storage: return "externaldrive"
+        case .permissions: return "key"
         case .company: return "doc.text"
         case .activity: return "waveform.path.ecg"
         }
@@ -102,6 +104,7 @@ struct SettingsView: View {
         case .files: FilesPage()
         case .network: NetworkPage()
         case .storage: StoragePage()
+        case .permissions: PermissionsPage()
         case .company: CompanyPage()
         case .activity: ActivityPage()
         }
@@ -619,6 +622,79 @@ private struct CompanyPage: View {
                     }
                 }
             }
+        }
+    }
+}
+
+// S7: every active grant across sessions/projects, plus the recent lifecycle
+// history (granted / used / expired / revoked) from the audit log. Grants are
+// created only from Kai; this page can revoke them.
+private struct PermissionsPage: View {
+    @EnvironmentObject var model: AppModel
+    @StateObject private var grants = GrantManager()
+    @AppStorage("permFilter") private var filter = "all"
+
+    private var history: [AuditEvent] {
+        model.events.filter { $0.source == "grant" }.filter { e in
+            switch filter {
+            case "granted": return e.event == "approved" || e.event == "requested"
+            case "used": return e.event == "used"
+            case "ended": return e.event == "revoked" || e.event == "expired"
+            default: return true
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            PageHeader(icon: "key", title: "Permissions",
+                       subtitle: "Every active grant across sessions and projects, and the recent history of grants, uses, expiries and revocations. Grants are created only from Kai — never by an agent.")
+            CapsLabel("Active grants")
+            if grants.grantGroups.isEmpty {
+                Text("No active grants.").font(.system(size: 13)).foregroundStyle(Theme.muted)
+            } else {
+                ForEach(grants.grantGroups) { g in
+                    Card(padding: 12) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(g.agent) · \(g.opLabel) · \(g.scopeLabel)"
+                                     + (g.count > 1 ? " ×\(g.count)" : "")
+                                     + (g.signed ? "" : " (unsigned)"))
+                                    .font(.system(size: 13))
+                                Text(g.resource).font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(Theme.muted).lineLimit(1)
+                                Text(g.status).font(.system(size: 11))
+                                    .foregroundStyle(g.status == "expired" ? Theme.muted : Theme.lime)
+                            }
+                            Spacer()
+                            Button(g.count > 1 ? "Revoke all" : "Revoke") { grants.revokeGroup(g) }
+                                .buttonStyle(GhostButtonStyle())
+                        }
+                    }
+                }
+            }
+            CapsLabel("Recent history").padding(.top, 4)
+            Picker("", selection: $filter) {
+                Text("All").tag("all")
+                Text("Granted").tag("granted")
+                Text("Used").tag("used")
+                Text("Ended").tag("ended")
+            }.pickerStyle(.segmented).labelsHidden().frame(width: 320)
+            if history.isEmpty {
+                Text("No permission history yet.").font(.system(size: 13)).foregroundStyle(Theme.muted)
+            } else {
+                ForEach(history.prefix(60)) { e in
+                    HStack(spacing: 10) {
+                        Text(e.event.capitalized).font(.system(size: 12))
+                            .frame(width: 78, alignment: .leading)
+                        Text(e.target ?? e.detail).font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(Theme.soft).lineLimit(1)
+                        Spacer()
+                        if let d = e.date { Text(ago(d)).font(.system(size: 11)).foregroundStyle(Theme.muted) }
+                    }
+                }
+            }
+            Spacer()
         }
     }
 }
