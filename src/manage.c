@@ -200,6 +200,86 @@ int kai_cmd_status_json(void) {
     return 0;
 }
 
+/* ---------- kai agents (S2): agent inventory ---------- */
+
+int kai_cmd_agents(int argc, char **argv) {
+    int json = argc > 0 && strcmp(argv[0], "--json") == 0;
+    char err[256];
+    kai_policy *p = kai_policy_load(NULL, err, sizeof err);
+    kai_session *sess = NULL; int nsess = 0;
+    kai_sessions_load(&sess, &nsess);
+    char *codex = kai_codex_hooks_path();
+    const struct { const char *name, *rel, *needle; } agents[] = {
+        {"claude", "~/.claude/settings.json", "hook claude"},
+        {"cursor", "~/.cursor/hooks.json", "hook cursor"},
+        {"codex", codex, "hook codex"},
+    };
+    cJSON *arr = json ? cJSON_CreateArray() : NULL;
+    if (!json)
+        printf("%-8s %-10s %-15s %-10s %s\n", "agent", "hooks", "walls", "sessions", "detail");
+    for (size_t i = 0; i < sizeof agents / sizeof agents[0]; i++) {
+        int detected = 0;
+        int on = agent_installed(agents[i].rel, agents[i].needle, &detected);
+        kai_health h; h.ok = 0; h.problem[0] = '\0';
+        if (on) kai_health_agent(agents[i].name, agents[i].rel, &h);
+        const char *hooks = !on ? (detected ? "missing" : "not found")
+                                : (h.ok ? "installed" : "failing");
+        int recog = kai_agent_wall_recognized(p, agents[i].name);
+        int active = 0;
+        for (int k = 0; k < nsess; k++)
+            if (sess[k].ended_utc == 0 &&
+                strncmp(sess[k].agent, agents[i].name, strlen(agents[i].name)) == 0) active++;
+        char detail[320];
+        if (on && !h.ok) kai_strlcpy(detail, h.problem, sizeof detail);
+        else if (!on) snprintf(detail, sizeof detail, "not protected; run: kai install %s", agents[i].name);
+        else detail[0] = '\0';
+        if (json) {
+            cJSON *a = cJSON_CreateObject();
+            cJSON_AddStringToObject(a, "name", agents[i].name);
+            cJSON_AddBoolToObject(a, "installed", on);
+            cJSON_AddBoolToObject(a, "detected", detected);
+            cJSON_AddStringToObject(a, "hooks", hooks);
+            if (detail[0]) cJSON_AddStringToObject(a, "detail", detail);
+            cJSON_AddBoolToObject(a, "wall_recognized", recog);
+            cJSON_AddNumberToObject(a, "active_sessions", active);
+            cJSON_AddItemToArray(arr, a);
+        } else {
+            char ses[16]; snprintf(ses, sizeof ses, "%d active", active);
+            printf("%-8s %-10s %-15s %-10s %s\n", agents[i].name, hooks,
+                   recog ? "recognized" : "not recognized", ses, detail);
+        }
+    }
+    /* User-defined agents the walls recognize but Kai installs no hooks for. */
+    if (p) {
+        for (int i = 0; i < p->nagents; i++) {
+            const char *nm = p->agents[i].name;
+            if (!strcmp(nm, "claude") || !strcmp(nm, "cursor") || !strcmp(nm, "codex")) continue;
+            /* de-dupe repeated names (an agent may have several rules) */
+            int seen = 0;
+            for (int j = 0; j < i; j++) if (!strcmp(p->agents[j].name, nm)) { seen = 1; break; }
+            if (seen) continue;
+            int active = 0;
+            for (int k = 0; k < nsess; k++)
+                if (sess[k].ended_utc == 0 && strncmp(sess[k].agent, nm, strlen(nm)) == 0) active++;
+            if (json) {
+                cJSON *a = cJSON_CreateObject();
+                cJSON_AddStringToObject(a, "name", nm);
+                cJSON_AddStringToObject(a, "hooks", "n/a");
+                cJSON_AddBoolToObject(a, "wall_recognized", 1);
+                cJSON_AddNumberToObject(a, "active_sessions", active);
+                cJSON_AddItemToArray(arr, a);
+            } else {
+                char ses[16]; snprintf(ses, sizeof ses, "%d active", active);
+                printf("%-8s %-10s %-15s %-10s %s\n", nm, "n/a", "recognized", ses,
+                       "recognized by the network wall (no Kai hooks)");
+            }
+        }
+    }
+    free(codex); kai_policy_free(p); free(sess);
+    if (json) print_json(arr);
+    return 0;
+}
+
 /* ---------- policy file as editable lines ---------- */
 
 typedef struct {

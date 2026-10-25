@@ -37,6 +37,7 @@ int kai_cmd_grant(int argc, char **argv);
 int kai_cmd_grants(int argc, char **argv);
 int kai_cmd_sessions(int argc, char **argv);
 int kai_cmd_session(int argc, char **argv);
+int kai_cmd_agents(int argc, char **argv);
 int kai_cmd_why(int argc, char **argv);
 int kai_cmd_denials(int argc, char **argv);
 int kai_cmd_pause(int argc, char **argv);
@@ -243,6 +244,7 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "grants") == 0) return kai_cmd_grants(rest, restv);
     if (strcmp(cmd, "sessions") == 0) return kai_cmd_sessions(rest, restv);
     if (strcmp(cmd, "session") == 0) return kai_cmd_session(rest, restv);
+    if (strcmp(cmd, "agents") == 0) return kai_cmd_agents(rest, restv);
     if (strcmp(cmd, "why") == 0) return kai_cmd_why(rest, restv);
     if (strcmp(cmd, "denials") == 0) return kai_cmd_denials(rest, restv);
     if (strcmp(cmd, "pause") == 0) return kai_cmd_pause(rest, restv);

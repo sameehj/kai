@@ -903,6 +903,22 @@ static void test_session_registry(void) {
     CHECK(kai_session_begin(&bad) == -1, "begin with a traversal id is refused");
 }
 
+/* S2: agent inventory — the walls recognize the built-in agents, and a
+ * user-defined agent once the policy names it. */
+static void test_agent_inventory(void) {
+    printf("agent inventory: wall recognition (S2)\n");
+    kai_policy *p = mk("storage block\n");   /* built-in agent rules are injected */
+    CHECK(kai_agent_wall_recognized(p, "claude") == 1, "claude recognized by the walls");
+    CHECK(kai_agent_wall_recognized(p, "codex") == 1, "codex recognized");
+    CHECK(kai_agent_wall_recognized(p, "cursor") == 1, "cursor recognized");
+    CHECK(kai_agent_wall_recognized(p, "gemini") == 1, "gemini recognized");
+    CHECK(kai_agent_wall_recognized(p, "aider") == 0, "an unknown agent is not recognized");
+    kai_policy_free(p);
+    kai_policy *q = mk("storage block\nagent aider arg */bin/aider\n");
+    CHECK(kai_agent_wall_recognized(q, "aider") == 1, "a user-defined agent is recognized");
+    kai_policy_free(q);
+}
+
 /* S0: the dev-sandbox guard predicate. */
 static void test_s0_sandbox_guard(void) {
     printf("dev-sandbox guard (S0)\n");
@@ -1000,6 +1016,7 @@ int main(void) {
     test_s0_sandbox_guard();
     test_trust_store();
     test_session_registry();
+    test_agent_inventory();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

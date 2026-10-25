@@ -143,6 +143,9 @@ int kai_control_read_allowed(const char *rule);
  * carry the OVERRIDE tier (grant-overridable), since they change which websites
  * the Mac trusts. */
 int kai_rule_is_trust_store(const char *rule);
+/* Is `name` an agent product the storage and network walls recognize? (The
+ * policy carries the built-in agent rules both walls classify by.) */
+int kai_agent_wall_recognized(const kai_policy *p, const char *name);
 
 /* How far the user may override Kai's protection of a matched resource. S4 acts
  * on these; the storage/network walls already make non-builtin protections

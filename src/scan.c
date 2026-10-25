@@ -301,6 +301,16 @@ int kai_rule_is_trust_store(const char *rule) {
     return rule && !strcmp(rule, "trust-store");
 }
 
+/* Is `name` an agent product the walls recognize? True when the policy (which
+ * always carries the built-in agent rules) has an agent rule for it, so both
+ * walls, which classify via these same rules, would attribute its processes. */
+int kai_agent_wall_recognized(const kai_policy *p, const char *name) {
+    if (!p || !name || !*name) return 0;
+    for (int i = 0; i < p->nagents; i++)
+        if (strcmp(p->agents[i].name, name) == 0) return 1;
+    return 0;
+}
+
 /* Is this matched rule Kai's own home (~/.kai / self-protect)? That tree holds
  * the policy, audit log and approval key, so agent reads stay blocked. */
 int kai_rule_is_kai_home(const char *rule) {
