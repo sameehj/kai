@@ -267,6 +267,10 @@ struct SessionDetail: View {
                         Text("topic reported by agent").font(.caption2).foregroundStyle(.secondary)
                     }
                 }
+                // Item 6/4: coverage disclosure (ide-extension, browser, or unverified).
+                if let noteC = session.agent.withCString({ kai_agent_coverage_note($0) }) {
+                    Text(String(cString: noteC)).font(.caption).foregroundStyle(.orange)
+                }
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
                     detailRow("Enforcement", session.enforcement.isEmpty ? "—" : session.enforcement)
                     detailRow("Project", session.project)

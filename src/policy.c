@@ -135,6 +135,11 @@ static const struct { const char *name; int kind; int hooks; int verified; } AGE
     {"cursor", 1, 1, 1}, {"chrome", 3, 1, 1},
     {"aider", 0, 0, 0}, {"opencode", 0, 0, 0}, {"goose", 0, 0, 0},
     {"antigravity", 1, 0, 0}, {"windsurf", 1, 0, 0}, {"kiro", 1, 0, 0}, {"zed", 1, 0, 0},
+    /* ide-extension agents run INSIDE the editor's process, so there is no safe
+     * static rule that tags them without also tagging (and walling off) the
+     * user's own editing. They get NO match rule on purpose: Kai covers only the
+     * shells/processes they start, and the agent card discloses this. */
+    {"cline", 2, 0, 0}, {"copilot", 2, 0, 0},
 };
 
 int kai_agent_product_kind(const char *name) {
@@ -154,6 +159,20 @@ int kai_agent_has_hooks(const char *name) {
         for (size_t i = 0; i < sizeof AGENT_CATALOG / sizeof AGENT_CATALOG[0]; i++)
             if (strcmp(AGENT_CATALOG[i].name, name) == 0) return AGENT_CATALOG[i].hooks;
     return 0;
+}
+
+/* A plain coverage disclosure for the agent card, or NULL when fully covered. */
+const char *kai_agent_coverage_note(const char *name) {
+    switch (kai_agent_product_kind(name)) {
+    case KAI_AGENT_IDE_EXTENSION:
+        return "Runs inside your editor — Kai covers only the shells it starts, "
+               "not your own editing.";
+    case KAI_AGENT_BROWSER:
+        return "Browser extension — the network and storage walls don't apply.";
+    default:
+        return kai_agent_catalog_verified(name) ? NULL
+             : "Profile not yet verified against an installed copy.";
+    }
 }
 
 /* Hosts agents may always reach. Each entry also covers its subdomains.

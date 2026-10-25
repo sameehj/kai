@@ -1169,6 +1169,17 @@ static void test_agent_catalog(void) {
     CHECK(kai_agent_product_kind("mystery") == KAI_AGENT_CLI, "unknown behaves like a CLI");
     CHECK(kai_agent_catalog_verified("claude") == 1, "claude is verified");
     CHECK(kai_agent_catalog_verified("zed") == 0, "zed is unverified (no install checked)");
+    /* Item 6: ide-extension agents are recognized but NOT tagged by a rule (so
+     * the editor isn't walled off), and the card discloses it. */
+    CHECK(kai_agent_product_kind("cline") == KAI_AGENT_IDE_EXTENSION, "cline is an ide-extension");
+    kai_policy *q = mk("storage block\n");
+    CHECK(kai_agent_wall_recognized(q, "cline") == 0,
+          "cline has NO wall rule (editor not walled off)");
+    kai_policy_free(q);
+    const char *cn = kai_agent_coverage_note("cline");
+    CHECK(cn && strstr(cn, "editor"), "ide-extension card discloses editor coverage");
+    CHECK(kai_agent_coverage_note("zed") != NULL, "unverified agent is disclosed");
+    CHECK(kai_agent_coverage_note("claude") == NULL, "a verified CLI needs no note");
     kai_policy *p = mk("storage block\n");
     CHECK(kai_agent_wall_recognized(p, "aider") == 1, "aider recognized by the walls");
     CHECK(kai_agent_wall_recognized(p, "zed") == 1, "zed recognized");

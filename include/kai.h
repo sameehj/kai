@@ -157,6 +157,7 @@ typedef enum {
 int kai_agent_product_kind(const char *name);  /* kai_agent_kind; CLI if unknown */
 int kai_agent_catalog_verified(const char *name); /* 1 only if checked vs an install */
 int kai_agent_has_hooks(const char *name);     /* Kai has a hook integration for it */
+const char *kai_agent_coverage_note(const char *name); /* card disclosure, or NULL */
 
 /* How far the user may override Kai's protection of a matched resource. S4 acts
  * on these; the storage/network walls already make non-builtin protections
