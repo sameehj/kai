@@ -20,6 +20,8 @@
 #include <time.h>
 #include <unistd.h>
 
+void kai_sha256_hex(const void *data, size_t n, char out[65]);  /* sha256.c */
+
 const char *kai_session_dir(void) {
     static char buf[1100];
     if (!buf[0]) snprintf(buf, sizeof buf, "%s/registry", kai_home());
@@ -28,6 +30,98 @@ const char *kai_session_dir(void) {
 
 static void session_path(const char *id, char *out, size_t n) {
     snprintf(out, n, "%s/%s.json", kai_session_dir(), id);
+}
+
+/* ---- Discovery (item 5): "looks like an agent — protect it?" ----
+ * The network wall records when a process Kai does NOT recognize as an agent
+ * connects to a model-API host. Correlated with the scan (does it spawn
+ * shells?), that produces a SUGGESTION the user confirms — Kai never adds an
+ * agent on its own. Records live under <home>/discovery, keyed by exe. */
+int kai_host_is_model_api(const char *host) {
+    if (!host || !*host) return 0;
+    static const char *const H[] = {
+        "anthropic.com", "claude.ai", "claude.com", "openai.com", "chatgpt.com",
+        "openrouter.ai", "googleapis.com", "generativelanguage", "x.ai", "mistral.ai",
+    };
+    for (size_t i = 0; i < sizeof H / sizeof H[0]; i++)
+        if (strstr(host, H[i])) return 1;
+    return 0;
+}
+
+int kai_looks_like_agent(int contacted_model_api, int spawns_shells, int already_recognized) {
+    return contacted_model_api && spawns_shells && !already_recognized;
+}
+
+static const char *discovery_dir(void) {
+    static char buf[1100];
+    if (!buf[0]) snprintf(buf, sizeof buf, "%s/discovery", kai_home());
+    return buf;
+}
+
+/* A stable, filesystem-safe id for an exe path (so one file per program). */
+static void exe_id(const char *exe, char *out, size_t n) {
+    char h[65];
+    kai_sha256_hex(exe, strlen(exe), h);
+    snprintf(out, n, "%.16s", h);
+}
+
+int kai_discovery_record(const char *exe, const char *host) {
+    if (!exe || !*exe || !kai_host_is_model_api(host)) return -1;
+    mkdir(kai_home(), 0700);
+    mkdir(discovery_dir(), 0700);
+    char id[32]; exe_id(exe, id, sizeof id);
+    char path[1300];
+    snprintf(path, sizeof path, "%s/%s.json", discovery_dir(), id);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "exe", exe);
+    cJSON_AddStringToObject(o, "host", host ? host : "");
+    cJSON_AddNumberToObject(o, "last_utc", (double)time(NULL));
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (!js) return -1;
+    char tmp[1400];
+    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
+    FILE *f = fopen(tmp, "wb");
+    if (!f) { free(js); return -1; }
+    chmod(tmp, 0600);
+    int ok = fwrite(js, 1, strlen(js), f) == strlen(js);
+    ok = (fclose(f) == 0) && ok;
+    free(js);
+    if (!ok || rename(tmp, path) != 0) { unlink(tmp); return -1; }
+    return 0;
+}
+
+int kai_discovery_load(kai_discovery **out, int *n) {
+    *out = NULL; *n = 0;
+    DIR *d = opendir(discovery_dir());
+    if (!d) return 0;
+    kai_discovery *arr = NULL; int c = 0, cap = 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        size_t nl = strlen(e->d_name);
+        if (e->d_name[0] == '.' || nl < 6 || strcmp(e->d_name + nl - 5, ".json")) continue;
+        char path[1300];
+        snprintf(path, sizeof path, "%s/%s", discovery_dir(), e->d_name);
+        size_t len = 0; char *txt = kai_read_file(path, 1 << 16, &len);
+        if (!txt) continue;
+        cJSON *o = cJSON_Parse(txt); free(txt);
+        if (!o) continue;
+        kai_discovery r; memset(&r, 0, sizeof r);
+        const char *ex = cJSON_GetStringValue(cJSON_GetObjectItem(o, "exe"));
+        const char *h = cJSON_GetStringValue(cJSON_GetObjectItem(o, "host"));
+        cJSON *lu = cJSON_GetObjectItem(o, "last_utc");
+        if (ex) kai_strlcpy(r.exe, ex, sizeof r.exe);
+        if (h) kai_strlcpy(r.host, h, sizeof r.host);
+        if (cJSON_IsNumber(lu)) r.last_utc = (long long)lu->valuedouble;
+        cJSON_Delete(o);
+        if (!r.exe[0]) continue;
+        if (c == cap) { int nc = cap ? cap * 2 : 8; kai_discovery *na = realloc(arr, (size_t)nc * sizeof *na);
+                        if (!na) break; arr = na; cap = nc; }
+        arr[c++] = r;
+    }
+    closedir(d);
+    *out = arr; *n = c;
+    return c;
 }
 
 int kai_classify_session(const char *cmdline, int has_tty, int parent_is_launchd,

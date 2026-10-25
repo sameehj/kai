@@ -276,6 +276,27 @@ int kai_cmd_agents(int argc, char **argv) {
             }
         }
     }
+    /* Discovery suggestions (item 5): unrecognized programs that talked to a
+     * model API. Shown as "looks like an agent — protect it?"; never auto-added. */
+    kai_discovery *disc = NULL; int ndisc = 0;
+    kai_discovery_load(&disc, &ndisc);
+    for (int i = 0; i < ndisc; i++) {
+        const char *base = strrchr(disc[i].exe, '/');
+        base = base ? base + 1 : disc[i].exe;
+        if (json) {
+            cJSON *a = cJSON_CreateObject();
+            cJSON_AddStringToObject(a, "name", base);
+            cJSON_AddStringToObject(a, "suggestion", "looks like an agent");
+            cJSON_AddStringToObject(a, "exe", disc[i].exe);
+            cJSON_AddStringToObject(a, "saw_host", disc[i].host);
+            cJSON_AddItemToArray(arr, a);
+        } else {
+            if (i == 0) printf("\nLooks like an agent (talked to a model API; not protected):\n");
+            printf("  %-12s %s  -> protect: kai policy add agent %s exe '%s'\n",
+                   base, disc[i].host, base, disc[i].exe);
+        }
+    }
+    free(disc);
     free(codex); kai_policy_free(p); free(sess);
     if (json) print_json(arr);
     return 0;

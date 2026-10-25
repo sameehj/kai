@@ -273,6 +273,17 @@ int kai_sessions_scan(const kai_policy *p, kai_session **out, int *n);
  * Never claims "protected" for a session no active wall can attribute. */
 const char *kai_enforcement_label(int storage_active, int network_active);
 
+/* ---- Discovery (item 5) ---- */
+typedef struct { char exe[1024]; char host[256]; long long last_utc; } kai_discovery;
+int kai_host_is_model_api(const char *host);     /* anthropic/openai/google/openrouter/… */
+/* 1 when an unrecognized process that contacted a model API also spawns shells
+ * -> suggest protecting it. Kai NEVER auto-adds; this only drives a suggestion. */
+int kai_looks_like_agent(int contacted_model_api, int spawns_shells, int already_recognized);
+/* The network wall records a non-agent's model-API contact (keyed by exe). */
+int kai_discovery_record(const char *exe, const char *host);
+int kai_discovery_load(kai_discovery **out, int *n);   /* caller frees *out */
+void kai_pid_exe(int pid, char *out, size_t n);        /* a pid's executable path */
+
 /* Create or update a session record (idempotent on id). Returns 0 on success.
  * Called by Kai components only; the control store keeps agents out. */
 int kai_session_begin(const kai_session *s);

@@ -1187,6 +1187,26 @@ static void test_agent_catalog(void) {
     kai_policy_free(p);
 }
 
+/* Item 5: discovery — model-API host check, the suggestion rule, and the store. */
+static void test_discovery(void) {
+    printf("discovery: looks-like-an-agent (item 5)\n");
+    CHECK(kai_host_is_model_api("api.anthropic.com") == 1, "anthropic is a model API");
+    CHECK(kai_host_is_model_api("api.openai.com") == 1, "openai is a model API");
+    CHECK(kai_host_is_model_api("example.com") == 0, "a random host is not");
+    CHECK(kai_looks_like_agent(1, 1, 0) == 1, "model-API + spawns shells + unknown = suggest");
+    CHECK(kai_looks_like_agent(0, 1, 0) == 0, "no model-API contact = no suggestion");
+    CHECK(kai_looks_like_agent(1, 0, 0) == 0, "no shells = no suggestion");
+    CHECK(kai_looks_like_agent(1, 1, 1) == 0, "already recognized = no suggestion");
+    CHECK(kai_discovery_record("/opt/x/bin/mystery", "api.openai.com") == 0, "record a contact");
+    CHECK(kai_discovery_record("/opt/x/bin/mystery", "example.com") == -1, "non-model host not recorded");
+    kai_discovery *d = NULL; int nd = 0;
+    kai_discovery_load(&d, &nd);
+    int found = 0;
+    for (int i = 0; i < nd; i++) if (strstr(d[i].exe, "mystery")) found = 1;
+    CHECK(found, "the recorded contact loads back");
+    free(d);
+}
+
 /* S0: the dev-sandbox guard predicate. */
 static void test_s0_sandbox_guard(void) {
     printf("dev-sandbox guard (S0)\n");
@@ -1292,6 +1312,7 @@ int main(void) {
     test_u5_hook_reads();
     test_session_classify();
     test_agent_catalog();
+    test_discovery();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

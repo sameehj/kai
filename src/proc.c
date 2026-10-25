@@ -104,6 +104,12 @@ static int proc_read_impl(int pid, kai_proc *out, int want_team) {
 int kai_proc_read(int pid, kai_proc *out) { return proc_read_impl(pid, out, 1); }
 int kai_proc_read_fast(int pid, kai_proc *out) { return proc_read_impl(pid, out, 0); }
 
+/* The executable path of a pid, "" if unavailable. Cheap (one syscall). */
+void kai_pid_exe(int pid, char *out, size_t n) {
+    if (n) out[0] = '\0';
+    if (proc_pidpath(pid, out, (uint32_t)n) <= 0 && n) out[0] = '\0';
+}
+
 #else /* Linux */
 
 int kai_proc_read(int pid, kai_proc *out) {
@@ -136,6 +142,13 @@ int kai_proc_read(int pid, kai_proc *out) {
     return 0;
 }
 int kai_proc_read_fast(int pid, kai_proc *out) { return kai_proc_read(pid, out); }
+void kai_pid_exe(int pid, char *out, size_t n) {
+    if (n) out[0] = '\0';
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/exe", pid);
+    ssize_t l = readlink(path, out, n - 1);
+    out[l > 0 ? l : 0] = '\0';
+}
 
 #endif
 

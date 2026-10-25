@@ -58,6 +58,21 @@ final class FilterDataProvider: NEFilterDataProvider {
         log.info("Kai network wall started")
     }
 
+    private var discoverySeen = Set<String>()   // exe paths already recorded this run
+
+    private func recordDiscoveryIfModelAPI(_ pid: pid_t, _ flow: NEFilterFlow) {
+        guard let sf = flow as? NEFilterSocketFlow,
+              let host = sf.remoteHostname, !host.isEmpty,
+              host.withCString({ kai_host_is_model_api($0) }) != 0 else { return }
+        var exe = [CChar](repeating: 0, count: 1024)
+        kai_pid_exe(pid, &exe, exe.count)
+        let path = String(cString: exe)
+        guard !path.isEmpty, !discoverySeen.contains(path) else { return }
+        if discoverySeen.count > 4096 { discoverySeen.removeAll() }
+        discoverySeen.insert(path)
+        _ = path.withCString { e in host.withCString { h in kai_discovery_record(e, h) } }
+    }
+
     override func stopFilter(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         healthTimer?.cancel(); healthTimer = nil
         try? FileManager.default.removeItem(atPath: healthPath)   // goes stale -> not running
@@ -69,7 +84,14 @@ final class FilterDataProvider: NEFilterDataProvider {
         guard let sf = flow as? NEFilterSocketFlow, sf.direction == .outbound,
               let token = flow.sourceAppAuditToken else { return .allow() }
         let pid = Engine.pid(fromAuditToken: token)
-        guard pid > 0, let agent = engine.agent(pid: pid, token: token) else { return .allow() }
+        guard pid > 0 else { return .allow() }
+        guard let agent = engine.agent(pid: pid, token: token) else {
+            // Item 5: a process Kai doesn't recognize as an agent, talking to a
+            // model API, is a discovery candidate. Record it (once per exe) for a
+            // "looks like an agent?" suggestion; Kai never auto-adds.
+            recordDiscoveryIfModelAPI(pid, flow)
+            return .allow()
+        }
         let pidv = Engine.pidVersion(fromAuditToken: token)
 
         let mode = engine.mode
