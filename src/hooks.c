@@ -326,8 +326,14 @@ static void deny_policy_error(const char *ev, const char *err) {
     snprintf(msg, sizeof msg, "Kai policy error: %s", err);
     cJSON *o = cJSON_CreateObject();
     if (ev && strcmp(ev, "UserPromptSubmit") == 0) {
-        cJSON_AddStringToObject(o, "decision", "block");
-        cJSON_AddStringToObject(o, "reason", msg);
+        /* Never block the user's prompt because Kai couldn't read or parse its
+         * own policy: that fails every prompt closed (the Oct 25 S0 incident,
+         * when the storage wall denied Kai's own policy read). The prompt is
+         * just text; warn and let it through. Tool-use events below still fail
+         * closed, since a tool action must not run unchecked. */
+        cJSON_AddStringToObject(o, "systemMessage",
+            "Kai couldn't read its policy, so this prompt wasn't checked. "
+            "Open Kai -> Activity to see why. (Kai is not blocking your work.)");
     } else if (ev && strcmp(ev, "PreToolUse") == 0) {
         cJSON *h = cJSON_AddObjectToObject(o, "hookSpecificOutput");
         cJSON_AddStringToObject(h, "hookEventName", "PreToolUse");

@@ -13,6 +13,8 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <sys/stat.h>
+#include <sys/fcntl.h>
+#include <fcntl.h>
 #include <dirent.h>
 #include <stdint.h>
 
@@ -718,11 +720,118 @@ static void test_policy_pending(void) {
     rmdir(dir);
 }
 
+/* S0: the open write-classification bug that blocked Kai's own policy read.
+ * ES open.fflag is in the kernel FREAD/FWRITE convention, so a read-only open
+ * must NOT be classed as a write. */
+static void test_open_write_classification(void) {
+    printf("open read/write classification (S0)\n");
+    CHECK(kai_open_is_write(FREAD) == 0, "O_RDONLY (FREAD) is a READ, not a write");
+    CHECK(kai_open_is_write(FWRITE) == 1, "O_WRONLY (FWRITE) is a write");
+    CHECK(kai_open_is_write(FREAD | FWRITE) == 1, "O_RDWR is a write");
+    CHECK(kai_open_is_write(FREAD | O_TRUNC) == 1, "read+truncate is a write");
+    CHECK(kai_open_is_write(FREAD | O_APPEND) == 1, "read+append is a write");
+    CHECK(kai_open_is_write(FREAD | O_CREAT) == 1, "read+create is a write");
+}
+
+/* S0: the control store (policy, grants, pending) and the read/write rules the
+ * walls apply to it. */
+static void test_s0_control_store(void) {
+    printf("control store identity and read/write rules (S0)\n");
+    const char *home = kai_home();
+    char polp[1100], grantp[1100], pendp[1100];
+    snprintf(polp, sizeof polp, "%s/policy", home);
+    snprintf(grantp, sizeof grantp, "%s/grants/abc.json", home);
+    snprintf(pendp, sizeof pendp, "%s/pending-policy/x.json", home);
+    CHECK(kai_path_is_control_store(polp) == 1, "policy file is the control store");
+    CHECK(kai_path_is_control_store(grantp) == 1, "grant store is the control store");
+    CHECK(kai_path_is_control_store(pendp) == 1, "pending-policy is the control store");
+    CHECK(kai_path_is_control_store("/work/project/main.c") == 0, "an ordinary file is not");
+    CHECK(kai_path_is_control_store("/work/.claude/settings.json") == 0,
+          "a hook config is not the control store (reads are allowed for it)");
+
+    /* The engine denies every agent-tree read AND write of the policy in block;
+     * the signed-kai read exemption lives in the ES client, not here. */
+    kai_policy *p = mk("storage block\n");
+    char why[256] = "";
+    CHECK(kai_storage_open_allowed(p, 1, 0, polp, why, sizeof why) == 0,
+          "engine: agent READ of the policy is denied");
+    CHECK(kai_storage_open_allowed(p, 1, 1, polp, why, sizeof why) == 0,
+          "engine: agent WRITE of the policy is denied");
+
+    /* kai_control_read_allowed: a hook config's reads may be allowed (so the
+     * agent can start); Kai's own home never (it holds the policy terms). */
+    why[0] = '\0';
+    if (kai_path_protected(p, "/work/.claude/settings.json", NULL, why, sizeof why))
+        CHECK(kai_control_read_allowed(why) == 1, "hook-config reads are allowed by the control rule");
+    else
+        CHECK(0, "hook config should match a builtin protect rule");
+    why[0] = '\0';
+    if (kai_path_protected(p, polp, NULL, why, sizeof why))
+        CHECK(kai_control_read_allowed(why) == 0, "policy reads are NOT in the read-allow set");
+    else
+        CHECK(0, "policy should match the kai-home builtin rule");
+    kai_policy_free(p);
+}
+
+/* S0: hook error behaviour when Kai can't read its own policy. The prompt hook
+ * must WARN (never block the user's prompt); a tool-use hook must fail closed. */
+static void test_s0_hook_errors(void) {
+    printf("hook error paths when the policy is unreadable (S0)\n");
+    char dir[] = "/tmp/kai-hookerrXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char polp[600]; snprintf(polp, sizeof polp, "%s/policy", dir);
+    FILE *f = fopen(polp, "w");
+    if (f) { fputs("storage block\n", f); fclose(f); }
+    chmod(polp, 0);   /* simulate the wall denying Kai's own policy read */
+
+    char outp[650]; snprintf(outp, sizeof outp, "%s/out", dir);
+    char cmd[1600];
+    /* UserPromptSubmit: warn, not block. */
+    snprintf(cmd, sizeof cmd,
+             "printf '%s' | KAI_HOME='%s' KAI_POLICY='%s' ./kai hook claude > '%s' 2>/dev/null",
+             "{\\\"hook_event_name\\\":\\\"UserPromptSubmit\\\",\\\"prompt\\\":\\\"hi\\\",\\\"cwd\\\":\\\"/tmp\\\"}",
+             dir, polp, outp);
+    (void)system(cmd);
+    CHECK(!file_contains(outp, "\"decision\":\"block\""),
+          "prompt hook does NOT block when Kai can't read its policy");
+    CHECK(file_contains(outp, "systemMessage"),
+          "prompt hook warns instead (systemMessage)");
+
+    /* PreToolUse: fail closed (deny) with an actionable message. */
+    snprintf(cmd, sizeof cmd,
+             "printf '%s' | KAI_HOME='%s' KAI_POLICY='%s' ./kai hook claude > '%s' 2>/dev/null",
+             "{\\\"hook_event_name\\\":\\\"PreToolUse\\\",\\\"tool_name\\\":\\\"Bash\\\","
+             "\\\"tool_input\\\":{\\\"command\\\":\\\"ls\\\"},\\\"cwd\\\":\\\"/tmp\\\"}",
+             dir, polp, outp);
+    (void)system(cmd);
+    CHECK(file_contains(outp, "\"permissionDecision\":\"deny\""),
+          "tool-use hook fails closed (deny) on a policy error");
+
+    chmod(polp, 0600); unlink(polp); unlink(outp); rmdir(dir);
+}
+
+/* S0: the dev-sandbox guard predicate. */
+static void test_s0_sandbox_guard(void) {
+    printf("dev-sandbox guard (S0)\n");
+    /* The suite set KAI_HOME to a temp dir, so the active home is a sandbox. */
+    CHECK(kai_home_is_real() == 0, "a temp KAI_HOME is recognized as a sandbox");
+    /* kai_home_is_real reflects KAI_HOME live (it does not cache). Unsetting it
+     * makes the predicate report the real home, which the guard would refuse.
+     * Restore immediately so the rest of the suite stays hermetic. */
+    char saved[1100]; const char *e = getenv("KAI_HOME");
+    snprintf(saved, sizeof saved, "%s", e ? e : "");
+    unsetenv("KAI_HOME");
+    CHECK(kai_home_is_real() == 1, "unset KAI_HOME is refused as the real home");
+    setenv("KAI_HOME", saved, 1);
+}
+
 int main(void) {
     /* Hermetic + avoids touching the real audit log: point KAI_HOME at a temp
      * dir BEFORE anything calls kai_home() (it caches on first use). */
     static char kh[] = "/tmp/kai-suite-XXXXXX";
     if (mkdtemp(kh)) setenv("KAI_HOME", kh, 1);
+    /* S0 rule: never run against the real Kai home. */
+    kai_require_sandbox_home();
     printf("storage wall decisions\n");
 
     /* Absolute protect paths so the test doesn't depend on ~ expanding to any
@@ -792,6 +901,10 @@ int main(void) {
     test_pause();
     test_policy_agent_refusal();
     test_policy_pending();
+    test_open_write_classification();
+    test_s0_control_store();
+    test_s0_hook_errors();
+    test_s0_sandbox_guard();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

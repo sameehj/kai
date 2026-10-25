@@ -54,7 +54,7 @@ targets:
         PRODUCT_MODULE_NAME: KaiStorage
         SWIFT_INCLUDE_PATHS: $(SRCROOT)/KaiCore
         SKIP_INSTALL: YES
-        KAI_STORAGE_VERSION: "18"
+        KAI_STORAGE_VERSION: "19"
         # Compile the blocking (AUTH) path. It still only engages when the
         # policy is `storage block`; `log`/`off` stay notify-only. Distribution
         # is excluded regardless (this target isn't in project.yml), so Apple

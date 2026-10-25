@@ -141,6 +141,18 @@ int kai_control_read_allowed(const char *rule);
  * writable by an agent-tree process, Kai-signed or not (the storage wall uses
  * this to withhold the Kai-signature exemption from a tagged `kai` process). */
 int kai_path_is_control_store(const char *path);
+/* True if an Endpoint Security open event's `fflag` denotes a write-capable
+ * open. `fflag` is in the kernel FREAD/FWRITE convention, not the O_RDONLY/
+ * O_WRONLY/O_RDWR convention; see the definition. The storage wall uses this
+ * to tell a read open from a write open. */
+int kai_open_is_write(int fflag);
+/* Dev-sandbox guard: abort the process if KAI_HOME is unset or resolves to the
+ * user's real ~/.kai. Call at the top of every test main() so a test can never
+ * run against (and corrupt) the real Kai home. */
+void kai_require_sandbox_home(void);
+/* 1 if the active Kai home is, or would default to, the user's real ~/.kai
+ * (KAI_HOME unset/empty, or set to the real home). Used by the guard above. */
+int kai_home_is_real(void);
 
 /* Extract the server name (SNI) from the start of a TLS ClientHello.
  * Returns 1 and fills host if found, 0 if this is not TLS or carries no SNI,

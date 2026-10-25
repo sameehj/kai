@@ -2,6 +2,7 @@
 #include "internal.h"
 
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -165,4 +166,29 @@ const char *kai_exe_path(void) {
 #endif
     kai_strlcpy(buf, "kai", sizeof buf);
     return buf;
+}
+
+/* Dev-sandbox guard (S0): abort if a test or dev run would touch the real Kai
+ * home. Tests MUST set KAI_HOME to a throwaway dir; running against the user's
+ * real home can corrupt their policy, grants and audit log. Call this at the
+ * top of every test main() right after setting KAI_HOME. */
+/* 1 if the active Kai home is (or would default to) the user's real ~/.kai:
+ * either KAI_HOME is unset/empty, or it resolves to the real home. */
+int kai_home_is_real(void) {
+    const char *env = getenv("KAI_HOME");
+    if (!env || !*env) return 1;
+    char *real = kai_expand_home("~/.kai");
+    int same = real && strcmp(kai_home(), real) == 0;
+    free(real);
+    return same;
+}
+
+void kai_require_sandbox_home(void) {
+    if (kai_home_is_real()) {
+        fprintf(stderr,
+                "kai: REFUSING to run against the real Kai home (%s).\n"
+                "Set KAI_HOME to a throwaway sandbox dir (e.g. /tmp/kai-dev) first.\n",
+                kai_home());
+        abort();
+    }
 }

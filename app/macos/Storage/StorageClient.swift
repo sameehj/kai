@@ -59,7 +59,11 @@ final class StorageClient {
     /// Does this open() carry write intent? Read-only opens of an agent's own
     /// hook config are allowed; writes to it are blocked (anti-tamper).
     @inline(__always) private func openIsWrite(_ fflag: Int32) -> Bool {
-        (fflag & O_ACCMODE) != O_RDONLY || (fflag & (O_CREAT | O_TRUNC | O_APPEND)) != 0
+        // ES open.fflag is in the kernel FREAD/FWRITE convention, where a
+        // read-only open (O_RDONLY) has the FWRITE bit clear. Classifying it
+        // with O_ACCMODE flags every read as a write — the S0 incident, which
+        // blocked Kai's own policy read. One source of truth in libkai.
+        kai_open_is_write(fflag) != 0
     }
 
     // Filesystem auth events the wall authorizes. ES_EVENT_TYPE_AUTH_READDIR

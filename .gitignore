@@ -19,3 +19,6 @@ app/macos/Storage/Storage.entitlements
 *.dSYM/
 app/macos/build/
 tests/storage/run_storage_tests
+
+# test seam binary (built by `make test`)
+tests/cli/kai-test

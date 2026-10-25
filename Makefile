@@ -46,15 +46,26 @@ fuzz: kai
 asan: CFLAGS += -fsanitize=address,undefined -g -O1
 asan: clean kai test
 
+# The storage suite exercises the policy-change engine (kai_policy_dispatch in
+# manage.c), so it links the app sources too, minus main.c (it has its own).
+STORAGE_TEST_SRC = $(CORE) $(filter-out src/main.c,$(APP))
+
 test: kai
 	$(CC) $(CFLAGS) -o tests/run_tests tests/run_tests.c $(CORE) $(LDLIBS)
 	./tests/run_tests
-	$(CC) $(CFLAGS) -o tests/storage/run_storage_tests tests/storage/run_storage_tests.c $(CORE) $(LDLIBS)
+	$(CC) $(CFLAGS) -o tests/storage/run_storage_tests tests/storage/run_storage_tests.c $(STORAGE_TEST_SRC) $(LDLIBS)
 	./tests/storage/run_storage_tests
 	sh tests/hooks/run_hook_tests.sh ./kai
-	sh tests/cli/run_cli_tests.sh ./kai
-	sh tests/gateway/run_gateway_tests.sh ./kai
-	sh tests/browser/run_native_tests.sh ./kai
+	# Suites that SET UP policy via `kai policy ...` use a throwaway binary built
+	# with the test seam (KAI_TEST_DIRECT_POLICY): the suites run inside the
+	# dev's agent tree and set loosening switches, both of which the production
+	# refusal + pending-hold (correctly) block. The seam is never in the product
+	# or signed build; the refusal and pending-hold are covered by
+	# run_storage_tests. Suites that don't touch policy use the real ./kai.
+	$(CC) $(CFLAGS) -DKAI_TEST_DIRECT_POLICY -o tests/cli/kai-test $(CORE) $(APP) $(LDLIBS)
+	sh tests/cli/run_cli_tests.sh tests/cli/kai-test
+	sh tests/gateway/run_gateway_tests.sh tests/cli/kai-test
+	sh tests/browser/run_native_tests.sh tests/cli/kai-test
 	python3 -I tests/corpus/run_corpus.py ./kai
 	python3 -I tests/escape/run_escape.py ./kai
 
@@ -138,7 +149,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/kai
 
 clean:
-	rm -f $(OBJ) kai libkai.a tests/run_tests
+	rm -f $(OBJ) kai libkai.a tests/run_tests tests/storage/run_storage_tests tests/cli/kai-test
 	rm -rf build app/macos/Kai.xcodeproj
 
 .PHONY: all asan fuzz test escape validation chrome-zip app app-dev app-storage try-app-storage try-app install-app install uninstall clean
