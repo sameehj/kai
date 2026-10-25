@@ -124,6 +124,99 @@ int kai_discovery_load(kai_discovery **out, int *n) {
     return c;
 }
 
+/* ---- AI chats (item 3) ----
+ * The web UIs of the chat assistants, as opposed to the programmatic model
+ * APIs. A browser reaching one of these is "an AI chat", surfaced for the
+ * user's awareness; it is never gated (the walls protect files, not a browser
+ * tab). Kept separate from the model-API list so a browser visiting claude.ai
+ * is reported as a chat, not mistaken for an unrecognized agent. */
+int kai_host_is_ai_chat(const char *host) {
+    if (!host || !*host) return 0;
+    static const char *const H[] = {
+        "claude.ai", "chatgpt.com", "chat.openai.com", "gemini.google.com",
+        "copilot.microsoft.com", "perplexity.ai", "poe.com", "grok.com",
+        "x.ai", "deepseek.com", "mistral.ai", "chat.mistral.ai",
+    };
+    for (size_t i = 0; i < sizeof H / sizeof H[0]; i++)
+        if (strstr(host, H[i])) return 1;
+    return 0;
+}
+
+static const char *chat_dir(void) {
+    static char buf[1100];
+    if (!buf[0]) snprintf(buf, sizeof buf, "%s/chats", kai_home());
+    return buf;
+}
+
+/* One record per (exe, host): the same browser reaching two assistants is two
+ * rows, the same pair seen again just refreshes last_utc. */
+static void chat_id(const char *exe, const char *host, char *out, size_t n) {
+    char combined[1300];
+    snprintf(combined, sizeof combined, "%s|%s", exe, host ? host : "");
+    char h[65];
+    kai_sha256_hex(combined, strlen(combined), h);
+    snprintf(out, n, "%.16s", h);
+}
+
+int kai_chat_record(const char *exe, const char *host) {
+    if (!exe || !*exe || !kai_host_is_ai_chat(host)) return -1;
+    mkdir(kai_home(), 0700);
+    mkdir(chat_dir(), 0700);
+    char id[32]; chat_id(exe, host, id, sizeof id);
+    char path[1300];
+    snprintf(path, sizeof path, "%s/%s.json", chat_dir(), id);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "exe", exe);
+    cJSON_AddStringToObject(o, "host", host ? host : "");
+    cJSON_AddNumberToObject(o, "last_utc", (double)time(NULL));
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (!js) return -1;
+    char tmp[1400];
+    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
+    FILE *f = fopen(tmp, "wb");
+    if (!f) { free(js); return -1; }
+    chmod(tmp, 0600);
+    int ok = fwrite(js, 1, strlen(js), f) == strlen(js);
+    ok = (fclose(f) == 0) && ok;
+    free(js);
+    if (!ok || rename(tmp, path) != 0) { unlink(tmp); return -1; }
+    return 0;
+}
+
+int kai_chat_load(kai_chat **out, int *n) {
+    *out = NULL; *n = 0;
+    DIR *d = opendir(chat_dir());
+    if (!d) return 0;
+    kai_chat *arr = NULL; int c = 0, cap = 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        size_t nl = strlen(e->d_name);
+        if (e->d_name[0] == '.' || nl < 6 || strcmp(e->d_name + nl - 5, ".json")) continue;
+        char path[1300];
+        snprintf(path, sizeof path, "%s/%s", chat_dir(), e->d_name);
+        size_t len = 0; char *txt = kai_read_file(path, 1 << 16, &len);
+        if (!txt) continue;
+        cJSON *o = cJSON_Parse(txt); free(txt);
+        if (!o) continue;
+        kai_chat r; memset(&r, 0, sizeof r);
+        const char *ex = cJSON_GetStringValue(cJSON_GetObjectItem(o, "exe"));
+        const char *h = cJSON_GetStringValue(cJSON_GetObjectItem(o, "host"));
+        cJSON *lu = cJSON_GetObjectItem(o, "last_utc");
+        if (ex) kai_strlcpy(r.exe, ex, sizeof r.exe);
+        if (h) kai_strlcpy(r.host, h, sizeof r.host);
+        if (cJSON_IsNumber(lu)) r.last_utc = (long long)lu->valuedouble;
+        cJSON_Delete(o);
+        if (!r.exe[0]) continue;
+        if (c == cap) { int nc = cap ? cap * 2 : 8; kai_chat *na = realloc(arr, (size_t)nc * sizeof *na);
+                        if (!na) break; arr = na; cap = nc; }
+        arr[c++] = r;
+    }
+    closedir(d);
+    *out = arr; *n = c;
+    return c;
+}
+
 int kai_classify_session(const char *cmdline, int has_tty, int parent_is_launchd,
                          long long age_sec, int nested_in_same_agent) {
     if (nested_in_same_agent) return KAI_KIND_NESTED;         /* inside another session's tree */

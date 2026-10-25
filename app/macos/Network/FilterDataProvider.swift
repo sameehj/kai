@@ -58,19 +58,32 @@ final class FilterDataProvider: NEFilterDataProvider {
         log.info("Kai network wall started")
     }
 
-    private var discoverySeen = Set<String>()   // exe paths already recorded this run
+    private var discoverySeen = Set<String>()   // exe|host already recorded this run (discovery + chats)
 
-    private func recordDiscoveryIfModelAPI(_ pid: pid_t, _ flow: NEFilterFlow) {
+    // A non-agent reaching a model endpoint. If it's an AI chat WEB UI (claude.ai,
+    // chatgpt.com, …) it's a browser tab -> record it as an AI chat (item 3, for
+    // visibility, never gated). Otherwise a model API -> a discovery candidate
+    // (item 5). Chat UIs are checked first so a browser on claude.ai isn't mistaken
+    // for an unrecognized agent. Keyed by exe|host and deduped per run.
+    private func recordModelContact(_ pid: pid_t, _ flow: NEFilterFlow) {
         guard let sf = flow as? NEFilterSocketFlow,
-              let host = sf.remoteHostname, !host.isEmpty,
-              host.withCString({ kai_host_is_model_api($0) }) != 0 else { return }
+              let host = sf.remoteHostname, !host.isEmpty else { return }
+        let isChat = host.withCString { kai_host_is_ai_chat($0) } != 0
+        let isAPI  = host.withCString { kai_host_is_model_api($0) } != 0
+        guard isChat || isAPI else { return }
         var exe = [CChar](repeating: 0, count: 1024)
         kai_pid_exe(pid, &exe, exe.count)
         let path = String(cString: exe)
-        guard !path.isEmpty, !discoverySeen.contains(path) else { return }
+        guard !path.isEmpty else { return }
+        let key = path + "|" + host
+        guard !discoverySeen.contains(key) else { return }
         if discoverySeen.count > 4096 { discoverySeen.removeAll() }
-        discoverySeen.insert(path)
-        _ = path.withCString { e in host.withCString { h in kai_discovery_record(e, h) } }
+        discoverySeen.insert(key)
+        if isChat {
+            _ = path.withCString { e in host.withCString { h in kai_chat_record(e, h) } }
+        } else {
+            _ = path.withCString { e in host.withCString { h in kai_discovery_record(e, h) } }
+        }
     }
 
     override func stopFilter(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
@@ -86,10 +99,11 @@ final class FilterDataProvider: NEFilterDataProvider {
         let pid = Engine.pid(fromAuditToken: token)
         guard pid > 0 else { return .allow() }
         guard let agent = engine.agent(pid: pid, token: token) else {
-            // Item 5: a process Kai doesn't recognize as an agent, talking to a
-            // model API, is a discovery candidate. Record it (once per exe) for a
-            // "looks like an agent?" suggestion; Kai never auto-adds.
-            recordDiscoveryIfModelAPI(pid, flow)
+            // A process Kai doesn't recognize as an agent, talking to a model
+            // endpoint: an AI chat web UI (item 3, shown for visibility) or a
+            // model API (item 5, a "looks like an agent?" candidate). Recorded
+            // once per exe|host; Kai never auto-adds or gates on this.
+            recordModelContact(pid, flow)
             return .allow()
         }
         let pidv = Engine.pidVersion(fromAuditToken: token)

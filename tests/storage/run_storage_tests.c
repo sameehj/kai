@@ -1207,6 +1207,25 @@ static void test_discovery(void) {
     free(d);
 }
 
+static void test_ai_chats(void) {
+    printf("AI chats (item 3)\n");
+    CHECK(kai_host_is_ai_chat("claude.ai") == 1, "claude.ai is an AI chat");
+    CHECK(kai_host_is_ai_chat("chatgpt.com") == 1, "chatgpt.com is an AI chat");
+    CHECK(kai_host_is_ai_chat("gemini.google.com") == 1, "gemini is an AI chat");
+    CHECK(kai_host_is_ai_chat("api.anthropic.com") == 0, "the API endpoint is not a chat UI");
+    CHECK(kai_host_is_ai_chat("example.com") == 0, "a random host is not");
+    CHECK(kai_chat_record("/Applications/Safari.app/Contents/MacOS/Safari", "claude.ai") == 0,
+          "record a browser chat");
+    CHECK(kai_chat_record("/Applications/Safari.app/Contents/MacOS/Safari", "example.com") == -1,
+          "non-chat host not recorded");
+    kai_chat *c = NULL; int nc = 0;
+    kai_chat_load(&c, &nc);
+    int found = 0;
+    for (int i = 0; i < nc; i++) if (strstr(c[i].exe, "Safari") && strstr(c[i].host, "claude.ai")) found = 1;
+    CHECK(found, "the recorded chat loads back");
+    free(c);
+}
+
 /* S0: the dev-sandbox guard predicate. */
 static void test_s0_sandbox_guard(void) {
     printf("dev-sandbox guard (S0)\n");
@@ -1313,6 +1332,7 @@ int main(void) {
     test_session_classify();
     test_agent_catalog();
     test_discovery();
+    test_ai_chats();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

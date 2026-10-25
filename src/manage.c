@@ -297,6 +297,26 @@ int kai_cmd_agents(int argc, char **argv) {
         }
     }
     free(disc);
+    /* AI chats (item 3): browsers (or other non-agents) that reached an AI chat
+     * web UI. Shown for visibility; the walls protect files, not a browser tab. */
+    kai_chat *chats = NULL; int nchats = 0;
+    kai_chat_load(&chats, &nchats);
+    for (int i = 0; i < nchats; i++) {
+        const char *base = strrchr(chats[i].exe, '/');
+        base = base ? base + 1 : chats[i].exe;
+        if (json) {
+            cJSON *a = cJSON_CreateObject();
+            cJSON_AddStringToObject(a, "name", base);
+            cJSON_AddStringToObject(a, "kind", "ai-chat");
+            cJSON_AddStringToObject(a, "exe", chats[i].exe);
+            cJSON_AddStringToObject(a, "host", chats[i].host);
+            cJSON_AddItemToArray(arr, a);
+        } else {
+            if (i == 0) printf("\nAI chats (web UI; visibility only, not gated):\n");
+            printf("  %-12s %s\n", base, chats[i].host);
+        }
+    }
+    free(chats);
     free(codex); kai_policy_free(p); free(sess);
     if (json) print_json(arr);
     return 0;

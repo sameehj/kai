@@ -284,6 +284,17 @@ int kai_discovery_record(const char *exe, const char *host);
 int kai_discovery_load(kai_discovery **out, int *n);   /* caller frees *out */
 void kai_pid_exe(int pid, char *out, size_t n);        /* a pid's executable path */
 
+/* ---- AI chats (item 3) ----
+ * Browser-based AI chat UIs (claude.ai, chatgpt.com, gemini, …) are not CLI
+ * agents, so the walls don't gate their files; Kai still SHOWS them, so the
+ * user sees where AI is being used. The network wall records when a non-agent
+ * (typically a browser) reaches an AI-chat web host. Records live under
+ * <home>/chats, keyed by exe+host. Visibility only — never a grant or a block. */
+typedef struct { char exe[1024]; char host[256]; long long last_utc; } kai_chat;
+int kai_host_is_ai_chat(const char *host);    /* claude.ai/chatgpt.com/gemini/… web UIs */
+int kai_chat_record(const char *exe, const char *host);
+int kai_chat_load(kai_chat **out, int *n);    /* caller frees *out */
+
 /* Create or update a session record (idempotent on id). Returns 0 on success.
  * Called by Kai components only; the control store keeps agents out. */
 int kai_session_begin(const kai_session *s);
