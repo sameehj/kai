@@ -1063,6 +1063,11 @@ static void test_session_pause(void) {
           "the pause auto-resumes after the window");
     CHECK(kai_session_pause_write("sess-P", 0) == 0, "resume clears the pause");
     CHECK(kai_session_paused("sess-P", (long long)time(NULL)) == 0, "the session is no longer paused");
+    /* A multi-day pause is capped at 1 day (a longer one would be the wall off). */
+    CHECK(kai_session_pause_write("sess-P", 10000) == 0, "a 7-day pause request is accepted but...");
+    CHECK(kai_session_paused("sess-P", (long long)time(NULL) + 23 * 3600) == 1, "still paused at 23h");
+    CHECK(kai_session_paused("sess-P", (long long)time(NULL) + 25 * 3600) == 0, "capped at 1 day (not 7)");
+    kai_session_pause_write("sess-P", 0);
     CHECK(kai_session_pause_write("../escape", 15) == -1, "a traversal session id is refused");
 }
 

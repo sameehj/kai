@@ -51,6 +51,7 @@ struct PendingRequest: Decodable, Identifiable {
     let ts: Int
     var note: String? = nil     // plain explanation of the resource class (e.g. trust store)
     var tier: Int? = nil        // kai_override_tier_t: 2 = override, 3 = break-glass, 4 = never
+    var session: String? = nil  // the ES session this request belongs to (for "this session" grants)
     var strengthLabel: String { strength >= 2 ? "strong" : strength == 1 ? "medium" : "weak" }
 }
 
@@ -70,7 +71,30 @@ struct ActiveGrant: Decodable, Identifiable {
     var expiresEpoch: Int { Int(expires_utc) ?? 0 }
 }
 
-enum GrantScope { case once, process }
+/// How long a grant lasts. "this session" ends when the session exits (the
+/// registry drives that); the fixed ones show a countdown. All are revocable.
+enum GrantDuration: CaseIterable {
+    case min10, hour1, day1, day7, session
+    var seconds: Int {
+        switch self {
+        case .min10: return 600
+        case .hour1: return 3600
+        case .day1: return 86_400
+        case .day7: return 604_800
+        case .session: return 604_800   // cap; a live session also ends it early
+        }
+    }
+    var label: String {
+        switch self {
+        case .min10: return "10 min"
+        case .hour1: return "1 hour"
+        case .day1: return "1 day"
+        case .day7: return "7 days"
+        case .session: return "this session"
+        }
+    }
+    var isSession: Bool { self == .session }
+}
 
 /// Identical active grants collapsed into one row with a count (menu interim).
 struct GrantGroup: Identifiable {
@@ -150,7 +174,7 @@ final class GrantManager: ObservableObject {
     /// (S4) decides how: never -> refused; break-glass -> LocalAuthentication
     /// first, then a read-only grant capped at 15 minutes; override/confirm ->
     /// the click is the confirmation. The honor flags are signed into the grant.
-    func approve(_ req: PendingRequest, scope: GrantScope) {
+    func approve(_ req: PendingRequest, duration: GrantDuration) {
         let tier = req.tier ?? 1
         if tier >= 4 { return }   // never: not approvable from here
         if tier == 3 {            // break-glass: require Touch ID / login password
@@ -159,33 +183,36 @@ final class GrantManager: ObservableObject {
             ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { ok, _ in
                 DispatchQueue.main.async {
                     guard ok else { return }   // auth failed/cancelled: nothing signed
-                    self.signGrant(req, scope: .once, confirmed: true, authenticated: true, breakglass: true)
+                    self.signGrant(req, duration: .min10, confirmed: true, authenticated: true, breakglass: true)
                 }
             }
             return
         }
-        signGrant(req, scope: scope, confirmed: tier >= 2, authenticated: false, breakglass: false)
+        signGrant(req, duration: duration, confirmed: tier >= 2, authenticated: false, breakglass: false)
     }
 
-    private func signGrant(_ req: PendingRequest, scope: GrantScope,
+    private func signGrant(_ req: PendingRequest, duration: GrantDuration,
                            confirmed: Bool, authenticated: Bool, breakglass: Bool) {
         guard let key = KaiApprovalKey.ensure() else { return }
         let now = Int(Date().timeIntervalSince1970)
-        // break-glass is read-only and capped at 15 minutes regardless of scope.
-        let ttl = breakglass ? 900 : (scope == .once ? 120 : 900)
+        // break-glass is read-only and capped at 15 minutes regardless of choice.
+        let ttl = breakglass ? 900 : duration.seconds
         let expires = now + ttl
         let gid = UUID().uuidString
         let rawOp: Int32 = req.op == "connect" ? 2 : (req.op == "open" || req.op == "readdir") ? 0 : 1
         let opCode: Int32 = breakglass ? 0 : rawOp     // break-glass is read-only
-        let scopeCode: Int32 = (scope == .once) ? 1 : 0
+        // "this session" binds the grant to the session (covers its whole tree,
+        // ends at session exit); fixed durations bind to the requesting process.
+        let sessionBound = !breakglass && duration.isSession
+        let sessionId = sessionBound ? (req.session ?? "") : ""
 
         let json: String? = key.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> String? in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return nil }
             let destKind: Int32 = (req.op == "connect") ? 1 : 0
             guard let c = kai_grant_build_json3(gid, Int64(now), Int64(expires), Int32(req.pid),
                                                 req.pidversion, req.agent, Int32(req.strength),
-                                                req.resource, opCode, scopeCode, "console-user",
-                                                "", "", destKind,
+                                                req.resource, opCode, 0 /*process scope*/, "console-user",
+                                                sessionId, "", destKind,
                                                 confirmed ? 1 : 0, authenticated ? 1 : 0,
                                                 base, key.count) else { return nil }
             defer { free(c) }
@@ -308,18 +335,26 @@ struct ApprovalCard: View {
             case 3:
                 HStack {
                     Button("Deny") { manager.deny(req) }
-                    Button("Override with Touch ID…") { manager.approve(req, scope: .once) }
+                    Button("Override with Touch ID (15 min, read-only)…") {
+                        manager.approve(req, duration: .min10)
+                    }
                 }
             case 2:
+                // Override (policy block): task or session only — never project-wide
+                // from the card.
                 HStack {
                     Button("Deny") { manager.deny(req) }
-                    Button("Override for this session…") { manager.approve(req, scope: .process) }
+                    Button("This session…") { manager.approve(req, duration: .session) }
+                    Button("1 day…") { manager.approve(req, duration: .day1) }
                 }
             default:
                 HStack {
                     Button("Deny") { manager.deny(req) }
-                    Button("Allow once") { manager.approve(req, scope: .once) }
-                    Button("Allow this process (15 min)") { manager.approve(req, scope: .process) }
+                    Menu("Allow…") {
+                        ForEach(GrantDuration.allCases, id: \.self) { d in
+                            Button(d.label) { manager.approve(req, duration: d) }
+                        }
+                    }.fixedSize()
                 }
             }
         }

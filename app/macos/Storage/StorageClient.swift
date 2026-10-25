@@ -293,10 +293,17 @@ final class StorageClient {
         let noteC = rule.withCString { kai_rule_explanation($0) }
         let note = noteC != nil ? String(cString: noteC!) : ""
         let noteField = note.isEmpty ? "" : "\"note\":\"\(esc(note))\","
+        // The ES session this request belongs to, so "this session" grants bind
+        // to it (and cover its whole tree).
+        var sessionField = ""
+        #if KAI_STORAGE_ENFORCE
+        let sid = sessionFor(pid(proc)).sid
+        if !sid.isEmpty { sessionField = "\"session\":\"\(esc(sid))\"," }
+        #endif
         let json = "{\"id\":\"\(id)\",\"agent\":\"\(esc(agent))\",\"pid\":\(pid(proc))," +
                    "\"pidversion\":\(UInt64(token.val.7)),\"strength\":\(strength)," +
                    "\"resource\":\"\(esc(p))\",\"op\":\"\(esc(opStr))\",\"tier\":\(tier)," +
-                   noteField +
+                   noteField + sessionField +
                    "\"ts\":\(Int(Date().timeIntervalSince1970))}"
         let fp = dir + "/" + id + ".json"
         writeFileNoFollow(fp, Array(json.utf8), append: false)

@@ -187,6 +187,9 @@ int kai_session_pause_write(const char *session, long long minutes) {
     char fp[1200];
     snprintf(fp, sizeof fp, "%s/pause-session-%s", kai_home(), session);
     if (minutes <= 0) { unlink(fp); return 0; }   /* resume */
+    if (minutes > 24 * 60) minutes = 24 * 60;      /* cap at 1 day: a longer pause
+                                                      is the wall switched off, so
+                                                      use a 7-day grant instead */
     long long until = (long long)time(NULL) + minutes * 60;
     char tmp[1300];
     snprintf(tmp, sizeof tmp, "%s.tmp.%d", fp, (int)getpid());
