@@ -147,6 +147,17 @@ int kai_rule_is_trust_store(const char *rule);
  * policy carries the built-in agent rules both walls classify by.) */
 int kai_agent_wall_recognized(const kai_policy *p, const char *name);
 
+/* Agent product kind, from the shipped catalog: how Kai finds its sessions. */
+typedef enum {
+    KAI_AGENT_CLI = 0,          /* one root process per terminal (Aider, Codex, …) */
+    KAI_AGENT_IDE = 1,          /* an app hosting many chats/windows (Cursor, Zed, …) */
+    KAI_AGENT_IDE_EXTENSION = 2,/* an agent inside an editor extension (Cline, Copilot) */
+    KAI_AGENT_BROWSER = 3       /* a browser extension (Chrome AI chats) */
+} kai_agent_kind;
+int kai_agent_product_kind(const char *name);  /* kai_agent_kind; CLI if unknown */
+int kai_agent_catalog_verified(const char *name); /* 1 only if checked vs an install */
+int kai_agent_has_hooks(const char *name);     /* Kai has a hook integration for it */
+
 /* How far the user may override Kai's protection of a matched resource. S4 acts
  * on these; the storage/network walls already make non-builtin protections
  * grant-overridable (= OVERRIDE/CONFIRM) and builtin ones not (= NEVER). */

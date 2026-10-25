@@ -912,7 +912,7 @@ static void test_agent_inventory(void) {
     CHECK(kai_agent_wall_recognized(p, "codex") == 1, "codex recognized");
     CHECK(kai_agent_wall_recognized(p, "cursor") == 1, "cursor recognized");
     CHECK(kai_agent_wall_recognized(p, "gemini") == 1, "gemini recognized");
-    CHECK(kai_agent_wall_recognized(p, "aider") == 0, "an unknown agent is not recognized");
+    CHECK(kai_agent_wall_recognized(p, "notanagent") == 0, "an unknown agent is not recognized");
     kai_policy_free(p);
     kai_policy *q = mk("storage block\nagent aider arg */bin/aider\n");
     CHECK(kai_agent_wall_recognized(q, "aider") == 1, "a user-defined agent is recognized");
@@ -1157,6 +1157,25 @@ static void test_session_classify(void) {
     CHECK(!strcmp(kai_session_kind_name(KAI_KIND_BACKGROUND), "background service"), "kind name");
 }
 
+/* Item 4: the agent catalog — product kind, verified flag, and that the new
+ * agents are recognized by the walls. */
+static void test_agent_catalog(void) {
+    printf("agent catalog: kind + recognition (item 4)\n");
+    CHECK(kai_agent_product_kind("cursor") == KAI_AGENT_IDE, "cursor is an IDE");
+    CHECK(kai_agent_product_kind("zed") == KAI_AGENT_IDE, "zed is an IDE");
+    CHECK(kai_agent_product_kind("claude") == KAI_AGENT_CLI, "claude is a CLI");
+    CHECK(kai_agent_product_kind("aider") == KAI_AGENT_CLI, "aider is a CLI");
+    CHECK(kai_agent_product_kind("chrome") == KAI_AGENT_BROWSER, "chrome is a browser");
+    CHECK(kai_agent_product_kind("mystery") == KAI_AGENT_CLI, "unknown behaves like a CLI");
+    CHECK(kai_agent_catalog_verified("claude") == 1, "claude is verified");
+    CHECK(kai_agent_catalog_verified("zed") == 0, "zed is unverified (no install checked)");
+    kai_policy *p = mk("storage block\n");
+    CHECK(kai_agent_wall_recognized(p, "aider") == 1, "aider recognized by the walls");
+    CHECK(kai_agent_wall_recognized(p, "zed") == 1, "zed recognized");
+    CHECK(kai_agent_wall_recognized(p, "antigravity") == 1, "antigravity recognized");
+    kai_policy_free(p);
+}
+
 /* S0: the dev-sandbox guard predicate. */
 static void test_s0_sandbox_guard(void) {
     printf("dev-sandbox guard (S0)\n");
@@ -1261,6 +1280,7 @@ int main(void) {
     test_enforcement_labels();
     test_u5_hook_reads();
     test_session_classify();
+    test_agent_catalog();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

@@ -110,7 +110,51 @@ static const struct {
     {"codex", "arg", "*/@openai/codex/*"},
     {"codex", "team", "2DC432GLL2"},
     {"gemini", "arg", "*/@google/gemini-cli/*"},
+    /* Added to the catalog (unverified against installed copies -- see
+     * AGENT_CATALOG below; patterns are best-effort and may need refining). */
+    {"aider", "arg", "*/bin/aider"},
+    {"aider", "arg", "*aider_chat*"},
+    {"opencode", "arg", "*/opencode/*"},
+    {"opencode", "exe", "*/bin/opencode"},
+    {"goose", "exe", "*/bin/goose"},
+    {"goose", "arg", "*goose*session*"},
+    {"antigravity", "exe", "*/Antigravity.app/Contents/*"},
+    {"windsurf", "exe", "/Applications/Windsurf.app/Contents/*"},
+    {"kiro", "exe", "*/Kiro.app/Contents/*"},
+    {"zed", "exe", "*/Zed.app/Contents/*"},
+    {"zed", "exe", "*/bin/zed"},
 };
+
+/* Agent product catalog: maps a recognized agent name to its KIND (how Kai
+ * finds its sessions) and whether Kai has a hook integration for it. `verified`
+ * is 1 only for entries checked against an installed copy. Shipped with Kai; a
+ * user can add entries through `kai policy add agent` (the "Add agent" button).
+ * kind: 0=cli, 1=ide, 2=ide-extension, 3=browser. */
+static const struct { const char *name; int kind; int hooks; int verified; } AGENT_CATALOG[] = {
+    {"claude", 0, 1, 1}, {"codex", 0, 1, 1}, {"gemini", 0, 0, 1},
+    {"cursor", 1, 1, 1}, {"chrome", 3, 1, 1},
+    {"aider", 0, 0, 0}, {"opencode", 0, 0, 0}, {"goose", 0, 0, 0},
+    {"antigravity", 1, 0, 0}, {"windsurf", 1, 0, 0}, {"kiro", 1, 0, 0}, {"zed", 1, 0, 0},
+};
+
+int kai_agent_product_kind(const char *name) {
+    if (name)
+        for (size_t i = 0; i < sizeof AGENT_CATALOG / sizeof AGENT_CATALOG[0]; i++)
+            if (strcmp(AGENT_CATALOG[i].name, name) == 0) return AGENT_CATALOG[i].kind;
+    return KAI_AGENT_CLI;   /* unknown agents behave like a CLI (one root per terminal) */
+}
+int kai_agent_catalog_verified(const char *name) {
+    if (name)
+        for (size_t i = 0; i < sizeof AGENT_CATALOG / sizeof AGENT_CATALOG[0]; i++)
+            if (strcmp(AGENT_CATALOG[i].name, name) == 0) return AGENT_CATALOG[i].verified;
+    return 0;
+}
+int kai_agent_has_hooks(const char *name) {
+    if (name)
+        for (size_t i = 0; i < sizeof AGENT_CATALOG / sizeof AGENT_CATALOG[0]; i++)
+            if (strcmp(AGENT_CATALOG[i].name, name) == 0) return AGENT_CATALOG[i].hooks;
+    return 0;
+}
 
 /* Hosts agents may always reach. Each entry also covers its subdomains.
  * Policy `egress_allow` lines add more. */
