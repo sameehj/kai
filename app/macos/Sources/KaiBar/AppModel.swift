@@ -66,6 +66,37 @@ final class AppModel: ObservableObject {
         return missed ? .partial : .protecting
     }
 
+    // MARK: observed wall state (U1) — the headline reflects what the walls are
+    // MEASURED to be doing, never what the policy is configured to. `running` is
+    // taken from the OS extension state the app already tracks (StorageWall /
+    // NetworkWall .isOn), which is reliable; the storage health snapshot is used
+    // only to tell block from log. The network wall emits no health snapshot yet
+    // (M0.4 TODO), so its mode is not distinguished here.
+    enum ObservedProtection { case protected, partial, notProtected }
+
+    private var storageIsLogging: Bool {
+        let m = status?.walls?.observed?.storage?.health?.mode
+        return m == "log" || m == "warn"
+    }
+
+    func observedProtection(storageOn: Bool, networkOn: Bool) -> ObservedProtection {
+        let storageEnforcing = storageOn && !storageIsLogging
+        if storageEnforcing && networkOn { return .protected }
+        if !storageOn && !networkOn { return .notProtected }
+        return .partial
+    }
+
+    /// U1 headline, from observed enforcement only.
+    func observedHeadline(storageOn: Bool, networkOn: Bool) -> String {
+        var weak: [String] = []
+        if !storageOn { weak.append("storage is off") }
+        else if storageIsLogging { weak.append("storage is logging") }
+        if !networkOn { weak.append("network is off") }
+        if weak.isEmpty { return "Protected" }
+        if !storageOn && !networkOn { return "Not protected" }
+        return "Partly protected: " + weak.joined(separator: ", ")
+    }
+
     var menuBarSymbol: String {
         if let t = lastBlockAt, Date().timeIntervalSince(t) < 30 { return "xmark.shield.fill" }
         switch health {

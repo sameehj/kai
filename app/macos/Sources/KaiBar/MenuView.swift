@@ -5,6 +5,7 @@ import SwiftUI
 struct MenuView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var wall: NetworkWall
+    @EnvironmentObject var storage: StorageWall
     @Environment(\.openWindow) private var openWindow
     @AppStorage("settingsPage") private var settingsPage = SettingsPage.general.rawValue
     @State private var dismissedBlock: String?
@@ -45,11 +46,11 @@ struct MenuView: View {
 
     private var glow: Color {
         if alert != nil { return Theme.coral }
-        switch model.health {
-        case .protecting: return Theme.lime
+        if model.health == .problem { return Theme.coral }
+        switch model.observedProtection(storageOn: storage.isOn, networkOn: wall.isOn) {
+        case .protected: return Theme.lime
         case .partial: return Theme.amber
-        case .problem: return Theme.coral
-        case .off, .unknown: return Theme.muted
+        case .notProtected: return Theme.coral
         }
     }
 
@@ -90,10 +91,16 @@ struct MenuView: View {
     }
 
     private var protection: some View {
+        // Interim (before S5): the menu shows the two system walls only. Per-agent
+        // toggles live in Settings → General (agents are on by default); the menu
+        // stays focused on observed protection and what needs the user.
         VStack(alignment: .leading, spacing: 8) {
-            CapsLabel("Agents")
-            ForEach(Agent.allCases) { AgentCard(agent: $0) }
-            CapsLabel("System protection").padding(.top, 4)
+            HStack {
+                CapsLabel("System protection")
+                Spacer()
+                Button("Agents") { open(.general) }
+                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
+            }
             Text("Covers every agent on this Mac.")
                 .font(.system(size: 11)).foregroundStyle(Theme.muted)
             NetworkCard()
@@ -109,11 +116,11 @@ struct MenuView: View {
                 Button("See all") { open(.activity) }
                     .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
             }
-            let items = Array(model.importantEvents.prefix(3))
+            let items = Array(model.importantEventGroups.prefix(3))
             if items.isEmpty {
                 Text("Nothing blocked yet.").font(.system(size: 13)).foregroundStyle(Theme.muted)
             }
-            ForEach(items) { EventLine(event: $0) }
+            ForEach(items) { EventLine(event: $0.event, count: $0.count) }
             let hosts = model.reachedHosts.count
             if hosts > 0 {
                 Button { open(.network) } label: {
@@ -159,32 +166,35 @@ struct MenuView: View {
 struct StatusHero: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var wall: NetworkWall
+    @EnvironmentObject var storage: StorageWall
 
+    // U1: the hero shows OBSERVED wall enforcement (the walls' live OS state),
+    // not configured policy. A Kai problem (policy unreadable, audit tampered)
+    // still takes precedence.
+    private var obs: AppModel.ObservedProtection {
+        model.observedProtection(storageOn: storage.isOn, networkOn: wall.isOn)
+    }
     private var color: Color {
-        switch model.health {
-        case .protecting: return Theme.lime
+        if model.health == .problem { return Theme.coral }
+        switch obs {
+        case .protected: return Theme.lime
         case .partial: return Theme.amber
-        case .problem: return Theme.coral
-        case .off, .unknown: return Theme.muted
+        case .notProtected: return Theme.coral
         }
     }
 
     private var title: String {
-        switch model.health {
-        case .protecting: return "Protection on"
-        case .partial: return "Partly protected"
-        case .off: return "Protection is off"
-        case .unknown: return "Checking…"
-        case .problem: return model.headline
-        }
+        if model.health == .problem { return model.headline }
+        return model.observedHeadline(storageOn: storage.isOn, networkOn: wall.isOn)
     }
 
     private var subtitle: String {
-        if let d = model.detailLine { return d }
-        let names = Agent.allCases.filter { model.installed($0) }.map(\.title)
-        let covered = names.isEmpty ? "No agent is protected yet."
-            : ListFormatter.localizedString(byJoining: names) + (names.count == 1 ? " is covered." : " are covered.")
-        return covered + (wall.isOn ? "\nNetwork wall is watching agent traffic." : "")
+        if model.health == .problem, let d = model.detailLine { return d }
+        switch obs {
+        case .protected: return "Both walls are enforcing on this Mac."
+        case .partial: return "A wall is not enforcing — open Settings to check it."
+        case .notProtected: return "No wall is enforcing. Agents are not restricted."
+        }
     }
 
     var body: some View {
@@ -195,7 +205,7 @@ struct StatusHero: View {
                 Circle().stroke(color.opacity(0.10), lineWidth: 10).padding(-5)
                 Circle().stroke(color, lineWidth: 2)
                 Image("KaiLogo").resizable().frame(width: 70, height: 70)
-                    .saturation(model.health == .protecting ? 1 : 0.2)
+                    .saturation(obs == .protected ? 1 : 0.2)
             }
             .frame(width: 120, height: 120)
             .shadow(color: color.opacity(0.35), radius: 24)
@@ -438,10 +448,12 @@ struct StorageCard: View {
 /// One line in the menu's recent list.
 struct EventLine: View {
     let event: AuditEvent
+    var count: Int = 1
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Circle().fill(event.isBlock ? Theme.coral : Theme.amber).frame(width: 8, height: 8)
-            Text(event.summary).font(.system(size: 13)).foregroundStyle(Theme.soft)
+            Text(event.summary + (count > 1 ? "  ×\(count)" : ""))
+                .font(.system(size: 13)).foregroundStyle(Theme.soft)
                 .lineLimit(2).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
             if let d = event.date { Text(ago(d)).font(.system(size: 12)).foregroundStyle(Theme.muted) }

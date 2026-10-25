@@ -70,6 +70,27 @@ struct ActiveGrant: Decodable, Identifiable {
 
 enum GrantScope { case once, process }
 
+/// Identical active grants collapsed into one row with a count (menu interim).
+struct GrantGroup: Identifiable {
+    let id: String
+    let agent: String
+    let resource: String
+    let opLabel: String
+    let scopeLabel: String
+    let count: Int
+    let signed: Bool
+    let expiresEpoch: Int               // soonest expiry in the group
+    let members: [ActiveGrant]
+    /// granted → (received by walls / used: S6) → expiring. Interim status.
+    var status: String {
+        let secs = expiresEpoch - Int(Date().timeIntervalSince1970)
+        if secs <= 0 { return "expired" }
+        if secs < 60 { return "\(secs)s left" }
+        if secs < 3600 { return "\(secs / 60)m left" }
+        return "\(secs / 3600)h \((secs % 3600) / 60)m left"
+    }
+}
+
 /// A policy change that would LOOSEN protection, held for the user to confirm
 /// here (U0 hardening). The CLI queues these under ~/.kai/pending-policy instead
 /// of applying them, regardless of caller; only this app — Kai-signed and not in
@@ -165,6 +186,23 @@ final class GrantManager: ObservableObject {
         kai_grant_audit("denied", req.id, req.agent, req.resource, opCode, "deny", "denied by user")
         clearPending(req); refresh()
     }
+
+    /// Identical grants collapsed with a count; soonest expiry wins.
+    var grantGroups: [GrantGroup] {
+        var map: [String: [ActiveGrant]] = [:]
+        for g in grants {
+            map["\(g.agent)|\(g.resource)|\(g.opLabel)|\(g.scopeLabel)", default: []].append(g)
+        }
+        return map.map { key, gs in
+            let f = gs[0]
+            return GrantGroup(id: key, agent: f.agent, resource: f.resource, opLabel: f.opLabel,
+                              scopeLabel: f.scopeLabel, count: gs.count,
+                              signed: gs.allSatisfy { $0.signed },
+                              expiresEpoch: gs.map(\.expiresEpoch).min() ?? 0, members: gs)
+        }.sorted { $0.id < $1.id }
+    }
+
+    func revokeGroup(_ g: GrantGroup) { g.members.forEach(revoke) }
 
     func revoke(_ grant: ActiveGrant) {
         kai_grant_audit("revoked", grant.id, grant.agent, grant.resource, Int32(grant.op),
@@ -282,15 +320,20 @@ struct ApprovalsSection: View {
             }
             if !manager.grants.isEmpty {
                 Text("Active grants").font(.caption).foregroundColor(.secondary)
-                ForEach(manager.grants) { g in
+                ForEach(manager.grantGroups) { g in
                     HStack {
-                        VStack(alignment: .leading) {
-                            Text("\(g.agent) · \(g.opLabel) · \(g.scopeLabel)\(g.signed ? "" : " (unsigned)")")
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("\(g.agent) · \(g.opLabel) · \(g.scopeLabel)"
+                                 + (g.count > 1 ? " ×\(g.count)" : "")
+                                 + (g.signed ? "" : " (unsigned)"))
                                 .font(.caption)
                             Text(g.resource).font(.system(.caption2, design: .monospaced)).lineLimit(1)
+                            Text(g.status)   // interim lifecycle: countdown / expired (S6 adds used)
+                                .font(.caption2)
+                                .foregroundColor(g.status == "expired" ? .secondary : .green)
                         }
                         Spacer()
-                        Button("Revoke") { manager.revoke(g) }
+                        Button(g.count > 1 ? "Revoke all" : "Revoke") { manager.revokeGroup(g) }
                     }
                 }
             }

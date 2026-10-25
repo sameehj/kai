@@ -53,6 +53,18 @@ extension AppModel {
         events.filter { $0.isBlock || $0.decision == "redact" || $0.decision == "replace" }
     }
 
+    /// Identical incidents collapsed with a count, for the menu's Recent list.
+    var importantEventGroups: [EventGroup] {
+        var order: [String] = []
+        var map: [String: [AuditEvent]] = [:]
+        for e in importantEvents {
+            let key = "\(e.agentName)|\(e.rule)|\(e.target ?? "")|\(e.decision)"
+            if map[key] == nil { order.append(key) }
+            map[key, default: []].append(e)
+        }
+        return order.map { k in EventGroup(event: map[k]!.first!, count: map[k]!.count) }
+    }
+
     /// Prompt-injection suspicions in the last 7 days (shown in Activity).
     var suspicionsThisWeek: Int {
         events.filter { $0.detail.hasPrefix("possible prompt injection") }.count

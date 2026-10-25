@@ -4,6 +4,13 @@ import Foundation
 /// One record of ~/.kai/audit.log. The log never holds secret values: rule
 /// names, short reasons and, for decisions, an excerpt of what was blocked
 /// with every rule match already hidden by the scanner.
+/// Identical incidents collapsed with a count, for the menu's Recent list.
+struct EventGroup: Identifiable {
+    let event: AuditEvent
+    let count: Int
+    var id: String { event.id }
+}
+
 struct AuditEvent: Decodable, Identifiable, Equatable {
     let ts: String
     let source: String

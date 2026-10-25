@@ -27,6 +27,28 @@ struct KaiStatus: Decodable, Equatable {
         let intact: Bool
         let error: String
     }
+    /// Configured-vs-observed wall state (U1: the headline must reflect observed
+    /// enforcement, not what the policy is set to). Absent on older kai CLIs.
+    struct Walls: Decodable, Equatable {
+        struct Health: Decodable, Equatable {
+            var mode: String? = nil         // off | log | block
+            var enforcing: Bool? = nil
+        }
+        struct WallObs: Decodable, Equatable {
+            var running: Bool? = nil
+            var health: Health? = nil
+        }
+        struct Configured: Decodable, Equatable {
+            var storage: String? = nil
+            var network: String? = nil
+        }
+        struct Observed: Decodable, Equatable {
+            var storage: WallObs? = nil
+            var network: WallObs? = nil
+        }
+        var configured: Configured? = nil
+        var observed: Observed? = nil
+    }
     let version: String
     let exe: String
     let home: String
@@ -36,6 +58,7 @@ struct KaiStatus: Decodable, Equatable {
     let codex: Agent?
     let chrome: Agent?
     let audit: Audit
+    var walls: Walls? = nil
 }
 
 /// Output of `kai policy show --json`.
