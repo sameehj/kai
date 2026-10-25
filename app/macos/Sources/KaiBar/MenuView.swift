@@ -27,6 +27,7 @@ struct MenuView: View {
                             details: { open(.activity) })
             }
             statusLine
+            pauseBanner
             protection
             needsYou
             activeNow
@@ -133,6 +134,26 @@ struct MenuView: View {
                             .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.coral)
                     }
                 }
+            }
+        }
+    }
+
+    // Item 1: a persistent banner while any session is paused, with Resume.
+    // (Pauses auto-resume and are capped at 1 day in the engine.)
+    @ViewBuilder private var pauseBanner: some View {
+        let paused = agents.pausedSessions
+        if !paused.isEmpty {
+            ForEach(paused) { s in
+                HStack(spacing: 8) {
+                    Image(systemName: "pause.circle.fill").foregroundStyle(Theme.amber)
+                    Text("Kai paused for \(s.displayAgent)\(s.projectName.isEmpty ? "" : " · \(s.projectName)")")
+                        .font(.system(size: 12))
+                    Spacer()
+                    Button("Resume") { grantManager.pauseSession(s.id, minutes: 0) }
+                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
+                }
+                .padding(10)
+                .background(Theme.amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
             }
         }
     }

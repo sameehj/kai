@@ -94,6 +94,13 @@ final class AgentsModel: ObservableObject {
     /// Only real interactive sessions (not daemons/nested/orphans).
     var interactiveSessions: [SessionRow] { sessions.filter { $0.isSession } }
     var backgroundServices: [SessionRow] { sessions.filter { $0.kind == "background service" } }
+    /// Sessions currently paused (Kai skipped for them, auto-resuming).
+    var pausedSessions: [SessionRow] {
+        let now = Int64(Date().timeIntervalSince1970)
+        return interactiveSessions.filter { s in
+            s.id.withCString { kai_session_paused($0, now) } != 0
+        }
+    }
 
     init() {
         Task { await refresh() }
