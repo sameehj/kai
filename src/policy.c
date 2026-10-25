@@ -484,6 +484,8 @@ int kai_path_is_control_store(const char *path) {
     if (under_dir(path, dir)) return 1;
     snprintf(dir, sizeof dir, "%s/pending-policy", kai_home());
     if (under_dir(path, dir)) return 1;
+    snprintf(dir, sizeof dir, "%s/registry", kai_home());   /* session registry (S1) */
+    if (under_dir(path, dir)) return 1;
     return 0;
 }
 

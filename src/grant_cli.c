@@ -56,16 +56,19 @@ static int parse_op(const char *s) {
     return -1;
 }
 
-static int grant_list(int json) {
+/* List grants, optionally only those bound to `session` (NULL = all). */
+static int grant_list(int json, const char *session) {
     char dir[512]; grants_dir(dir, sizeof dir);
     kai_grant *g = NULL; int n = 0;
     kai_grants_load(dir, &g, &n);
     long long now = (long long)time(NULL);
+    int shown = 0;
     if (json) {
         printf("[");
         for (int i = 0; i < n; i++) {
+            if (session && strcmp(g[i].session_id, session) != 0) continue;
             char *js = kai_grant_to_json(&g[i]);
-            printf("%s%s", i ? "," : "", js ? js : "null");
+            printf("%s%s", shown++ ? "," : "", js ? js : "null");
             free(js);
         }
         printf("]\n");
@@ -73,6 +76,7 @@ static int grant_list(int json) {
         printf("%-22s %-8s %-7s %-7s %-9s %-8s %s\n",
                "id", "agent", "op", "scope", "expires", "signed", "resource");
         for (int i = 0; i < n; i++) {
+            if (session && strcmp(g[i].session_id, session) != 0) continue;
             long long left = g[i].expires_utc - now;
             char exp[32];
             if (g[i].expires_utc == 0) snprintf(exp, sizeof exp, "never");
@@ -81,8 +85,9 @@ static int grant_list(int json) {
             printf("%-22s %-8s %-7s %-7s %-9s %-8s %s\n",
                    g[i].id, g[i].agent, op_name(g[i].op), scope_name(g[i].scope),
                    exp, g[i].hmac[0] ? "yes" : "no", g[i].resource);
+            shown++;
         }
-        if (n == 0) printf("(no grants)\n");
+        if (shown == 0) printf("(no grants%s)\n", session ? " for that session" : "");
     }
     free(g);
     return 0;
@@ -192,9 +197,75 @@ int kai_cmd_resume(int argc, char **argv) {
 
 int kai_cmd_grant(int argc, char **argv) {
     const char *sub = argc > 0 ? argv[0] : "list";
-    if (!strcmp(sub, "list")) return grant_list(argc > 1 && !strcmp(argv[1], "--json"));
+    if (!strcmp(sub, "list")) return grant_list(argc > 1 && !strcmp(argv[1], "--json"), NULL);
     if (!strcmp(sub, "revoke")) return grant_revoke(argc > 1 ? argv[1] : NULL);
     if (!strcmp(sub, "create")) return grant_create(argc - 1, argv + 1);
     fprintf(stderr, "usage: kai grant [list [--json] | create ... | revoke <id>]\n");
     return 2;
+}
+
+/* ---- Session registry CLI (S1), read-only ---- */
+
+static const char *sess_state(const kai_session *s) { return s->ended_utc ? "ended" : "active"; }
+
+static int sessions_list(int json) {
+    kai_session *s = NULL; int n = 0;
+    kai_sessions_load(&s, &n);
+    if (json) {
+        printf("[");
+        for (int i = 0; i < n; i++)
+            printf("%s{\"id\":\"%s\",\"agent\":\"%s\",\"project\":\"%s\",\"host_app\":\"%s\","
+                   "\"started_utc\":%lld,\"ended_utc\":%lld,\"state\":\"%s\"}",
+                   i ? "," : "", s[i].id, s[i].agent, s[i].project, s[i].host_app,
+                   s[i].started_utc, s[i].ended_utc, sess_state(&s[i]));
+        printf("]\n");
+    } else {
+        printf("%-38s %-8s %-7s %-20s %s\n", "session", "agent", "state", "host", "project");
+        for (int i = 0; i < n; i++)
+            printf("%-38s %-8s %-7s %-20s %s\n", s[i].id, s[i].agent, sess_state(&s[i]),
+                   s[i].host_app[0] ? s[i].host_app : "-", s[i].project);
+        if (n == 0) printf("(no sessions)\n");
+    }
+    free(s);
+    return 0;
+}
+
+static int session_show(const char *id) {
+    if (!id || !*id) { fprintf(stderr, "usage: kai session show <id>\n"); return 2; }
+    kai_session s;
+    if (!kai_session_get(id, &s)) { fprintf(stderr, "kai session: no session '%s'\n", id); return 1; }
+    printf("session   %s\n", s.id);
+    printf("agent     %s%s%s\n", s.agent, s.agent_version[0] ? " " : "", s.agent_version);
+    printf("state     %s\n", sess_state(&s));
+    printf("project   %s\n", s.project);
+    printf("host app  %s\n", s.host_app[0] ? s.host_app : "-");
+    printf("root pid  %d (pidversion %llu)\n", s.root_pid, s.root_pidversion);
+    printf("started   %lld\n", s.started_utc);
+    if (s.ended_utc) printf("ended     %lld\n", s.ended_utc);
+    printf("\ngrants for this session:\n");
+    grant_list(0, s.id);
+    return 0;
+}
+
+/* `kai sessions [--json]` */
+int kai_cmd_sessions(int argc, char **argv) {
+    return sessions_list(argc > 0 && !strcmp(argv[0], "--json"));
+}
+
+/* `kai session show <id>` (or `kai session <id>`) */
+int kai_cmd_session(int argc, char **argv) {
+    if (argc >= 2 && !strcmp(argv[0], "show")) return session_show(argv[1]);
+    if (argc >= 1 && strcmp(argv[0], "show") != 0) return session_show(argv[0]);
+    fprintf(stderr, "usage: kai session show <id>\n");
+    return 2;
+}
+
+/* `kai grants [--json] [--session <id>]` (plural: read-only listing) */
+int kai_cmd_grants(int argc, char **argv) {
+    int json = 0; const char *session = NULL;
+    for (int i = 0; i < argc; i++) {
+        if (!strcmp(argv[i], "--json")) json = 1;
+        else if (!strcmp(argv[i], "--session") && i + 1 < argc) session = argv[++i];
+    }
+    return grant_list(json, session);
 }

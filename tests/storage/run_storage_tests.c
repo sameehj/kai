@@ -851,6 +851,58 @@ static void test_trust_store(void) {
     kai_policy_free(p);
 }
 
+/* S1: the session registry — create at root exec, end at root exit, distinct
+ * ids, project recorded, newest-first, and unwritable from an agent tree. */
+static void test_session_registry(void) {
+    printf("session registry (S1)\n");
+    kai_session a; memset(&a, 0, sizeof a);
+    snprintf(a.id, sizeof a.id, "%s", "sess-aaa");
+    snprintf(a.agent, sizeof a.agent, "%s", "claude");
+    snprintf(a.agent_version, sizeof a.agent_version, "%s", "1.2.3");
+    a.root_pid = 1001; a.root_pidversion = 42; a.started_utc = 1000; a.ended_utc = 0;
+    snprintf(a.project, sizeof a.project, "%s", "/work/website");
+    snprintf(a.host_app, sizeof a.host_app, "%s", "Terminal");
+    CHECK(kai_session_begin(&a) == 0, "begin session A at root exec");
+
+    kai_session b = a;
+    snprintf(b.id, sizeof b.id, "%s", "sess-bbb");
+    snprintf(b.project, sizeof b.project, "%s", "/work/other");
+    b.root_pid = 1002; b.started_utc = 2000;
+    CHECK(kai_session_begin(&b) == 0, "begin session B (same agent)");
+    CHECK(strcmp(a.id, b.id) != 0, "two sessions of one agent have distinct ids");
+
+    kai_session got;
+    CHECK(kai_session_get("sess-aaa", &got) == 1, "get A");
+    CHECK(strcmp(got.project, "/work/website") == 0, "A records its project at root exec");
+    CHECK(got.root_pidversion == 42, "A records its audit-token pidversion");
+    CHECK(got.ended_utc == 0, "A is active");
+
+    kai_session *all = NULL; int n = 0;
+    kai_sessions_load(&all, &n);
+    CHECK(n == 2, "both sessions load");
+    CHECK(n >= 2 && strcmp(all[0].id, "sess-bbb") == 0, "newest-started first");
+    free(all);
+
+    CHECK(kai_session_end("sess-aaa", 3000) == 0, "end A at root exit");
+    CHECK(kai_session_get("sess-aaa", &got) == 1 && got.ended_utc == 3000, "A shows ended");
+    CHECK(kai_session_end("sess-nope", 1) == -1, "ending an unknown session fails");
+
+    /* The registry lives in the control store: agents cannot write it. */
+    CHECK(kai_path_is_control_store(kai_session_dir()) == 1, "registry is the control store");
+    char rp[1200]; snprintf(rp, sizeof rp, "%s/sess-aaa.json", kai_session_dir());
+    kai_policy *p = mk("storage block\n");
+    char why[128];
+    CHECK(kai_storage_open_allowed(p, 1, 1, rp, why, sizeof why) == 0,
+          "an agent write to a session record is denied");
+    kai_policy_free(p);
+
+    /* A hostile id cannot escape the registry directory. */
+    CHECK(kai_session_get("../escape", &got) == 0, "path-traversal id is rejected");
+    kai_session bad; memset(&bad, 0, sizeof bad);
+    snprintf(bad.id, sizeof bad.id, "%s", "../escape");
+    CHECK(kai_session_begin(&bad) == -1, "begin with a traversal id is refused");
+}
+
 /* S0: the dev-sandbox guard predicate. */
 static void test_s0_sandbox_guard(void) {
     printf("dev-sandbox guard (S0)\n");
@@ -947,6 +999,7 @@ int main(void) {
     test_s0_hook_errors();
     test_s0_sandbox_guard();
     test_trust_store();
+    test_session_registry();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

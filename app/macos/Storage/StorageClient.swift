@@ -298,6 +298,7 @@ final class StorageClient {
     // network extension can read -- so "Allow for this session" covers the
     // child processes (ssh, node) that actually open files/connections.
     private var sessions: [pid_t: (sid: String, project: String)] = [:]
+    private var sessionRoots: [pid_t: String] = [:]   // root pid -> sid, for root-exit end (S1)
 
     private func cwdOf(_ p: pid_t) -> String {
         var info = proc_vnodepathinfo()
@@ -328,16 +329,29 @@ final class StorageClient {
     }
 
     /// Mint (root) or inherit (child) a session for an agent process `proc`.
-    private func mintSession(_ proc: UnsafeMutablePointer<es_process_t>) {
+    /// A ROOT exec (no session inherited from the parent) also creates the
+    /// registry record (S1); descendants only inherit it.
+    private func mintSession(_ proc: UnsafeMutablePointer<es_process_t>, agent: String) {
         let p = pid(proc)
         let ppid = proc.pointee.ppid
         let pidv = UInt32(proc.pointee.audit_token.val.7)
         lock.lock()
-        let entry: (sid: String, project: String) = sessions[ppid] ?? (UUID().uuidString, cwdOf(p))
+        let inherited = sessions[ppid]
+        let entry: (sid: String, project: String) = inherited ?? (UUID().uuidString, cwdOf(p))
         if sessions.count > 8192 { sessions.removeAll() }
         sessions[p] = entry
+        let isRoot = inherited == nil
+        if isRoot { sessionRoots[p] = entry.sid }
         lock.unlock()
         writeSessionFile(pid: p, pidv: pidv, sid: entry.sid, project: entry.project)
+        if isRoot {
+            let now = Int64(Date().timeIntervalSince1970)
+            _ = entry.sid.withCString { sidC in agent.withCString { agentC in
+                entry.project.withCString { projC in
+                    kai_session_record(sidC, agentC, "", Int32(p), UInt64(pidv), projC, "", now)
+                }
+            }}
+        }
     }
 
     private func sessionFor(_ p: pid_t) -> (sid: String, project: String) {
@@ -346,8 +360,16 @@ final class StorageClient {
     }
 
     private func dropSession(_ p: pid_t) {
-        lock.lock(); sessions[p] = nil; lock.unlock()
+        lock.lock()
+        sessions[p] = nil
+        let rootSid = sessionRoots[p]      // non-nil only when the ROOT exits
+        if rootSid != nil { sessionRoots[p] = nil }
+        lock.unlock()
         try? FileManager.default.removeItem(atPath: sessionPath(p))
+        if let sid = rootSid {             // end the session at root exit (S1)
+            let now = Int64(Date().timeIntervalSince1970)
+            _ = sid.withCString { kai_session_end($0, now) }
+        }
     }
     #endif
 
@@ -506,7 +528,7 @@ final class StorageClient {
                 let v = classify(target)                      // agent name, "" non-agent, nil unknown
                 if filter == .process, let v { muteFS(target, v.isEmpty) }
                 #if KAI_STORAGE_ENFORCE
-                if let v, !v.isEmpty { mintSession(target) }  // agents get/inherit a session
+                if let v, !v.isEmpty { mintSession(target, agent: v) }  // agents get/inherit a session
                 #endif
             }
         case ES_EVENT_TYPE_NOTIFY_FORK:

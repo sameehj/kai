@@ -203,6 +203,46 @@ kai_storage_mode kai_policy_storage_mode(const kai_policy *p);
 int kai_storage_open_allowed(const kai_policy *p, int is_agent, int write,
                              const char *path, char *why, size_t whylen);
 
+/* ---- Session registry (S1) ----
+ * One record per agent session: created at the agent's ROOT exec (keyed on its
+ * audit token / pidversion), inherited by descendants (tracked by the ES wall),
+ * ended at root exit. Written only by Kai components, under the control store,
+ * so an agent tree cannot create or alter one. Backed by one JSON file per
+ * session under <home>/registry (file-based and encapsulated behind this API,
+ * so the backend can change without touching callers). Authorization never
+ * trusts an agent-reported id; a session is established only from what the ES
+ * wall observes. */
+#define KAI_SESSION_ID_MAX 40
+#define KAI_SESSION_PROJ_MAX 1024
+typedef struct {
+    char id[KAI_SESSION_ID_MAX];
+    char agent[32];
+    char agent_version[32];
+    int root_pid;
+    unsigned long long root_pidversion;  /* audit-token pidversion: defeats pid reuse */
+    long long started_utc;
+    long long ended_utc;                 /* 0 while active                            */
+    char project[KAI_SESSION_PROJ_MAX];  /* canonical working dir at root exec        */
+    char host_app[64];                   /* Terminal, iTerm, Cursor, ...              */
+} kai_session;
+
+/* Create or update a session record (idempotent on id). Returns 0 on success.
+ * Called by Kai components only; the control store keeps agents out. */
+int kai_session_begin(const kai_session *s);
+/* Convenience for the ES wall: create a session record from plain C strings
+ * (no Swift fixed-array copying). Returns 0 on success. */
+int kai_session_record(const char *id, const char *agent, const char *agent_version,
+                       int root_pid, unsigned long long root_pidversion,
+                       const char *project, const char *host_app, long long started_utc);
+/* Mark a session ended (root exit). Returns 0 if updated, -1 if unknown. */
+int kai_session_end(const char *id, long long ended_utc);
+/* Load all session records, newest-started first. Caller frees *out. */
+int kai_sessions_load(kai_session **out, int *n);
+/* Fill `out` for one session id. Returns 1 if found, 0 otherwise. */
+int kai_session_get(const char *id, kai_session *out);
+/* The registry directory: <home>/registry. */
+const char *kai_session_dir(void);
+
 /* ---- Scoped Approvals (M0 engine) ----
  * A grant narrows an existing denial for one verified identity, one resource,
  * one operation, for a bounded time. It can turn a SOFT-protected path into

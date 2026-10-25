@@ -54,6 +54,7 @@ targets:
       - path: ../../src/approval_store.c
       - path: ../../src/proc.c
       - path: ../../src/shell.c
+      - path: ../../src/session.c
       - path: ../../third_party/cjson/cJSON.c
     settings:
       base:
