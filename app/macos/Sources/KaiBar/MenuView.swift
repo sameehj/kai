@@ -98,7 +98,7 @@ struct MenuView: View {
             HStack {
                 CapsLabel("System protection")
                 Spacer()
-                Button("Agents") { open(.general) }
+                Button("Agents") { openWindow(id: "agents"); NSApp.activate(ignoringOtherApps: true) }
                     .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
             }
             Text("Covers every agent on this Mac.")

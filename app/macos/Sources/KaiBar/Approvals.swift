@@ -63,6 +63,7 @@ struct ActiveGrant: Decodable, Identifiable {
     let scope: Int
     let expires_utc: String
     let hmac: String
+    var session_id: String? = nil
     var opLabel: String { op == 1 ? "write" : op == 2 ? "connect" : "read" }
     var scopeLabel: String { scope == 1 ? "once" : "this process" }
     var signed: Bool { !hmac.isEmpty }
