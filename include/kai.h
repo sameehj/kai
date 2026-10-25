@@ -288,6 +288,8 @@ typedef struct {
     char session_id[40];        /* v2: bind to one verified agent session; "" = any */
     char project[KAI_GRANT_RES_MAX]; /* v2: realpath at root exec; "" = any      */
     int dest_kind;              /* v2: kai_grant_dest (path | endpoint)          */
+    int confirmed;              /* v3: user passed the override confirm sheet    */
+    int authenticated;          /* v3: LocalAuthentication passed (break-glass)   */
     char hmac[65];              /* hex HMAC-SHA256 over the canonical form      */
 } kai_grant;
 
@@ -324,6 +326,23 @@ char *kai_grant_build_json2(const char *id, long long created, long long expires
                             const char *approved_by, const char *session_id,
                             const char *project, int dest_kind,
                             const unsigned char *key, size_t keylen);
+
+/* v3: also signs the honor flags (S4). `confirmed` = the user passed the
+ * override confirm sheet; `authenticated` = LocalAuthentication passed, for a
+ * break-glass resource. The flags are in the signed canonical form, so an agent
+ * cannot flip them on a signed grant to escalate its tier. */
+char *kai_grant_build_json3(const char *id, long long created, long long expires,
+                            int pid, unsigned long long pidversion, const char *agent,
+                            int strength, const char *resource, int op, int scope,
+                            const char *approved_by, const char *session_id,
+                            const char *project, int dest_kind,
+                            int confirmed, int authenticated,
+                            const unsigned char *key, size_t keylen);
+/* S4 tier enforcement: does this signed grant meet the resource's override
+ * tier, and is its session still active? Both walls apply these before honoring
+ * a matched grant. */
+int kai_grant_satisfies_tier(const kai_grant *g, kai_override_tier_t tier);
+int kai_grant_session_ended(const kai_grant *g);
 
 /* Load every *.json grant under dir (e.g. <home>/grants). Caller free()s *out.
  * A grant with a durable "<dir>/<id>.used" marker (a spent one-shot) is skipped. */

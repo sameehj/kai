@@ -11,6 +11,7 @@
 // Every field shown and signed is Kai-verified (from the extension's pending
 // record); an agent-supplied process name is never trusted as identity.
 import Foundation
+import LocalAuthentication
 import Security
 import SwiftUI
 import KaiCore
@@ -144,26 +145,48 @@ final class GrantManager: ObservableObject {
             .compactMap { FileManager.default.contents(atPath: dir + "/" + $0) }
     }
 
-    /// Sign and persist a grant for a pending request. The ONLY path that signs.
+    /// Approve a pending request. The ONLY path that signs a grant. The tier
+    /// (S4) decides how: never -> refused; break-glass -> LocalAuthentication
+    /// first, then a read-only grant capped at 15 minutes; override/confirm ->
+    /// the click is the confirmation. The honor flags are signed into the grant.
     func approve(_ req: PendingRequest, scope: GrantScope) {
+        let tier = req.tier ?? 1
+        if tier >= 4 { return }   // never: not approvable from here
+        if tier == 3 {            // break-glass: require Touch ID / login password
+            let ctx = LAContext()
+            let reason = "Kai: allow a break-glass read of \(req.resource)"
+            ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { ok, _ in
+                DispatchQueue.main.async {
+                    guard ok else { return }   // auth failed/cancelled: nothing signed
+                    self.signGrant(req, scope: .once, confirmed: true, authenticated: true, breakglass: true)
+                }
+            }
+            return
+        }
+        signGrant(req, scope: scope, confirmed: tier >= 2, authenticated: false, breakglass: false)
+    }
+
+    private func signGrant(_ req: PendingRequest, scope: GrantScope,
+                           confirmed: Bool, authenticated: Bool, breakglass: Bool) {
         guard let key = KaiApprovalKey.ensure() else { return }
         let now = Int(Date().timeIntervalSince1970)
-        let ttl = (scope == .once) ? 120 : 900           // one-shot 2 min, process 15 min
+        // break-glass is read-only and capped at 15 minutes regardless of scope.
+        let ttl = breakglass ? 900 : (scope == .once ? 120 : 900)
         let expires = now + ttl
         let gid = UUID().uuidString
-        let opCode: Int32 = req.op == "connect" ? 2 :
-                            (req.op == "open" || req.op == "readdir") ? 0 : 1
+        let rawOp: Int32 = req.op == "connect" ? 2 : (req.op == "open" || req.op == "readdir") ? 0 : 1
+        let opCode: Int32 = breakglass ? 0 : rawOp     // break-glass is read-only
         let scopeCode: Int32 = (scope == .once) ? 1 : 0
 
         let json: String? = key.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> String? in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return nil }
-            // v2 grant. session_id/project are empty ("any") until M1.2 supplies
-            // the verified session; dest_kind is path for storage ops.
             let destKind: Int32 = (req.op == "connect") ? 1 : 0
-            guard let c = kai_grant_build_json2(gid, Int64(now), Int64(expires), Int32(req.pid),
+            guard let c = kai_grant_build_json3(gid, Int64(now), Int64(expires), Int32(req.pid),
                                                 req.pidversion, req.agent, Int32(req.strength),
                                                 req.resource, opCode, scopeCode, "console-user",
-                                                "", "", destKind, base, key.count) else { return nil }
+                                                "", "", destKind,
+                                                confirmed ? 1 : 0, authenticated ? 1 : 0,
+                                                base, key.count) else { return nil }
             defer { free(c) }
             return String(cString: c)
         }
@@ -173,8 +196,8 @@ final class GrantManager: ObservableObject {
         let fp = grantsDir + "/" + gid + ".json"
         if FileManager.default.createFile(atPath: fp, contents: Data(json.utf8),
                                           attributes: [.posixPermissions: 0o600]) {
-            kai_grant_audit("approved", gid, req.agent, req.resource, opCode,
-                            "sign", "approved by console user")
+            kai_grant_audit("approved", gid, req.agent, req.resource, opCode, "sign",
+                            breakglass ? "break-glass approved with authentication" : "approved by console user")
             clearPending(req)
         }
         refresh()

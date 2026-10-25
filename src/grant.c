@@ -63,7 +63,14 @@ static void hmac_sha256(const unsigned char *key, size_t keylen,
  * can never be replayed as v2 or vice-versa. */
 static int grant_canonical(const kai_grant *g, char *buf, size_t n) {
     int w;
-    if (g->grant_version >= 2) {
+    if (g->grant_version >= 3) {
+        /* v3 appends the honor flags so they are signed: an agent cannot flip
+         * confirmed/authenticated on a signed grant to escalate its tier. */
+        w = snprintf(buf, n, "v3\n%s\n%lld\n%lld\n%d\n%llu\n%s\n%d\n%s\n%d\n%d\n%s\n%s\n%s\n%d\n%d\n%d",
+                     g->id, g->created_utc, g->expires_utc, g->pid, g->pidversion,
+                     g->agent, g->strength, g->resource, g->op, g->scope, g->approved_by,
+                     g->session_id, g->project, g->dest_kind, g->confirmed, g->authenticated);
+    } else if (g->grant_version == 2) {
         w = snprintf(buf, n, "v2\n%s\n%lld\n%lld\n%d\n%llu\n%s\n%d\n%s\n%d\n%d\n%s\n%s\n%s\n%d",
                      g->id, g->created_utc, g->expires_utc, g->pid, g->pidversion,
                      g->agent, g->strength, g->resource, g->op, g->scope, g->approved_by,
@@ -127,6 +134,8 @@ char *kai_grant_to_json(const kai_grant *g) {
     cJSON_AddStringToObject(o, "session_id", g->session_id);
     cJSON_AddStringToObject(o, "project", g->project);
     cJSON_AddNumberToObject(o, "dest_kind", g->dest_kind);
+    cJSON_AddNumberToObject(o, "confirmed", g->confirmed);
+    cJSON_AddNumberToObject(o, "authenticated", g->authenticated);
     cJSON_AddStringToObject(o, "hmac", g->hmac);
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
@@ -169,6 +178,8 @@ int kai_grant_from_json(const char *json, kai_grant *out) {
     cpy(out->session_id, sizeof out->session_id, o, "session_id");
     cpy(out->project, sizeof out->project, o, "project");
     out->dest_kind = num_int(o, "dest_kind");
+    out->confirmed = num_int(o, "confirmed");
+    out->authenticated = num_int(o, "authenticated");
     cpy(out->hmac, sizeof out->hmac, o, "hmac");
     cJSON_Delete(o);
     return out->id[0] != '\0';
@@ -245,6 +256,36 @@ char *kai_grant_build_json2(const char *id, long long created, long long expires
     kai_strlcpy(g.session_id, session_id ? session_id : "", sizeof g.session_id);
     kai_strlcpy(g.project, project ? project : "", sizeof g.project);
     g.dest_kind = dest_kind;
+    kai_grant_sign(&g, key, keylen);
+    return kai_grant_to_json(&g);
+}
+
+char *kai_grant_build_json3(const char *id, long long created, long long expires,
+                            int pid, unsigned long long pidversion, const char *agent,
+                            int strength, const char *resource, int op, int scope,
+                            const char *approved_by, const char *session_id,
+                            const char *project, int dest_kind,
+                            int confirmed, int authenticated,
+                            const unsigned char *key, size_t keylen) {
+    kai_grant g;
+    memset(&g, 0, sizeof g);
+    kai_strlcpy(g.id, id ? id : "", sizeof g.id);
+    g.created_utc = created;
+    g.expires_utc = expires;
+    g.pid = pid;
+    g.pidversion = pidversion;
+    kai_strlcpy(g.agent, agent ? agent : "", sizeof g.agent);
+    g.strength = strength;
+    kai_strlcpy(g.resource, resource ? resource : "", sizeof g.resource);
+    g.op = op;
+    g.scope = scope;
+    kai_strlcpy(g.approved_by, approved_by ? approved_by : "", sizeof g.approved_by);
+    g.grant_version = 3;
+    kai_strlcpy(g.session_id, session_id ? session_id : "", sizeof g.session_id);
+    kai_strlcpy(g.project, project ? project : "", sizeof g.project);
+    g.dest_kind = dest_kind;
+    g.confirmed = confirmed ? 1 : 0;
+    g.authenticated = authenticated ? 1 : 0;
     kai_grant_sign(&g, key, keylen);
     return kai_grant_to_json(&g);
 }
@@ -358,6 +399,31 @@ int kai_grant_match(const kai_grant *grants, int n, const kai_grant_subject *s,
     return -1;
 }
 
+/* S4: does this signed grant meet the override tier of the resource it covers?
+ * never: never; break-glass: only a read, authenticated, capped at 15 min;
+ * override: only if the user confirmed; confirm/normal: yes. The flags are part
+ * of the signed canonical form, so an agent cannot forge them. */
+int kai_grant_satisfies_tier(const kai_grant *g, kai_override_tier_t tier) {
+    if (!g) return 0;
+    switch (tier) {
+    case KAI_TIER_NEVER: return 0;
+    case KAI_TIER_BREAKGLASS:
+        return g->authenticated && g->op == KAI_OP_READ &&
+               g->expires_utc != 0 && (g->expires_utc - g->created_utc) <= 900;
+    case KAI_TIER_OVERRIDE: return g->confirmed != 0;
+    default: return 1;   /* KAI_TIER_CONFIRM and anything else */
+    }
+}
+
+/* S4: a session-bound grant stops being honored once its session has ended
+ * (root exit, recorded in the registry). An unknown session is treated as
+ * still active, so a grant made before the registry existed is unaffected. */
+int kai_grant_session_ended(const kai_grant *g) {
+    if (!g || !g->session_id[0]) return 0;
+    kai_session s;
+    return kai_session_get(g->session_id, &s) && s.ended_utc != 0;
+}
+
 int kai_storage_decide(const kai_policy *p, const char *resolved_path,
                        const char *cwd, int op, const kai_grant_subject *s,
                        const kai_grant *grants, int ngrants, long long now,
@@ -365,9 +431,16 @@ int kai_storage_decide(const kai_policy *p, const char *resolved_path,
                        char *why, size_t whylen) {
     if (!kai_path_protected(p, resolved_path, cwd, why, whylen)) return 1; /* allow */
     if (kai_rule_is_builtin(why)) return 0;      /* un-exemptable: no grant overrides */
-    if (s && kai_grant_match(grants, ngrants, s, resolved_path, op, now, key, keylen) >= 0) {
-        if (why) kai_strlcpy(why, "scoped grant", whylen);
-        return 1;                                /* soft-protected, grant allows */
+    kai_override_tier_t tier = kai_override_tier(why);   /* before `why` is overwritten */
+    if (s) {
+        int idx = kai_grant_match(grants, ngrants, s, resolved_path, op, now, key, keylen);
+        if (idx >= 0) {
+            const kai_grant *g = &grants[idx];
+            if (!kai_grant_satisfies_tier(g, tier)) return 0;  /* grant too weak for the tier */
+            if (kai_grant_session_ended(g)) return 0;          /* session is over */
+            if (why) kai_strlcpy(why, "scoped grant", whylen);
+            return 1;                            /* soft-protected, grant allows */
+        }
     }
     return 0;                                    /* soft-protected, no grant: deny */
 }

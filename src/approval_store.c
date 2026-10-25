@@ -106,10 +106,15 @@ static void load_snapshot(kai_approval_store *s, int first) {
     for (int i = 0; i < nn; i++) {
         int bad = (s->keylen && !kai_grant_hmac_ok(&ng[i], s->key, s->keylen));
         int expired = (!bad && ng[i].expires_utc != 0 && now >= ng[i].expires_utc);
-        if (bad || expired) {
-            kai_grant_audit(bad ? "rejected" : "expired", ng[i].id, ng[i].agent,
-                            ng[i].resource, ng[i].op, bad ? "reject" : "expire",
-                            bad ? "invalid signature" : "ttl elapsed");
+        /* S4: a session-bound grant stops once its session ends (root exit).
+         * Checked here, off the hot path, so decide() needs no file I/O. */
+        int session_over = (!bad && !expired && kai_grant_session_ended(&ng[i]));
+        if (bad || expired || session_over) {
+            const char *act = bad ? "rejected" : session_over ? "expired" : "expired";
+            const char *reason = bad ? "invalid signature"
+                               : session_over ? "session ended" : "ttl elapsed";
+            kai_grant_audit(act, ng[i].id, ng[i].agent, ng[i].resource, ng[i].op,
+                            bad ? "reject" : "expire", reason);
             char fp[PATH_MAX];
             if (snprintf(fp, sizeof fp, "%s/%s.json", s->grants_dir, ng[i].id) < (int)sizeof fp)
                 unlink(fp);
@@ -232,10 +237,18 @@ int kai_approval_store_decide(kai_approval_store *s, const char *resolved_path,
     } else if (kai_rule_is_builtin(why)) {
         allow = 0;                                   /* un-exemptable: no grant overrides */
     } else if (subj) {
+        kai_override_tier_t tier = kai_override_tier(why);   /* before `why` is overwritten */
         int idx = kai_grant_match(s->grants, s->ngrants, subj, resolved_path, op, now,
                                   s->keylen ? s->key : NULL, s->keylen);
         if (idx >= 0) {
-            if (s->grants[idx].scope == KAI_GRANT_ONESHOT) {
+            const kai_grant *g = &s->grants[idx];
+            /* S4: a matched grant must meet the resource's override tier
+             * (confirmed/authenticated/read-only/cap). Session-end expiry is
+             * applied at reload (ended-session grants are dropped from the
+             * snapshot) so this hot path does no file I/O. */
+            if (!kai_grant_satisfies_tier(g, tier)) {
+                allow = 0;
+            } else if (g->scope == KAI_GRANT_ONESHOT) {
                 allow = consume_oneshot(s, idx); /* atomic flag; loser denies */
             } else {
                 allow = 1;                           /* process-scoped: repeatable */

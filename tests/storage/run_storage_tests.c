@@ -952,6 +952,92 @@ static void test_session_reports(void) {
     kai_policy_free(p);
 }
 
+/* S4: a signed v3 grant with explicit honor flags + session binding. */
+static kai_grant mkgrant3(const char *res, int op, int pid, unsigned long long pv,
+                          long long created, long long expires, const char *session,
+                          int confirmed, int authenticated) {
+    kai_grant g; memset(&g, 0, sizeof g);
+    snprintf(g.id, sizeof g.id, "g3-%d-%d-%d-%d-%lld", pid, op, confirmed, authenticated, expires);
+    g.created_utc = created; g.expires_utc = expires; g.pid = pid; g.pidversion = pv;
+    snprintf(g.agent, sizeof g.agent, "claude");
+    g.strength = KAI_ID_STRONG;
+    snprintf(g.resource, sizeof g.resource, "%s", res);
+    g.op = op; g.scope = KAI_GRANT_PROCESS;
+    snprintf(g.approved_by, sizeof g.approved_by, "console-user");
+    g.grant_version = 3;
+    if (session) snprintf(g.session_id, sizeof g.session_id, "%s", session);
+    g.confirmed = confirmed; g.authenticated = authenticated;
+    kai_grant_sign(&g, GKEY, GKEYLEN);
+    return g;
+}
+
+static void test_grant_tiers(void) {
+    printf("session-scoped grants + override tiers (S4)\n");
+    const long long NOW = 1000;
+    kai_grant_subject sub = { .pid = 200, .pidversion = 9, .agent = "claude",
+                              .strength = KAI_ID_STRONG, .session_id = "sess-A" };
+    char why[256];
+    kai_policy *p = mk("storage block\n");
+
+    /* OVERRIDE tier (trust store): unconfirmed grant not honored; confirmed is. */
+    char cert[96]; snprintf(cert, sizeof cert, "/usr/local/etc/ca-certificates/cert.%s", "pem");
+    kai_grant g_noc = mkgrant3(cert, KAI_OP_WRITE, 200, 9, 1000, 1000000, "sess-A", 0, 0);
+    kai_grant g_c   = mkgrant3(cert, KAI_OP_WRITE, 200, 9, 1000, 1000000, "sess-A", 1, 0);
+    CHECK(kai_storage_decide(p, cert, NULL, KAI_OP_WRITE, &sub, &g_noc, 1, NOW,
+                             GKEY, GKEYLEN, why, sizeof why) == 0,
+          "override tier: an unconfirmed grant is NOT honored");
+    CHECK(kai_storage_decide(p, cert, NULL, KAI_OP_WRITE, &sub, &g_c, 1, NOW,
+                             GKEY, GKEYLEN, why, sizeof why) == 1,
+          "override tier: a confirmed grant is honored");
+
+    /* BREAK-GLASS (a private-key path): needs auth + read-only + <= 15 min. */
+    char sshdir[64]; snprintf(sshdir, sizeof sshdir, "/work/.%s", "ssh");
+    char keyp[96]; snprintf(keyp, sizeof keyp, "%s/id_rsa", sshdir);
+    kai_policy *pk = mk("storage block\nprotect /work/.ssh\n");
+    kai_grant bg_noauth = mkgrant3(keyp, KAI_OP_READ, 200, 9, 1000, 1000 + 600, "sess-A", 1, 0);
+    kai_grant bg_ok     = mkgrant3(keyp, KAI_OP_READ, 200, 9, 1000, 1000 + 600, "sess-A", 1, 1);
+    kai_grant bg_write  = mkgrant3(keyp, KAI_OP_WRITE, 200, 9, 1000, 1000 + 600, "sess-A", 1, 1);
+    kai_grant bg_long   = mkgrant3(keyp, KAI_OP_READ, 200, 9, 1000, 1000 + 2000, "sess-A", 1, 1);
+    CHECK(kai_override_tier("/work/.ssh") == KAI_TIER_BREAKGLASS, "a key path is break-glass tier");
+    CHECK(kai_storage_decide(pk, keyp, NULL, KAI_OP_READ, &sub, &bg_noauth, 1, NOW,
+                             GKEY, GKEYLEN, why, sizeof why) == 0, "break-glass: no auth -> denied");
+    CHECK(kai_storage_decide(pk, keyp, NULL, KAI_OP_READ, &sub, &bg_ok, 1, NOW,
+                             GKEY, GKEYLEN, why, sizeof why) == 1, "break-glass: auth + read + short ttl -> honored");
+    CHECK(kai_storage_decide(pk, keyp, NULL, KAI_OP_WRITE, &sub, &bg_write, 1, NOW,
+                             GKEY, GKEYLEN, why, sizeof why) == 0, "break-glass: write is never honored");
+    CHECK(kai_storage_decide(pk, keyp, NULL, KAI_OP_READ, &sub, &bg_long, 1, NOW,
+                             GKEY, GKEYLEN, why, sizeof why) == 0, "break-glass: ttl over 15 min -> denied");
+
+    /* NEVER tier (control store): no grant, however maxed, is honored. */
+    char pol[1100]; snprintf(pol, sizeof pol, "%s/policy", kai_home());
+    kai_grant god = mkgrant3(pol, KAI_OP_WRITE, 200, 9, 1000, 1000000, "sess-A", 1, 1);
+    CHECK(kai_storage_decide(p, pol, NULL, KAI_OP_WRITE, &sub, &god, 1, NOW,
+                             GKEY, GKEYLEN, why, sizeof why) == 0,
+          "never tier: the control store cannot be granted");
+
+    /* Session end expires a session grant (CONFIRM-tier path so tier isn't the blocker). */
+    kai_policy *pd = mk("storage block\nprotect /work/data\n");
+    kai_grant sg = mkgrant3("/work/data/x", KAI_OP_READ, 200, 9, 1000, 1000000, "sess-A", 0, 0);
+    CHECK(kai_storage_decide(pd, "/work/data/x", NULL, KAI_OP_READ, &sub, &sg, 1, NOW,
+                             GKEY, GKEYLEN, why, sizeof why) == 1, "session grant honored while active");
+    kai_session reg; memset(&reg, 0, sizeof reg);
+    snprintf(reg.id, sizeof reg.id, "sess-A"); snprintf(reg.agent, sizeof reg.agent, "claude");
+    reg.started_utc = 1; kai_session_begin(&reg);
+    kai_session_end("sess-A", 2000);
+    CHECK(kai_storage_decide(pd, "/work/data/x", NULL, KAI_OP_READ, &sub, &sg, 1, NOW,
+                             GKEY, GKEYLEN, why, sizeof why) == 0, "session grant expires at session end");
+
+    /* An unattributed process (no session) never matches a session-bound grant. */
+    kai_grant_subject anon = { .pid = 200, .pidversion = 9, .agent = "claude",
+                               .strength = KAI_ID_STRONG, .session_id = NULL };
+    kai_grant sg2 = mkgrant3("/work/data/x", KAI_OP_READ, 200, 9, 1000, 1000000, "sess-B", 0, 0);
+    CHECK(kai_storage_decide(pd, "/work/data/x", NULL, KAI_OP_READ, &anon, &sg2, 1, NOW,
+                             GKEY, GKEYLEN, why, sizeof why) == 0,
+          "an unattributed process never matches a session grant");
+
+    kai_policy_free(p); kai_policy_free(pk); kai_policy_free(pd);
+}
+
 /* S0: the dev-sandbox guard predicate. */
 static void test_s0_sandbox_guard(void) {
     printf("dev-sandbox guard (S0)\n");
@@ -1051,6 +1137,7 @@ int main(void) {
     test_session_registry();
     test_agent_inventory();
     test_session_reports();
+    test_grant_tiers();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s");

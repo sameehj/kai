@@ -317,10 +317,29 @@ int kai_rule_is_kai_home(const char *rule) {
     return rule && (!strcmp(rule, "kai_self_protect") || !strcmp(rule, "~/.kai"));
 }
 
+/* Does a matched protect-rule pattern name a private key or cloud credential?
+ * These are break-glass: reading one is high-consequence, so an override needs
+ * authentication. Matched on the rule text (the protect pattern), case-folded. */
+static int rule_is_secret_class(const char *rule) {
+    if (!rule) return 0;
+    static const char *const marks[] = {
+        ".ssh", "id_rsa", "id_ed25519", "id_ecdsa", ".pem", ".key", ".p12",
+        ".pfx", "secring", "credentials", ".aws", "/.gnupg", "private",
+    };
+    char low[256]; size_t i = 0;
+    for (; rule[i] && i < sizeof low - 1; i++)
+        low[i] = (char)tolower((unsigned char)rule[i]);
+    low[i] = '\0';
+    for (size_t k = 0; k < sizeof marks / sizeof marks[0]; k++)
+        if (strstr(low, marks[k])) return 1;
+    return 0;
+}
+
 kai_override_tier_t kai_override_tier(const char *rule) {
     if (kai_rule_is_kai_home(rule) || kai_rule_is_builtin(rule)) return KAI_TIER_NEVER;
+    if (rule_is_secret_class(rule)) return KAI_TIER_BREAKGLASS;  /* keys / credentials */
     if (kai_rule_is_trust_store(rule)) return KAI_TIER_OVERRIDE;
-    return KAI_TIER_CONFIRM;   /* S4 refines keys/credentials to BREAKGLASS */
+    return KAI_TIER_CONFIRM;   /* other protected paths and blocked hosts */
 }
 
 const char *kai_rule_explanation(const char *rule) {
