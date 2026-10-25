@@ -282,6 +282,58 @@ int kai_sessions_scan(const kai_policy *p, kai_session **out, int *n) {
         if (proc_pidinfo(tab[i].pid, PROC_PIDTBSDINFO, 0, &bi, sizeof bi) == (int)sizeof bi)
             started = (long long)bi.pbi_start_tvsec;
         long long age = started > 0 ? now - started : 0;
+
+        /* Item 2: an IDE agent (Cursor, Zed, …) is a HOST, not a background
+         * service. Its sessions are its open workspaces — the distinct working
+         * directories of its child processes — so one long-lived app process
+         * becomes one session per window/workspace. */
+        if (kai_agent_product_kind(tab[i].name) == KAI_AGENT_IDE) {
+            /* Skip the IDE's helper processes (renderer/GPU/plugin host); the
+             * main app process carries the workspaces. */
+            if (strstr(tab[i].exe, "Helper") || strstr(tab[i].exe, "(GPU)") ||
+                strstr(tab[i].exe, "(Renderer)") || strstr(tab[i].exe, "(Plugin)"))
+                continue;
+            const char *home = getenv("HOME");
+            char ws[16][1024]; int nws = 0;
+            for (int j = 0; j < nt && nws < 16; j++) {
+                int isdesc = (j == i);
+                for (int a = tab[j].parent, d = 0; !isdesc && a >= 0 && d < 64; a = tab[a].parent, d++)
+                    if (a == i) isdesc = 1;
+                if (!isdesc) continue;
+                struct proc_vnodepathinfo v;
+                if (proc_pidinfo(tab[j].pid, PROC_PIDVNODEPATHINFO, 0, &v, sizeof v) <= 0) continue;
+                const char *cwd = v.pvi_cdir.vip_path;
+                if (!cwd[0] || !strcmp(cwd, "/") || (home && !strcmp(cwd, home))) continue;
+                int dup = 0;
+                for (int k = 0; k < nws; k++) if (!strcmp(ws[k], cwd)) { dup = 1; break; }
+                if (!dup) kai_strlcpy(ws[nws], cwd, sizeof ws[0]), nws++;
+            }
+            char hostname[64];
+            kai_strlcpy(hostname, tab[i].name, sizeof hostname);
+            if (hostname[0] >= 'a' && hostname[0] <= 'z') hostname[0] -= 32;  /* "cursor" -> "Cursor" */
+            int emit_n = nws > 0 ? nws : 1;
+            for (int w = 0; w < emit_n; w++) {
+                kai_session s;
+                memset(&s, 0, sizeof s);
+                snprintf(s.id, sizeof s.id, "scan-%d-%d", tab[i].pid, w);
+                kai_strlcpy(s.agent, tab[i].name, sizeof s.agent);
+                s.root_pid = tab[i].pid;
+                s.source = KAI_SESS_SCAN;
+                s.kind = KAI_KIND_SESSION;      /* a host workspace is a session */
+                s.started_utc = started;
+                kai_strlcpy(s.host_app, hostname, sizeof s.host_app);
+                kai_strlcpy(s.project, nws > 0 ? ws[w] : "(IDE host)", sizeof s.project);
+                if (count == cap) {
+                    int nc = cap ? cap * 2 : 8;
+                    kai_session *na = realloc(arr, (size_t)nc * sizeof *na);
+                    if (!na) break;
+                    arr = na; cap = nc;
+                }
+                arr[count++] = s;
+            }
+            continue;
+        }
+
         int kind = kai_classify_session(tab[i].cmd, tty[0] != '\0', parent_is_launchd, age, 0);
 
         kai_session s;
