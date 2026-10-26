@@ -63,8 +63,17 @@ static const upstream_t *route(const char *target, const char **rest) {
 }
 
 static const char *upstream_base(const upstream_t *u) {
+#ifdef KAI_TEST_DIRECT_POLICY
+    /* Test builds only: the TLS-validation suite points an upstream at a local
+     * bad-cert server through this env var. It is never compiled into product,
+     * so a shipped gateway's upstreams are exactly the fixed https list above -
+     * neither the policy nor the environment can redirect them. */
     const char *e = getenv(u->env);
-    return (e && *e) ? e : u->url;
+    if (e && *e) return e;
+#else
+    (void)u->env;
+#endif
+    return u->url;
 }
 
 /* ---------- socket helpers ---------- */
@@ -371,6 +380,29 @@ static void forward(int fd, const request_t *r, const upstream_t *u, const char 
     curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 30L);
     curl_easy_setopt(c, CURLOPT_TCP_KEEPALIVE, 1L);
+    /* Kai is a TLS client here. Enforce full certificate + hostname validation
+     * explicitly (defense in depth over the libcurl defaults), require TLS 1.2
+     * or newer, and refuse any scheme but HTTPS - including on a redirect - so a
+     * downgrade or a stray http:// upstream can never carry model traffic in the
+     * clear. No "insecure" path and no custom trust override exists. */
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(c, CURLOPT_SSLVERSION, (long)CURL_SSLVERSION_TLSv1_2);
+    curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 0L);
+#ifndef KAI_TEST_DIRECT_POLICY
+    /* Product: the fixed upstream list is all https, so refuse any other scheme
+     * outright (including on a redirect). Test builds skip only this clause so
+     * the fake-upstream streaming suite can use a local http server; the cert,
+     * hostname and TLS-version checks above still apply to every https call,
+     * which is what the TLS-validation tests exercise. */
+#  if defined(CURL_AT_LEAST_VERSION) && CURL_AT_LEAST_VERSION(7, 85, 0)
+    curl_easy_setopt(c, CURLOPT_PROTOCOLS_STR, "https");
+    curl_easy_setopt(c, CURLOPT_REDIR_PROTOCOLS_STR, "https");
+#  else
+    curl_easy_setopt(c, CURLOPT_PROTOCOLS, (long)CURLPROTO_HTTPS);
+    curl_easy_setopt(c, CURLOPT_REDIR_PROTOCOLS, (long)CURLPROTO_HTTPS);
+#  endif
+#endif
     curl_easy_setopt(c, CURLOPT_HEADERFUNCTION, on_header);
     curl_easy_setopt(c, CURLOPT_HEADERDATA, &f);
     curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, on_body);
@@ -386,6 +418,9 @@ static void forward(int fd, const request_t *r, const upstream_t *u, const char 
         char msg[300];
         snprintf(msg, sizeof msg, "Kai gateway: upstream %s failed: %s", u->name,
                  curl_easy_strerror(rc));
+        /* Fail closed and surface it in Activity. A TLS validation failure
+         * (CURLE_PEER_FAILED_VERIFICATION / CURLE_SSL_*) lands here. */
+        kai_audit("gateway", u->name, "block", "upstream", curl_easy_strerror(rc));
         respond_error(fd, 502, u, msg);
     } else if (!f.head_sent && !f.client_gone) {
         send_head(&f); /* empty body */

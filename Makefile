@@ -65,6 +65,7 @@ test: kai
 	$(CC) $(CFLAGS) -DKAI_TEST_DIRECT_POLICY -o tests/cli/kai-test $(CORE) $(APP) $(LDLIBS)
 	sh tests/cli/run_cli_tests.sh tests/cli/kai-test
 	sh tests/gateway/run_gateway_tests.sh tests/cli/kai-test
+	sh tests/gateway/run_tls_tests.sh tests/cli/kai-test
 	sh tests/browser/run_native_tests.sh tests/cli/kai-test
 	python3 -I tests/corpus/run_corpus.py ./kai
 	python3 -I tests/escape/run_escape.py ./kai
