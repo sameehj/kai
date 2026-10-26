@@ -297,23 +297,25 @@ int kai_cmd_agents(int argc, char **argv) {
         }
     }
     free(disc);
-    /* AI chats (item 3): browsers (or other non-agents) that reached an AI chat
-     * web UI. Shown for visibility; the walls protect files, not a browser tab. */
+    /* AI chats (item 3): chat sites the Kai browser extension reports as open.
+     * Browser extension · walls don't apply. Site only; no URL, no chat text. */
     kai_chat *chats = NULL; int nchats = 0;
     kai_chat_load(&chats, &nchats);
     for (int i = 0; i < nchats; i++) {
-        const char *base = strrchr(chats[i].exe, '/');
-        base = base ? base + 1 : chats[i].exe;
         if (json) {
             cJSON *a = cJSON_CreateObject();
-            cJSON_AddStringToObject(a, "name", base);
+            cJSON_AddStringToObject(a, "name", chats[i].site);
             cJSON_AddStringToObject(a, "kind", "ai-chat");
-            cJSON_AddStringToObject(a, "exe", chats[i].exe);
-            cJSON_AddStringToObject(a, "host", chats[i].host);
+            cJSON_AddStringToObject(a, "source", "browser extension");
+            cJSON_AddStringToObject(a, "coverage", "walls don't apply");
+            cJSON_AddNumberToObject(a, "open_tabs", chats[i].open_tabs);
+            cJSON_AddNumberToObject(a, "redactions", chats[i].redactions);
+            cJSON_AddNumberToObject(a, "overrides", chats[i].overrides);
             cJSON_AddItemToArray(arr, a);
         } else {
-            if (i == 0) printf("\nAI chats (web UI; visibility only, not gated):\n");
-            printf("  %-12s %s\n", base, chats[i].host);
+            if (i == 0) printf("\nAI chats (browser extension - walls don't apply):\n");
+            printf("  %-22s %d open, %d redacted, %d sent anyway\n",
+                   chats[i].site, chats[i].open_tabs, chats[i].redactions, chats[i].overrides);
         }
     }
     free(chats);

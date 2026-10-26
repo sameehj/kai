@@ -17,10 +17,14 @@ This finds agents Kai does not yet know about, without weakening any wall.
   like any other control-store write (no new write surface for agents).
 
 ## Network extension (app/macos/Network/FilterDataProvider.swift)
-- `recordDiscoveryIfModelAPI(...)` is called on flows whose remote host is a
-  model API. If the contacting process is not a recognized agent, it records a
-  discovery entry. A per-process `discoverySeen` set avoids re-recording on the
-  hot path (no file I/O per packet for already-seen pids).
+- **REMOVED in v1 Step 2.** The network wall is now strictly **agent-only**: it
+  never inspects or records a non-agent flow, so it no longer feeds discovery.
+  The heuristic (`kai_looks_like_agent`), the store (`kai_discovery_record/load`)
+  and the `kai agents` suggestion UI remain, but discovery has **no live
+  producer** in v1 after this change — recording a non-agent's model-API contact
+  from the wall violated the agent-only invariant. A non-wall producer (e.g. the
+  session scan noticing an unrecognized shell-spawner) can be added later; until
+  then the mechanism is retained but unfed. Flagged, not silently dropped.
 
 ## CLI (src/manage.c)
 - `kai agents` prints a "Looks like an agent — protect it?" section listing

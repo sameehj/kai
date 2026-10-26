@@ -14,9 +14,13 @@
  *   {"type":"decision","site":"...","action":"redacted|sent_anyway|blocked|cancelled",
  *    "summary":"..."}
  *       -> {"ok":true}   (recorded in the audit log)
+ *   {"type":"status","sites":[{"site":"claude.ai","open_tabs":2,
+ *                              "redactions":3,"overrides":1}, ...]}
+ *       -> {"ok":true}   (feeds the "AI chats" section; site only, no URL/text)
  *
- * The host only scans and logs. It cannot change the policy or install
- * anything, so a malicious page that reaches the extension gains nothing.
+ * The host only scans, logs, and records which chat SITES are open (never a URL
+ * or any chat text). It cannot change the policy or install anything, so a
+ * malicious page that reaches the extension gains nothing.
  */
 #include "cJSON.h"
 #include "internal.h"
@@ -162,6 +166,32 @@ static cJSON *handle_decision(const cJSON *req) {
     return o;
 }
 
+/* The extension reports which AI-chat sites are open and its per-site redaction
+ * and override counts. Site only — the extension never sends a full URL or any
+ * chat text. Feeds the "AI chats" section (kai agents); it is visibility only
+ * and changes no policy. */
+static cJSON *handle_status(const cJSON *req) {
+    const cJSON *sites = cJSON_GetObjectItemCaseSensitive(req, "sites");
+    if (cJSON_IsArray(sites)) {
+        const cJSON *s;
+        cJSON_ArrayForEach(s, sites) {
+            const cJSON *site = cJSON_GetObjectItemCaseSensitive(s, "site");
+            if (!cJSON_IsString(site) || !site->valuestring) continue;
+            const cJSON *ot = cJSON_GetObjectItemCaseSensitive(s, "open_tabs");
+            const cJSON *rd = cJSON_GetObjectItemCaseSensitive(s, "redactions");
+            const cJSON *ov = cJSON_GetObjectItemCaseSensitive(s, "overrides");
+            /* kai_chat_record ignores anything that isn't a known chat site. */
+            kai_chat_record(site->valuestring,
+                            cJSON_IsNumber(ot) ? (int)ot->valuedouble : 0,
+                            cJSON_IsNumber(rd) ? (int)rd->valuedouble : 0,
+                            cJSON_IsNumber(ov) ? (int)ov->valuedouble : 0);
+        }
+    }
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "ok", 1);
+    return o;
+}
+
 int kai_native_host(const char *origin) {
     (void)origin; /* Chrome already restricted callers via allowed_origins */
     (void)kai_home();
@@ -185,6 +215,8 @@ int kai_native_host(const char *origin) {
             reply = handle_scan(req);
         } else if (strcmp(t, "decision") == 0) {
             reply = handle_decision(req);
+        } else if (strcmp(t, "status") == 0) {
+            reply = handle_status(req);
         } else {
             reply = error_reply("unknown request");
         }

@@ -285,15 +285,23 @@ int kai_discovery_load(kai_discovery **out, int *n);   /* caller frees *out */
 void kai_pid_exe(int pid, char *out, size_t n);        /* a pid's executable path */
 
 /* ---- AI chats (item 3) ----
- * Browser-based AI chat UIs (claude.ai, chatgpt.com, gemini, …) are not CLI
- * agents, so the walls don't gate their files; Kai still SHOWS them, so the
- * user sees where AI is being used. The network wall records when a non-agent
- * (typically a browser) reaches an AI-chat web host. Records live under
- * <home>/chats, keyed by exe+host. Visibility only — never a grant or a block. */
-typedef struct { char exe[1024]; char host[256]; long long last_utc; } kai_chat;
-int kai_host_is_ai_chat(const char *host);    /* claude.ai/chatgpt.com/gemini/… web UIs */
-int kai_chat_record(const char *exe, const char *host);
-int kai_chat_load(kai_chat **out, int *n);    /* caller frees *out */
+ * Browser AI chats (claude.ai, chatgpt.com, gemini, …) are not CLI agents and
+ * the walls don't apply to them; Kai still SHOWS them so the user sees where AI
+ * is used. The data comes only from the Kai browser extension over native
+ * messaging (src/native.c) — the network wall stays agent-only and never
+ * records a non-agent flow. Site only: no full URL, no chat text is stored.
+ * Records live under <home>/chats, keyed by site. Visibility only. */
+typedef struct {
+    char site[256];      /* site only, e.g. "claude.ai" — never a full URL      */
+    long long last_utc;  /* last time the extension reported this site          */
+    int open_tabs;       /* tabs currently open on this site                    */
+    int redactions;      /* redactions Kai applied before sending, on this site */
+    int overrides;       /* times the user chose to send anyway                 */
+} kai_chat;
+int kai_host_is_ai_chat(const char *site);     /* claude.ai/chatgpt.com/gemini/… */
+/* Record/update the browser extension's status for one chat site. */
+int kai_chat_record(const char *site, int open_tabs, int redactions, int overrides);
+int kai_chat_load(kai_chat **out, int *n);     /* caller frees *out */
 
 /* Create or update a session record (idempotent on id). Returns 0 on success.
  * Called by Kai components only; the control store keeps agents out. */

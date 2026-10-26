@@ -126,19 +126,19 @@ int kai_discovery_load(kai_discovery **out, int *n) {
 
 /* ---- AI chats (item 3) ----
  * The web UIs of the chat assistants, as opposed to the programmatic model
- * APIs. A browser reaching one of these is "an AI chat", surfaced for the
- * user's awareness; it is never gated (the walls protect files, not a browser
- * tab). Kept separate from the model-API list so a browser visiting claude.ai
- * is reported as a chat, not mistaken for an unrecognized agent. */
-int kai_host_is_ai_chat(const char *host) {
-    if (!host || !*host) return 0;
+ * APIs. The data arrives ONLY from the Kai browser extension over native
+ * messaging (src/native.c); the network wall is agent-only and never records a
+ * non-agent flow. Site only — no full URL, no chat text is stored. These are
+ * surfaced for awareness and are never gated (the walls protect files). */
+int kai_host_is_ai_chat(const char *site) {
+    if (!site || !*site) return 0;
     static const char *const H[] = {
         "claude.ai", "chatgpt.com", "chat.openai.com", "gemini.google.com",
         "copilot.microsoft.com", "perplexity.ai", "poe.com", "grok.com",
         "x.ai", "deepseek.com", "mistral.ai", "chat.mistral.ai",
     };
     for (size_t i = 0; i < sizeof H / sizeof H[0]; i++)
-        if (strstr(host, H[i])) return 1;
+        if (strstr(site, H[i])) return 1;
     return 0;
 }
 
@@ -148,27 +148,27 @@ static const char *chat_dir(void) {
     return buf;
 }
 
-/* One record per (exe, host): the same browser reaching two assistants is two
- * rows, the same pair seen again just refreshes last_utc. */
-static void chat_id(const char *exe, const char *host, char *out, size_t n) {
-    char combined[1300];
-    snprintf(combined, sizeof combined, "%s|%s", exe, host ? host : "");
+/* One record per site: the extension reporting the same site again just
+ * refreshes its counts and last_utc. */
+static void chat_id(const char *site, char *out, size_t n) {
     char h[65];
-    kai_sha256_hex(combined, strlen(combined), h);
+    kai_sha256_hex(site, strlen(site), h);
     snprintf(out, n, "%.16s", h);
 }
 
-int kai_chat_record(const char *exe, const char *host) {
-    if (!exe || !*exe || !kai_host_is_ai_chat(host)) return -1;
+int kai_chat_record(const char *site, int open_tabs, int redactions, int overrides) {
+    if (!site || !*site || !kai_host_is_ai_chat(site)) return -1;
     mkdir(kai_home(), 0700);
     mkdir(chat_dir(), 0700);
-    char id[32]; chat_id(exe, host, id, sizeof id);
+    char id[32]; chat_id(site, id, sizeof id);
     char path[1300];
     snprintf(path, sizeof path, "%s/%s.json", chat_dir(), id);
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddStringToObject(o, "exe", exe);
-    cJSON_AddStringToObject(o, "host", host ? host : "");
+    cJSON_AddStringToObject(o, "site", site);
     cJSON_AddNumberToObject(o, "last_utc", (double)time(NULL));
+    cJSON_AddNumberToObject(o, "open_tabs", open_tabs < 0 ? 0 : open_tabs);
+    cJSON_AddNumberToObject(o, "redactions", redactions < 0 ? 0 : redactions);
+    cJSON_AddNumberToObject(o, "overrides", overrides < 0 ? 0 : overrides);
     char *js = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (!js) return -1;
@@ -200,14 +200,18 @@ int kai_chat_load(kai_chat **out, int *n) {
         cJSON *o = cJSON_Parse(txt); free(txt);
         if (!o) continue;
         kai_chat r; memset(&r, 0, sizeof r);
-        const char *ex = cJSON_GetStringValue(cJSON_GetObjectItem(o, "exe"));
-        const char *h = cJSON_GetStringValue(cJSON_GetObjectItem(o, "host"));
+        const char *site = cJSON_GetStringValue(cJSON_GetObjectItem(o, "site"));
         cJSON *lu = cJSON_GetObjectItem(o, "last_utc");
-        if (ex) kai_strlcpy(r.exe, ex, sizeof r.exe);
-        if (h) kai_strlcpy(r.host, h, sizeof r.host);
+        cJSON *ot = cJSON_GetObjectItem(o, "open_tabs");
+        cJSON *rd = cJSON_GetObjectItem(o, "redactions");
+        cJSON *ov = cJSON_GetObjectItem(o, "overrides");
+        if (site) kai_strlcpy(r.site, site, sizeof r.site);
         if (cJSON_IsNumber(lu)) r.last_utc = (long long)lu->valuedouble;
+        if (cJSON_IsNumber(ot)) r.open_tabs = (int)ot->valuedouble;
+        if (cJSON_IsNumber(rd)) r.redactions = (int)rd->valuedouble;
+        if (cJSON_IsNumber(ov)) r.overrides = (int)ov->valuedouble;
         cJSON_Delete(o);
-        if (!r.exe[0]) continue;
+        if (!r.site[0]) continue;
         if (c == cap) { int nc = cap ? cap * 2 : 8; kai_chat *na = realloc(arr, (size_t)nc * sizeof *na);
                         if (!na) break; arr = na; cap = nc; }
         arr[c++] = r;

@@ -1208,21 +1208,30 @@ static void test_discovery(void) {
 }
 
 static void test_ai_chats(void) {
-    printf("AI chats (item 3)\n");
+    printf("AI chats (item 3; extension-sourced)\n");
     CHECK(kai_host_is_ai_chat("claude.ai") == 1, "claude.ai is an AI chat");
     CHECK(kai_host_is_ai_chat("chatgpt.com") == 1, "chatgpt.com is an AI chat");
     CHECK(kai_host_is_ai_chat("gemini.google.com") == 1, "gemini is an AI chat");
     CHECK(kai_host_is_ai_chat("api.anthropic.com") == 0, "the API endpoint is not a chat UI");
     CHECK(kai_host_is_ai_chat("example.com") == 0, "a random host is not");
-    CHECK(kai_chat_record("/Applications/Safari.app/Contents/MacOS/Safari", "claude.ai") == 0,
-          "record a browser chat");
-    CHECK(kai_chat_record("/Applications/Safari.app/Contents/MacOS/Safari", "example.com") == -1,
-          "non-chat host not recorded");
+    CHECK(kai_chat_record("claude.ai", 2, 3, 1) == 0, "record a chat site from the extension");
+    CHECK(kai_chat_record("example.com", 1, 0, 0) == -1, "a non-chat site is not recorded");
     kai_chat *c = NULL; int nc = 0;
     kai_chat_load(&c, &nc);
     int found = 0;
-    for (int i = 0; i < nc; i++) if (strstr(c[i].exe, "Safari") && strstr(c[i].host, "claude.ai")) found = 1;
-    CHECK(found, "the recorded chat loads back");
+    for (int i = 0; i < nc; i++)
+        if (strcmp(c[i].site, "claude.ai") == 0 && c[i].open_tabs == 2 &&
+            c[i].redactions == 3 && c[i].overrides == 1) found = 1;
+    CHECK(found, "the recorded chat loads back with its counts");
+    /* Re-reporting the same site updates in place, not a second row. */
+    kai_chat_record("claude.ai", 1, 5, 2);
+    free(c); c = NULL; nc = 0;
+    kai_chat_load(&c, &nc);
+    int rows = 0, updated = 0;
+    for (int i = 0; i < nc; i++)
+        if (strcmp(c[i].site, "claude.ai") == 0) { rows++; if (c[i].redactions == 5) updated = 1; }
+    CHECK(rows == 1, "one row per site");
+    CHECK(updated, "re-report updates counts in place");
     free(c);
 }
 

@@ -1,55 +1,48 @@
-# Item 3 — AI chats section
+# Item 3 / v1 Step 2 — AI chats section (extension-sourced)
 
 ## What it does
-Shows where AI is being used through a **browser** (claude.ai, chatgpt.com,
-gemini.google.com, …), not just through CLI/IDE agents. These web chat UIs are
-not CLI agents — the walls protect files on disk, not a browser tab — so this is
-VISIBILITY ONLY: Kai never gates, grants for, or blocks a browser chat.
+Shows where AI is used through a **browser** (claude.ai, chatgpt.com, gemini, …)
+alongside CLI/IDE agents. These web chat UIs are not CLI agents and the walls
+don't apply to a browser tab, so this is **visibility only** — never gated,
+granted, or blocked.
 
-## Why not the browser extension
-The shipped browser integration (`src/browser.c`) is install-only: it registers
-a native-messaging host but has no pipeline that reports chat activity back to
-Kai. Rather than invent an unverifiable extension data path, item 3 reuses the
-network wall's existing flow observation (same mechanism as item 5 discovery):
-when a non-agent process (typically a browser) reaches an AI-chat web host, Kai
-records it.
+## Source: the browser extension, NOT the network wall
+The network wall is **agent-only**: it never inspects, records, or gates a
+process Kai doesn't recognize as an agent. The earlier approach (network wall
+recording non-agent flows to AI-chat hosts) was removed — see
+`redesign-sessions.md`/this doc's history. The single source is now the Kai
+browser extension over native messaging.
 
-## Engine pieces (src/session.c, include/kai.h)
-- `kai_host_is_ai_chat(host)` — matches AI chat WEB UI hosts, kept as a list
-  separate from `kai_host_is_model_api` so a browser on claude.ai is reported as
-  a chat, not mistaken for an unrecognized agent (claude.ai appears in both).
-- `kai_chat_record(exe, host)` / `kai_chat_load()` — one JSON per (exe, host)
-  under the home `chats` dir, keyed by sha256(exe|host); re-seeing a pair just
-  refreshes `last_utc`. Same control-store write rules as everything in the home
-  tree — agent-tree writes are refused.
-
-## Network extension (app/macos/Network/FilterDataProvider.swift)
-- `recordModelContact(pid, flow)` runs on flows from processes Kai does NOT
-  recognize as agents. AI-chat web host -> `kai_chat_record` (item 3); otherwise
-  a model API -> `kai_discovery_record` (item 5). Chat UIs are checked first.
-  Deduped per run by `exe|host` (the `discoverySeen` set) so there is no
-  per-packet file I/O on the hot path.
-
-## CLI (src/manage.c)
-- `kai agents` prints an "AI chats (web UI; visibility only, not gated)" section
-  listing each app and the chat host it reached. JSON mode emits
-  `{name, kind:"ai-chat", exe, host}` entries.
+- **Extension (`integrations/browser/background.js`)** reports a `status`
+  message: the AI-chat sites currently open (by site), plus per-site redaction
+  and override counts it has tracked. Site only — never a full URL, never any
+  chat text. Needs the `tabs` permission (added to `manifest.json`).
+- **Native host (`src/native.c`)** gains a `status` handler that records each
+  reported site via `kai_chat_record(site, open_tabs, redactions, overrides)`.
+  The host still cannot change policy or install anything.
+- **Store (`src/session.c`)** `kai_chat_record`/`kai_chat_load`: one JSON per
+  site under the control store (`<home>/chats`), keyed by site; a re-report
+  updates counts in place. Agent-tree writes are refused like any control-store
+  write.
+- **CLI (`src/manage.c`)** `kai agents` prints an
+  "AI chats (browser extension - walls don't apply)" section:
+  `site — N open, N redacted, N sent anyway`. JSON carries
+  `source:"browser extension"`, `coverage:"walls don't apply"`.
 
 ## Automated tests (tests/storage/run_storage_tests.c → test_ai_chats) — PASS
-  - claude.ai / chatgpt.com / gemini are AI chats; the API endpoint and a random
-    host are not
-  - record a browser chat; a non-chat host is not recorded
-  - the recorded chat loads back
+  - claude.ai / chatgpt.com / gemini are chats; API endpoint and random host are not
+  - record a chat site from the extension; a non-chat site is not recorded
+  - loads back with its counts; one row per site; re-report updates in place
 
-## Live-test status
-- Engine + CLI logic: PASS (unit-tested above).
-- Network-extension recording path: NOT fully live-tested here. It needs a real
-  browser TLS flow to an AI-chat host while network wall v10 is active, then
-  inspecting the home `chats` dir. Documented as not-tested in this environment
-  rather than claimed.
+## Live-test status (Step 2 "done when": live, a claude.ai tab appears under AI
+## chats with no network-wall record of it)
+- Engine + CLI + native-host logic: PASS (unit-tested).
+- End-to-end (extension → native host → `kai agents`): **NOT tested here** —
+  needs Chrome with the Kai extension loaded, a claude.ai tab open, then
+  `kai agents` showing the site while the network wall shows no record of it.
+  Record result here during the live walk.
 
 ## Honesty notes
-- Visibility only: no wall gates a browser chat, and nothing here grants or
-  blocks anything.
-- Hostname-based: it records that an app reached a chat host, not the content of
-  any chat. No prompt or message text is read or stored.
+- Visibility only; no wall gates a browser chat.
+- Site only: no full URL and no chat text is stored or sent. Redaction/override
+  counts are integers the extension already tracks for its own badge.
