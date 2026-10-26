@@ -27,7 +27,12 @@ static void grants_dir(char *buf, size_t n) { snprintf(buf, n, "%s/grants", kai_
 /* M1.3: an agent-attributed process must never create or revoke grants. Best-
  * effort: if our own process tree traces to a known agent, refuse. (A human
  * terminal has no agent ancestor.) */
+/* -1: determine from this process's own tree (the CLI in the test seam).
+ * 0/1: forced by the control service, which already decided from the client's
+ * audit token - the only trustworthy source when the write runs in the app. */
+static int g_forced_agent = -1;
 static int caller_is_agent(void) {
+    if (g_forced_agent >= 0) return g_forced_agent;
     char err[256];
     kai_policy *p = kai_policy_load(NULL, err, sizeof err);
     if (!p) return 0;                     /* can't determine: don't block the human */
@@ -35,6 +40,22 @@ static int caller_is_agent(void) {
     int hit = kai_process_agent(p, (int)getpid(), name, sizeof name, &apid);
     kai_policy_free(p);
     return hit;
+}
+
+static int grant_create(int argc, char **argv);
+static int grant_revoke(const char *idprefix);
+
+/* Server side of the control path: the app has verified the client; run the
+ * grant write with that verdict. Only create/revoke write; list stays a read. */
+int kai_grant_dispatch(int argc, char **argv, int caller_is_agent_flag) {
+    g_forced_agent = caller_is_agent_flag;
+    const char *sub = argc > 0 ? argv[0] : "";
+    int rc;
+    if (!strcmp(sub, "create")) rc = grant_create(argc - 1, argv + 1);
+    else if (!strcmp(sub, "revoke")) rc = grant_revoke(argc > 1 ? argv[1] : NULL);
+    else rc = 2;
+    g_forced_agent = -1;
+    return rc;
 }
 static int refuse_if_agent(const char *verb) {
     if (caller_is_agent()) {
@@ -210,6 +231,16 @@ int kai_cmd_resume(int argc, char **argv) {
 int kai_cmd_grant(int argc, char **argv) {
     const char *sub = argc > 0 ? argv[0] : "list";
     if (!strcmp(sub, "list")) return grant_list(argc > 1 && !strcmp(argv[1], "--json"), NULL);
+#ifndef KAI_TEST_DIRECT_POLICY
+    /* Writes go to the one control path (the signed app's service); the CLI
+     * never writes grants itself. */
+    if (!strcmp(sub, "create") || !strcmp(sub, "revoke")) {
+        char msg[600] = "";
+        int rc = kai_control_request("grant", argc, argv, msg, sizeof msg);
+        if (msg[0]) fprintf(rc == 0 ? stdout : stderr, "%s\n", msg);
+        return rc;
+    }
+#endif
     if (!strcmp(sub, "revoke")) return grant_revoke(argc > 1 ? argv[1] : NULL);
     if (!strcmp(sub, "create")) return grant_create(argc - 1, argv + 1);
     fprintf(stderr, "usage: kai grant [list [--json] | create ... | revoke <id>]\n");

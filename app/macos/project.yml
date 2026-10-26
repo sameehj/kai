@@ -105,12 +105,26 @@ targets:
   Kai:
     type: application
     platform: macOS
-    sources: [Sources/KaiBar, Sources/Assets.xcassets]
+    sources:
+      - Sources/KaiBar
+      - Sources/Assets.xcassets
+      # Step 3: the app hosts the one control service, so it compiles the policy
+      # and grant WRITE logic (and their deps) and calls it in-process. The
+      # extensions keep the slim libkai; these CLI modules live only in the app.
+      - path: ../../src/control.c
+      - path: ../../src/manage.c
+      - path: ../../src/grant_cli.c
+      - path: ../../src/install.c
+      - path: ../../src/browser.c
+      - path: ../../src/native.c
+      - path: ../../src/report.c
+      - path: ../../src/health.c
     dependencies:
       - target: KaiNetwork
       - target: libkai            # Scoped Approvals: sign grants in-process (no agent-callable signing)
       - sdk: NetworkExtension.framework
       - sdk: SystemExtensions.framework
+      - sdk: ServiceManagement.framework   # register the control-service launch agent
     info:
       path: Sources/Info.plist
       properties:
@@ -133,6 +147,11 @@ targets:
         PRODUCT_NAME: Kai
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_INCLUDE_PATHS: $(SRCROOT)/KaiCore   # expose libkai's C API as `import KaiCore`
+        GCC_C_LANGUAGE_STANDARD: c11
+        HEADER_SEARCH_PATHS: ["$(SRCROOT)/../../include", "$(SRCROOT)/../../third_party/cjson"]
+        # KAI_PRODUCT_BUILD trips the build guard in control.c if the policy
+        # test seam is ever set in a shipped build (see control.c / Makefile).
+        GCC_PREPROCESSOR_DEFINITIONS: ["_POSIX_C_SOURCE=200809L", "_DARWIN_C_SOURCE", "KAI_PRODUCT_BUILD=1"]
     postBuildScripts:
       # Ship the kai CLI inside the app; the app uses it when none is installed.
       - name: Bundle kai CLI
@@ -148,6 +167,11 @@ targets:
           rm -rf "$ext" && mkdir -p "$ext/icons"
           cp "$SRCROOT/../../integrations/browser/"*.js "$SRCROOT/../../integrations/browser/"*.json \
              "$SRCROOT/../../integrations/browser/popup.html" "$ext/"
+          # Step 3: the control-service launch agent, where SMAppService.agent
+          # looks for it (Contents/Library/LaunchAgents).
+          la="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchAgents"
+          mkdir -p "$la"
+          cp "$SRCROOT/Sources/LaunchAgents/io.github.sameehj.kai.control.plist" "$la/"
           cp "$SRCROOT/../../integrations/browser/icons/"*.png "$ext/icons/"
           if [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
             codesign --force --options runtime --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$dest"

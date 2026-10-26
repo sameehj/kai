@@ -606,6 +606,22 @@ int kai_path_is_control_store(const char *path) {
     return 0;
 }
 
+/* The policy store proper: the files that decide what agents may do - policy,
+ * grants, and pending changes. In v1 (Step 3) ONLY the signed Kai app process
+ * may write these, in every mode; the storage wall uses this to replace the
+ * per-binary signature exemption. The session registry is deliberately NOT here
+ * - the storage extension (a different signed component) writes it. */
+int kai_path_is_policy_store(const char *path) {
+    if (!path || !*path) return 0;
+    if (strcmp(path, kai_policy_file()) == 0) return 1;
+    char dir[1300];
+    snprintf(dir, sizeof dir, "%s/grants", kai_home());
+    if (under_dir(path, dir)) return 1;
+    snprintf(dir, sizeof dir, "%s/pending-policy", kai_home());
+    if (under_dir(path, dir)) return 1;
+    return 0;
+}
+
 kai_policy *kai_policy_from_string(const char *text, char *err, size_t errlen) {
     return parse(text, "string", err, errlen);
 }

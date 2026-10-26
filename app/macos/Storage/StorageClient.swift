@@ -655,16 +655,29 @@ final class StorageClient {
         let tClassify = timed ? nowTicks() : 0
         if isKaiOwnProcess(proc) {
             if timed { prof(.classify, tClassify, nowTicks()) }
-            // Kai's signature exempts a process from the wall for its own work —
-            // but NOT when that process is inside an agent tree and writing Kai's
-            // control store (policy file, grant store, pending-policy). An agent
-            // that shells `kai policy set` must not inherit the exemption and
-            // tamper with Kai's own config. Reads stay exempt so an agent-run
-            // `kai denials`/`kai status` still works.
+            // Kai's signature exempts a process from the wall for its own work,
+            // but the POLICY STORE (policy, grants, pending) has exactly one
+            // writer in v1: the signed app process. Every other Kai component -
+            // the CLI, the extensions - must go through the app's control
+            // service, never write these files itself (Step 3 / M1.3). This
+            // replaces the old "block only when under an agent tree" carve-out:
+            // now a kai-signed CLI run straight from a human terminal is blocked
+            // from writing policy too, so there is a single authenticated path.
+            // The wider control store (e.g. the session registry, which the
+            // extension writes) still just bars agent-tree writers. Reads stay
+            // exempt so an agent-run `kai denials`/`kai status` still works.
             if write {
+                let isApp = esString(proc.pointee.signing_id) == "io.github.sameehj.kai"
                 let under = classify(proc)   // agent in ancestry? nil/"" = none
-                if let under, !under.isEmpty {
-                    for p in paths where kai_path_is_control_store(p) == 1 {
+                for p in paths {
+                    if kai_path_is_policy_store(p) == 1 {
+                        if !isApp {
+                            dlog("BLOCK \(op) policy-store non-app pid \(pid(proc)) \(p)")
+                            audit(decision: "block", agent: "(kai non-app)", op: op, path: p,
+                                  why: "policy-store-app-only")
+                            return false
+                        }
+                    } else if kai_path_is_control_store(p) == 1, let under, !under.isEmpty {
                         dlog("BLOCK \(op) kai-signed-under-agent \(under) pid \(pid(proc)) \(p)")
                         audit(decision: "block", agent: under + " (kai)", op: op, path: p,
                               why: "kai-control-store")

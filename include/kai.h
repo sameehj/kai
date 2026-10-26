@@ -189,6 +189,40 @@ const char *kai_rule_explanation(const char *rule);
  * writable by an agent-tree process, Kai-signed or not (the storage wall uses
  * this to withhold the Kai-signature exemption from a tagged `kai` process). */
 int kai_path_is_control_store(const char *path);
+/* The policy store (policy, grants, pending) - writable ONLY by the signed app
+ * process in v1. Narrower than the control store: excludes the registry, which
+ * the storage extension writes. */
+int kai_path_is_policy_store(const char *path);
+
+/* ---- the one authenticated control path (v1 Step 3) ----
+ * The signed Kai app hosts an XPC Mach service; it is the only writer of the
+ * policy store. The `kai` CLI is a client. */
+#define KAI_CONTROL_MACH_NAME "io.github.sameehj.kai.control"
+/* CLI side: send a write command ("policy"/"grant" + argv) to the app's service
+ * and relay its message. Returns the service's exit code, or non-zero with a
+ * clear message if the app isn't running. Never writes the store itself. */
+int kai_control_request(const char *op, int argc, char **argv, char *msg, size_t msglen);
+/* Start the Mach-service listener; the signed app calls this once at launch. */
+int kai_control_service_start(void);
+/* Service side (run in the app, in C): apply an already-verified request. The
+ * app has checked the caller by audit token + code signature + agent tree and
+ * passes caller_pid (for the audit chain) and caller_is_agent. */
+int kai_control_service_apply(const char *op, int argc, char **argv,
+                              int caller_pid, int caller_is_agent,
+                              char *msg, size_t msglen);
+/* The app sets the real caller's pid around an apply so the audit records the
+ * client's process tree, not the app's; the grant/policy dispatchers below do
+ * the agent-aware write. */
+void kai_caller_pid_set(int pid);
+int  kai_policy_last_was_pending(void);
+/* Identify an XPC caller from its audit token bytes (sizeof(audit_token_t)):
+ * validates the signature (anchored to Apple) and fills Team ID, signing id and
+ * pid. Returns 1 if valid. Lets the Swift service verify a caller without any
+ * SecCode code of its own. */
+int kai_audit_token_identity(const void *token, size_t toklen, char *team, size_t tlen,
+                             char *signid, size_t slen, int *pid);
+int  kai_policy_dispatch(int argc, char **argv, int caller_is_agent);
+int  kai_grant_dispatch(int argc, char **argv, int caller_is_agent);
 /* True if an Endpoint Security open event's `fflag` denotes a write-capable
  * open. `fflag` is in the kernel FREAD/FWRITE convention, not the O_RDONLY/
  * O_WRONLY/O_RDWR convention; see the definition. The storage wall uses this

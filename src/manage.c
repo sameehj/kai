@@ -717,11 +717,20 @@ static int set_loosens(const char *key, const char *oldval, const char *newval) 
     return rn < ro;
 }
 
+/* When the control service applies a change on a client's behalf, the real
+ * caller is the client, not the app. The service sets its pid here so the audit
+ * records the client's process tree; 0 means "this process" (the CLI itself, in
+ * the test seam). */
+static int g_caller_pid = 0;
+static int g_policy_pending = 0;   /* set by policy_commit_or_queue: was the last change held? */
+void kai_caller_pid_set(int pid) { g_caller_pid = pid; }
+int kai_policy_last_was_pending(void) { return g_policy_pending; }
+
 /* Build "comm(pid) <- comm(ppid) <- ..." up the process tree and the calling
  * process's own code-signing Team ID, for the policy-change audit (#3). */
 static void caller_context(char *chain, size_t chainlen, char *team, size_t teamlen) {
     chain[0] = '\0'; team[0] = '\0';
-    int pid = (int)getpid();
+    int pid = g_caller_pid ? g_caller_pid : (int)getpid();
     sb_t b; sb_init(&b);
     for (int i = 0; i < 16 && pid > 0; i++) {
         kai_proc pr;
@@ -780,6 +789,7 @@ static int policy_commit_or_queue(const lines_t *L, int loosens, const char *sum
     loosens = 0;   /* test seam: apply directly so the cli suite can assert the
                       edit mechanics; the pending-hold is covered elsewhere. */
 #endif
+    g_policy_pending = loosens;   /* so the control service can tell the caller */
     char chain[512], team[32];
     caller_context(chain, sizeof chain, team, sizeof team);
     char detail[1200];
@@ -1223,7 +1233,17 @@ int kai_policy_dispatch(int argc, char **argv, int caller_is_agent) {
 
 int kai_cmd_policy(int argc, char **argv) {
     const char *sub = argc > 0 ? argv[0] : "show";
-    int is_agent = (!strcmp(sub, "set") || !strcmp(sub, "add") || !strcmp(sub, "remove"))
-                   && policy_caller_is_agent();
+    int is_write = !strcmp(sub, "set") || !strcmp(sub, "add") || !strcmp(sub, "remove");
+#ifndef KAI_TEST_DIRECT_POLICY
+    /* Writes go to the one control path: the signed Kai app's XPC service. The
+     * CLI never writes policy itself. Reads (path/show/pending) stay local. */
+    if (is_write) {
+        char msg[600] = "";
+        int rc = kai_control_request("policy", argc, argv, msg, sizeof msg);
+        if (msg[0]) fprintf(rc == 0 ? stdout : stderr, "%s\n", msg);
+        return rc;
+    }
+#endif
+    int is_agent = is_write && policy_caller_is_agent();
     return kai_policy_dispatch(argc, argv, is_agent);
 }

@@ -14,6 +14,7 @@
 #ifdef __APPLE__
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
+#include <mach/message.h>   /* audit_token_t */
 #include <libproc.h>
 #include <sys/sysctl.h>
 #include <sys/types.h>
@@ -104,6 +105,55 @@ static int proc_read_impl(int pid, kai_proc *out, int want_team) {
 int kai_proc_read(int pid, kai_proc *out) { return proc_read_impl(pid, out, 1); }
 int kai_proc_read_fast(int pid, kai_proc *out) { return proc_read_impl(pid, out, 0); }
 
+/* Identify an XPC caller from its audit token (Step 3). The token, not a pid,
+ * is the trustworthy identity: it can't be recycled under us. We validate the
+ * caller's dynamic signature (anchored to Apple) and read its Team ID, signing
+ * id, and pid. Returns 1 if the signature is valid, 0 otherwise. All SecCode
+ * use stays here in C; Swift just hands over the token bytes. */
+int kai_audit_token_identity(const void *tokbytes, size_t toklen, char *team, size_t tlen,
+                             char *signid, size_t slen, int *pid) {
+    if (team && tlen) team[0] = '\0';
+    if (signid && slen) signid[0] = '\0';
+    if (pid) *pid = -1;
+    if (!tokbytes || toklen != sizeof(audit_token_t)) return 0;
+    audit_token_t tok;
+    memcpy(&tok, tokbytes, sizeof tok);
+    /* audit_token_to_pid() lives in libbsm; read the pid field directly (val[5],
+     * exactly what that macro expands to) so libkai needs no extra link. */
+    if (pid) *pid = (int)tok.val[5];
+
+    CFDataRef data = CFDataCreate(NULL, (const UInt8 *)&tok, sizeof tok);
+    const void *keys[] = {kSecGuestAttributeAudit};
+    const void *vals[] = {data};
+    CFDictionaryRef attrs = CFDictionaryCreate(NULL, keys, vals, 1,
+                                               &kCFTypeDictionaryKeyCallBacks,
+                                               &kCFTypeDictionaryValueCallBacks);
+    SecCodeRef code = NULL;
+    int ok = 0;
+    if (SecCodeCopyGuestWithAttributes(NULL, attrs, kSecCSDefaultFlags, &code) == errSecSuccess) {
+        SecRequirementRef req = NULL;
+        SecRequirementCreateWithString(CFSTR("anchor apple generic"), kSecCSDefaultFlags, &req);
+        OSStatus v = SecCodeCheckValidity(code, kSecCSDefaultFlags, req);
+        if (req) CFRelease(req);
+        if (v == errSecSuccess) {
+            CFDictionaryRef info = NULL;
+            if (SecCodeCopySigningInformation((SecStaticCodeRef)code, kSecCSSigningInformation,
+                                              &info) == errSecSuccess && info) {
+                CFStringRef t = CFDictionaryGetValue(info, kSecCodeInfoTeamIdentifier);
+                if (t && team) CFStringGetCString(t, team, (CFIndex)tlen, kCFStringEncodingUTF8);
+                CFStringRef s = CFDictionaryGetValue(info, kSecCodeInfoIdentifier);
+                if (s && signid) CFStringGetCString(s, signid, (CFIndex)slen, kCFStringEncodingUTF8);
+                CFRelease(info);
+                ok = 1;
+            }
+        }
+        CFRelease(code);
+    }
+    CFRelease(attrs);
+    CFRelease(data);
+    return ok;
+}
+
 /* The executable path of a pid, "" if unavailable. Cheap (one syscall). */
 void kai_pid_exe(int pid, char *out, size_t n) {
     if (n) out[0] = '\0';
@@ -148,6 +198,15 @@ void kai_pid_exe(int pid, char *out, size_t n) {
     snprintf(path, sizeof path, "/proc/%d/exe", pid);
     ssize_t l = readlink(path, out, n - 1);
     out[l > 0 ? l : 0] = '\0';
+}
+/* No XPC/SecCode off macOS; the control service is macOS-only. */
+int kai_audit_token_identity(const void *tokbytes, size_t toklen, char *team, size_t tlen,
+                             char *signid, size_t slen, int *pid) {
+    (void)tokbytes; (void)toklen;
+    if (team && tlen) team[0] = '\0';
+    if (signid && slen) signid[0] = '\0';
+    if (pid) *pid = -1;
+    return 0;
 }
 
 #endif

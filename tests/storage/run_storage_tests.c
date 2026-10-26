@@ -1207,6 +1207,50 @@ static void test_discovery(void) {
     free(d);
 }
 
+static void test_control_service(void) {
+    printf("one control path: service apply (Step 3)\n");
+    char err[256], msg[600];
+
+    /* policy store is narrower than control store: registry excluded */
+    char rp[1300];
+    CHECK(kai_path_is_policy_store(kai_policy_file()) == 1, "policy file is in the policy store");
+    snprintf(rp, sizeof rp, "%s/grants/x.json", getenv("KAI_HOME"));
+    CHECK(kai_path_is_policy_store(rp) == 1, "grants are in the policy store");
+    snprintf(rp, sizeof rp, "%s/registry/s.json", getenv("KAI_HOME"));
+    CHECK(kai_path_is_policy_store(rp) == 0, "registry is NOT in the policy store");
+    CHECK(kai_path_is_control_store(rp) == 1, "registry IS in the control store");
+
+    FILE *f = fopen(kai_policy_file(), "wb"); if (f) { fputs("storage block\n", f); fclose(f); }
+    char *set_off[] = {"set", "storage", "off"};
+
+    /* an agent-tree caller is refused, whatever it asks */
+    int rc = kai_control_service_apply("policy", 3, set_off, 4321, 1, msg, sizeof msg);
+    CHECK(rc == 3, "agent-tree caller is refused");
+    CHECK(strstr(msg, "Refused") != NULL, "refusal says so");
+
+    /* a human caller loosening protection is HELD pending, not applied */
+    rc = kai_control_service_apply("policy", 3, set_off, 4321, 0, msg, sizeof msg);
+    CHECK(rc == 0 && kai_policy_last_was_pending(), "loosening is held pending");
+    CHECK(strstr(msg, "Held") != NULL, "pending message");
+    kai_policy *p = kai_policy_load(NULL, err, sizeof err);
+    CHECK(p && kai_policy_storage_mode(p) == KAI_STORAGE_BLOCK, "loosening is NOT live yet");
+    kai_policy_free(p);
+
+    /* a human caller tightening protection is applied immediately */
+    FILE *g = fopen(kai_policy_file(), "wb"); if (g) { fputs("storage off\n", g); fclose(g); }
+    char *set_block[] = {"set", "storage", "block"};
+    rc = kai_control_service_apply("policy", 3, set_block, 4321, 0, msg, sizeof msg);
+    CHECK(rc == 0 && !kai_policy_last_was_pending(), "tightening applies at once");
+    kai_policy *q = kai_policy_load(NULL, err, sizeof err);
+    CHECK(q && kai_policy_storage_mode(q) == KAI_STORAGE_BLOCK, "tightening took effect");
+    kai_policy_free(q);
+
+    /* grants are never created by an agent through the service */
+    char *gc[] = {"create", "--resource", "/x", "--op", "write"};
+    rc = kai_control_service_apply("grant", 5, gc, 4321, 1, msg, sizeof msg);
+    CHECK(rc == 3, "agent cannot create a grant via the service");
+}
+
 static void test_mcp_policy(void) {
     printf("MCP-aware policy (item 4)\n");
     char srv[64], tool[64];
@@ -1377,6 +1421,7 @@ int main(void) {
     test_session_classify();
     test_agent_catalog();
     test_discovery();
+    test_control_service();
     test_mcp_policy();
     test_ai_chats();
 
