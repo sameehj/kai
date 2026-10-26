@@ -732,35 +732,29 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 free(gs);
             }
             kai_action a = granted ? KAI_ACT_NONE : kai_mcp_decide(p, mcp_server, mcp_tool);
-            /* allow -> run; block -> deny; ask -> fail closed, offer the user a
-             * one-time allow (deny if this agent can't prompt). Same shape as
-             * the secret-ask path: a card is decision=BLOCK with ask set. */
+            /* MCP is Kai-card-only. We NEVER return Claude's native "ask": in auto
+             * mode the agent could approve that prompt itself, with no Kai
+             * decision. allow (granted or policy-allow) -> run; everything else ->
+             * deny. For the ask case the agent is told to approve in Kai; one Kai
+             * card then grants the tool and its declared host for the session. */
             if (a == KAI_ACT_NONE) {
                 decision = KAI_ACT_NONE;
             } else {
                 decision = KAI_ACT_BLOCK;
-                ask = (a == KAI_ACT_WARN) && can_ask;
+                ask = 0;
             }
             snprintf(rule, sizeof rule, "mcp:%.26s/%.26s", mcp_server, mcp_tool);
-            char keys[256] = "";
-            for (const cJSON *k = ti ? ti->child : NULL; k && k->string; k = k->next) {
-                size_t have = strlen(keys);
-                int n = snprintf(keys + have, sizeof keys - have, "%s%s",
-                                 have ? ", " : "", k->string);
-                if (n < 0 || (size_t)n >= sizeof keys - have) break;
-            }
-            /* When asking, offer the server's declared host (a .mcp.json proposal)
-             * so one approval can cover the tool and its egress for the session. */
-            char host[256] = "", hostnote[320] = "";
-            if (a == KAI_ACT_WARN && kai_mcp_declared_host(mcp_server, cwd, host, sizeof host))
-                snprintf(hostnote, sizeof hostnote,
-                         " — approving also allows %s for this session", host);
-            /* Offer the same approval as a Kai card: allow the server (and its
-             * host) for the whole session, instead of once per call. */
-            if (a == KAI_ACT_WARN)
+            char host[256] = "";
+            if (a == KAI_ACT_WARN) {
+                kai_mcp_declared_host(mcp_server, cwd, host, sizeof host);
                 stage_mcp_request(session, mcp_server, mcp_tool, host, source);
-            snprintf(reason, sizeof reason, "MCP \xC2\xB7 %s \xC2\xB7 %s%s%s%s",
-                     mcp_server, mcp_tool, keys[0] ? " \xE2\x80\x94 args: " : "", keys, hostnote);
+                snprintf(reason, sizeof reason,
+                         "Waiting for approval in Kai: %s \xC2\xB7 %s. Approve in Kai, then retry.",
+                         mcp_server, mcp_tool);
+            } else if (a == KAI_ACT_BLOCK) {
+                snprintf(reason, sizeof reason, "MCP blocked by policy: %s \xC2\xB7 %s",
+                         mcp_server, mcp_tool);
+            }
             subject = strdup(mcp_tool);
         } else if (hit_path) {
             decision = KAI_ACT_BLOCK;
