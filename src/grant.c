@@ -407,6 +407,72 @@ int kai_grant_match(const kai_grant *grants, int n, const kai_grant_subject *s,
     return -1;
 }
 
+/* ---- MCP session grants (Step 4) ----
+ * An MCP tool approval becomes a session-bound grant like any other, with the
+ * resource "mcp:<server>/<tool>" (or a server-wide wildcard tool). The hook honors it so a
+ * once-approved server runs for the rest of that session; a different session
+ * has no such grant and is asked again. The hook runs as the signed `kai`
+ * (wall-exempt for reads), so it can read the grant store and the approval key
+ * and verify the HMAC - an agent cannot forge one. */
+int kai_mcp_grant_allows(const kai_grant *grants, int n, const char *session_id,
+                         const char *server, const char *tool, long long now,
+                         const unsigned char *key, size_t keylen) {
+    if (!grants || !session_id || !*session_id || !server) return 0;
+    char exact[KAI_GRANT_RES_MAX], wild[KAI_GRANT_RES_MAX];
+    snprintf(exact, sizeof exact, "mcp:%s/%s", server, tool ? tool : "");
+    snprintf(wild, sizeof wild, "mcp:%s/*", server);
+    for (int i = 0; i < n; i++) {
+        const kai_grant *g = &grants[i];
+        if (!kai_grant_hmac_ok(g, key, keylen)) continue;          /* forged/tampered */
+        if (g->expires_utc != 0 && now >= g->expires_utc) continue; /* expired */
+        if (!g->session_id[0] || strcmp(g->session_id, session_id) != 0) continue; /* session only */
+        if (strcmp(g->resource, exact) == 0 || strcmp(g->resource, wild) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Read the approval key bytes from the control store. Only the signed app and
+ * the walls (and the signed hook, which is read-exempt) can read it. */
+size_t kai_approval_key_read(unsigned char *out, size_t cap) {
+    if (!out || !cap) return 0;
+    char fp[1200];
+    if (snprintf(fp, sizeof fp, "%s/approval.key", kai_home()) >= (int)sizeof fp) return 0;
+    FILE *f = fopen(fp, "rb");
+    if (!f) return 0;
+    size_t nread = fread(out, 1, cap, f);
+    fclose(f);
+    return nread;
+}
+
+static int host_from_url(const char *url, char *out, size_t n) {
+    const char *p = strstr(url, "://");
+    p = p ? p + 3 : url;
+    size_t i = 0;
+    while (p[i] && p[i] != '/' && p[i] != ':' && i + 1 < n) { out[i] = p[i]; i++; }
+    out[i] = '\0';
+    return i > 0;
+}
+
+/* The host an MCP server declares in .mcp.json (project cwd). A PROPOSAL only
+ * (M2.5): it lets the approval card offer "also allow <host> for this session",
+ * but never allows anything on its own. Returns 1 and fills out if found. */
+int kai_mcp_declared_host(const char *server, const char *cwd, char *out, size_t n) {
+    if (out && n) out[0] = '\0';
+    if (!server || !out || !n) return 0;
+    char path[1300];
+    snprintf(path, sizeof path, "%s/.mcp.json", (cwd && *cwd) ? cwd : ".");
+    size_t len = 0; char *txt = kai_read_file(path, 1 << 20, &len);
+    if (!txt) return 0;
+    cJSON *o = cJSON_Parse(txt); free(txt);
+    if (!o) return 0;
+    cJSON *servers = cJSON_GetObjectItem(o, "mcpServers");
+    cJSON *s = servers ? cJSON_GetObjectItem(servers, server) : NULL;
+    const char *url = s ? cJSON_GetStringValue(cJSON_GetObjectItem(s, "url")) : NULL;
+    int found = (url && *url) ? host_from_url(url, out, n) : 0;
+    cJSON_Delete(o);
+    return found;
+}
+
 /* S4: does this signed grant meet the override tier of the resource it covers?
  * never: never; break-glass: only a read, authenticated, capped at 15 min;
  * override: only if the user confirmed; confirm/normal: yes. The flags are part

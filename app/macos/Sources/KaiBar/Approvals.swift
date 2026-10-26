@@ -52,7 +52,9 @@ struct PendingRequest: Decodable, Identifiable {
     var note: String? = nil     // plain explanation of the resource class (e.g. trust store)
     var tier: Int? = nil        // kai_override_tier_t: 2 = override, 3 = break-glass, 4 = never
     var session: String? = nil  // the ES session this request belongs to (for "this session" grants)
+    var declaredHost: String? = nil  // MCP: the server's .mcp.json host, offered as a second grant
     var strengthLabel: String { strength >= 2 ? "strong" : strength == 1 ? "medium" : "weak" }
+    var isMCP: Bool { resource.hasPrefix("mcp:") }
 }
 
 /// An active grant, decoded from its stored JSON for display/revocation.
@@ -206,29 +208,52 @@ final class GrantManager: ObservableObject {
         let sessionBound = !breakglass && duration.isSession
         let sessionId = sessionBound ? (req.session ?? "") : ""
 
+        let wrote = emitGrant(id: gid, resource: req.resource, opCode: opCode,
+                              destKind: (req.op == "connect") ? 1 : 0, req: req, now: now,
+                              expires: expires, sessionId: sessionId, confirmed: confirmed,
+                              authenticated: authenticated, key: key)
+        guard wrote else { return }
+        kai_grant_audit("approved", gid, req.agent, req.resource, opCode, "sign",
+                        breakglass ? "break-glass approved with authentication" : "approved by console user")
+
+        // Step 4 "one card, two grants": approving an MCP server for this session
+        // also allows its declared host, so the agent's connection to that host
+        // isn't a second prompt. Only when session-bound and a host was declared
+        // (a .mcp.json proposal the user is confirming here, never authority).
+        if req.isMCP, sessionBound, let host = req.declaredHost, !host.isEmpty {
+            let hid = UUID().uuidString
+            if emitGrant(id: hid, resource: host, opCode: 2 /*connect*/, destKind: 1 /*endpoint*/,
+                         req: req, now: now, expires: expires, sessionId: sessionId,
+                         confirmed: confirmed, authenticated: authenticated, key: key) {
+                kai_grant_audit("approved", hid, req.agent, host, 2, "sign",
+                                "MCP host allowed for the session with its tool")
+            }
+        }
+        clearPending(req)
+        refresh()
+    }
+
+    /// Build and write one signed grant file. Returns true on success.
+    private func emitGrant(id: String, resource: String, opCode: Int32, destKind: Int32,
+                           req: PendingRequest, now: Int, expires: Int, sessionId: String,
+                           confirmed: Bool, authenticated: Bool, key: Data) -> Bool {
         let json: String? = key.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> String? in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return nil }
-            let destKind: Int32 = (req.op == "connect") ? 1 : 0
-            guard let c = kai_grant_build_json3(gid, Int64(now), Int64(expires), Int32(req.pid),
+            guard let c = kai_grant_build_json3(id, Int64(now), Int64(expires), Int32(req.pid),
                                                 req.pidversion, req.agent, Int32(req.strength),
-                                                req.resource, opCode, 0 /*process scope*/, "console-user",
+                                                resource, opCode, 0 /*process scope*/, "console-user",
                                                 sessionId, "", destKind,
                                                 confirmed ? 1 : 0, authenticated ? 1 : 0,
                                                 base, key.count) else { return nil }
             defer { free(c) }
             return String(cString: c)
         }
-        guard let json else { return }
+        guard let json else { return false }
         try? FileManager.default.createDirectory(atPath: grantsDir, withIntermediateDirectories: true,
                                                  attributes: [.posixPermissions: 0o700])
-        let fp = grantsDir + "/" + gid + ".json"
-        if FileManager.default.createFile(atPath: fp, contents: Data(json.utf8),
-                                          attributes: [.posixPermissions: 0o600]) {
-            kai_grant_audit("approved", gid, req.agent, req.resource, opCode, "sign",
-                            breakglass ? "break-glass approved with authentication" : "approved by console user")
-            clearPending(req)
-        }
-        refresh()
+        let fp = grantsDir + "/" + id + ".json"
+        return FileManager.default.createFile(atPath: fp, contents: Data(json.utf8),
+                                              attributes: [.posixPermissions: 0o600])
     }
 
     func deny(_ req: PendingRequest) {

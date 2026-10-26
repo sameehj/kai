@@ -35,23 +35,38 @@ No MCP proxy. Kai decides MCP tool calls from what the hooks already see.
   - `mcp__weather__forecast` (unseen) → `ask` "Kai: MCP · weather · forecast —
     args: city. Allow it this time?"
 
-## Done / not-done
-- **Done:** identity parsing, policy grammar + decision, hook enforcement +
-  display, annotations never decide, agent-added server grants nothing until
-  approved (default ask).
-- **Follow-on (needs the app card + approval store, or live agents):**
-  - *Approving creates a persistent Kai session grant.* Today the Claude hook's
-    "ask → allow" is Claude Code's own one-time allow; persisting it as a Kai
-    session grant needs the approval-store/card flow (ties into Step 3's single
-    write path). Flagged.
-  - *Network-wall link:* offering the server's declared host as a second grant
-    on the same card. Needs the host from `.mcp.json` (a proposal, never
-    authority) + the app card. Flagged.
-  - *Cursor/Codex identity:* only Claude's `mcp__` naming is parsed; Cursor's
-    `beforeMCPExecution` / Codex forms fall through to "normal tool call" until
-    their hook payloads are mapped. Matches the plan's "unknown → normal".
+## Session grants + one-card-two-grants (now implemented)
+- **Honor a session grant (src/grant.c, src/hooks.c):** `kai_mcp_grant_allows`
+  — a session-bound grant with resource `mcp:<server>/<tool>` (or a server
+  wildcard) allows the call outright. The hook loads grants + the approval key
+  (`kai_approval_key_read`) and verifies the HMAC; the signed hook is read-exempt
+  so it can, and an agent cannot forge a grant. A different session has no such
+  grant and is asked again.
+- **Declared host (src/grant.c):** `kai_mcp_declared_host` reads the server's
+  host from `.mcp.json` — a proposal only (M2.5), never authority.
+- **One card, two grants (hooks.c + Approvals.swift):** on an MCP ask the hook
+  stages a Kai approval request under `<home>/pending` (resource + session +
+  declared host; dedup'd per session+tool). Approving it in the app
+  (`signGrant` → `emitGrant`) writes BOTH a session grant for the tool and, when
+  a host was declared, a session egress grant for that host — so the agent's
+  connection to the server isn't a second prompt. The ask text also names the
+  host.
 
-## Live "done when" (needs you)
-The Oct 22 MCP task: one ask, a single approval covering the tool + its host for
-the session, session B still blocked. Blocked on the follow-on grant/host-link
-above; the decision + display half is live now.
+## Automated tests (test_mcp_grants, 8) — PASS
+  - a session grant allows its tool; a different session / tool is not covered;
+    a grant edited after signing is rejected; a server-wildcard covers any tool;
+    an expired grant does not allow; `.mcp.json` host parsed; unknown server has
+    no host.
+
+## Still a judgment call (confirm live)
+- **Surface:** the hook currently returns Claude Code's native `ask` AND stages a
+  Kai card, so the user can either allow once (Claude) or grant the whole session
+  (Kai card, which also covers the host). If you'd rather MCP asks surface ONLY
+  as the Kai card (deny-until-approved), that's a one-line change in the hook.
+- **Cursor/Codex identity:** only Claude's `mcp__` naming is parsed; other agents
+  fall through to "normal tool call" (the plan's "unknown → normal").
+
+## Live "done when" (needs you + the running app)
+The Oct 22 MCP task: one ask; approving in the Kai card covers the tool AND its
+host for the session (two grants); session B still blocked. The engine + hook +
+app code are all in; this needs the signed app to validate end to end.

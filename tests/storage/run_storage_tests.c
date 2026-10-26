@@ -599,24 +599,26 @@ static void test_pause(void) {
 }
 
 static void test_policy_agent_refusal(void) {
-    printf("policy change refuses agents (U0)\n");
+    printf("policy change: the CLI routes to the control service (Step 3)\n");
     char dir[] = "/tmp/kai-polguardXXXXXX";
     if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
     char polp[600]; snprintf(polp, sizeof polp, "%s/policy", dir);
     FILE *f = fopen(polp, "w");
-    if (f) { fputs("agent selftest arg *run_storage_tests*\nstorage off\n", f); fclose(f); }
-    // Run `./kai policy set storage block` as a child. Its ancestor (this test,
-    // argv ~ run_storage_tests) matches the agent rule, so the caller is
-    // agent-attributed and the change must be refused.
+    if (f) { fputs("storage off\n", f); fclose(f); }
+    // In v1 the production `kai policy set` never writes the policy itself: it
+    // asks the signed app's control service. With no app running, it must fail
+    // with a clear message and leave the policy untouched. (The agent-refusal
+    // itself now lives in the service; see test_control_service.)
     char outp[650]; snprintf(outp, sizeof outp, "%s/out", dir);
     char cmd[1400];
     snprintf(cmd, sizeof cmd,
              "KAI_HOME='%s' KAI_POLICY='%s' ./kai policy set storage block > '%s' 2>&1",
              dir, polp, outp);
     (void)system(cmd);
-    CHECK(file_contains(outp, "refused"), "kai policy set refused for an agent-attributed caller");
+    CHECK(file_contains(outp, "isn't running") || file_contains(outp, "Agents can't"),
+          "kai policy set reports it cannot reach the control service");
     CHECK(file_contains(polp, "storage off") && !file_contains(polp, "storage block"),
-          "policy was NOT changed by the refused agent call");
+          "the CLI did NOT write the policy directly");
     unlink(polp); unlink(outp); rmdir(dir);
 }
 
@@ -1287,6 +1289,56 @@ static void test_mcp_policy(void) {
     kai_policy_free(q);
 }
 
+static void test_mcp_grants(void) {
+    printf("MCP session grants + declared host (item 4)\n");
+    unsigned char key[32];
+    for (int i = 0; i < 32; i++) key[i] = (unsigned char)(i * 7 + 1);
+    long long now = (long long)time(NULL);
+
+    kai_grant g; memset(&g, 0, sizeof g);
+    snprintf(g.id, sizeof g.id, "%s", "g1");
+    g.created_utc = now; g.expires_utc = now + 3600;
+    snprintf(g.resource, sizeof g.resource, "%s", "mcp:github/create_issue");
+    g.op = KAI_OP_CONNECT; g.scope = KAI_GRANT_PROCESS; g.grant_version = 2;
+    snprintf(g.session_id, sizeof g.session_id, "%s", "sessA");
+    kai_grant_sign(&g, key, sizeof key);
+    CHECK(kai_mcp_grant_allows(&g, 1, "sessA", "github", "create_issue", now, key, sizeof key) == 1,
+          "a session grant allows its tool");
+    CHECK(kai_mcp_grant_allows(&g, 1, "sessB", "github", "create_issue", now, key, sizeof key) == 0,
+          "a different session is NOT covered");
+    CHECK(kai_mcp_grant_allows(&g, 1, "sessA", "github", "other", now, key, sizeof key) == 0,
+          "a different tool is NOT covered");
+    kai_grant bad = g; snprintf(bad.resource, sizeof bad.resource, "%s", "mcp:github/*");
+    CHECK(kai_mcp_grant_allows(&bad, 1, "sessA", "github", "create_issue", now, key, sizeof key) == 0,
+          "a grant edited after signing is rejected");
+
+    kai_grant w; memset(&w, 0, sizeof w); snprintf(w.id, sizeof w.id, "%s", "g2");
+    w.expires_utc = now + 3600; snprintf(w.resource, sizeof w.resource, "%s", "mcp:files/*");
+    w.op = KAI_OP_CONNECT; w.grant_version = 2; snprintf(w.session_id, sizeof w.session_id, "%s", "sessA");
+    kai_grant_sign(&w, key, sizeof key);
+    CHECK(kai_mcp_grant_allows(&w, 1, "sessA", "files", "read", now, key, sizeof key) == 1,
+          "a server-wildcard grant covers any tool");
+
+    kai_grant e; memset(&e, 0, sizeof e); snprintf(e.id, sizeof e.id, "%s", "g3");
+    e.expires_utc = now - 10; snprintf(e.resource, sizeof e.resource, "%s", "mcp:github/create_issue");
+    e.op = KAI_OP_CONNECT; e.grant_version = 2; snprintf(e.session_id, sizeof e.session_id, "%s", "sessA");
+    kai_grant_sign(&e, key, sizeof key);
+    CHECK(kai_mcp_grant_allows(&e, 1, "sessA", "github", "create_issue", now, key, sizeof key) == 0,
+          "an expired grant does not allow");
+
+    char dir[] = "/tmp/kai-mcp-XXXXXX";
+    if (mkdtemp(dir)) {
+        char p[300]; snprintf(p, sizeof p, "%s/.mcp.json", dir);
+        FILE *f = fopen(p, "wb");
+        if (f) { fputs("{\"mcpServers\":{\"github\":{\"url\":\"https://api.githubmcp.com/v1/x\"}}}", f); fclose(f); }
+        char host[256];
+        CHECK(kai_mcp_declared_host("github", dir, host, sizeof host) == 1 &&
+              strcmp(host, "api.githubmcp.com") == 0, "declared host parsed from .mcp.json");
+        CHECK(kai_mcp_declared_host("other", dir, host, sizeof host) == 0,
+              "an unknown server has no declared host");
+    }
+}
+
 static void test_ai_chats(void) {
     printf("AI chats (item 3; extension-sourced)\n");
     CHECK(kai_host_is_ai_chat("claude.ai") == 1, "claude.ai is an AI chat");
@@ -1423,6 +1475,7 @@ int main(void) {
     test_discovery();
     test_control_service();
     test_mcp_policy();
+    test_mcp_grants();
     test_ai_chats();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",

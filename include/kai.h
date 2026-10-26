@@ -169,6 +169,11 @@ int kai_mcp_parse_tool(const char *tool_name, char *server, size_t slen,
  * no rule = KAI_ACT_WARN (ask: a decision card). Server descriptions and
  * annotations (readOnlyHint, …) never reach here and never change this. */
 kai_action kai_mcp_decide(const kai_policy *p, const char *server, const char *tool);
+/* The host a server declares in .mcp.json (a proposal, never authority): lets
+ * the approval card offer "also allow <host> for this session". 1 if found. */
+int kai_mcp_declared_host(const char *server, const char *cwd, char *out, size_t n);
+/* Read the approval key bytes; returns the length read (0 if unavailable). */
+size_t kai_approval_key_read(unsigned char *out, size_t cap);
 
 /* How far the user may override Kai's protection of a matched resource. S4 acts
  * on these; the storage/network walls already make non-builtin protections
@@ -495,6 +500,11 @@ void kai_grant_audit(const char *action, const char *id, const char *agent,
 int kai_grant_match(const kai_grant *grants, int n, const kai_grant_subject *s,
                     const char *resolved_path, int op, long long now,
                     const unsigned char *key, size_t keylen);
+/* Honor a session-bound MCP grant (resource "mcp:<server>/<tool>", or a
+ * server-wide "mcp:<server>" + "/" + "*"): 1 if valid for this session (Step 4). */
+int kai_mcp_grant_allows(const kai_grant *grants, int n, const char *session_id,
+                         const char *server, const char *tool, long long now,
+                         const unsigned char *key, size_t keylen);
 
 /* The storage enforcement gate WITH grants. Returns 1 = allow, 0 = deny.
  * not-protected -> allow; un-exemptable (builtin/control) -> deny (no grant can
