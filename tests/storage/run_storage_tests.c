@@ -1207,6 +1207,42 @@ static void test_discovery(void) {
     free(d);
 }
 
+static void test_mcp_policy(void) {
+    printf("MCP-aware policy (item 4)\n");
+    char srv[64], tool[64];
+    CHECK(kai_mcp_parse_tool("mcp__github__create_issue", srv, sizeof srv, tool, sizeof tool) == 1 &&
+          strcmp(srv, "github") == 0 && strcmp(tool, "create_issue") == 0,
+          "parse mcp__server__tool");
+    CHECK(kai_mcp_parse_tool("mcp__srv__a__b", srv, sizeof srv, tool, sizeof tool) == 1 &&
+          strcmp(srv, "srv") == 0 && strcmp(tool, "a__b") == 0,
+          "tool part may contain __");
+    CHECK(kai_mcp_parse_tool("Read", srv, sizeof srv, tool, sizeof tool) == 0,
+          "a normal tool is not MCP");
+    CHECK(kai_mcp_parse_tool("mcp__only", srv, sizeof srv, tool, sizeof tool) == 0,
+          "malformed mcp name is not parsed");
+
+    kai_policy *p = mk("mcp github create_issue block\n"
+                       "mcp github * allow\n"
+                       "mcp files * ask\n");
+    CHECK(p != NULL, "policy with mcp rules parses");
+    CHECK(kai_mcp_decide(p, "github", "create_issue") == KAI_ACT_BLOCK,
+          "exact server+tool rule wins (block)");
+    CHECK(kai_mcp_decide(p, "github", "list_repos") == KAI_ACT_NONE,
+          "server wildcard allows other tools");
+    CHECK(kai_mcp_decide(p, "files", "read") == KAI_ACT_WARN,
+          "explicit ask raises a card");
+    CHECK(kai_mcp_decide(p, "unknown", "whatever") == KAI_ACT_WARN,
+          "an unseen server defaults to ask");
+    kai_policy_free(p);
+
+    /* A server-wide "*" rule still loses to an exact tool rule. */
+    kai_policy *q = mk("mcp * * allow\nmcp secrets reveal block\n");
+    CHECK(kai_mcp_decide(q, "anything", "x") == KAI_ACT_NONE, "global * allow");
+    CHECK(kai_mcp_decide(q, "secrets", "reveal") == KAI_ACT_BLOCK,
+          "exact rule beats global wildcard");
+    kai_policy_free(q);
+}
+
 static void test_ai_chats(void) {
     printf("AI chats (item 3; extension-sourced)\n");
     CHECK(kai_host_is_ai_chat("claude.ai") == 1, "claude.ai is an AI chat");
@@ -1341,6 +1377,7 @@ int main(void) {
     test_session_classify();
     test_agent_catalog();
     test_discovery();
+    test_mcp_policy();
     test_ai_chats();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",

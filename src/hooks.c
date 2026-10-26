@@ -667,7 +667,34 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
          * lets the tool run, so it gets deny. */
         int can_ask = strcmp(source, "claude") == 0;
         int strength = 0;
-        if (hit_path) {
+        /* MCP tool call (mcp__server__tool): decided by the `mcp` policy, not by
+         * file/command rules. No rule = ask. We show "MCP · server · tool" and
+         * the argument KEYS only (libkai redacts values); server descriptions
+         * and annotations like readOnlyHint are never read and never decide. */
+        char mcp_server[64] = "", mcp_tool[64] = "";
+        if (kai_mcp_parse_tool(tool, mcp_server, sizeof mcp_server, mcp_tool, sizeof mcp_tool)) {
+            kai_action a = kai_mcp_decide(p, mcp_server, mcp_tool);
+            /* allow -> run; block -> deny; ask -> fail closed, offer the user a
+             * one-time allow (deny if this agent can't prompt). Same shape as
+             * the secret-ask path: a card is decision=BLOCK with ask set. */
+            if (a == KAI_ACT_NONE) {
+                decision = KAI_ACT_NONE;
+            } else {
+                decision = KAI_ACT_BLOCK;
+                ask = (a == KAI_ACT_WARN) && can_ask;
+            }
+            snprintf(rule, sizeof rule, "mcp:%.26s/%.26s", mcp_server, mcp_tool);
+            char keys[256] = "";
+            for (const cJSON *k = ti ? ti->child : NULL; k && k->string; k = k->next) {
+                size_t have = strlen(keys);
+                int n = snprintf(keys + have, sizeof keys - have, "%s%s",
+                                 have ? ", " : "", k->string);
+                if (n < 0 || (size_t)n >= sizeof keys - have) break;
+            }
+            snprintf(reason, sizeof reason, "MCP \xC2\xB7 %s \xC2\xB7 %s%s%s",
+                     mcp_server, mcp_tool, keys[0] ? " \xE2\x80\x94 args: " : "", keys);
+            subject = strdup(mcp_tool);
+        } else if (hit_path) {
             decision = KAI_ACT_BLOCK;
             kai_strlcpy(rule, why, sizeof rule);
             snprintf(reason, sizeof reason, "%s touches protected path (%s)",

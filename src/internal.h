@@ -146,6 +146,14 @@ struct kai_policy {
         char *pattern;
     } agents[KAI_MAX_LIST];
     int nagents;
+    /* MCP tool policy: server + tool ("*" = any tool on that server) -> action.
+     * Matched most-specific first; no match = ask (a decision card). */
+    struct {
+        char server[64];
+        char tool[64];
+        kai_action action;
+    } mcp[KAI_MAX_LIST];
+    int nmcp;
     int gateway_port;
     /* the user's exceptions: rule name + glob over the command */
     struct {

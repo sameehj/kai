@@ -159,6 +159,17 @@ int kai_agent_catalog_verified(const char *name); /* 1 only if checked vs an ins
 int kai_agent_has_hooks(const char *name);     /* Kai has a hook integration for it */
 const char *kai_agent_coverage_note(const char *name); /* card disclosure, or NULL */
 
+/* ---- MCP tool identity + policy (Step 4) ----
+ * An MCP tool call is a (server, tool) pair. Parse Claude Code's
+ * "mcp__<server>__<tool>" naming; returns 1 and fills server/tool, 0 if the
+ * name is not an MCP tool (then treat it as a normal tool call). */
+int kai_mcp_parse_tool(const char *tool_name, char *server, size_t slen,
+                       char *tool, size_t tlen);
+/* Decide (server, tool) against the policy's `mcp` rules. Most-specific wins;
+ * no rule = KAI_ACT_WARN (ask: a decision card). Server descriptions and
+ * annotations (readOnlyHint, …) never reach here and never change this. */
+kai_action kai_mcp_decide(const kai_policy *p, const char *server, const char *tool);
+
 /* How far the user may override Kai's protection of a matched resource. S4 acts
  * on these; the storage/network walls already make non-builtin protections
  * grant-overridable (= OVERRIDE/CONFIRM) and builtin ones not (= NEVER). */

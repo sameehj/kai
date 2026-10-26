@@ -161,6 +161,48 @@ int kai_agent_has_hooks(const char *name) {
     return 0;
 }
 
+/* ---- MCP tool identity + policy (Step 4) ----
+ * An MCP tool call is a (server, tool) pair. Claude Code names them
+ * "mcp__<server>__<tool>"; the tool part may itself contain "__". We parse that
+ * shape and record anything else as unknown (handled as a normal tool call). */
+int kai_mcp_parse_tool(const char *tool_name, char *server, size_t slen,
+                       char *tool, size_t tlen) {
+    if (server && slen) server[0] = '\0';
+    if (tool && tlen) tool[0] = '\0';
+    if (!tool_name || strncmp(tool_name, "mcp__", 5) != 0) return 0;
+    const char *s = tool_name + 5;
+    const char *sep = strstr(s, "__");
+    if (!sep || sep == s) return 0;            /* need a non-empty server */
+    const char *t = sep + 2;
+    if (!*t) return 0;                          /* need a non-empty tool */
+    if (server && slen) {
+        size_t n = (size_t)(sep - s);
+        if (n >= slen) n = slen - 1;
+        memcpy(server, s, n); server[n] = '\0';
+    }
+    if (tool && tlen) kai_strlcpy(tool, t, tlen);
+    return 1;
+}
+
+/* Decide an MCP (server, tool) call against the policy. Most-specific wins:
+ * an exact server+tool rule, then a server+"*" rule. No rule = ask (a decision
+ * card), so a newly-seen server never runs silently. */
+kai_action kai_mcp_decide(const kai_policy *p, const char *server, const char *tool) {
+    if (!p || !server) return KAI_ACT_WARN;
+    int best = -1, best_specific = -1;
+    for (int i = 0; i < p->nmcp; i++) {
+        if (strcmp(p->mcp[i].server, server) != 0 &&
+            strcmp(p->mcp[i].server, "*") != 0)
+            continue;
+        int specific = 0;
+        if (strcmp(p->mcp[i].server, server) == 0) specific += 2;
+        if (tool && strcmp(p->mcp[i].tool, tool) == 0) specific += 1;
+        else if (strcmp(p->mcp[i].tool, "*") != 0) continue; /* tool named but no match */
+        if (specific > best_specific) { best_specific = specific; best = i; }
+    }
+    return best < 0 ? KAI_ACT_WARN : p->mcp[best].action;
+}
+
 /* A plain coverage disclosure for the agent card, or NULL when fully covered. */
 const char *kai_agent_coverage_note(const char *name) {
     switch (kai_agent_product_kind(name)) {
@@ -412,6 +454,18 @@ static kai_policy *parse(const char *text, const char *source, char *err,
             kai_strlcpy(p->agents[p->nagents].name, nm, sizeof p->agents[0].name);
             kai_strlcpy(p->agents[p->nagents].kind, kind, sizeof p->agents[0].kind);
             p->agents[p->nagents++].pattern = ex;
+        } else if (strcmp(d, "mcp") == 0) {
+            /* mcp <server> <tool|*> allow|ask|block */
+            char *server, *tool, *act;
+            if (!next_tok(&cur, &server) || !next_tok(&cur, &tool) ||
+                !next_tok(&cur, &act) || p->nmcp >= KAI_MAX_LIST)
+                continue;
+            kai_action a = strcmp(act, "allow") == 0  ? KAI_ACT_NONE
+                           : strcmp(act, "block") == 0 ? KAI_ACT_BLOCK
+                                                       : KAI_ACT_WARN; /* ask */
+            kai_strlcpy(p->mcp[p->nmcp].server, server, sizeof p->mcp[0].server);
+            kai_strlcpy(p->mcp[p->nmcp].tool, tool, sizeof p->mcp[0].tool);
+            p->mcp[p->nmcp++].action = a;
         } else if (strcmp(d, "gateway_port") == 0) {
             char *v; if (!next_tok(&cur, &v)) continue;
             long port = strtol(v, NULL, 10);
