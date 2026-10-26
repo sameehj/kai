@@ -821,11 +821,15 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
         /* MCP tool arguments: scan for secrets / blocked terms */
         int is_mcp = tool && (strncmp(tool, "mcp__", 5) == 0 ||
                               (strcmp(source, "codex") == 0 && strstr(tool, "mcp")));
-        if (decision < KAI_ACT_BLOCK && is_mcp && ti) {
+        /* Runs even when the mcp policy said allow or ask: a secret in the
+         * arguments is a hard deny that overrides it (content protection beats a
+         * tool allowance). Skipped only when already a hard block. */
+        if (is_mcp && ti && !(decision >= KAI_ACT_BLOCK && !ask)) {
             kai_report rep;
             char *c = kai_scan_text(p, alltext, &rep); free(c);
             if (rep.worst >= KAI_ACT_REDACT) {
                 decision = KAI_ACT_BLOCK;
+                ask = 0;   /* not "allow this time?" - a secret must not be sent */
                 kai_report_summary(&rep, reason, sizeof reason);
                 kai_strlcpy(rule, "mcp_arguments", sizeof rule);
                 free(subject);
