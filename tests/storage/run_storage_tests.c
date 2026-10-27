@@ -995,7 +995,7 @@ static void test_grant_tiers(void) {
                              GKEY, GKEYLEN, why, sizeof why) == 1,
           "override tier: a confirmed grant is honored");
 
-    /* BREAK-GLASS (a private-key path): needs auth + read-only + <= 15 min. */
+    /* BREAK-GLASS (a private-key path): needs auth + the op signed + <= 15 min. */
     char sshdir[64]; snprintf(sshdir, sizeof sshdir, "/work/.%s", "ssh");
     char keyp[96]; snprintf(keyp, sizeof keyp, "%s/id_rsa", sshdir);
     kai_policy *pk = mk("storage block\nprotect /work/.ssh\n");
@@ -1008,8 +1008,14 @@ static void test_grant_tiers(void) {
                              GKEY, GKEYLEN, why, sizeof why) == 0, "break-glass: no auth -> denied");
     CHECK(kai_storage_decide(pk, keyp, NULL, KAI_OP_READ, &sub, &bg_ok, 1, NOW,
                              GKEY, GKEYLEN, why, sizeof why) == 1, "break-glass: auth + read + short ttl -> honored");
+    kai_grant bg_wnoauth = mkgrant3(keyp, KAI_OP_WRITE, 200, 9, 1000, 1000 + 600, "sess-A", 1, 0);
     CHECK(kai_storage_decide(pk, keyp, NULL, KAI_OP_WRITE, &sub, &bg_write, 1, NOW,
-                             GKEY, GKEYLEN, why, sizeof why) == 0, "break-glass: write is never honored");
+                             GKEY, GKEYLEN, why, sizeof why) == 1,
+          "break-glass: an authenticated write grant allows the write it was signed for");
+    CHECK(kai_storage_decide(pk, keyp, NULL, KAI_OP_WRITE, &sub, &bg_wnoauth, 1, NOW,
+                             GKEY, GKEYLEN, why, sizeof why) == 0, "break-glass: write without auth -> denied");
+    CHECK(kai_storage_decide(pk, keyp, NULL, KAI_OP_WRITE, &sub, &bg_ok, 1, NOW,
+                             GKEY, GKEYLEN, why, sizeof why) == 0, "break-glass: a read grant does not cover a write");
     CHECK(kai_storage_decide(pk, keyp, NULL, KAI_OP_READ, &sub, &bg_long, 1, NOW,
                              GKEY, GKEYLEN, why, sizeof why) == 0, "break-glass: ttl over 15 min -> denied");
 

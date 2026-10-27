@@ -550,7 +550,8 @@ int kai_mcp_declared_host(const char *server, const char *cwd, char *out, size_t
 }
 
 /* S4: does this signed grant meet the override tier of the resource it covers?
- * never: never; break-glass: only a read, authenticated, capped at 15 min;
+ * never: never; break-glass: a read or write (the op it was signed for, which
+ * kai_grant_match already checks), authenticated, capped at 15 min;
  * override: only if the user confirmed; confirm/normal: yes. The flags are part
  * of the signed canonical form, so an agent cannot forge them. */
 int kai_grant_satisfies_tier(const kai_grant *g, kai_override_tier_t tier) {
@@ -558,7 +559,8 @@ int kai_grant_satisfies_tier(const kai_grant *g, kai_override_tier_t tier) {
     switch (tier) {
     case KAI_TIER_NEVER: return 0;
     case KAI_TIER_BREAKGLASS:
-        return g->authenticated && g->op == KAI_OP_READ &&
+        return g->authenticated &&
+               (g->op == KAI_OP_READ || g->op == KAI_OP_WRITE) &&
                g->expires_utc != 0 && (g->expires_utc - g->created_utc) <= 900;
     case KAI_TIER_OVERRIDE: return g->confirmed != 0;
     default: return 1;   /* KAI_TIER_CONFIRM and anything else */

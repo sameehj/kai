@@ -71,7 +71,7 @@ Each policy rule declares how far it can be overridden, for example `override: n
 |---|---|---|---|
 | **Normal** | New host for an MCP server; a project file outside the allowed set | One click in the decision card | Task, session or project scope |
 | **Override** (policy says block) | A blocked host or a protected project `.env` | Click plus a confirm sheet stating "This overrides your policy rule *X* for this session only" | Task or session only; never project-wide from the card |
-| **Break-glass** | A private key, cloud credentials, anything the policy marks breakglass | Touch ID or login password (LocalAuthentication) in the Kai app | One resource, one session, read-only by default, at most 15 minutes, persistent red banner while active |
+| **Break-glass** | A private key, cloud credentials, anything the policy marks breakglass | Touch ID or login password (LocalAuthentication) in the Kai app | One resource, one session, the requested op (read or write), at most 15 minutes, persistent red banner while active |
 | **Never** | Writing Kai's policy, grant store or pending changes; disabling Kai from an agent | Not offered; the card explains why | — |
 
 Defaults: Kai's control store is `never`. Private keys and cloud credentials are `breakglass`. Other protected paths and blocked hosts are `confirm`. Everything else is `normal`. A future Teams policy can lock tiers centrally.
@@ -199,7 +199,7 @@ On October 25 the storage wall denied Kai's own `UserPromptSubmit` hook reading 
 - Grant to session A applies to A's children and not to B.
 - A task grant expires at 10 minutes; a session grant ends at session exit.
 - An override-tier grant requires the confirm flag.
-- A break-glass grant requires an authentication result and caps at 15 minutes, read-only.
+- A break-glass grant requires an authentication result, covers only the op it was signed for (read or write) and caps at 15 minutes.
 - A never-tier resource cannot be granted at all.
 - An unattributed process never matches a session grant.
 - An agent-tree caller cannot create a grant.
