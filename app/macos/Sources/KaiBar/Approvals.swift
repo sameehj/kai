@@ -55,6 +55,7 @@ struct PendingRequest: Decodable, Identifiable {
     var declaredHost: String? = nil  // MCP: the server's .mcp.json host, offered as a second grant
     var strengthLabel: String { strength >= 2 ? "strong" : strength == 1 ? "medium" : "weak" }
     var isMCP: Bool { resource.hasPrefix("mcp:") }
+    var opLabel: String { op == "connect" ? "connect" : (op == "open" || op == "readdir") ? "read" : "write" }
 }
 
 /// An active grant, decoded from its stored JSON for display/revocation.
@@ -174,14 +175,17 @@ final class GrantManager: ObservableObject {
 
     /// Approve a pending request. The ONLY path that signs a grant. The tier
     /// (S4) decides how: never -> refused; break-glass -> LocalAuthentication
-    /// first, then a read-only grant capped at 15 minutes; override/confirm ->
-    /// the click is the confirmation. The honor flags are signed into the grant.
+    /// first, then a grant for the requested op, bound to the session, capped at
+    /// 15 minutes; override/confirm -> the click is the confirmation. The honor
+    /// flags are signed into the grant.
     func approve(_ req: PendingRequest, duration: GrantDuration) {
         let tier = req.tier ?? 1
         if tier >= 4 { return }   // never: not approvable from here
         if tier == 3 {            // break-glass: require Touch ID / login password
             let ctx = LAContext()
-            let reason = "Kai: allow a break-glass read of \(req.resource)"
+            let verb = req.op == "connect" ? "connection" :
+                       (req.op == "open" || req.op == "readdir") ? "read" : "write"
+            let reason = "Kai: allow a break-glass \(verb) of \(req.resource) for this session (15 min)"
             ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { ok, _ in
                 DispatchQueue.main.async {
                     guard ok else { return }   // auth failed/cancelled: nothing signed
@@ -197,15 +201,20 @@ final class GrantManager: ObservableObject {
                            confirmed: Bool, authenticated: Bool, breakglass: Bool) {
         guard let key = KaiApprovalKey.ensure() else { return }
         let now = Int(Date().timeIntervalSince1970)
-        // break-glass is read-only and capped at 15 minutes regardless of choice.
+        // Break-glass is capped at 15 minutes regardless of choice (its TTL must
+        // match the "15 min" the card shows).
         let ttl = breakglass ? 900 : duration.seconds
         let expires = now + ttl
         let gid = UUID().uuidString
-        let rawOp: Int32 = req.op == "connect" ? 2 : (req.op == "open" || req.op == "readdir") ? 0 : 1
-        let opCode: Int32 = breakglass ? 0 : rawOp     // break-glass is read-only
-        // "this session" binds the grant to the session (covers its whole tree,
-        // ends at session exit); fixed durations bind to the requesting process.
-        let sessionBound = !breakglass && duration.isSession
+        // Grant the operation the agent actually requested - a break-glass WRITE
+        // when it asked to write, a read when it asked to read - not always read.
+        let opCode: Int32 = req.op == "connect" ? 2 : (req.op == "open" || req.op == "readdir") ? 0 : 1
+        // "this session" binds the grant to the whole session tree (new child
+        // processes included), ending at session exit; fixed durations bind to
+        // the requesting process. Break-glass binds to the session when there is
+        // one, so each process in the task doesn't re-prompt for Touch ID.
+        let hasSession = !(req.session ?? "").isEmpty
+        let sessionBound = breakglass ? hasSession : duration.isSession
         let sessionId = sessionBound ? (req.session ?? "") : ""
 
         let wrote = emitGrant(id: gid, resource: req.resource, opCode: opCode,
@@ -360,7 +369,9 @@ struct ApprovalCard: View {
             case 3:
                 HStack {
                     Button("Deny") { manager.deny(req) }
-                    Button("Override with Touch ID (15 min, read-only)…") {
+                    // Label agrees with the grant: the requested op, this session,
+                    // 15 minutes (see signGrant).
+                    Button("Override with Touch ID (\(req.opLabel), this session, 15 min)…") {
                         manager.approve(req, duration: .min10)
                     }
                 }
