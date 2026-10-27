@@ -385,15 +385,7 @@ final class GrantManager: ObservableObject {
     /// tree) is what lets this write past the storage wall. Writes atomically,
     /// audits, then removes the pending request.
     func applyPolicy(_ c: PendingPolicyChange) {
-        let url = URL(fileURLWithPath: policyPath)
-        do {
-            try Data(c.proposedPolicy.utf8).write(to: url, options: .atomic)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: policyPath)
-        } catch {
-            return   // leave the pending request in place if the write failed
-        }
-        kai_audit("policy", "confirm", "applied", "", "user confirmed in app: " + c.summary)
-        try? FileManager.default.removeItem(atPath: pendingPolicyDir + "/" + c.id + ".json")
+        _ = PendingPolicyStore.apply(c)
         refresh()
     }
 
@@ -407,9 +399,48 @@ final class GrantManager: ObservableObject {
 
     /// Reject a held change: drop the request, audit, apply nothing.
     func rejectPolicy(_ c: PendingPolicyChange) {
-        kai_audit("policy", "confirm", "rejected", "", "user rejected in app: " + c.summary)
-        try? FileManager.default.removeItem(atPath: pendingPolicyDir + "/" + c.id + ".json")
+        PendingPolicyStore.reject(c)
         refresh()
+    }
+}
+
+/// The held loosening changes under ~/.kai/pending-policy, and the ONLY code
+/// that applies one to the policy file. Called from a real click (the card's
+/// Apply) or after the owner authenticates for a toggle they just changed
+/// (AppModel, Phase A item 4); the app's Kai signature, outside any agent
+/// tree, is what lets this write past the storage wall.
+enum PendingPolicyStore {
+    private static var home: String { ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory() }
+    private static var dir: String { home + "/.kai/pending-policy" }
+    private static var policyPath: String { home + "/.kai/policy" }
+
+    static func load() -> [PendingPolicyChange] {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return [] }
+        return names.filter { $0.hasSuffix(".json") }
+            .compactMap { FileManager.default.contents(atPath: dir + "/" + $0) }
+            .compactMap { try? JSONDecoder().decode(PendingPolicyChange.self, from: $0) }
+            .sorted { $0.id < $1.id }
+    }
+
+    /// Write the proposed policy atomically, audit, drop the request. False
+    /// (request left in place) if the write failed.
+    static func apply(_ c: PendingPolicyChange) -> Bool {
+        let url = URL(fileURLWithPath: policyPath)
+        do {
+            try Data(c.proposedPolicy.utf8).write(to: url, options: .atomic)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: policyPath)
+        } catch {
+            return false
+        }
+        kai_audit("policy", "confirm", "applied", "", "user confirmed in app: " + c.summary)
+        try? FileManager.default.removeItem(atPath: dir + "/" + c.id + ".json")
+        return true
+    }
+
+    /// Drop a held change, audit, apply nothing.
+    static func reject(_ c: PendingPolicyChange) {
+        kai_audit("policy", "confirm", "rejected", "", "user rejected in app: " + c.summary)
+        try? FileManager.default.removeItem(atPath: dir + "/" + c.id + ".json")
     }
 }
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
 import AppKit
 import Foundation
+import LocalAuthentication
 import ServiceManagement
 import UserNotifications
 
@@ -353,17 +354,46 @@ final class AppModel: ObservableObject {
 
     func setSwitch(_ key: String, _ value: String) {
         guard policy?.switches[key] != value else { return }
-        Task { await perform(["policy", "set", key, value]) }
+        Task { await performPolicyChange(["policy", "set", key, value]) }
     }
 
     func add(_ kind: String, _ value: String) {
         let v = value.trimmingCharacters(in: .whitespaces)
         guard !v.isEmpty else { return }
-        Task { await perform(["policy", "add", kind, v]) }
+        Task { await performPolicyChange(["policy", "add", kind, v]) }
     }
 
     func remove(_ kind: String, _ value: String) {
-        Task { await perform(["policy", "remove", kind, value]) }
+        Task { await performPolicyChange(["policy", "remove", kind, value]) }
+    }
+
+    /// Phase A item 4: a change the user makes here that LOOSENS protection is
+    /// held by the engine (it can't tell this click from an agent). Instead of
+    /// leaving it in a pending card they may never see, confirm it right away
+    /// with Touch ID / the login password and apply it; cancelling rejects it,
+    /// so the control snaps back. The engine still decides what loosens.
+    private func performPolicyChange(_ args: [String]) async {
+        let before = Set(PendingPolicyStore.load().map(\.id))
+        await perform(args)
+        let held = PendingPolicyStore.load().filter { !before.contains($0.id) }
+        for c in held {
+            if await confirmWithOwner("turn protection down: \(c.summary)") {
+                if !PendingPolicyStore.apply(c) { errorMessage = "Kai couldn't apply “\(c.summary)”. Try again." }
+            } else {
+                PendingPolicyStore.reject(c)
+            }
+        }
+        guard !held.isEmpty else { return }
+        await refresh()
+        // The status comes from what the walls report (their health), which
+        // follows a policy reload by a second or two.
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        await refresh()
+    }
+
+    private func confirmWithOwner(_ reason: String) async -> Bool {
+        let ctx = LAContext()
+        return (try? await ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)) ?? false
     }
 
     func addTerm(text: String, action: String, replacement: String) {
