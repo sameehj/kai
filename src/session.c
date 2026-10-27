@@ -298,6 +298,124 @@ const char *kai_enforcement_label(int storage_active, int network_active) {
     return "Seen only: Files and Internet are off";
 }
 
+static int id_ok(const char *id);
+static int read_session(const char *path, kai_session *out);
+
+/* Labels from the same measured levels as the headline (kai_wall_observed_level):
+ * a wall covers sessions in Watch or Protect (>= 1); off / not running /
+ * unverified (<= 0) does not. */
+const char *kai_enforcement_from_levels(int files, int internet) {
+    return kai_enforcement_label(files >= 1, internet >= 1);
+}
+
+/* ---- session activity (Agent Control: working / idle) ----
+ * "Working" = the agent ran a command or a hook in the last 15 minutes. The
+ * storage wall sees every exec in a session (a hook is an exec of `kai hook`)
+ * and records the time per session and per working folder here, under the
+ * registry (control store: an agent can't write its own activity). */
+const char *kai_session_activity_dir(void) {
+    static char buf[1200];
+    if (!buf[0]) snprintf(buf, sizeof buf, "%s/registry/activity", kai_home());
+    return buf;
+}
+
+int kai_session_working(long long last_active, long long now) {
+    return last_active > 0 && now - last_active <= KAI_WORKING_WINDOW;
+}
+
+static cJSON *activity_load(const char *sid) {
+    char path[1300];
+    snprintf(path, sizeof path, "%s/%s.json", kai_session_activity_dir(), sid);
+    size_t len = 0; char *txt = kai_read_file(path, 1 << 16, &len);
+    cJSON *o = txt ? cJSON_Parse(txt) : NULL;
+    free(txt);
+    return o;
+}
+
+int kai_session_activity_touch(const char *sid, const char *workspace, long long now) {
+    if (!id_ok(sid)) return -1;
+    cJSON *o = activity_load(sid);
+    if (!o) o = cJSON_CreateObject();
+    if (!o) return -1;
+    /* keep the latest time (events can be recorded out of order) */
+    cJSON *l = cJSON_GetObjectItem(o, "last");
+    long long prev = cJSON_IsNumber(l) ? (long long)l->valuedouble : 0;
+    cJSON_DeleteItemFromObject(o, "last");
+    cJSON_AddNumberToObject(o, "last", (double)(now > prev ? now : prev));
+    cJSON *ws = cJSON_GetObjectItem(o, "ws");
+    if (!cJSON_IsObject(ws)) { cJSON_DeleteItemFromObject(o, "ws"); ws = cJSON_AddObjectToObject(o, "ws"); }
+    if (ws && workspace && *workspace) {
+        cJSON *w = cJSON_GetObjectItem(ws, workspace);
+        long long wprev = cJSON_IsNumber(w) ? (long long)w->valuedouble : 0;
+        cJSON_DeleteItemFromObject(ws, workspace);
+        if (cJSON_GetArraySize(ws) >= 32) cJSON_DeleteItemFromArray(ws, 0);   /* bounded */
+        cJSON_AddNumberToObject(ws, workspace, (double)(now > wprev ? now : wprev));
+    }
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (!js) return -1;
+    char path[1300], tmp[1400];
+    mkdir(kai_home(), 0700);
+    mkdir(kai_session_dir(), 0700);
+    mkdir(kai_session_activity_dir(), 0700);
+    snprintf(path, sizeof path, "%s/%s.json", kai_session_activity_dir(), sid);
+    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
+    FILE *f = fopen(tmp, "wb");
+    if (!f) { free(js); return -1; }
+    size_t len = strlen(js);
+    int ok = fwrite(js, 1, len, f) == len;
+    ok = (fclose(f) == 0) && ok;
+    free(js);
+    if (!ok || rename(tmp, path) != 0) { unlink(tmp); return -1; }
+    return 0;
+}
+
+long long kai_session_last_active(const char *sid, const char *workspace) {
+    if (!id_ok(sid)) return 0;
+    cJSON *o = activity_load(sid);
+    if (!o) return 0;
+    long long last = 0;
+    if (!workspace) {
+        cJSON *l = cJSON_GetObjectItem(o, "last");
+        if (cJSON_IsNumber(l)) last = (long long)l->valuedouble;
+    } else {
+        size_t wl = strlen(workspace);
+        cJSON *ws = cJSON_GetObjectItem(o, "ws"), *e = NULL;
+        cJSON_ArrayForEach(e, ws) {
+            const char *k = e->string;
+            if (!k || !cJSON_IsNumber(e) || strncmp(k, workspace, wl) != 0 || (k[wl] && k[wl] != '/'))
+                continue;
+            if ((long long)e->valuedouble > last) last = (long long)e->valuedouble;
+        }
+    }
+    cJSON_Delete(o);
+    return last;
+}
+
+/* A "(delegated)" process (its responsible process is an agent) never owns a
+ * session; remove the records older builds made for them. Returns how many. */
+int kai_sessions_prune_delegated(void) {
+    DIR *d = opendir(kai_session_dir());
+    if (!d) return 0;
+    int removed = 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        size_t nl = strlen(e->d_name);
+        if (e->d_name[0] == '.' || nl < 6 || strcmp(e->d_name + nl - 5, ".json")) continue;
+        char path[1300];
+        if (snprintf(path, sizeof path, "%s/%s", kai_session_dir(), e->d_name) >= (int)sizeof path) continue;
+        kai_session s;
+        if (read_session(path, &s) && strstr(s.agent, " (delegated)") && unlink(path) == 0) {
+            char ap[1400];
+            snprintf(ap, sizeof ap, "%s/%s.json", kai_session_activity_dir(), s.id);
+            unlink(ap);
+            removed++;
+        }
+    }
+    closedir(d);
+    return removed;
+}
+
 /* Phase B item 8: the ONE status sentence, shared by the popover, the Settings
  * sidebar, the menu-bar label and `kai status`. files/internet: 0 off (not
  * running or set off), 1 watch (log), 2 protect (block), from what the walls

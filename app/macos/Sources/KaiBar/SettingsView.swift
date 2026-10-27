@@ -694,13 +694,10 @@ private struct AgentControlPage: View {
     @StateObject private var model = AgentsModel()
     @StateObject private var grants = GrantManager()
     @State private var selected: String?
+    @State private var showEnded = false
 
-    private var sorted: [SessionRow] {
-        model.interactiveSessions.sorted { a, b in
-            if a.isActive != b.isActive { return a.isActive }
-            return a.startedUtc > b.startedUtc
-        }
-    }
+    /// Working now, then idle; ended sessions live in their own collapsed group.
+    private var sorted: [SessionRow] { model.workingNow + model.idle }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -716,7 +713,21 @@ private struct AgentControlPage: View {
                             .foregroundStyle(Theme.muted).padding(10)
                     }
                     List(selection: $selected) {
-                        ForEach(sorted) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
+                        if !model.workingNow.isEmpty {
+                            Section("Working now") {
+                                ForEach(model.workingNow) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
+                            }
+                        }
+                        if !model.idle.isEmpty {
+                            Section("Idle") {
+                                ForEach(model.idle) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
+                            }
+                        }
+                        if !model.endedToday.isEmpty {
+                            DisclosureGroup("Ended today (\(model.endedToday.count))", isExpanded: $showEnded) {
+                                ForEach(model.endedToday) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
+                            }
+                        }
                         if !model.backgroundServices.isEmpty {
                             Section("Background services") {
                                 ForEach(model.backgroundServices) { b in

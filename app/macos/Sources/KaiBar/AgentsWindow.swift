@@ -43,10 +43,28 @@ struct SessionRow: Decodable, Identifiable, Equatable {
     var tty: String = ""
     var enforcement: String = ""
     var state: String = "active"
+    /// One session definition (libkai): working = a command or hook in the
+    /// last 15 minutes; idle otherwise; ended is separate.
+    var activity: String = "idle"
+    var lastActiveUtc: Int = 0
+    /// An IDE app is one row holding its workspaces.
+    struct Workspace: Decodable, Equatable, Identifiable {
+        let path: String
+        var lastActiveUtc: Int = 0
+        var activity: String = "idle"
+        var id: String { path }
+        var name: String { (path as NSString).lastPathComponent }
+    }
+    var workspaces: [Workspace]? = nil
     var isActive: Bool { state == "active" }
+    var isWorking: Bool { isActive && activity == "working" }
     var isSession: Bool { kind == "session" }
+    var isIDE: Bool { workspaces != nil }
     var window: String { !tty.isEmpty ? tty : (hostApp.isEmpty ? "—" : hostApp) }
-    var projectName: String { project.isEmpty ? "—" : (project as NSString).lastPathComponent }
+    var projectName: String {
+        if let w = workspaces { return "\(w.count) workspace\(w.count == 1 ? "" : "s")" }
+        return project.isEmpty ? "—" : (project as NSString).lastPathComponent
+    }
     /// Proper product names, not the lowercase classifier.
     var displayAgent: String {
         switch agent {
@@ -65,13 +83,15 @@ struct SessionRow: Decodable, Identifiable, Equatable {
         f.dateFormat = Calendar.current.isDateInToday(d) ? "HH:mm" : "MMM d"
         return f.string(from: d)
     }
-    /// "8d 2h" / "3h 10m" / "12m" — never "190h 8m".
-    var runningFor: String {
-        guard startedUtc > 0, isActive else { return "" }
-        let s = max(0, Int(Date().timeIntervalSince1970) - startedUtc)
-        if s >= 86400 { return "\(s / 86400)d \((s % 86400) / 3600)h" }
-        if s >= 3600 { return "\(s / 3600)h \((s % 3600) / 60)m" }
-        return "\(s / 60)m"
+    /// Duration = time since the agent was last active (not since the window
+    /// opened): "active 2m ago", "idle 3h 10m". "8d 2h" never "190h 8m".
+    var activeLabel: String {
+        guard isActive else { return "" }
+        guard lastActiveUtc > 0 else { return "no activity seen" }
+        let s = max(0, Int(Date().timeIntervalSince1970) - lastActiveUtc)
+        let d = s >= 86400 ? "\(s / 86400)d \((s % 86400) / 3600)h"
+              : s >= 3600 ? "\(s / 3600)h \((s % 3600) / 60)m" : s >= 60 ? "\(s / 60)m" : "\(s)s"
+        return isWorking ? "active \(d) ago" : "idle \(d)"
     }
     /// Never say "protected": the label comes straight from observed enforcement.
     var enforcementShort: String {
@@ -103,6 +123,10 @@ final class AgentsModel: ObservableObject {
 
     /// Only real interactive sessions (not daemons/nested/orphans).
     var interactiveSessions: [SessionRow] { sessions.filter { $0.isSession } }
+    /// The three list sections; ended never mixes into the live ones.
+    var workingNow: [SessionRow] { interactiveSessions.filter { $0.isWorking }.sorted { $0.lastActiveUtc > $1.lastActiveUtc } }
+    var idle: [SessionRow] { interactiveSessions.filter { $0.isActive && !$0.isWorking }.sorted { $0.lastActiveUtc > $1.lastActiveUtc } }
+    var endedToday: [SessionRow] { interactiveSessions.filter { !$0.isActive }.sorted { $0.endedUtc > $1.endedUtc } }
     var backgroundServices: [SessionRow] { sessions.filter { $0.kind == "background service" } }
     /// Sessions currently paused (Kai skipped for them, auto-resuming).
     var pausedSessions: [SessionRow] {
@@ -252,7 +276,7 @@ struct SessionRowView: View {
                 HStack(spacing: 6) {          // project once, window/tab, time
                     Text(session.projectName)
                     Text("· \(session.window)")
-                    if !session.runningFor.isEmpty { Text("· running \(session.runningFor)") }
+                    if !session.activeLabel.isEmpty { Text("· \(session.activeLabel)") }
                 }.font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
             }
         }.padding(.vertical, 2)
@@ -304,10 +328,14 @@ struct SessionDetail: View {
                 }
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
                     detailRow("Enforcement", session.enforcement.isEmpty ? "—" : session.enforcement)
-                    detailRow("Project", session.project)
+                    detailRow(session.isIDE ? "Workspaces" : "Project",
+                              session.isIDE ? (session.workspaces ?? []).map { "\($0.name) (\($0.activity))" }
+                                                  .joined(separator: ", ")
+                                            : session.project)
                     detailRow("Window", session.window)
                     detailRow("Host app", session.hostApp.isEmpty ? "-" : session.hostApp)
-                    detailRow("Started", session.startedClock + (session.runningFor.isEmpty ? "" : " · running \(session.runningFor)"))
+                    detailRow("Started", session.startedClock)
+                    detailRow("Activity", session.activeLabel.isEmpty ? session.state : session.activeLabel)
                     detailRow("Processes", "\(session.childCount + 1)")
                     detailRow("State", session.state)
                     detailRow("Session id", session.id)

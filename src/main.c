@@ -114,11 +114,8 @@ static int cmd_status(void) {
     /* Internet is never inferred from the policy: unverified (-1) stays out of
      * the headline and gets its own line below. */
     if (p) {
-        kai_session *s = NULL; int n = 0;
-        kai_sessions_scan(p, &s, &n);
-        agents = 0;
-        for (int i = 0; i < n; i++) if (s[i].kind == KAI_KIND_SESSION && !s[i].ended_utc) agents++;
-        free(s);
+        /* The one session definition (Agent Control): working now. */
+        agents = kai_sessions_working_count();
         kai_policy_free(p);
     }
     printf("%s\n", kai_status_sentence(files, internet, agents,

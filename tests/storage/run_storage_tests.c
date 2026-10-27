@@ -1613,6 +1613,95 @@ static void test_agent_root_pid(void) {
     kai_policy_free(p);
 }
 
+/* Agent Control list: one session model (working / idle / ended), no
+ * delegated rows, one row per IDE app, labels from the measured status. */
+static pid_t spawn_sleep(void) {
+    pid_t c = fork();
+    if (c == 0) { execl("/bin/sleep", "sleep", "20", (char *)NULL); _exit(127); }
+    usleep(100000);
+    return c;
+}
+
+static int sessions_json_run(const char *py_check) {
+    char out[900], cmd[2600];
+    snprintf(out, sizeof out, "%s/sl.json", getenv("KAI_HOME"));
+    snprintf(cmd, sizeof cmd,
+             "KAI_HOME='%s' ./kai sessions --json > '%s' 2>/dev/null && "
+             "/usr/bin/python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); %s' '%s'",
+             getenv("KAI_HOME"), out, py_check, out);
+    int rc = system(cmd);
+    if (rc != 0) {   /* show what the list held, to debug a failure */
+        char show[1100]; snprintf(show, sizeof show, "head -c 1500 '%s'; echo", out);
+        (void)system(show);
+    }
+    unlink(out);
+    return rc;
+}
+
+static void test_session_model(void) {
+    printf("Agent Control list: working / idle / ended, IDE rows, no delegated (list fix)\n");
+    long long now = (long long)time(NULL);
+
+    /* the activity store and the 15-minute window */
+    CHECK(kai_session_working(now - 60, now) == 1, "active a minute ago: working");
+    CHECK(kai_session_working(now - 901, now) == 0, "active 15+ minutes ago: idle");
+    CHECK(kai_session_working(0, now) == 0, "never active: idle");
+    CHECK(kai_session_activity_touch("act-1", "/w/proj/sub", now - 30) == 0, "touch activity");
+    kai_session_activity_touch("act-1", "/w/other", now - 1200);
+    CHECK(kai_session_last_active("act-1", NULL) == now - 30, "last activity overall");
+    CHECK(kai_session_last_active("act-1", "/w/proj") == now - 30, "workspace match by prefix");
+    CHECK(kai_session_last_active("act-1", "/w/other") == now - 1200, "another workspace keeps its own time");
+    CHECK(kai_session_last_active("act-1", "/w/pro") == 0, "a sibling prefix is not a match");
+    CHECK(kai_session_last_active("nope", NULL) == 0, "unknown session: never active");
+
+    /* labels from the measured levels: Files off -> Internet only */
+    CHECK(!strcmp(kai_enforcement_from_levels(0, 2), "Enforced: Internet only"), "files off: Internet only");
+    CHECK(!strcmp(kai_enforcement_from_levels(-1, 2), "Enforced: Internet only"), "files not running: Internet only");
+    CHECK(!strcmp(kai_enforcement_from_levels(2, -1), "Enforced: Files only"), "internet unverified: Files only");
+    CHECK(!strcmp(kai_enforcement_from_levels(1, 2), "Enforced: Files and Internet"), "watch counts as covering");
+
+    /* registry: a working + an idle terminal session, an ended one, a
+     * delegated one, and two Cursor workspaces (one active). */
+    pid_t r1 = spawn_sleep(), r2 = spawn_sleep(), rd = spawn_sleep(), rc1 = spawn_sleep();
+    kai_session_record("sm-work", "codex", "", (int)r1, 0, "/w/a", "", now);
+    kai_session_activity_touch("sm-work", "/w/a", now - 20);
+    kai_session_record("sm-idle", "aider", "", (int)r2, 0, "/w/b", "", now);
+    kai_session_activity_touch("sm-idle", "/w/b", now - 2000);
+    kai_session_record("sm-ended", "claude", "", 1, 0, "/w/c", "", now - 900);
+    kai_session_end("sm-ended", now - 60);
+    kai_session_record("sm-dele", "claude (delegated)", "", (int)rd, 0, "/", "", now - 10);
+    kai_session_activity_touch("sm-dele", "/", now - 5);
+    kai_session_record("sm-cur", "cursor", "", (int)rc1, 0, "/w/wolf", "", now);
+    kai_session_activity_touch("sm-cur", "/w/wolf/engine/src", now - 30);
+    kai_session_activity_touch("sm-cur", "/w/curl", now - 4000);
+
+    CHECK(sessions_json_run("sys.exit(0 if not any(\"delegated\" in x[\"agent\"] for x in d) else 1)") == 0,
+          "no delegated rows in the list");
+    CHECK(sessions_json_run("r=[x for x in d if x[\"id\"]==\"sm-work\"]; "
+                            "sys.exit(0 if r and r[0][\"activity\"]==\"working\" and r[0][\"state\"]==\"active\" else 1)") == 0,
+          "a session active 20 s ago is working");
+    CHECK(sessions_json_run("r=[x for x in d if x[\"id\"]==\"sm-idle\"]; "
+                            "sys.exit(0 if r and r[0][\"activity\"]==\"idle\" and r[0][\"last_active_utc\"]>0 else 1)") == 0,
+          "a session last active 33 min ago is idle, with its last-active time");
+    CHECK(sessions_json_run("r=[x for x in d if x[\"id\"]==\"sm-ended\"]; "
+                            "sys.exit(0 if r and r[0][\"state\"]==\"ended\" and r[0][\"activity\"]==\"ended\" else 1)") == 0,
+          "an ended session is ended, never working or idle");
+    CHECK(sessions_json_run("r=[x for x in d if x[\"agent\"]==\"cursor\"]; "
+                            "sys.exit(0 if len(r)==1 else 1)") == 0,
+          "Cursor is ONE row");
+    CHECK(sessions_json_run("r=[x for x in d if x[\"agent\"]==\"cursor\"][0]; w=r[\"workspaces\"]; "
+                            "a={x[\"path\"]:x[\"activity\"] for x in w}; "
+                            "sys.exit(0 if a.get(\"/w/wolf\")==\"working\" and r[\"activity\"]==\"working\" else 1)") == 0,
+          "an IDE workspace with a command in the last 15 min is working, and so is its row");
+    CHECK(kai_sessions_working_count() >= 2, "working count includes the working terminal + IDE rows");
+    CHECK(kai_sessions_prune_delegated() >= 1, "delegated records are removed from the registry");
+    kai_session g;
+    CHECK(kai_session_get("sm-dele", &g) == 0, "the delegated record is gone");
+    CHECK(kai_session_get("sm-work", &g) == 1, "...and nothing else was removed");
+    pid_t kids[] = {r1, r2, rd, rc1};
+    for (size_t i = 0; i < 4; i++) if (kids[i] > 0) { kill(kids[i], SIGTERM); waitpid(kids[i], NULL, 0); }
+}
+
 static void test_control_service(void) {
     printf("one control path: service apply (Step 3)\n");
     char err[256], msg[600];
@@ -1929,6 +2018,7 @@ int main(void) {
     test_agent_inventory();
     test_session_reports();
     test_session_live();
+    test_session_model();
     test_grant_tiers();
     test_session_pause();
     test_enforcement_labels();

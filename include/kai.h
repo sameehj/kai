@@ -366,6 +366,18 @@ const char *kai_enforcement_label(int storage_active, int network_active);
 /* A registry session is live: not ended, root process running and not a newer
  * process reusing its pid. */
 int kai_session_live(const kai_session *s);
+/* Session label from measured wall levels (>= 1 covers: Watch or Protect). */
+const char *kai_enforcement_from_levels(int files, int internet);
+/* Session activity: "working" = a command or hook in the last 15 minutes. */
+#define KAI_WORKING_WINDOW 900
+int kai_session_working(long long last_active, long long now);
+const char *kai_session_activity_dir(void);
+/* Record activity for a session (and the working folder it ran in). */
+int kai_session_activity_touch(const char *sid, const char *workspace, long long now);
+/* Last activity of a session, overall (workspace NULL) or in a folder (and below). 0 = never. */
+long long kai_session_last_active(const char *sid, const char *workspace);
+/* Remove registry records of "(delegated)" processes. Returns the count. */
+int kai_sessions_prune_delegated(void);
 /* The one status sentence ("Protected · 3 agents working", "Watching only",
  * "Files protection is off", ...). files/internet: 0 off, 1 watch, 2 protect;
  * internet -1 = not verified (left out of the headline); agents < 0 = unknown.

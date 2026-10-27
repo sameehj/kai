@@ -180,4 +180,8 @@ int kai_proc_read(int pid, kai_proc *out); /* 0 on success */
 int kai_proc_read_fast(int pid, kai_proc *out); /* like kai_proc_read but skips the Team ID (no code-signing lookup) */
 void kai_proc_free(kai_proc *pr);
 
+/* Agent Control: live interactive sessions working now (a command or hook in
+ * the last 15 minutes). The one count for the popover and `kai status`. */
+int kai_sessions_working_count(void);
+
 #endif

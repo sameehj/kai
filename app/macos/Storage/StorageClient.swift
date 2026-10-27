@@ -131,6 +131,7 @@ final class StorageClient {
         scheduleTimingExport()
         #if KAI_STORAGE_ENFORCE
         openGrantStore()
+        _ = kai_sessions_prune_delegated()   // older builds gave delegated processes sessions
         giveRegistryToUser()   // records an older build left root-owned
         #endif
         scheduleHealth()
@@ -359,6 +360,18 @@ final class StorageClient {
         let p = pid(proc)
         let ppid = proc.pointee.ppid
         let pidv = UInt32(proc.pointee.audit_token.val.7)
+        // A "(delegated)" process (its RESPONSIBLE process is an agent, e.g. a
+        // helper launchd started for it) never owns a session: it joins the
+        // responsible agent's session, or has none if that can't be found.
+        if agent.hasSuffix(" (delegated)") {
+            let rp = pidOf(proc.pointee.responsible_audit_token)
+            lock.lock()
+            let s = sessions[rp]
+            if let s { sessions[p] = (s.sid, s.project, pidv) }
+            lock.unlock()
+            if let s { writeSessionFile(pid: p, pidv: pidv, sid: s.sid, project: s.project) }
+            return
+        }
         lock.lock()
         var inherited = sessions[ppid]
         let pol = policy
@@ -410,6 +423,32 @@ final class StorageClient {
         if let sid { chown(dir + "/" + sid + ".json", userUID, userGID); return }
         for f in (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? [] {
             chown(dir + "/" + f, userUID, userGID)
+        }
+    }
+
+    /// Agent Control "working": record that a session ran a command (a hook is
+    /// an exec of `kai hook`, so it counts too) in the folder it ran in. At
+    /// most once per 30 s per session+folder, written off the ES handler.
+    private var activitySeen: [String: Date] = [:]
+    private func noteActivity(_ proc: UnsafeMutablePointer<es_process_t>) {
+        let p = pid(proc)
+        let sid = sessionFor(p, UInt32(proc.pointee.audit_token.val.7)).sid
+        guard !sid.isEmpty else { return }
+        let cwd = cwdOf(p)
+        let key = sid + "|" + cwd
+        lock.lock()
+        if let t = activitySeen[key], Date().timeIntervalSince(t) < 30 { lock.unlock(); return }
+        if activitySeen.count > 4096 { activitySeen.removeAll() }
+        activitySeen[key] = Date()
+        lock.unlock()
+        let uid = userUID, gid = userGID
+        DispatchQueue.global(qos: .utility).async {
+            let now = Int64(Date().timeIntervalSince1970)
+            _ = kai_session_activity_touch(sid, cwd, now)
+            guard uid >= 501 else { return }
+            let dir = String(cString: kai_session_activity_dir())
+            chown(dir, uid, gid)
+            chown(dir + "/" + sid + ".json", uid, gid)
         }
     }
 
@@ -605,7 +644,14 @@ final class StorageClient {
                 let v = classify(target)                      // agent name, "" non-agent, nil unknown
                 if filter == .process, let v { muteFS(target, v.isEmpty) }
                 #if KAI_STORAGE_ENFORCE
-                if let v, !v.isEmpty { mintSession(target, agent: v) }  // agents get/inherit a session
+                if let v, !v.isEmpty {
+                    mintSession(target, agent: v)                  // agents get/inherit a session
+                    noteActivity(target)                           // a command ran: working
+                }
+                #endif
+            } else {
+                #if KAI_STORAGE_ENFORCE
+                noteActivity(target)   // `kai hook …` (Kai-signed) inherits the agent's session at fork: a hook event
                 #endif
             }
         case ES_EVENT_TYPE_NOTIFY_FORK:

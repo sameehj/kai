@@ -51,7 +51,7 @@ struct MenuView: View {
     // from observed enforcement only — replaces the big shield and the weekly
     // counters (those stay in the window).
     private var statusLine: some View {
-        let running = agents.interactiveSessions.filter { $0.isActive }.count
+        let running = agents.workingNow.count   // the one definition: working now
         let needs = grantManager.pending.count + grantManager.pendingPolicy.count
         let activeGrants = grantManager.grants.count
         let blockedToday = model.events.filter {
@@ -68,7 +68,7 @@ struct MenuView: View {
             }
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("\(running)").font(Theme.display(34)).foregroundStyle(glow)
-                Text("agent session\(running == 1 ? "" : "s") running")
+                Text("agent\(running == 1 ? "" : "s") working now")
                     .font(.system(size: 13)).foregroundStyle(Theme.soft)
             }
             HStack(spacing: 6) {
@@ -99,17 +99,16 @@ struct MenuView: View {
         }
     }
 
-    // Item 2: Active now — one row per running session (opens its detail).
+    // Working now — sessions with a command or hook in the last 15 minutes
+    // (opens Agent Control); idle ones are counted, not listed.
     private var activeNow: some View {
-        // Group sessions under their agent ("Claude Code · 3") so several
-        // sessions don't become a long flat list.
-        let running = agents.interactiveSessions.filter { $0.isActive }
-            .sorted { $0.startedUtc > $1.startedUtc }
+        let running = agents.workingNow
+        let idleCount = agents.idle.count
         let groups = Dictionary(grouping: running, by: { $0.displayAgent })
         return VStack(alignment: .leading, spacing: 6) {
-            if !running.isEmpty {
+            if !running.isEmpty || idleCount > 0 {
                 HStack {
-                    CapsLabel("Active now")
+                    CapsLabel("Working now")
                     Spacer()
                     Button("Open Agent Control") { openAgentControl() }
                         .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
@@ -123,6 +122,11 @@ struct MenuView: View {
                         Button { openAgentControl() } label: { PopoverSessionRow(session: s, grants: gc) }
                             .buttonStyle(.plain)
                     }
+                }
+                if idleCount > 0 {
+                    Button { openAgentControl() } label: {
+                        Text("\(idleCount) idle").font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    }.buttonStyle(.plain)
                 }
             }
         }
@@ -616,7 +620,7 @@ struct PopoverSessionRow: View {
                 }
                 HStack(spacing: 6) {
                     Text(session.window)
-                    if !session.runningFor.isEmpty { Text("· running \(session.runningFor)") }
+                    if !session.activeLabel.isEmpty { Text("· \(session.activeLabel)") }
                 }.font(.system(size: 10)).foregroundStyle(Theme.muted).lineLimit(1)
             }
             Spacer()

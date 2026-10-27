@@ -252,10 +252,24 @@ int kai_cmd_grant(int argc, char **argv) {
 
 static const char *sess_state(const kai_session *s) { return s->ended_utc ? "ended" : "active"; }
 
+/* One row of the Agent Control list. ONE definition, used by the list, the
+ * popover count and `kai status`: live sessions are "working" (a command or
+ * hook in the last 15 minutes) or "idle"; ended ones are separate. An IDE app
+ * is one row holding its workspaces. */
+#define ROW_MAX_WS 16
+typedef struct {
+    kai_session s;
+    long long last;                 /* last activity (0 = none seen) */
+    int nws;
+    char ws[ROW_MAX_WS][512];
+    long long wslast[ROW_MAX_WS];
+} sess_row;
 
-/* Merge the ES registry (authoritative, storage wall active) with the
- * storage-wall-free process scan, deduped by root pid (registry wins). This is
- * why sessions are visible even with the storage wall off. Caller frees *out. */
+static const char *row_activity(const sess_row *r, long long now) {
+    if (r->s.ended_utc) return "ended";
+    return kai_session_working(r->last, now) ? "working" : "idle";
+}
+
 /* A live record whose root runs under another live record's root of the same
  * agent (an older build keyed a child, e.g. Codex's app-server, to itself) is
  * folded into that session. */
@@ -276,30 +290,40 @@ static int root_is_nested(const kai_session *reg, int nr, int i) {
     return 0;
 }
 
-static int merged_sessions(kai_session **out, int *n) {
+static int is_delegated(const kai_session *s) { return strstr(s->agent, " (delegated)") != NULL; }
+
+static void row_add_ws(sess_row *r, const char *path) {
+    if (!path || !*path || !strcmp(path, "/") || path[0] == '(') return;
+    for (int i = 0; i < r->nws; i++) if (!strcmp(r->ws[i], path)) return;
+    if (r->nws < ROW_MAX_WS) kai_strlcpy(r->ws[r->nws++], path, sizeof r->ws[0]);
+}
+
+/* Merge the ES registry (authoritative while the storage wall runs) with the
+ * wall-free process scan, deduped by root pid (registry wins), then fold each
+ * IDE app into one row. Delegated processes never own a session. Caller frees. */
+static int session_rows(sess_row **out, int *n) {
     kai_session *reg = NULL; int nr = 0;
     kai_sessions_load(&reg, &nr);
     char err[256];
     kai_policy *p = kai_policy_load(NULL, err, sizeof err);
     kai_session *scan = NULL; int ns = 0;
     if (p) { kai_sessions_scan(p, &scan, &ns); kai_policy_free(p); }
-    kai_session *all = calloc((size_t)(nr + ns + 1), sizeof *all);
+    sess_row *rows = calloc((size_t)(nr + ns + 1), sizeof *rows);
     int c = 0;
     long long now = (long long)time(NULL);
-    if (all) {
-        /* Live fix: only live records (one per agent root, the newest), plus
-         * ones that ended in the last day. Records a restarted wall never ended
-         * - thousands of them - are not sessions. */
-        /* Ended ones: the 20 most recent of the last day. */
+    if (rows) {
+        /* Ended: the 20 most recent of the last day; never mixed with live. */
         int nended = 0;
         for (int i = 0; i < nr; i++)
-            if (!kai_session_live(&reg[i]) && reg[i].ended_utc && now - reg[i].ended_utc < 86400) nended++;
+            if (!is_delegated(&reg[i]) && !kai_session_live(&reg[i]) && reg[i].ended_utc &&
+                now - reg[i].ended_utc < 86400) nended++;
         long long cutoff = 0;
         if (nended > 20) {
             long long *ts = calloc((size_t)nended, sizeof *ts);
             int k = 0;
             for (int i = 0; ts && i < nr; i++)
-                if (!kai_session_live(&reg[i]) && reg[i].ended_utc && now - reg[i].ended_utc < 86400)
+                if (!is_delegated(&reg[i]) && !kai_session_live(&reg[i]) && reg[i].ended_utc &&
+                    now - reg[i].ended_utc < 86400)
                     ts[k++] = reg[i].ended_utc;
             for (int a = 0; ts && a < 20; a++)          /* partial selection: 20th newest */
                 for (int b2 = a + 1; b2 < k; b2++)
@@ -308,68 +332,144 @@ static int merged_sessions(kai_session **out, int *n) {
             free(ts);
         }
         for (int i = 0; i < nr; i++) {
+            if (is_delegated(&reg[i])) continue;
             int live = kai_session_live(&reg[i]);
-            if (!live && !(reg[i].ended_utc && now - reg[i].ended_utc < 86400 && reg[i].ended_utc >= cutoff))
+            if (!live) {
+                if (reg[i].ended_utc && now - reg[i].ended_utc < 86400 && reg[i].ended_utc >= cutoff) {
+                    rows[c].s = reg[i]; rows[c].last = kai_session_last_active(reg[i].id, NULL); c++;
+                }
                 continue;
-            if (!live) { all[c++] = reg[i]; continue; }
+            }
             if (root_is_nested(reg, nr, i)) continue;
             int newer = 0;
             for (int j = 0; j < nr && !newer; j++)
-                if (j != i && reg[j].root_pid == reg[i].root_pid && kai_session_live(&reg[j]) &&
+                if (j != i && !is_delegated(&reg[j]) && reg[j].root_pid == reg[i].root_pid &&
+                    kai_session_live(&reg[j]) &&
                     (reg[j].started_utc > reg[i].started_utc ||
                      (reg[j].started_utc == reg[i].started_utc && strcmp(reg[j].id, reg[i].id) > 0)))
                     newer = 1;
-            if (!newer) all[c++] = reg[i];
+            if (newer) continue;
+            rows[c].s = reg[i];
+            rows[c].last = kai_session_last_active(reg[i].id, NULL);
+            c++;
         }
         int nlive = c;
         for (int i = 0; i < ns; i++) {
             int dup = 0;
             for (int j = 0; j < nlive; j++)
-                if (!all[j].ended_utc && all[j].root_pid != 0 && all[j].root_pid == scan[i].root_pid) {
+                if (!rows[j].s.ended_utc && rows[j].s.root_pid != 0 && rows[j].s.root_pid == scan[i].root_pid) {
                     /* the wall's record wins, but keep what only the scan knows */
-                    if (!all[j].tty[0]) kai_strlcpy(all[j].tty, scan[i].tty, sizeof all[j].tty);
-                    if (!all[j].host_app[0]) kai_strlcpy(all[j].host_app, scan[i].host_app, sizeof all[j].host_app);
-                    all[j].kind = scan[i].kind;
+                    if (!rows[j].s.tty[0]) kai_strlcpy(rows[j].s.tty, scan[i].tty, sizeof rows[j].s.tty);
+                    if (!rows[j].s.host_app[0])
+                        kai_strlcpy(rows[j].s.host_app, scan[i].host_app, sizeof rows[j].s.host_app);
+                    rows[j].s.kind = scan[i].kind;
+                    if (kai_agent_product_kind(scan[i].agent) == KAI_AGENT_IDE) row_add_ws(&rows[j], scan[i].project);
                     dup = 1; break;
                 }
-            if (!dup) all[c++] = scan[i];
+            if (!dup) { rows[c].s = scan[i]; rows[c].last = 0; c++; }   /* scan-only: no activity seen */
+        }
+
+        /* One row per IDE app: its live rows' workspaces, each working or idle
+         * by the activity recorded in that folder. */
+        for (int i = 0; i < c; i++) {
+            if (rows[i].s.ended_utc || kai_agent_product_kind(rows[i].s.agent) != KAI_AGENT_IDE) continue;
+            sess_row *h = &rows[i];
+            row_add_ws(h, h->s.project);
+            char sids[32][KAI_SESSION_ID_MAX]; int nsid = 0;
+            if (h->s.source != KAI_SESS_SCAN) kai_strlcpy(sids[nsid++], h->s.id, sizeof sids[0]);
+            for (int j = i + 1; j < c; j++) {
+                if (rows[j].s.ended_utc || strcmp(rows[j].s.agent, h->s.agent)) continue;
+                row_add_ws(h, rows[j].s.project);
+                for (int w = 0; w < rows[j].nws; w++) row_add_ws(h, rows[j].ws[w]);
+                if (rows[j].s.source != KAI_SESS_SCAN && nsid < 32) kai_strlcpy(sids[nsid++], rows[j].s.id, sizeof sids[0]);
+                if (h->s.source == KAI_SESS_SCAN && rows[j].s.source != KAI_SESS_SCAN) {
+                    kai_session keep = h->s;            /* prefer the wall's id for the row */
+                    h->s = rows[j].s;
+                    if (!h->s.host_app[0]) kai_strlcpy(h->s.host_app, keep.host_app, sizeof h->s.host_app);
+                }
+                if (rows[j].s.started_utc && (!h->s.started_utc || rows[j].s.started_utc < h->s.started_utc))
+                    h->s.started_utc = rows[j].s.started_utc;
+                rows[j] = rows[--c]; j--;               /* folded into h */
+            }
+            h->last = 0;
+            for (int w = 0; w < h->nws; w++) {
+                h->wslast[w] = 0;
+                for (int k = 0; k < nsid; k++) {
+                    long long t = kai_session_last_active(sids[k], h->ws[w]);
+                    if (t > h->wslast[w]) h->wslast[w] = t;
+                }
+                if (h->wslast[w] > h->last) h->last = h->wslast[w];
+            }
+            h->s.project[0] = '\0';
         }
     }
     free(reg); free(scan);
-    *out = all; *n = c;
+    *out = rows; *n = c;
     return c;
 }
 
+/* The popover headline and `kai status` count: live interactive rows working now. */
+int kai_sessions_working_count(void) {
+    sess_row *r = NULL; int n = 0;
+    session_rows(&r, &n);
+    long long now = (long long)time(NULL);
+    int w = 0;
+    for (int i = 0; i < n; i++)
+        if (!r[i].s.ended_utc && r[i].s.kind == KAI_KIND_SESSION && kai_session_working(r[i].last, now)) w++;
+    free(r);
+    return w;
+}
+
+static void ago(long long secs, char *out, size_t n) {
+    if (secs < 60) snprintf(out, n, "%llds", secs);
+    else if (secs < 3600) snprintf(out, n, "%lldm", secs / 60);
+    else if (secs < 86400) snprintf(out, n, "%lldh %lldm", secs / 3600, (secs % 3600) / 60);
+    else snprintf(out, n, "%lldd", secs / 86400);
+}
+
 static int sessions_list(int json) {
-    kai_session *s = NULL; int n = 0;
-    merged_sessions(&s, &n);
-    /* Verified (root-owned, fresh) heartbeats only; see kai_heartbeat_level. */
-    int storage_active = kai_wall_observed_level("storage") >= 0;
-    int network_active = kai_wall_observed_level("network") >= 0;
-    const char *enf = kai_enforcement_label(storage_active, network_active);
+    sess_row *r = NULL; int n = 0;
+    session_rows(&r, &n);
+    long long now = (long long)time(NULL);
+    /* Labels from the same measured, verified levels as the headline. */
+    const char *enf = kai_enforcement_from_levels(kai_wall_observed_level("storage"),
+                                                  kai_wall_observed_level("network"));
     if (json) {
-        /* cJSON escapes every string: a topic with a newline or quote used to
-         * break the whole list (and the app then showed no sessions). */
+        /* cJSON escapes every string (a topic with a newline used to break it). */
         cJSON *arr = cJSON_CreateArray();
         for (int i = 0; i < n; i++) {
+            const kai_session *s = &r[i].s;
             char topic[128] = "";
-            kai_session_report_get(s[i].id, topic, sizeof topic);
+            kai_session_report_get(s->id, topic, sizeof topic);
             /* topic is agent-reported + already redacted; shown, never trusted. */
             cJSON *o = cJSON_CreateObject();
-            cJSON_AddStringToObject(o, "id", s[i].id);
-            cJSON_AddStringToObject(o, "agent", s[i].agent);
+            cJSON_AddStringToObject(o, "id", s->id);
+            cJSON_AddStringToObject(o, "agent", s->agent);
             cJSON_AddStringToObject(o, "topic", topic);
             cJSON_AddBoolToObject(o, "topic_reported_by_agent", 1);
-            cJSON_AddStringToObject(o, "project", s[i].project);
-            cJSON_AddStringToObject(o, "host_app", s[i].host_app);
-            cJSON_AddStringToObject(o, "tty", s[i].tty);
-            cJSON_AddNumberToObject(o, "started_utc", (double)s[i].started_utc);
-            cJSON_AddNumberToObject(o, "ended_utc", (double)s[i].ended_utc);
-            cJSON_AddNumberToObject(o, "child_count", s[i].child_count);
-            cJSON_AddStringToObject(o, "source", s[i].source == KAI_SESS_SCAN ? "scan" : "es");
-            cJSON_AddStringToObject(o, "kind", kai_session_kind_name(s[i].kind));
+            cJSON_AddStringToObject(o, "project", s->project);
+            cJSON_AddStringToObject(o, "host_app", s->host_app);
+            cJSON_AddStringToObject(o, "tty", s->tty);
+            cJSON_AddNumberToObject(o, "started_utc", (double)s->started_utc);
+            cJSON_AddNumberToObject(o, "ended_utc", (double)s->ended_utc);
+            cJSON_AddNumberToObject(o, "last_active_utc", (double)r[i].last);
+            cJSON_AddStringToObject(o, "activity", row_activity(&r[i], now));
+            cJSON_AddNumberToObject(o, "child_count", s->child_count);
+            cJSON_AddStringToObject(o, "source", s->source == KAI_SESS_SCAN ? "scan" : "es");
+            cJSON_AddStringToObject(o, "kind", kai_session_kind_name(s->kind));
             cJSON_AddStringToObject(o, "enforcement", enf);
-            cJSON_AddStringToObject(o, "state", sess_state(&s[i]));
+            cJSON_AddStringToObject(o, "state", sess_state(s));
+            if (kai_agent_product_kind(s->agent) == KAI_AGENT_IDE && !s->ended_utc) {
+                cJSON *ws = cJSON_AddArrayToObject(o, "workspaces");
+                for (int w = 0; w < r[i].nws; w++) {
+                    cJSON *x = cJSON_CreateObject();
+                    cJSON_AddStringToObject(x, "path", r[i].ws[w]);
+                    cJSON_AddNumberToObject(x, "last_active_utc", (double)r[i].wslast[w]);
+                    cJSON_AddStringToObject(x, "activity",
+                                            kai_session_working(r[i].wslast[w], now) ? "working" : "idle");
+                    cJSON_AddItemToArray(ws, x);
+                }
+            }
             cJSON_AddItemToArray(arr, o);
         }
         char *js = cJSON_PrintUnformatted(arr);
@@ -377,28 +477,35 @@ static int sessions_list(int json) {
         printf("%s\n", js ? js : "[]");
         free(js);
     } else {
-        int sessions = 0;
-        for (int i = 0; i < n; i++) if (s[i].kind == KAI_KIND_SESSION) sessions++;
-        printf("%-12s %-8s %-10s %-24s %-26s %s\n",
-               "session", "agent", "window", "project", "enforcement", "topic (reported)");
-        for (int i = 0; i < n; i++) {
-            if (s[i].kind != KAI_KIND_SESSION) continue;
-            char topic[128] = "";
-            kai_session_report_get(s[i].id, topic, sizeof topic);
-            printf("%-12s %-8s %-10s %-24.24s %-26s %s\n", s[i].id, s[i].agent,
-                   s[i].tty[0] ? s[i].tty : (s[i].host_app[0] ? s[i].host_app : "-"),
-                   s[i].project, enf, topic[0] ? topic : "-");
+        static const char *const SECTIONS[] = {"working", "idle", "ended"};
+        static const char *const TITLES[] = {"Working now", "Idle", "Ended today"};
+        for (int sct = 0; sct < 3; sct++) {
+            int cnt = 0;
+            for (int i = 0; i < n; i++)
+                if (r[i].s.kind == KAI_KIND_SESSION && !strcmp(row_activity(&r[i], now), SECTIONS[sct])) cnt++;
+            printf("%s (%d)\n", TITLES[sct], cnt);
+            for (int i = 0; i < n; i++) {
+                const kai_session *s = &r[i].s;
+                if (s->kind != KAI_KIND_SESSION || strcmp(row_activity(&r[i], now), SECTIONS[sct])) continue;
+                char when[32] = "-", where[600];
+                if (r[i].last) ago(now - r[i].last, when, sizeof when);
+                if (kai_agent_product_kind(s->agent) == KAI_AGENT_IDE && !s->ended_utc)
+                    snprintf(where, sizeof where, "%d workspace%s", r[i].nws, r[i].nws == 1 ? "" : "s");
+                else
+                    snprintf(where, sizeof where, "%s", s->project);
+                printf("  %-8.8s %-8s %-9s %-28.28s last active %-7s %s\n", s->id, s->agent,
+                       s->tty[0] ? s->tty : (s->host_app[0] ? s->host_app : "-"), where, when,
+                       s->ended_utc ? "" : enf);
+            }
         }
-        if (sessions == 0) printf("(no interactive sessions)\n");
         /* Background services and orphans are listed apart, not counted as sessions. */
         for (int i = 0; i < n; i++) {
-            if (s[i].kind == KAI_KIND_SESSION) continue;
-            printf("  [%s] %-8s pid %-6d %s\n", kai_session_kind_name(s[i].kind),
-                   s[i].agent, s[i].root_pid, s[i].project);
+            if (r[i].s.kind == KAI_KIND_SESSION) continue;
+            printf("  [%s] %-8s pid %-6d %s\n", kai_session_kind_name(r[i].s.kind),
+                   r[i].s.agent, r[i].s.root_pid, r[i].s.project);
         }
-        printf("\n%d interactive session(s).\n", sessions);
     }
-    free(s);
+    free(r);
     return 0;
 }
 
