@@ -256,6 +256,26 @@ static const char *sess_state(const kai_session *s) { return s->ended_utc ? "end
 /* Merge the ES registry (authoritative, storage wall active) with the
  * storage-wall-free process scan, deduped by root pid (registry wins). This is
  * why sessions are visible even with the storage wall off. Caller frees *out. */
+/* A live record whose root runs under another live record's root of the same
+ * agent (an older build keyed a child, e.g. Codex's app-server, to itself) is
+ * folded into that session. */
+static int root_is_nested(const kai_session *reg, int nr, int i) {
+    int pid = reg[i].root_pid;
+    for (int depth = 0; pid > 1 && depth < 64; depth++) {
+        kai_proc pr;
+        if (kai_proc_read_fast(pid, &pr) != 0) break;
+        int parent = pr.ppid;
+        kai_proc_free(&pr);
+        if (parent <= 1 || parent == pid) break;
+        for (int j = 0; j < nr; j++)
+            if (j != i && reg[j].root_pid == parent && !strcmp(reg[j].agent, reg[i].agent) &&
+                kai_session_live(&reg[j]))
+                return 1;
+        pid = parent;
+    }
+    return 0;
+}
+
 static int merged_sessions(kai_session **out, int *n) {
     kai_session *reg = NULL; int nr = 0;
     kai_sessions_load(&reg, &nr);
@@ -270,10 +290,29 @@ static int merged_sessions(kai_session **out, int *n) {
         /* Live fix: only live records (one per agent root, the newest), plus
          * ones that ended in the last day. Records a restarted wall never ended
          * - thousands of them - are not sessions. */
+        /* Ended ones: the 20 most recent of the last day. */
+        int nended = 0;
+        for (int i = 0; i < nr; i++)
+            if (!kai_session_live(&reg[i]) && reg[i].ended_utc && now - reg[i].ended_utc < 86400) nended++;
+        long long cutoff = 0;
+        if (nended > 20) {
+            long long *ts = calloc((size_t)nended, sizeof *ts);
+            int k = 0;
+            for (int i = 0; ts && i < nr; i++)
+                if (!kai_session_live(&reg[i]) && reg[i].ended_utc && now - reg[i].ended_utc < 86400)
+                    ts[k++] = reg[i].ended_utc;
+            for (int a = 0; ts && a < 20; a++)          /* partial selection: 20th newest */
+                for (int b2 = a + 1; b2 < k; b2++)
+                    if (ts[b2] > ts[a]) { long long t = ts[a]; ts[a] = ts[b2]; ts[b2] = t; }
+            if (ts) cutoff = ts[19];
+            free(ts);
+        }
         for (int i = 0; i < nr; i++) {
             int live = kai_session_live(&reg[i]);
-            if (!live && !(reg[i].ended_utc && now - reg[i].ended_utc < 86400)) continue;
-            if (!live) { if (!reg[i].ended_utc) reg[i].ended_utc = now; all[c++] = reg[i]; continue; }
+            if (!live && !(reg[i].ended_utc && now - reg[i].ended_utc < 86400 && reg[i].ended_utc >= cutoff))
+                continue;
+            if (!live) { all[c++] = reg[i]; continue; }
+            if (root_is_nested(reg, nr, i)) continue;
             int newer = 0;
             for (int j = 0; j < nr && !newer; j++)
                 if (j != i && reg[j].root_pid == reg[i].root_pid && kai_session_live(&reg[j]) &&

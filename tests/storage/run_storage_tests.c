@@ -1016,7 +1016,7 @@ static void test_session_live(void) {
     pid_t jr = fork();
     if (jr == 0) { execl("/bin/sleep", "sleep", "10", (char *)NULL); _exit(127); }
     usleep(100000);
-    kai_session_record("es-json", "claude", "", (int)jr, 0, "/w", "", (long long)time(NULL) + 1);
+    kai_session_record("es-json", "gemini", "", (int)jr, 0, "/w", "", (long long)time(NULL) + 1);
     kai_policy *p = mk("secrets redact\n");
     kai_session_report_topic(p, "es-json", "conv-json", "line one\nline two \"quoted\"");
     kai_policy_free(p);
