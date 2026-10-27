@@ -22,7 +22,7 @@ struct MenuView: View {
             header
             if let msg = model.errorMessage { ErrorBanner(message: msg) { model.errorMessage = nil } }
             if let b = alert {
-                BlockedHero(event: b,
+                BlockNotice(event: b,
                             dismiss: { withAnimation { dismissedBlock = b.id } },
                             details: { open(.activity) })
             }
@@ -335,58 +335,50 @@ struct StatusHero: View {
     }
 }
 
-struct BlockedHero: View {
+/// Phase A item 3: a hook block, as a card with a next step, never a dead
+/// end. (Wall blocks stage their own decision card in Needs you.) The rule and
+/// excerpt live behind "Why?"; "Open Activity" is where "Not a threat" lives.
+struct BlockNotice: View {
     let event: AuditEvent
     let dismiss: () -> Void
     let details: () -> Void
-    @State private var pulse = false
+    @State private var showWhy = false
 
     var body: some View {
-        VStack(spacing: 12) {
-            ZStack {
-                Circle().fill(RadialGradient(colors: [Theme.coral.opacity(0.22), .clear], center: .center,
-                                             startRadius: 0, endRadius: 64))
-                Circle().stroke(Theme.coral.opacity(0.12), lineWidth: 10).padding(-5)
-                    .scaleEffect(pulse ? 1.08 : 1)
-                Circle().stroke(Theme.coral, lineWidth: 2)
-                Image(systemName: "xmark.shield").font(.system(size: 50, weight: .light))
-                    .foregroundStyle(Theme.coral)
-            }
-            .frame(width: 120, height: 120)
-            .shadow(color: Theme.coral.opacity(0.4), radius: 24)
-            .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever()) { pulse = true } }
-            Text("Kai stopped \(event.agentName)").font(Theme.display(22)).multilineTextAlignment(.center)
-            Text(event.isPrompt ? "The prompt wasn't sent." : event.isNetwork ? "The connection was dropped."
-                                                             : "The action didn't run.")
-                .font(.system(size: 13)).foregroundStyle(Theme.soft)
-
-            Card(stroke: Color(hex: 0x4A2A27)) {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        CapsLabel("What happened")
-                        Spacer()
-                        if let d = event.date { Text(ago(d)).font(.system(size: 12)).foregroundStyle(Theme.muted) }
+        Card(stroke: Color(hex: 0x4A2A27)) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Image(systemName: "xmark.shield").foregroundStyle(Theme.coral)
+                    Text("\(event.agentName) was stopped").font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    if let d = event.date { Text(ago(d)).font(.system(size: 11)).foregroundStyle(Theme.muted) }
+                }
+                Text((event.isPrompt ? "The prompt wasn't sent" : "The action didn't run")
+                     + (event.detail.isEmpty ? "." : ": \(event.detail)."))
+                    .font(.system(size: 12)).foregroundStyle(Theme.soft)
+                    .fixedSize(horizontal: false, vertical: true)
+                if showWhy {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let x = event.excerpt {
+                            Text(x).font(Theme.mono).foregroundStyle(Color(hex: 0xFFB4AC)).lineLimit(4)
+                        }
+                        if !event.rule.isEmpty {
+                            Text("Rule: \(event.rule)").font(.system(size: 11)).foregroundStyle(Theme.muted)
+                        }
                     }
-                    Text(event.excerpt ?? (event.detail.isEmpty ? event.rule : event.detail))
-                        .font(Theme.mono).foregroundStyle(Color(hex: 0xFFB4AC)).lineLimit(4)
-                        .padding(10).frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Theme.ink, in: RoundedRectangle(cornerRadius: 8))
-                    if event.excerpt != nil && !event.detail.isEmpty {
-                        Text(event.detail).font(.system(size: 12)).foregroundStyle(Theme.muted)
-                    }
-                    if !event.rule.isEmpty {
-                        Label(event.rule, systemImage: "circle.fill")
-                            .labelStyle(DotLabelStyle(color: Theme.coral))
-                            .font(.system(size: 13))
-                    }
-                    HStack(spacing: 8) {
-                        Button("Got it", action: dismiss).buttonStyle(WhiteButtonStyle())
-                        Button("View details", action: details).buttonStyle(GhostButtonStyle())
-                    }
+                    .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.ink, in: RoundedRectangle(cornerRadius: 8))
+                }
+                HStack(spacing: 8) {
+                    Button("Dismiss", action: dismiss).buttonStyle(WhiteButtonStyle())
+                    Button(event.canExemptCommand ? "Not a threat?" : "Open Activity", action: details)
+                        .buttonStyle(GhostButtonStyle())
+                    Spacer()
+                    Button(showWhy ? "Hide" : "Why?") { withAnimation { showWhy.toggle() } }
+                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.muted)
                 }
             }
         }
-        .frame(maxWidth: .infinity)
     }
 }
 

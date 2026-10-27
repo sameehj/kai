@@ -446,7 +446,8 @@ struct ApprovalCard: View {
             // override → confirm; normal/confirm → the usual allow buttons.
             switch req.tier ?? 1 {
             case 4:
-                Text("Kai protects its own settings; this can't be approved from here.")
+                // Always protected: no allow button, one-line reason (the note).
+                Text("Always protected. You can change it yourself; agents can't.")
                     .font(.caption).foregroundColor(.secondary)
                 HStack { Button("Dismiss") { manager.deny(req) } }
             case 3:

@@ -70,10 +70,15 @@ extension AppModel {
         events.filter { $0.detail.hasPrefix("possible prompt injection") }.count
     }
 
-    /// The block that is still "fresh" (last 30 s), shown as the alert hero.
+    /// A hook block that is still "fresh" (last 30 s), shown as a notice card.
+    /// Wall blocks (storage, network) are left out: each stages its own
+    /// decision card in Needs you, so showing them here would double up.
     var freshBlock: AuditEvent? {
         guard let t = lastBlockAt, Date().timeIntervalSince(t) < 30 else { return nil }
-        return events.first(where: \.isBlock)
+        return events.first {
+            $0.isBlock && !$0.isStorage && !$0.isNetwork &&
+                ($0.date.map { Date().timeIntervalSince($0) < 30 } ?? false)
+        }
     }
 
     /// Allow a destination the wall noticed: a host name, or for a connection

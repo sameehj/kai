@@ -308,7 +308,8 @@ final class StorageClient {
         let fp = dir + "/" + id + ".json"
         writeFileNoFollow(fp, Array(json.utf8), append: false)
         if userUID >= 501 { chown(fp, userUID, userGID); chown(dir, userUID, userGID) }
-        kai_grant_audit("requested", id, agent, p, opCode(opStr), "request", "awaiting approval")
+        kai_grant_audit("requested", id, agent, p, opCode(opStr), "request",
+                        tier == 4 ? "always protected (card shown)" : "awaiting approval")
     }
 
     // MARK: M1.2 session identity
@@ -783,11 +784,10 @@ final class StorageClient {
                         kai_grant_audit("used", "(granted)", agent, p, opCode(grantOp), "allow", "scoped grant")
                         return true
                     }
-                    // Built-in control paths cannot be granted. Do not show an
-                    // approval card that promises access the engine will deny.
-                    if kai_rule_is_builtin(why) == 0 {
-                        requestApproval(proc, path: p, agent: agent, opStr: grantOp, rule: reason)
-                    }
+                    // Phase A item 3: every block gets a card, never a dead end.
+                    // Built-in control paths cannot be granted, so theirs is a
+                    // never-tier (4) "Always protected" card with no allow button.
+                    requestApproval(proc, path: p, agent: agent, opStr: grantOp, rule: reason)
                     #endif
                     dlog("BLOCK \(eventOp) \(agent) pid \(pid(proc)) \(p) (\(reason))")
                     audit(decision: "block", agent: agent, op: eventOp, path: p, why: reason)

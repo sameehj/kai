@@ -425,6 +425,9 @@ kai_override_tier_t kai_override_tier(const char *rule) {
 
 const char *kai_rule_explanation(const char *rule) {
     if (kai_rule_is_trust_store(rule)) return "changes which websites this Mac trusts";
+    /* never tier: the "Always protected" card's one-line reason */
+    if (kai_rule_is_kai_home(rule)) return "holds Kai's own settings and keys, so no agent may touch it";
+    if (kai_rule_is_builtin(rule)) return "switches Kai's checks for this agent on and off, so agents may not change it";
     return NULL;
 }
 

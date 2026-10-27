@@ -848,6 +848,12 @@ static void test_trust_store(void) {
     /* a card explanation that names the effect */
     const char *expl = kai_rule_explanation("trust-store");
     CHECK(expl && strstr(expl, "trust"), "trust-store card text explains the effect");
+    /* Phase A item 3: an "Always protected" card says why in one line. */
+    expl = kai_rule_explanation("~/.kai");
+    CHECK(expl && strstr(expl, "Kai's own"), "Kai-home card text explains why it is always protected");
+    expl = kai_rule_explanation(".claude/settings.json");
+    CHECK(expl && strstr(expl, "checks"), "hook-settings card text explains why it is always protected");
+    CHECK(kai_rule_explanation("*.env") == NULL, "an ordinary rule has no special explanation");
     /* Kai's own control store stays never-tier and is NOT trust-store. */
     char pol[1100]; snprintf(pol, sizeof pol, "%s/policy", kai_home());
     why[0] = '\0';
