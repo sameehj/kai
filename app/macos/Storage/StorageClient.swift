@@ -246,7 +246,7 @@ final class StorageClient {
         let strong = (flags & 0x1) != 0 && (flags & 0x2) == 0  // valid, non-adhoc
         let subjStrength: Int32 = strong ? 2 : 1               // strong : medium
         let token = proc.pointee.audit_token
-        let sess = sessionFor(pid(proc))
+        let sess = sessionFor(pid(proc), UInt32(token.val.7))
         var ok = false
         var why = [CChar](repeating: 0, count: 256)
         agent.withCString { ap in sess.sid.withCString { sp in sess.project.withCString { pp in
@@ -297,7 +297,7 @@ final class StorageClient {
         // to it (and cover its whole tree).
         var sessionField = ""
         #if KAI_STORAGE_ENFORCE
-        let sid = sessionFor(pid(proc)).sid
+        let sid = sessionFor(pid(proc), UInt32(token.val.7)).sid
         if !sid.isEmpty { sessionField = "\"session\":\"\(esc(sid))\"," }
         #endif
         let json = "{\"id\":\"\(id)\",\"agent\":\"\(esc(agent))\",\"pid\":\(pid(proc))," +
@@ -316,7 +316,9 @@ final class StorageClient {
     // audit token), inherited by children, and written to a shared file the
     // network extension can read -- so "Allow for this session" covers the
     // child processes (ssh, node) that actually open files/connections.
-    private var sessions: [pid_t: (sid: String, project: String)] = [:]
+    // pidv binds the cache entry to the exact process generation: a reused pid
+    // must not inherit the prior process's session (Item 6 - grant isolation).
+    private var sessions: [pid_t: (sid: String, project: String, pidv: UInt32)] = [:]
     private var sessionRoots: [pid_t: String] = [:]   // root pid -> sid, for root-exit end (S1)
 
     private func cwdOf(_ p: pid_t) -> String {
@@ -356,9 +358,10 @@ final class StorageClient {
         let pidv = UInt32(proc.pointee.audit_token.val.7)
         lock.lock()
         let inherited = sessions[ppid]
-        let entry: (sid: String, project: String) = inherited ?? (UUID().uuidString, cwdOf(p))
+        let entry: (sid: String, project: String) =
+            inherited.map { ($0.sid, $0.project) } ?? (UUID().uuidString, cwdOf(p))
         if sessions.count > 8192 { sessions.removeAll() }
-        sessions[p] = entry
+        sessions[p] = (entry.sid, entry.project, pidv)
         let isRoot = inherited == nil
         if isRoot { sessionRoots[p] = entry.sid }
         lock.unlock()
@@ -373,9 +376,13 @@ final class StorageClient {
         }
     }
 
-    private func sessionFor(_ p: pid_t) -> (sid: String, project: String) {
+    private func sessionFor(_ p: pid_t, _ livePidv: UInt32 = 0) -> (sid: String, project: String) {
         lock.lock(); defer { lock.unlock() }
-        return sessions[p] ?? ("", "")
+        guard let e = sessions[p] else { return ("", "") }
+        // A reused pid whose live generation differs from the cached one is a
+        // different process: it gets NO session (so no cross-session grant).
+        if livePidv != 0 && e.pidv != livePidv { return ("", "") }
+        return (e.sid, e.project)
     }
 
     private func dropSession(_ p: pid_t) {
@@ -557,7 +564,9 @@ final class StorageClient {
             if let v = agentCache[parent] { agentCache[child] = v }
             #if KAI_STORAGE_ENFORCE
             let parentSession = sessions[parent]
-            if let s = parentSession { sessions[child] = s }
+            if let s = parentSession {
+                sessions[child] = (s.sid, s.project, UInt32(msg.pointee.event.fork.child.pointee.audit_token.val.7))
+            }
             #endif
             lock.unlock()
             #if KAI_STORAGE_ENFORCE
@@ -744,7 +753,7 @@ final class StorageClient {
                     // S6: a paused session skips enforcement for SOFT-protected
                     // resources; never-tier (builtin control store) still blocks.
                     if kai_rule_is_builtin(why) == 0 {
-                        let sid = sessionFor(pid(proc)).sid
+                        let sid = sessionFor(pid(proc), UInt32(proc.pointee.audit_token.val.7)).sid
                         if !sid.isEmpty {
                             lock.lock(); let isPaused = pausedSessions.contains(sid); lock.unlock()
                             if isPaused {

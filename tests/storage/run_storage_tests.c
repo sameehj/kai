@@ -1231,6 +1231,23 @@ static void test_ssh_public(void) {
     kai_policy_free(p);
 }
 
+static void test_session_forgery(void) {
+    printf("session map: pidversion guards pid reuse (item 6)\n");
+    const char *home = getenv("KAI_HOME");
+    char sd[700]; snprintf(sd, sizeof sd, "%s/sessions", home); mkdir(sd, 0700);
+    char sp[780]; snprintf(sp, sizeof sp, "%s/555001.json", sd);
+    FILE *f = fopen(sp, "wb");
+    if (f) { fputs("{\"pid\":555001,\"pidversion\":42,\"session\":\"sForge\"}", f); fclose(f); }
+    char out[40];
+    CHECK(kai_session_for_pid(555001, 42, out, sizeof out) == 1 && strcmp(out, "sForge") == 0,
+          "a matching pidversion resolves the session");
+    CHECK(kai_session_for_pid(555001, 99, out, sizeof out) == 0,
+          "a reused pid (different pidversion) gets NO session");
+    CHECK(kai_session_for_pid(555001, 0, out, sizeof out) == 1,
+          "pidversion 0 (unknown) trusts the file");
+    unlink(sp);
+}
+
 static void test_new_secret_file(void) {
     printf("new key-named file is created+logged, not blocked (item 3)\n");
     CHECK(kai_rule_is_name_pattern("*.key") == 1, "*.key is a name pattern");
@@ -1408,7 +1425,7 @@ static void test_mcp_service(void) {
     char sp[780]; snprintf(sp, sizeof sp, "%s/999001.json", sd);
     FILE *sf = fopen(sp, "wb"); if (sf) { fputs("{\"session\":\"sessB\"}", sf); fclose(sf); }
     char sess[40];
-    CHECK(kai_session_for_pid(999001, sess, sizeof sess) == 1 && strcmp(sess, "sessB") == 0,
+    CHECK(kai_session_for_pid(999001, 0, sess, sizeof sess) == 1 && strcmp(sess, "sessB") == 0,
           "a pid maps to its session via the model");
 
     /* No grant yet: the service stages a card and says wait. The staged request's
@@ -1583,6 +1600,7 @@ int main(void) {
     test_agent_catalog();
     test_discovery();
     test_ssh_public();
+    test_session_forgery();
     test_new_secret_file();
     test_control_service();
     test_mcp_policy();

@@ -226,7 +226,7 @@ int kai_chat_load(kai_chat **out, int *n) {
  * model: the control service uses it to stamp a request's session from the
  * CALLER's audit token, so a caller cannot claim another session's id. 1 if
  * found. */
-int kai_session_for_pid(int pid, char *out, size_t n) {
+int kai_session_for_pid(int pid, unsigned long long live_pidv, char *out, size_t n) {
     if (n) out[0] = '\0';
     for (int i = 0; i < 24 && pid > 1; i++) {
         char path[640];
@@ -238,7 +238,15 @@ int kai_session_for_pid(int pid, char *out, size_t n) {
             free(txt);
             if (o) {
                 const char *s = cJSON_GetStringValue(cJSON_GetObjectItem(o, "session"));
-                if (s && *s) kai_strlcpy(out, s, n);
+                cJSON *pv = cJSON_GetObjectItem(o, "pidversion");
+                /* Item 6: a reused pid must not inherit the prior process's
+                 * session. On the FIRST hop (the caller itself), require the
+                 * recorded pidversion to match the live one; a mismatch means the
+                 * file is stale (pid recycled), so ignore it. live_pidv == 0 means
+                 * the caller can't supply it (e.g. an ancestry hop) -> trust. */
+                int stale = (i == 0 && live_pidv != 0 && cJSON_IsNumber(pv) &&
+                             (unsigned long long)pv->valuedouble != live_pidv);
+                if (!stale && s && *s) kai_strlcpy(out, s, n);
                 cJSON_Delete(o);
                 if (out[0]) return 1;
             }

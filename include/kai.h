@@ -188,7 +188,7 @@ size_t kai_approval_key_read(unsigned char *out, size_t cap);
 /* The session a process belongs to, from the Kai pid->session map (walks the
  * ancestry). The control service uses this to stamp a request from the caller's
  * audit token, never a payload-supplied id. 1 if found. */
-int kai_session_for_pid(int pid, char *out, size_t n);
+int kai_session_for_pid(int pid, unsigned long long live_pidv, char *out, size_t n);
 /* Service side of an MCP call: derive the session from caller_pid, allow (rc 0)
  * if a session grant covers it, else stage a pending card (rc 10). Runs in the
  * app (the only reader of the approval key). */

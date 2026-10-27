@@ -493,7 +493,10 @@ int kai_mcp_service_request(int caller_pid, const char *server, const char *tool
     if (msg && msglen) msg[0] = '\0';
     if (!server || !*server) { if (msg) kai_strlcpy(msg, "bad MCP request", msglen); return 1; }
     char session[KAI_SESSION_ID_MAX] = "";
-    if (!kai_session_for_pid(caller_pid, session, sizeof session)) {
+    /* Ancestry walk from the caller (the hook) up to the agent root; the live
+     * pidversion of each hop isn't available here, so pass 0 (trust the files -
+     * the ES wall's in-memory cache is the pid-reuse guard for grant decisions). */
+    if (!kai_session_for_pid(caller_pid, 0, session, sizeof session)) {
         if (msg) kai_strlcpy(msg, "no Kai session for the caller; MCP denied", msglen);
         return 72;
     }
