@@ -580,7 +580,9 @@ final class StorageClient {
             let p = path(msg.pointee.event.open.file)
             let tPaths = profiling ? nowTicks() : 0
             let w = openIsWrite(msg.pointee.event.open.fflag)
-            let allow = authorize(msg, paths: [p], op: "open", enforce: true, write: w, timed: profiling, t0: t0, tPaths: tPaths)
+            let creating = (msg.pointee.event.open.fflag & O_CREAT) != 0
+            let allow = authorize(msg, paths: [p], op: "open", enforce: true, write: w,
+                                  creating: creating, timed: profiling, t0: t0, tPaths: tPaths)
             let tResp = profiling ? nowTicks() : 0
             if let c = client { es_respond_flags_result(c, msg, allow ? .max : 0, false) }
             finishTiming(msg, t0: t0, tResp: tResp)
@@ -647,7 +649,7 @@ final class StorageClient {
     }
 
     private func authorize(_ msg: UnsafePointer<es_message_t>, paths: [String], op: String,
-                           enforce: Bool, write: Bool = true,
+                           enforce: Bool, write: Bool = true, creating: Bool = false,
                            timed: Bool = false, t0: UInt64 = 0, tPaths: UInt64 = 0) -> Bool {
         if timed { prof(.path, t0, tPaths) }
         if pausedStorage { return true }   // wall paused (time-boxed, auto-resume): allow
@@ -729,6 +731,14 @@ final class StorageClient {
                 // ssh-agent without ever opening the private key (which stays
                 // blocked). Writes stay protected.
                 if !write && p.withCString({ kai_ssh_public_file($0) }) == 1 { return true }
+                // Item 3: creating a brand-new file whose name matches a secret
+                // pattern (*.key, *.pem, …), outside any protected folder, is not
+                // a secret access. Allow it and log it; reading or overwriting an
+                // existing one, or anything inside a protected folder, stays blocked.
+                if write && creating && p.withCString({ kai_new_secret_file(pol, $0, 1) }) == 1 {
+                    audit(decision: "allow", agent: agent, op: eventOp, path: p, why: "new-file")
+                    return true
+                }
                 if enforce && mode == KAI_STORAGE_BLOCK {
                     #if KAI_STORAGE_ENFORCE
                     // S6: a paused session skips enforcement for SOFT-protected

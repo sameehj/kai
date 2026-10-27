@@ -146,6 +146,13 @@ int kai_rule_is_trust_store(const char *rule);
 /* A public, non-secret file inside a .ssh dir (known_hosts[.old], config, *.pub):
  * agents may READ these; private keys stay protected. 1 if it is one. */
 int kai_ssh_public_file(const char *path);
+/* A protect rule that matches by name only (*.key, *.pem, id_rsa, .env, …), not
+ * a folder/path rule (~/.ssh, ~/.aws). 1 if name-only. */
+int kai_rule_is_name_pattern(const char *rule);
+/* Creating a brand-new file whose NAME matches a secret pattern, outside any
+ * protected folder, is not a secret access: 1 = allow (and log) this open. Only
+ * when o_creat is set and the file does not already exist. */
+int kai_new_secret_file(const kai_policy *p, const char *path, int o_creat);
 /* Is `name` an agent product the storage and network walls recognize? (The
  * policy carries the built-in agent rules both walls classify by.) */
 int kai_agent_wall_recognized(const kai_policy *p, const char *name);

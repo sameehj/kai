@@ -335,6 +335,18 @@ static int rule_is_secret_class(const char *rule) {
     return 0;
 }
 
+/* A protect rule that matches by NAME only (*.key, *.pem, .env, id_rsa, …), as
+ * opposed to a folder/path rule (~/.ssh, ~/.aws, ~/.kai, which contain a slash).
+ * A name rule protects an EXISTING secret wherever it sits, but CREATING a
+ * brand-new file with such a name - outside a protected folder - is not reading
+ * a secret, so it can be allowed and logged. */
+int kai_rule_is_name_pattern(const char *rule) {
+    if (!rule || !*rule) return 0;
+    if (strchr(rule, '/')) return 0;            /* a path/folder rule */
+    if (kai_rule_is_builtin(rule) || kai_rule_is_kai_home(rule)) return 0;
+    return 1;
+}
+
 /* Public, non-secret files inside a .ssh dir: known_hosts(.old), config, and
  * *.pub. These hold host fingerprints, options and PUBLIC keys - never a private
  * key - so an agent may READ them (ssh needs known_hosts/config to verify a host

@@ -1231,6 +1231,35 @@ static void test_ssh_public(void) {
     kai_policy_free(p);
 }
 
+static void test_new_secret_file(void) {
+    printf("new key-named file is created+logged, not blocked (item 3)\n");
+    CHECK(kai_rule_is_name_pattern("*.key") == 1, "*.key is a name pattern");
+    CHECK(kai_rule_is_name_pattern("*.pem") == 1, "*.pem is a name pattern");
+    CHECK(kai_rule_is_name_pattern("id_rsa") == 1, "id_rsa is a name pattern");
+    CHECK(kai_rule_is_name_pattern("~/.ssh") == 0, "a dot-ssh folder rule is not a name pattern");
+    CHECK(kai_rule_is_name_pattern("~/.kai") == 0, "the Kai home is not a name pattern");
+
+    kai_policy *p = mk("storage block\nprotect *.key\nprotect ~/.ssh\n");
+    char dir[] = "/tmp/kai-newkeyXXXXXX";
+    if (p && mkdtemp(dir)) {
+        char nk[300]; snprintf(nk, sizeof nk, "%s/fresh.key", dir);
+        CHECK(kai_new_secret_file(p, nk, 1) == 1, "creating a brand-new key-named file is allowed");
+        CHECK(kai_new_secret_file(p, nk, 0) == 0, "without O_CREAT it is not a new-file allow");
+        FILE *f = fopen(nk, "wb"); if (f) fclose(f);
+        if (access(nk, F_OK) == 0)   /* a live wall may block creating a *.key here */
+            CHECK(kai_new_secret_file(p, nk, 1) == 0, "overwriting an existing one is NOT allowed");
+        else
+            printf("  skip overwrite check (live wall blocked creating the test key; passes wall-off)\n");
+        unlink(nk); rmdir(dir);
+    }
+    kai_policy_free(p);
+
+    kai_policy *q = mk("storage block\nprotect /vault\nprotect *.key\n");
+    CHECK(q && kai_new_secret_file(q, "/vault/new.key", 1) == 0,
+          "a new key inside a protected folder stays protected");
+    kai_policy_free(q);
+}
+
 static void test_control_service(void) {
     printf("one control path: service apply (Step 3)\n");
     char err[256], msg[600];
@@ -1554,6 +1583,7 @@ int main(void) {
     test_agent_catalog();
     test_discovery();
     test_ssh_public();
+    test_new_secret_file();
     test_control_service();
     test_mcp_policy();
     test_mcp_grants();
