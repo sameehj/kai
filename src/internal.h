@@ -81,6 +81,10 @@ typedef int (*kai_skip_fn)(const char *rule, void *ud);
  * rules skip() says are exempt, and (upload) copying the matched text. */
 int kai_command_touches_protected_skip(const kai_policy *p, const char *cmd, const char *cwd,
                                        char *why, size_t whylen, kai_skip_fn skip, void *ud);
+/* ... as seen by `agent` (NULL = any): its own state is exempt from name rules. */
+int kai_command_touches_protected_as(const kai_policy *p, const char *agent, const char *cmd,
+                                     const char *cwd, char *why, size_t whylen,
+                                     kai_skip_fn skip, void *ud);
 int kai_upload_match(const kai_policy *p, const char *cmd, char *why, size_t whylen,
                      char *match, size_t matchlen, kai_skip_fn skip, void *ud);
 /* For the activity log: every rule match hidden, whatever its action (scan

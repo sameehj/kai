@@ -734,6 +734,12 @@ final class StorageClient {
             if hit {
                 if timed { prof(.policy, tPolicy, nowTicks()) }
                 let reason = String(cString: why)
+                // Phase A item 1: an agent may always use its own working files.
+                // A blanket name rule (*.key, .env, …) does not apply inside the
+                // requesting agent's own state dir (Claude Code's
+                // ~/.claude/daemon/control.key). Folder rules, the hook settings
+                // and Kai's home are never exempt; another agent stays blocked.
+                if p.withCString({ kai_own_state_exempt(agent, $0, nil, why) }) == 1 { return true }
                 // An agent READING its own hook config (not Kai's home, not a
                 // secret) is allowed: it must to start, and Kai's hooks live
                 // there, so blocking the read is self-defeating. WRITES to it are

@@ -364,6 +364,58 @@ int kai_ssh_public_file(const char *path) {
     return 0;
 }
 
+/* Each agent's own working state: where it keeps its settings, caches,
+ * transcripts and daemon files. An agent must always be able to use these. */
+static const struct { const char *agent, *root; } AGENT_STATE[] = {
+    {"claude", "~/.claude"},
+    {"claude", "~/.claude.json"},
+    {"codex", "~/.codex"},
+    {"cursor", "~/.cursor"},
+    {"cursor", "~/Library/Application Support/Cursor"},
+    {"gemini", "~/.gemini"},
+};
+
+static int under_root(const char *np, const char *root) {
+    char *r = kai_normalize_path(root, NULL);
+    size_t rl = r ? strlen(r) : 0;
+    int hit = r && strncmp(np, r, rl) == 0 && (np[rl] == '\0' || np[rl] == '/');
+    free(r);
+    return hit;
+}
+
+int kai_agent_own_state(const char *agent, const char *path, const char *cwd) {
+    if (!agent || !*agent || !path) return 0;
+    char *np = kai_normalize_path(path, cwd);
+    if (!np) return 0;
+    int hit = 0;
+    for (size_t i = 0; !hit && i < sizeof AGENT_STATE / sizeof AGENT_STATE[0]; i++)
+        hit = !strcmp(AGENT_STATE[i].agent, agent) && under_root(np, AGENT_STATE[i].root);
+    const char *ch = getenv("CODEX_HOME");
+    if (!hit && !strcmp(agent, "codex") && ch && *ch) hit = under_root(np, ch);
+    free(np);
+    return hit;
+}
+
+/* Phase A item 1: a blanket NAME rule (*.key, *.pem, .env, …) was written for
+ * the user's secrets, not an agent's internals, so it does not apply inside
+ * the requesting agent's own state directory (Claude Code's
+ * ~/.claude/daemon/control.key). Folder rules the user wrote, the built-in
+ * control paths (hook settings stay write-protected) and ~/.kai are untouched,
+ * and another agent reading the same file is still denied. */
+int kai_own_state_exempt(const char *agent, const char *path, const char *cwd,
+                         const char *rule) {
+    return kai_rule_is_name_pattern(rule) && kai_agent_own_state(agent, path, cwd);
+}
+
+int kai_path_protected_as(const kai_policy *p, const char *agent, const char *path,
+                          const char *cwd, char *why, size_t whylen) {
+    char scratch[256];
+    if (!why || !whylen) { why = scratch; whylen = sizeof scratch; }
+    if (!kai_path_protected(p, path, cwd, why, whylen)) return 0;
+    if (kai_own_state_exempt(agent, path, cwd, why)) { why[0] = '\0'; return 0; }
+    return 1;
+}
+
 kai_override_tier_t kai_override_tier(const char *rule) {
     if (kai_rule_is_kai_home(rule) || kai_rule_is_builtin(rule)) return KAI_TIER_NEVER;
     if (rule_is_secret_class(rule)) return KAI_TIER_BREAKGLASS;  /* keys / credentials */
@@ -443,11 +495,12 @@ typedef struct {
     int hit;
     kai_skip_fn skip;
     void *skip_ud;
+    const char *agent;          /* the requesting agent: its own state is exempt */
 } path_scan_t;
 
 /* A protected path was found: it counts unless the user exempted its rule. */
 static int path_hit(path_scan_t *ps, const char *path) {
-    if (!kai_path_protected(ps->p, path, ps->cwd, ps->why, ps->whylen)) return 0;
+    if (!kai_path_protected_as(ps->p, ps->agent, path, ps->cwd, ps->why, ps->whylen)) return 0;
     return !(ps->skip && ps->skip(ps->why, ps->skip_ud));
 }
 
@@ -497,16 +550,22 @@ static void scan_text_paths(const char *text, void *ud) {
     }
 }
 
-int kai_command_touches_protected_skip(const kai_policy *p, const char *cmd, const char *cwd,
-                                       char *why, size_t whylen, kai_skip_fn skip, void *ud) {
+int kai_command_touches_protected_as(const kai_policy *p, const char *agent, const char *cmd,
+                                     const char *cwd, char *why, size_t whylen,
+                                     kai_skip_fn skip, void *ud) {
     if (why && whylen) why[0] = '\0';
     if (!p || !cmd) return 0;
     char scratch[256];
     if (!why || !whylen) { why = scratch; whylen = sizeof scratch; } /* path_hit reads it */
-    path_scan_t ps = {p, cwd, why, whylen, 0, skip, ud};
+    path_scan_t ps = {p, cwd, why, whylen, 0, skip, ud, agent};
     kai_shell_walk(cmd, scan_cmd_words, scan_text_paths, &ps);
     if (!ps.hit) why[0] = '\0';
     return ps.hit;
+}
+
+int kai_command_touches_protected_skip(const kai_policy *p, const char *cmd, const char *cwd,
+                                       char *why, size_t whylen, kai_skip_fn skip, void *ud) {
+    return kai_command_touches_protected_as(p, NULL, cmd, cwd, why, whylen, skip, ud);
 }
 
 int kai_command_touches_protected(const kai_policy *p, const char *cmd,

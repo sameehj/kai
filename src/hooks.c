@@ -385,8 +385,8 @@ static char *command_text(const cJSON *ti) {
 
 /* Files named in an apply_patch-style patch ("*** Update File: x" etc.).
  * Returns 1 and fills why if any of them is protected. */
-static int patch_touches_protected(const kai_policy *p, const char *text, const char *cwd,
-                                   char *why, size_t whylen) {
+static int patch_touches_protected(const kai_policy *p, const char *agent, const char *text,
+                                   const char *cwd, char *why, size_t whylen) {
     static const char *const marks[] = {"*** Add File: ", "*** Update File: ",
                                         "*** Delete File: ", "*** Move to: "};
     for (const char *line = text; line && *line;) {
@@ -401,7 +401,7 @@ static int patch_touches_protected(const kai_policy *p, const char *text, const 
                 memcpy(path, line + ml, pl);
                 while (pl && (path[pl - 1] == '\r' || path[pl - 1] == ' ')) pl--;
                 path[pl] = '\0';
-                if (pl && kai_path_protected(p, path, cwd, why, whylen)) return 1;
+                if (pl && kai_path_protected_as(p, agent, path, cwd, why, whylen)) return 1;
             }
         }
         line = end ? end + 1 : NULL;
@@ -759,7 +759,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
         for (size_t k = 0; ti && !hit_path && k < sizeof PATH_KEYS / sizeof PATH_KEYS[0]; k++) {
             const char *fp = cjstr(ti, PATH_KEYS[k]);
             if (fp && !first_path) first_path = fp;
-            if (fp && kai_path_protected(p, fp, cwd, why, sizeof why)) {
+            if (fp && kai_path_protected_as(p, source, fp, cwd, why, sizeof why)) {
                 if (is_read_tool && kai_control_read_allowed(why)) continue; /* own config read: allow */
                 hit_path = fp;
             }
@@ -820,7 +820,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             snprintf(reason, sizeof reason, "%s touches protected path (%s)",
                      tool ? tool : "tool", why);
             subject = strdup(hit_path);
-        } else if (patch_touches_protected(p, alltext, cwd, why, sizeof why)) {
+        } else if (patch_touches_protected(p, source, alltext, cwd, why, sizeof why)) {
             decision = KAI_ACT_BLOCK;
             kai_strlcpy(rule, why, sizeof rule);
             snprintf(reason, sizeof reason, "patch edits protected path (%s)", why);
@@ -848,8 +848,8 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 kai_strlcpy(match, app, sizeof match);
                 snprintf(reason, sizeof reason,
                          "command makes another app (%s) run commands, outside Kai's checks", app);
-            } else if (kai_command_touches_protected_skip(p, cmd, cwd, why, sizeof why,
-                                                          skip_exempt, &ex)) {
+            } else if (kai_command_touches_protected_as(p, source, cmd, cwd, why, sizeof why,
+                                                        skip_exempt, &ex)) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, why, sizeof rule);
                 snprintf(reason, sizeof reason, "command touches protected path (%s)", why);
@@ -1087,7 +1087,7 @@ static int hook_cursor(const char *json) {
         tool = "Read";
         const char *fp = cjstr(root, "file_path");
         subject = fp;
-        if (fp && kai_path_protected(p, fp, cwd, why, sizeof why)) {
+        if (fp && kai_path_protected_as(p, "cursor", fp, cwd, why, sizeof why)) {
             deny = 1; snprintf(reason, sizeof reason, "protected path (%s)", why);
         } else if (fp && (strength = file_holds_sensitive(p, fp, cwd, held, sizeof held)) &&
                    (strength == 2 || kai_policy_file_secret_action(p) >= KAI_ACT_BLOCK) &&
@@ -1114,8 +1114,8 @@ static int hook_cursor(const char *json) {
             kai_strlcpy(match, app, sizeof match);
             snprintf(reason, sizeof reason,
                      "command makes another app (%s) run commands, outside Kai's checks", app);
-        } else if (cmd && kai_command_touches_protected_skip(p, cmd, cwd, why, sizeof why,
-                                                             skip_exempt, &ex)) {
+        } else if (cmd && kai_command_touches_protected_as(p, "cursor", cmd, cwd, why, sizeof why,
+                                                           skip_exempt, &ex)) {
             deny = 1; snprintf(reason, sizeof reason, "command touches protected path (%s)", why);
         } else if (cmd && (strength = command_reads_sensitive(p, cmd, cwd, match, sizeof match,
                                                               held, sizeof held)) &&

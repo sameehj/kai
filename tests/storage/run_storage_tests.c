@@ -5,6 +5,7 @@
  * secret fixtures the storage wall itself now guards).
  */
 #include "kai.h"
+#include "../../src/internal.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -1324,6 +1325,94 @@ static void test_new_secret_file(void) {
     kai_policy_free(q);
 }
 
+/* Phase A item 1: an agent may always use its own working files. A name rule
+ * (*.key, .env, …) does not match inside the agent's OWN state directory, so
+ * Claude Code reads ~/.claude/daemon/control.key; another agent, a folder rule
+ * the user wrote, the hook settings (writes) and ~/.kai stay protected.
+ * (".k" "ey" keeps the literal token out of the source, as test_trust_store.) */
+static void test_agent_own_state(void) {
+    printf("agents use their own working files (Phase A item 1)\n");
+    const char *KEY = ".k" "ey";
+    const char *home = getenv("HOME");
+    char ck[600], cx[600], cset[600], cjson[600], other[600];
+    snprintf(ck, sizeof ck, "%s/.claude/daemon/control%s", home, KEY);
+    snprintf(cx, sizeof cx, "%s/.codex/session%s", home, KEY);
+    snprintf(cset, sizeof cset, "%s/.claude/settings.json", home);
+    snprintf(cjson, sizeof cjson, "%s/.claude.json", home);
+    snprintf(other, sizeof other, "%s/projects/app/server%s", home, KEY);
+
+    CHECK(kai_agent_own_state("claude", ck, NULL) == 1, "~/.claude/... is Claude Code's own state");
+    CHECK(kai_agent_own_state("claude", cjson, NULL) == 1, "~/.claude.json is Claude Code's own state");
+    CHECK(kai_agent_own_state("codex", ck, NULL) == 0, "~/.claude/... is NOT Codex's state");
+    CHECK(kai_agent_own_state("codex", cx, NULL) == 1, "~/.codex/... is Codex's own state");
+    CHECK(kai_agent_own_state("claude", other, NULL) == 0, "a project file is no agent's state");
+    CHECK(kai_agent_own_state(NULL, ck, NULL) == 0, "no agent: no own state");
+    char sneaky[700]; snprintf(sneaky, sizeof sneaky, "%s/.claude/../.ssh/id%s", home, KEY);
+    CHECK(kai_agent_own_state("claude", sneaky, NULL) == 0, "'..' out of ~/.claude is not own state");
+    char prefix[600]; snprintf(prefix, sizeof prefix, "%s/.claude-evil/x%s", home, KEY);
+    CHECK(kai_agent_own_state("claude", prefix, NULL) == 0, "~/.claude-evil is not ~/.claude");
+
+    char pol[200]; snprintf(pol, sizeof pol, "storage block\nprotect *%s\nprotect ~/.claude/vault\n", KEY);
+    kai_policy *p = mk(pol);
+    char why[256];
+    CHECK(p && kai_path_protected(p, ck, NULL, why, sizeof why) == 1, "the name rule matches control key");
+    CHECK(kai_own_state_exempt("claude", ck, NULL, why) == 1,
+          "Claude Code reading its own control key is allowed");
+    CHECK(kai_own_state_exempt("codex", ck, NULL, why) == 0,
+          "Codex reading Claude Code's control key is denied");
+    CHECK(kai_path_protected_as(p, "claude", ck, NULL, why, sizeof why) == 0 && why[0] == '\0',
+          "path_protected_as: not protected for the owning agent");
+    CHECK(kai_path_protected_as(p, "codex", ck, NULL, why, sizeof why) == 1,
+          "path_protected_as: still protected for another agent");
+    CHECK(kai_path_protected_as(p, NULL, ck, NULL, why, sizeof why) == 1,
+          "path_protected_as: still protected with no agent");
+    CHECK(kai_path_protected_as(p, "claude", other, NULL, why, sizeof why) == 1,
+          "a key outside the agent's state stays protected");
+
+    /* A folder rule the user wrote is a deliberate choice: not exempted. */
+    char vault[600]; snprintf(vault, sizeof vault, "%s/.claude/vault/a.txt", home);
+    CHECK(kai_path_protected_as(p, "claude", vault, NULL, why, sizeof why) == 1,
+          "a user folder rule inside ~/.claude stays protected");
+    /* Built-in control paths are never exempted: hook settings stay protected. */
+    CHECK(kai_path_protected_as(p, "claude", cset, NULL, why, sizeof why) == 1 &&
+          kai_rule_is_builtin(why), "Claude's hook settings stay a builtin control path");
+    CHECK(kai_own_state_exempt("claude", cset, NULL, why) == 0,
+          "hook settings are not own-state exempt (write protection kept)");
+
+    char cmd[800]; snprintf(cmd, sizeof cmd, "cat %s", ck);
+    CHECK(kai_command_touches_protected_as(p, "claude", cmd, NULL, why, sizeof why, NULL, NULL) == 0,
+          "a Claude command reading its own control key is not a protected touch");
+    CHECK(kai_command_touches_protected_as(p, "codex", cmd, NULL, why, sizeof why, NULL, NULL) == 1,
+          "the same command from Codex is");
+    kai_policy_free(p);
+
+    /* End to end through the Claude/Codex hook (Read tool), with a temp HOME. */
+    char dir[] = "/tmp/kai-ownstateXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char polp[600], outp[650], input[1400], shcmd[3200];
+    snprintf(polp, sizeof polp, "%s/policy", dir);
+    snprintf(outp, sizeof outp, "%s/out", dir);
+    FILE *f = fopen(polp, "w");
+    if (f) { fprintf(f, "protect *%s\n", KEY); fclose(f); }
+    snprintf(input, sizeof input,
+             "{\\\"hook_event_name\\\":\\\"PreToolUse\\\",\\\"tool_name\\\":\\\"Read\\\","
+             "\\\"tool_input\\\":{\\\"file_path\\\":\\\"%s/.claude/daemon/control%s\\\"},"
+             "\\\"cwd\\\":\\\"/tmp\\\"}", dir, KEY);
+    snprintf(shcmd, sizeof shcmd,
+             "printf '%s' | HOME='%s' KAI_HOME='%s/kh' KAI_POLICY='%s' ./kai hook claude > '%s' 2>/dev/null",
+             input, dir, dir, polp, outp);
+    (void)system(shcmd);
+    CHECK(!file_contains(outp, "\"permissionDecision\":\"deny\""),
+          "hook: Claude Code may Read its own control key");
+    snprintf(shcmd, sizeof shcmd,
+             "printf '%s' | HOME='%s' KAI_HOME='%s/kh' KAI_POLICY='%s' ./kai hook codex > '%s' 2>/dev/null",
+             input, dir, dir, polp, outp);
+    (void)system(shcmd);
+    CHECK(file_contains(outp, "\"permissionDecision\":\"deny\""),
+          "hook: Codex may NOT Read Claude Code's control key");
+    unlink(polp); unlink(outp); rmdir(dir);
+}
+
 static void test_control_service(void) {
     printf("one control path: service apply (Step 3)\n");
     char err[256], msg[600];
@@ -1651,6 +1740,7 @@ int main(void) {
     test_pause_registry();
     test_session_forgery();
     test_new_secret_file();
+    test_agent_own_state();
     test_control_service();
     test_mcp_policy();
     test_mcp_grants();

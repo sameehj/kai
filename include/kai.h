@@ -149,6 +149,17 @@ int kai_ssh_public_file(const char *path);
 /* A protect rule that matches by name only (*.key, *.pem, id_rsa, .env, …), not
  * a folder/path rule (~/.ssh, ~/.aws). 1 if name-only. */
 int kai_rule_is_name_pattern(const char *rule);
+/* Is `path` inside `agent`'s own working state (its dot-dir under home,
+ * ~/.claude.json, $CODEX_HOME, Cursor's Application Support, ...)? 1 if so. */
+int kai_agent_own_state(const char *agent, const char *path, const char *cwd);
+/* Phase A item 1: 1 when `rule` (the protect match for `path`) is a blanket
+ * name rule and `path` is in the requesting agent's own state, so the agent
+ * may use it. Folder rules, builtin control paths and Kai's home: never. */
+int kai_own_state_exempt(const char *agent, const char *path, const char *cwd,
+                         const char *rule);
+/* kai_path_protected, minus the requesting agent's own state (agent may be NULL). */
+int kai_path_protected_as(const kai_policy *p, const char *agent, const char *path,
+                          const char *cwd, char *why, size_t whylen);
 /* Creating a brand-new file whose NAME matches a secret pattern, outside any
  * protected folder, is not a secret access: 1 = allow (and log) this open. Only
  * when o_creat is set and the file does not already exist. */
