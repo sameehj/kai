@@ -131,6 +131,7 @@ final class StorageClient {
         scheduleTimingExport()
         #if KAI_STORAGE_ENFORCE
         openGrantStore()
+        giveRegistryToUser()   // records an older build left root-owned
         #endif
         scheduleHealth()
     }
@@ -392,6 +393,23 @@ final class StorageClient {
                     kai_session_record(sidC, agentC, "", Int32(rootPid), UInt64(rootPidv), projC, "", now)
                 }
             }}
+            giveRegistryToUser(sid: entry.sid)
+        }
+    }
+
+    /// libkai writes registry records as this (root) process, 0600 in a 0700
+    /// dir, so the user's `kai sessions` and the app couldn't read any of them:
+    /// every session fell back to its scan- id and Pause was never available,
+    /// and the app couldn't write its pause markers there either. Hand the dir
+    /// and the record to the console user, like the per-pid session files.
+    /// (The storage wall still bars agent-tree writes to the control store.)
+    private func giveRegistryToUser(sid: String? = nil) {
+        guard userUID >= 501 else { return }
+        let dir = String(cString: kai_session_dir())
+        chown(dir, userUID, userGID)
+        if let sid { chown(dir + "/" + sid + ".json", userUID, userGID); return }
+        for f in (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? [] {
+            chown(dir + "/" + f, userUID, userGID)
         }
     }
 
@@ -427,6 +445,7 @@ final class StorageClient {
         if let sid = rootSid {             // end the session at root exit (S1)
             let now = Int64(Date().timeIntervalSince1970)
             _ = sid.withCString { kai_session_end($0, now) }
+            giveRegistryToUser(sid: sid)   // the end rewrites the record (root-owned again)
         }
     }
     #endif
