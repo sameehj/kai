@@ -14,6 +14,8 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <signal.h>
 #include <sys/fcntl.h>
 #include <fcntl.h>
 #include <dirent.h>
@@ -1419,6 +1421,34 @@ static void test_agent_own_state(void) {
     unlink(polp); unlink(outp); rmdir(dir);
 }
 
+/* Phase A item 5: the wall keys a session to the agent's ROOT (the topmost
+ * same-agent ancestor, as the scan reports it), not to the first child it
+ * sees exec. This test binary plays the agent: a forked child (same exe) must
+ * resolve to its parent as the root. */
+static void test_agent_root_pid(void) {
+    printf("session root = topmost same-agent ancestor (Phase A item 5)\n");
+    /* The child (/bin/sleep) is ALSO classified as the agent, so this checks
+     * that the topmost match wins, not the nearest. */
+    kai_policy *p = mk("agent kaitest exe */run_storage_tests\nagent kaitest exe /bin/sleep\n");
+    if (!p) { CHECK(0, "policy"); return; }
+    int me = (int)getpid();
+    CHECK(kai_agent_root_pid(p, me, "kaitest") == me, "the agent process is its own root");
+    CHECK(kai_agent_root_pid(p, me, "nosuchagent") == 0, "no ancestor of that agent: 0");
+    CHECK(kai_agent_root_pid(NULL, me, "kaitest") == 0, "no policy: 0");
+    pid_t c = fork();
+    if (c == 0) { execl("/bin/sleep", "sleep", "5", (char *)NULL); _exit(127); }
+    if (c > 0) {
+        usleep(200000);   /* let the exec land */
+        CHECK(kai_agent_root_pid(p, (int)c, "kaitest") == me,
+              "a child of the agent resolves to the agent's pid as root, not its own");
+        kill(c, SIGTERM);
+        waitpid(c, NULL, 0);
+    } else {
+        CHECK(0, "fork");
+    }
+    kai_policy_free(p);
+}
+
 static void test_control_service(void) {
     printf("one control path: service apply (Step 3)\n");
     char err[256], msg[600];
@@ -1747,6 +1777,7 @@ int main(void) {
     test_session_forgery();
     test_new_secret_file();
     test_agent_own_state();
+    test_agent_root_pid();
     test_control_service();
     test_mcp_policy();
     test_mcp_grants();

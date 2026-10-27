@@ -256,6 +256,30 @@ int kai_process_agent(const kai_policy *p, int pid, char *name, size_t namelen,
     return 0;
 }
 
+/* Phase A item 5: the ROOT of `agent`'s session that `pid` belongs to - the
+ * topmost process in its ancestry (itself included) classified as that same
+ * agent, which is the pid the session scan reports. The storage wall mints a
+ * session keyed to it, so an agent started before the wall gets the same root
+ * as the scan (and can be paused) rather than a session per child shell.
+ * 0 if no such process. */
+int kai_agent_root_pid(const kai_policy *p, int pid, const char *agent) {
+    if (!p || !agent || !*agent) return 0;
+    int root = 0;
+    for (int depth = 0; pid > 1 && depth < 64; depth++) {
+        kai_proc pr;
+        if (kai_proc_read(pid, &pr) != 0) break;
+        char name[64];
+        if (kai_agent_match(p, pr.exe, (const char *const *)pr.argv, pr.argc, pr.team,
+                            name, sizeof name) && strcmp(name, agent) == 0)
+            root = pid;
+        int parent = pr.ppid;
+        kai_proc_free(&pr);
+        if (parent == pid) break;
+        pid = parent;
+    }
+    return root;
+}
+
 /* ---- storage-wall-free session discovery (S-redesign item 1) ---- */
 #ifdef __APPLE__
 /* Session scan (perf-tuned + classified). ONE fast pass over all processes (no

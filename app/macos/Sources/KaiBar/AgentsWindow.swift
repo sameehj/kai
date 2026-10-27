@@ -284,10 +284,12 @@ struct SessionDetail: View {
                             .help("Skips Kai for this session for 15 minutes, then auto-resumes. "
                                   + "Kai's own settings stay protected.")
                         } else {
-                            Button("Pause Kai for this session (15 min)") {}
-                                .disabled(true)
-                                .help("Pausing needs the storage wall active for this session.")
-                            Text("needs the storage wall").font(.caption).foregroundColor(.secondary)
+                            // The wall keys sessions to the agent root (Phase A item
+                            // 5), so this shows only until the wall first sees the
+                            // session act; the global pause always works meanwhile.
+                            Button("Pause Kai for all agents (15 min)") { grants.pauseAll(minutes: 15) }
+                                .help("Pause isn't available for this session yet, so this pauses Kai "
+                                      + "for every agent for 15 minutes, then resumes by itself.")
                         }
                     }
                 }

@@ -27,6 +27,7 @@ struct MenuView: View {
                             details: { open(.activity) })
             }
             statusLine
+            globalPause
             pauseBanner
             protection
             needsYou
@@ -135,6 +136,31 @@ struct MenuView: View {
                     }
                 }
             }
+        }
+    }
+
+    // Phase A item 5: one guaranteed way out. Pauses both walls for 15 minutes
+    // and resumes by itself; while paused, a banner with the end time + Resume.
+    @ViewBuilder private var globalPause: some View {
+        if let until = grantManager.pausedUntil {
+            HStack(spacing: 8) {
+                Image(systemName: "pause.circle.fill").foregroundStyle(Theme.amber)
+                Text("Kai is paused · resumes at \(until.formatted(date: .omitted, time: .shortened))")
+                    .font(.system(size: 12))
+                Spacer()
+                Button("Resume") { grantManager.pauseAll(minutes: 0) }
+                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
+            }
+            .padding(10)
+            .background(Theme.amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        } else {
+            Button { grantManager.pauseAll(minutes: 15) } label: {
+                Label("Pause Kai for 15 minutes", systemImage: "pause.circle")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.plain).foregroundStyle(Theme.muted)
+            .help("Lets agents through for 15 minutes, logged, then turns back on by itself. "
+                  + "Kai's own settings stay protected.")
         }
     }
 

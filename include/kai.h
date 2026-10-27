@@ -643,6 +643,10 @@ int kai_agent_match(const kai_policy *p, const char *exe, const char *const *arg
  * and fills name (agent name) and agent_pid, else 0. */
 int kai_process_agent(const kai_policy *p, int pid, char *name, size_t namelen,
                       int *agent_pid);
+/* The root of `agent`'s session that pid belongs to: the topmost process in
+ * its ancestry (itself included) classified as that agent, as the session scan
+ * reports it. 0 if none. */
+int kai_agent_root_pid(const kai_policy *p, int pid, const char *agent);
 
 /* ---- AI gateway ----
  * Local HTTP server that cleans AI API requests and forwards them upstream.

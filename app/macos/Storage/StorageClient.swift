@@ -358,28 +358,58 @@ final class StorageClient {
         let ppid = proc.pointee.ppid
         let pidv = UInt32(proc.pointee.audit_token.val.7)
         lock.lock()
-        let inherited = sessions[ppid]
+        var inherited = sessions[ppid]
+        let pol = policy
+        lock.unlock()
+        // Phase A item 5: no session from the parent means the agent started
+        // before the wall (its root exec was never seen). Key the session to
+        // the agent's ROOT - the topmost same-agent ancestor, the pid the
+        // session scan reports - not to this child, so the registry matches
+        // Agent Control (and Pause reaches it) instead of a session per shell.
+        var rootPid = p, rootPidv = pidv
+        if inherited == nil {
+            let r = agent.withCString { kai_agent_root_pid(pol, Int32(p), $0) }
+            if r > 0 && r != p { rootPid = pid_t(r); rootPidv = 0 }  // generation pinned on its first event
+        }
+        lock.lock()
+        if inherited == nil && rootPid != p { inherited = sessions[rootPid] }
         let entry: (sid: String, project: String) =
-            inherited.map { ($0.sid, $0.project) } ?? (UUID().uuidString, cwdOf(p))
+            inherited.map { ($0.sid, $0.project) } ?? (UUID().uuidString, cwdOf(rootPid))
         if sessions.count > 8192 { sessions.removeAll() }
         sessions[p] = (entry.sid, entry.project, pidv)
         let isRoot = inherited == nil
-        if isRoot { sessionRoots[p] = entry.sid }
+        if isRoot {
+            sessionRoots[rootPid] = entry.sid
+            if rootPid != p { sessions[rootPid] = (entry.sid, entry.project, rootPidv) }
+        }
         lock.unlock()
         writeSessionFile(pid: p, pidv: pidv, sid: entry.sid, project: entry.project)
         if isRoot {
             let now = Int64(Date().timeIntervalSince1970)
             _ = entry.sid.withCString { sidC in agent.withCString { agentC in
                 entry.project.withCString { projC in
-                    kai_session_record(sidC, agentC, "", Int32(p), UInt64(pidv), projC, "", now)
+                    kai_session_record(sidC, agentC, "", Int32(rootPid), UInt64(rootPidv), projC, "", now)
                 }
             }}
         }
     }
 
+    /// Phase A item 5: an agent process with no session yet (it, or its agent,
+    /// predates the wall and never exec'd under it) gets one on its first event.
+    private func ensureSession(_ proc: UnsafeMutablePointer<es_process_t>, agent: String) {
+        lock.lock(); let has = sessions[pid(proc)] != nil; lock.unlock()
+        if !has { mintSession(proc, agent: agent) }
+    }
+
     private func sessionFor(_ p: pid_t, _ livePidv: UInt32 = 0) -> (sid: String, project: String) {
         lock.lock(); defer { lock.unlock() }
         guard let e = sessions[p] else { return ("", "") }
+        // An agent root keyed before Kai saw it run has no generation yet: pin
+        // it to the first live one (a later reuse of the pid then mismatches).
+        if e.pidv == 0 && livePidv != 0 {
+            sessions[p] = (e.sid, e.project, livePidv)
+            return (e.sid, e.project)
+        }
         // A reused pid whose live generation differs from the cached one is a
         // different process: it gets NO session (so no cross-session grant).
         if livePidv != 0 && e.pidv != livePidv { return ("", "") }
@@ -666,7 +696,6 @@ final class StorageClient {
                            enforce: Bool, write: Bool = true, creating: Bool = false,
                            timed: Bool = false, t0: UInt64 = 0, tPaths: UInt64 = 0) -> Bool {
         if timed { prof(.path, t0, tPaths) }
-        if pausedStorage { return true }   // wall paused (time-boxed, auto-resume): allow
         let proc = msg.pointee.process
         let tClassify = timed ? nowTicks() : 0
         if isKaiOwnProcess(proc) {
@@ -718,6 +747,9 @@ final class StorageClient {
         let agentName = classify(proc)
         if timed { prof(.classify, tClassify, nowTicks()) }
         guard let agent = agentName, !agent.isEmpty else { return true }
+        #if KAI_STORAGE_ENFORCE
+        ensureSession(proc, agent: agent)
+        #endif
         lock.lock(); let pol = policy; lock.unlock()
         var why = [CChar](repeating: 0, count: 256)
         let tPolicy = timed ? nowTicks() : 0
@@ -757,6 +789,15 @@ final class StorageClient {
                 // existing one, or anything inside a protected folder, stays blocked.
                 if write && creating && p.withCString({ kai_new_secret_file(pol, $0, 1) }) == 1 {
                     audit(decision: "allow", agent: agent, op: eventOp, path: p, why: "new-file")
+                    return true
+                }
+                // Wall paused ("Pause Kai for 15 minutes", time-boxed,
+                // auto-resume): soft blocks go through, logged. Never-tier
+                // (Kai's home, the hook settings) still blocks, as the hooks
+                // and a session pause do.
+                if pausedStorage && kai_rule_is_builtin(why) == 0 {
+                    audit(decision: "would-block", agent: agent, op: eventOp, path: p,
+                          why: reason + " (Kai paused)")
                     return true
                 }
                 if enforce && mode == KAI_STORAGE_BLOCK {

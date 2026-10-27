@@ -171,6 +171,8 @@ final class GrantManager: ObservableObject {
     @Published private(set) var pending: [PendingRequest] = []
     @Published private(set) var grants: [ActiveGrant] = []
     @Published private(set) var pendingPolicy: [PendingPolicyChange] = []
+    /// Phase A item 5: when the global pause ends (nil = not paused).
+    @Published private(set) var pausedUntil: Date?
 
     private var home: String { ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory() }
     private var pendingDir: String { home + "/.kai/pending" }
@@ -186,6 +188,7 @@ final class GrantManager: ObservableObject {
     deinit { timer?.invalidate() }
 
     func refresh() {
+        pausedUntil = wallPausedUntil()
         pending = loadJSON(dir: pendingDir).compactMap { try? JSONDecoder().decode(PendingRequest.self, from: $0) }
             .sorted { $0.ts < $1.ts }
         // Item 5: auto-dismiss a request 10 minutes after its last attempt, or
@@ -395,6 +398,27 @@ final class GrantManager: ObservableObject {
         _ = id.withCString { kai_session_pause_write($0, Int64(minutes)) }
         kai_audit("session", "pause", minutes > 0 ? "paused" : "resumed", "",
                   "session \(id) \(minutes > 0 ? "paused \(minutes)m" : "resumed") by user")
+    }
+
+    /// Phase A item 5: "Pause Kai for 15 minutes" - both walls (and, through
+    /// the storage marker, the hooks) let soft blocks through, logged, and
+    /// resume by themselves. Kai's own settings stay protected. minutes 0 resumes.
+    func pauseAll(minutes: Int) {
+        for w in ["storage", "network"] { _ = w.withCString { kai_wall_pause_write($0, Int64(minutes)) } }
+        kai_audit("pause", "pause", minutes > 0 ? "paused" : "resumed", "",
+                  minutes > 0 ? "Kai paused \(minutes)m by user" : "Kai resumed by user")
+        refresh()
+    }
+
+    /// The later of the two walls' pause expiries, if still in the future.
+    private func wallPausedUntil() -> Date? {
+        let now = Date().timeIntervalSince1970
+        let ends = ["storage", "network"].compactMap { w -> Double? in
+            guard let t = try? String(contentsOfFile: home + "/.kai/registry/pause-" + w, encoding: .utf8),
+                  let v = Double(t.trimmingCharacters(in: .whitespacesAndNewlines)), v > now else { return nil }
+            return v
+        }
+        return ends.max().map { Date(timeIntervalSince1970: $0) }
     }
 
     /// Reject a held change: drop the request, audit, apply nothing.
