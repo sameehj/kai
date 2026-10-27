@@ -14,6 +14,7 @@
  */
 #include "internal.h"
 #include "kai.h"
+#include "cJSON.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -264,12 +265,34 @@ static int merged_sessions(kai_session **out, int *n) {
     if (p) { kai_sessions_scan(p, &scan, &ns); kai_policy_free(p); }
     kai_session *all = calloc((size_t)(nr + ns + 1), sizeof *all);
     int c = 0;
+    long long now = (long long)time(NULL);
     if (all) {
-        for (int i = 0; i < nr; i++) all[c++] = reg[i];
+        /* Live fix: only live records (one per agent root, the newest), plus
+         * ones that ended in the last day. Records a restarted wall never ended
+         * - thousands of them - are not sessions. */
+        for (int i = 0; i < nr; i++) {
+            int live = kai_session_live(&reg[i]);
+            if (!live && !(reg[i].ended_utc && now - reg[i].ended_utc < 86400)) continue;
+            if (!live) { if (!reg[i].ended_utc) reg[i].ended_utc = now; all[c++] = reg[i]; continue; }
+            int newer = 0;
+            for (int j = 0; j < nr && !newer; j++)
+                if (j != i && reg[j].root_pid == reg[i].root_pid && kai_session_live(&reg[j]) &&
+                    (reg[j].started_utc > reg[i].started_utc ||
+                     (reg[j].started_utc == reg[i].started_utc && strcmp(reg[j].id, reg[i].id) > 0)))
+                    newer = 1;
+            if (!newer) all[c++] = reg[i];
+        }
+        int nlive = c;
         for (int i = 0; i < ns; i++) {
             int dup = 0;
-            for (int j = 0; j < nr; j++)
-                if (reg[j].root_pid != 0 && reg[j].root_pid == scan[i].root_pid) { dup = 1; break; }
+            for (int j = 0; j < nlive; j++)
+                if (!all[j].ended_utc && all[j].root_pid != 0 && all[j].root_pid == scan[i].root_pid) {
+                    /* the wall's record wins, but keep what only the scan knows */
+                    if (!all[j].tty[0]) kai_strlcpy(all[j].tty, scan[i].tty, sizeof all[j].tty);
+                    if (!all[j].host_app[0]) kai_strlcpy(all[j].host_app, scan[i].host_app, sizeof all[j].host_app);
+                    all[j].kind = scan[i].kind;
+                    dup = 1; break;
+                }
             if (!dup) all[c++] = scan[i];
         }
     }
@@ -286,21 +309,34 @@ static int sessions_list(int json) {
     int network_active = kai_wall_observed_level("network") >= 0;
     const char *enf = kai_enforcement_label(storage_active, network_active);
     if (json) {
-        printf("[");
+        /* cJSON escapes every string: a topic with a newline or quote used to
+         * break the whole list (and the app then showed no sessions). */
+        cJSON *arr = cJSON_CreateArray();
         for (int i = 0; i < n; i++) {
             char topic[128] = "";
             kai_session_report_get(s[i].id, topic, sizeof topic);
             /* topic is agent-reported + already redacted; shown, never trusted. */
-            printf("%s{\"id\":\"%s\",\"agent\":\"%s\",\"topic\":\"%s\",\"topic_reported_by_agent\":true,"
-                   "\"project\":\"%s\",\"host_app\":\"%s\",\"tty\":\"%s\",\"started_utc\":%lld,"
-                   "\"ended_utc\":%lld,\"child_count\":%d,\"source\":\"%s\",\"kind\":\"%s\","
-                   "\"enforcement\":\"%s\",\"state\":\"%s\"}",
-                   i ? "," : "", s[i].id, s[i].agent, topic, s[i].project, s[i].host_app, s[i].tty,
-                   s[i].started_utc, s[i].ended_utc, s[i].child_count,
-                   s[i].source == KAI_SESS_SCAN ? "scan" : "es", kai_session_kind_name(s[i].kind),
-                   enf, sess_state(&s[i]));
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddStringToObject(o, "id", s[i].id);
+            cJSON_AddStringToObject(o, "agent", s[i].agent);
+            cJSON_AddStringToObject(o, "topic", topic);
+            cJSON_AddBoolToObject(o, "topic_reported_by_agent", 1);
+            cJSON_AddStringToObject(o, "project", s[i].project);
+            cJSON_AddStringToObject(o, "host_app", s[i].host_app);
+            cJSON_AddStringToObject(o, "tty", s[i].tty);
+            cJSON_AddNumberToObject(o, "started_utc", (double)s[i].started_utc);
+            cJSON_AddNumberToObject(o, "ended_utc", (double)s[i].ended_utc);
+            cJSON_AddNumberToObject(o, "child_count", s[i].child_count);
+            cJSON_AddStringToObject(o, "source", s[i].source == KAI_SESS_SCAN ? "scan" : "es");
+            cJSON_AddStringToObject(o, "kind", kai_session_kind_name(s[i].kind));
+            cJSON_AddStringToObject(o, "enforcement", enf);
+            cJSON_AddStringToObject(o, "state", sess_state(&s[i]));
+            cJSON_AddItemToArray(arr, o);
         }
-        printf("]\n");
+        char *js = cJSON_PrintUnformatted(arr);
+        cJSON_Delete(arr);
+        printf("%s\n", js ? js : "[]");
+        free(js);
     } else {
         int sessions = 0;
         for (int i = 0; i < n; i++) if (s[i].kind == KAI_KIND_SESSION) sessions++;

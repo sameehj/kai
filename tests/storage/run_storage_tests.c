@@ -964,7 +964,72 @@ static void test_session_reports(void) {
           "the same session may update its own topic");
 
     CHECK(kai_session_report_topic(p, "../escape", "c", "x") == -1, "a traversal ES id is refused");
+
+    /* Live fix: after the storage wall restarts it mints a new Kai session for
+     * the same running agent. Rebinding is allowed when the earlier session is
+     * the same agent root, or has ended; a different live root is still a
+     * clash, and an unknown earlier session (es-3 above) still is too. */
+    long long now = (long long)time(NULL);
+    kai_session_record("es-old", "claude", "", (int)getpid(), 0, "/w", "", now);
+    kai_session_record("es-new", "claude", "", (int)getpid(), 0, "/w", "", now);
+    CHECK(kai_session_report_topic(p, "es-old", "conv-R", "first") == 0, "bind conv-R to es-old");
+    CHECK(kai_session_report_topic(p, "es-new", "conv-R", "again") == 0,
+          "same agent root re-minted by a wall restart: rebinding is allowed");
+    kai_session_record("es-gone", "claude", "", (int)getpid(), 0, "/w", "", now);
+    kai_session_end("es-gone", now);
+    CHECK(kai_session_report_topic(p, "es-gone", "conv-E", "x") == 0, "bind conv-E to an ended session");
+    kai_session_record("es-next", "claude", "", 1, 0, "/w", "", now);
+    CHECK(kai_session_report_topic(p, "es-next", "conv-E", "y") == 0,
+          "the earlier session ended: rebinding is allowed");
+    pid_t c = fork();
+    if (c == 0) { execl("/bin/sleep", "sleep", "5", (char *)NULL); _exit(127); }
+    if (c > 0) {
+        usleep(100000);
+        kai_session_record("es-other", "codex", "", (int)c, 0, "/w", "", now);
+        CHECK(kai_session_report_topic(p, "es-other", "conv-R", "steal") == -1,
+              "a different LIVE agent root claiming the id is still rejected");
+        kill(c, SIGTERM); waitpid(c, NULL, 0);
+    }
     kai_policy_free(p);
+}
+
+/* Live fix: a registry record counts as active only while its root process
+ * runs and is not a newer process that reused the pid. */
+static void test_session_live(void) {
+    printf("session liveness: root alive and not a reused pid (live fix)\n");
+    kai_session s; memset(&s, 0, sizeof s);
+    s.root_pid = (int)getpid(); s.started_utc = (long long)time(NULL);
+    CHECK(kai_session_live(&s) == 1, "root running, started before the session: live");
+    s.started_utc = 1;   /* a session from 1970: this process started after it -> reused pid */
+    CHECK(kai_session_live(&s) == 0, "root pid now belongs to a newer process: not live");
+    s.started_utc = (long long)time(NULL); s.ended_utc = s.started_utc;
+    CHECK(kai_session_live(&s) == 0, "ended: not live");
+    pid_t c = fork();
+    if (c == 0) _exit(0);
+    waitpid(c, NULL, 0);
+    memset(&s, 0, sizeof s); s.root_pid = (int)c; s.started_utc = (long long)time(NULL);
+    CHECK(kai_session_live(&s) == 0, "root exited: not live");
+
+    /* `kai sessions --json` stays valid JSON when a topic holds a newline. */
+    /* its own root (other test sessions share this process as root, and only
+     * the newest live record per root is listed) */
+    pid_t jr = fork();
+    if (jr == 0) { execl("/bin/sleep", "sleep", "10", (char *)NULL); _exit(127); }
+    usleep(100000);
+    kai_session_record("es-json", "claude", "", (int)jr, 0, "/w", "", (long long)time(NULL) + 1);
+    kai_policy *p = mk("secrets redact\n");
+    kai_session_report_topic(p, "es-json", "conv-json", "line one\nline two \"quoted\"");
+    kai_policy_free(p);
+    char out[900], cmd[1400];
+    snprintf(out, sizeof out, "%s/sessions.json", getenv("KAI_HOME"));
+    snprintf(cmd, sizeof cmd,
+             "KAI_HOME='%s' ./kai sessions --json > '%s' 2>/dev/null && "
+             "/usr/bin/python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); "
+             "sys.exit(0 if any(x[\"id\"]==\"es-json\" for x in d) else 3)' '%s'",
+             getenv("KAI_HOME"), out, out);
+    CHECK(system(cmd) == 0, "kai sessions --json parses with a multi-line topic, live session listed");
+    unlink(out);
+    if (jr > 0) { kill(jr, SIGTERM); waitpid(jr, NULL, 0); }
 }
 
 /* S4: a signed v3 grant with explicit honor flags + session binding. */
@@ -1863,6 +1928,7 @@ int main(void) {
     test_session_registry();
     test_agent_inventory();
     test_session_reports();
+    test_session_live();
     test_grant_tiers();
     test_session_pause();
     test_enforcement_labels();

@@ -363,6 +363,9 @@ int kai_sessions_scan(const kai_policy *p, kai_session **out, int *n);
 /* The enforcement label for a session given which walls are observed active.
  * Never claims "protected" for a session no active wall can attribute. */
 const char *kai_enforcement_label(int storage_active, int network_active);
+/* A registry session is live: not ended, root process running and not a newer
+ * process reusing its pid. */
+int kai_session_live(const kai_session *s);
 /* The one status sentence ("Protected · 3 agents working", "Watching only",
  * "Files protection is off", ...). files/internet: 0 off, 1 watch, 2 protect;
  * internet -1 = not verified (left out of the headline); agents < 0 = unknown.

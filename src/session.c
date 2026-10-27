@@ -19,6 +19,11 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <errno.h>
+#include <signal.h>
+#ifdef __APPLE__
+#include <libproc.h>
+#endif
 
 void kai_sha256_hex(const void *data, size_t n, char out[65]);  /* sha256.c */
 
@@ -551,6 +556,33 @@ static size_t utf8_trunc(const char *s, size_t max) {
     return n;
 }
 
+/* Live fix: a registry record is active only while its root process runs and
+ * is not a newer process that reused the pid (it started after the session was
+ * recorded). The wall loses its in-memory sessions when it restarts, so records
+ * it never ended pile up as "active" otherwise. */
+int kai_session_live(const kai_session *s) {
+    if (!s || s->ended_utc || s->root_pid <= 0) return 0;
+    if (kill(s->root_pid, 0) != 0 && errno == ESRCH) return 0;
+#ifdef __APPLE__
+    struct proc_bsdinfo bi;
+    if (s->started_utc > 0 &&
+        proc_pidinfo(s->root_pid, PROC_PIDTBSDINFO, 0, &bi, sizeof bi) == (int)sizeof bi &&
+        (long long)bi.pbi_start_tvsec > s->started_utc + 1)
+        return 0;                       /* pid reused by a newer process */
+#endif
+    return 1;
+}
+
+/* May `es` take over an agent session id bound to the earlier `prev`? Only
+ * when prev is a known record that has ended / is no longer live, or has the
+ * same agent root (the wall restarted and re-minted it). Unknown prev: no. */
+static int rebind_ok(const char *prev, const char *es) {
+    kai_session a, b;
+    if (!kai_session_get(prev, &a)) return 0;
+    if (!kai_session_live(&a)) return 1;
+    return kai_session_get(es, &b) && a.root_pid > 0 && a.root_pid == b.root_pid;
+}
+
 /* Is `agent_session` already recorded under a report other than `es`? */
 static int agent_session_bound_elsewhere(const char *agent_session, const char *es) {
     if (!agent_session || !*agent_session) return 0;
@@ -569,7 +601,9 @@ static int agent_session_bound_elsewhere(const char *agent_session, const char *
             const char *as = cJSON_GetStringValue(cJSON_GetObjectItem(o, "agent_session"));
             const char *e2 = cJSON_GetStringValue(cJSON_GetObjectItem(o, "es_session"));
             if (e2) kai_strlcpy(esid, e2, sizeof esid);
-            if (as && strcmp(as, agent_session) == 0 && strcmp(esid, es) != 0) clash = 1;
+            if (as && strcmp(as, agent_session) == 0 && strcmp(esid, es) != 0 &&
+                !rebind_ok(esid, es))
+                clash = 1;
             cJSON_Delete(o);
         }
     }
