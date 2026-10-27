@@ -155,8 +155,8 @@ int kai_agent_own_state(const char *agent, const char *path, const char *cwd);
 /* Phase A item 1: 1 when `rule` (the protect match for `path`) is a blanket
  * name rule and `path` is in the requesting agent's own state, so the agent
  * may use it. Folder rules, builtin control paths and Kai's home: never. */
-int kai_own_state_exempt(const char *agent, const char *path, const char *cwd,
-                         const char *rule);
+int kai_own_state_exempt(const kai_policy *p, const char *agent, const char *path,
+                         const char *cwd, const char *rule);
 /* kai_path_protected, minus the requesting agent's own state (agent may be NULL). */
 int kai_path_protected_as(const kai_policy *p, const char *agent, const char *path,
                           const char *cwd, char *why, size_t whylen);
@@ -613,6 +613,8 @@ int kai_approval_store_revoke(kai_approval_store *s, const char *id_prefix);
  * lock. Lets a caller make the "is this protected / which rule" check against
  * the same coherent, reloaded snapshot the grant decision uses, instead of a
  * separately-loaded policy. Returns 1 protected (fills why), else 0. */
+int kai_approval_store_own_state_exempt(kai_approval_store *s, const char *agent,
+                                        const char *path, const char *cwd, const char *rule);
 int kai_approval_store_protected(kai_approval_store *s, const char *path,
                                  const char *cwd, char *why, size_t whylen);
 

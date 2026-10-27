@@ -269,6 +269,17 @@ int kai_approval_store_protected(kai_approval_store *s, const char *path,
     return r;
 }
 
+/* kai_own_state_exempt over the store's policy snapshot (the one
+ * kai_approval_store_protected matched against). */
+int kai_approval_store_own_state_exempt(kai_approval_store *s, const char *agent,
+                                        const char *path, const char *cwd, const char *rule) {
+    if (!s) return 0;
+    pthread_rwlock_rdlock(&s->lock);
+    int r = kai_own_state_exempt(s->policy, agent, path, cwd, rule);
+    pthread_rwlock_unlock(&s->lock);
+    return r;
+}
+
 int kai_approval_store_revoke(kai_approval_store *s, const char *id_prefix) {
     if (!s || !id_prefix || !*id_prefix) return 0;
     pthread_rwlock_wrlock(&s->lock);

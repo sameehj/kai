@@ -1383,9 +1383,9 @@ static void test_agent_own_state(void) {
     kai_policy *p = mk(pol);
     char why[256];
     CHECK(p && kai_path_protected(p, ck, NULL, why, sizeof why) == 1, "the name rule matches control key");
-    CHECK(kai_own_state_exempt("claude", ck, NULL, why) == 1,
+    CHECK(kai_own_state_exempt(p, "claude", ck, NULL, why) == 1,
           "Claude Code reading its own control key is allowed");
-    CHECK(kai_own_state_exempt("codex", ck, NULL, why) == 0,
+    CHECK(kai_own_state_exempt(p, "codex", ck, NULL, why) == 0,
           "Codex reading Claude Code's control key is denied");
     CHECK(kai_path_protected_as(p, "claude", ck, NULL, why, sizeof why) == 0 && why[0] == '\0',
           "path_protected_as: not protected for the owning agent");
@@ -1403,8 +1403,48 @@ static void test_agent_own_state(void) {
     /* Built-in control paths are never exempted: hook settings stay protected. */
     CHECK(kai_path_protected_as(p, "claude", cset, NULL, why, sizeof why) == 1 &&
           kai_rule_is_builtin(why), "Claude's hook settings stay a builtin control path");
-    CHECK(kai_own_state_exempt("claude", cset, NULL, why) == 0,
+    CHECK(kai_own_state_exempt(p, "claude", cset, NULL, why) == 0,
           "hook settings are not own-state exempt (write protection kept)");
+
+    /* Fix 2: the exemption needs EVERY matching rule to be a name pattern. A
+     * user rule naming a specific file inside ~/.claude still protects it,
+     * even when a blanket *.key rule is listed first and matches too. */
+    char pk[600]; snprintf(pk, sizeof pk, "%s/.claude/private%s", home, KEY);
+    char pol2[300]; snprintf(pol2, sizeof pol2, "protect *%s\nprotect ~/.claude/private%s\n", KEY, KEY);
+    kai_policy *p2 = mk(pol2);
+    CHECK(p2 && kai_path_protected_as(p2, "claude", pk, NULL, why, sizeof why) == 1,
+          "a user rule naming ~/.claude/private.key still protects it from Claude Code");
+    CHECK(p2 && kai_own_state_exempt(p2, "claude", pk, NULL, "*.key") == 0,
+          "own-state exempt refuses when a specific rule also matches");
+    CHECK(p2 && kai_path_protected_as(p2, "claude", ck, NULL, why, sizeof why) == 0,
+          "...while a key matched only by the blanket rule stays usable");
+    kai_policy_free(p2);
+
+    /* Fix 1: a CODEX_HOME that resolves to $HOME, a parent of it, or / is not
+     * an agent state dir (it would exempt the whole home). */
+    char envbuf[700], projenv[700];
+    snprintf(projenv, sizeof projenv, "%s/project/.env", home);
+    const char *old_ch = getenv("CODEX_HOME");
+    char saved[700] = ""; if (old_ch) snprintf(saved, sizeof saved, "%s", old_ch);
+    setenv("CODEX_HOME", home, 1);
+    CHECK(kai_agent_own_state("codex", projenv, NULL) == 0, "CODEX_HOME=$HOME doesn't make ~/project/.env Codex state");
+    kai_policy *pe = mk("protect .env\n");
+    CHECK(pe && kai_path_protected_as(pe, "codex", projenv, NULL, why, sizeof why) == 1,
+          "CODEX_HOME=$HOME: Codex still can't read ~/project/.env");
+    snprintf(envbuf, sizeof envbuf, "%s/", home);
+    setenv("CODEX_HOME", envbuf, 1);
+    CHECK(kai_agent_own_state("codex", projenv, NULL) == 0, "CODEX_HOME=$HOME/ (trailing slash) is ignored too");
+    snprintf(envbuf, sizeof envbuf, "%s/..", home);
+    setenv("CODEX_HOME", envbuf, 1);
+    CHECK(kai_agent_own_state("codex", projenv, NULL) == 0, "CODEX_HOME = a parent of $HOME is ignored");
+    setenv("CODEX_HOME", "/", 1);
+    CHECK(kai_agent_own_state("codex", projenv, NULL) == 0, "CODEX_HOME=/ is ignored");
+    snprintf(envbuf, sizeof envbuf, "%s/codex-home", home);
+    setenv("CODEX_HOME", envbuf, 1);
+    char inch[800]; snprintf(inch, sizeof inch, "%s/codex-home/auth%s", home, KEY);
+    CHECK(kai_agent_own_state("codex", inch, NULL) == 1, "a real CODEX_HOME below $HOME still counts");
+    kai_policy_free(pe);
+    if (old_ch) setenv("CODEX_HOME", saved, 1); else unsetenv("CODEX_HOME");
 
     char cmd[800]; snprintf(cmd, sizeof cmd, "cat %s", ck);
     CHECK(kai_command_touches_protected_as(p, "claude", cmd, NULL, why, sizeof why, NULL, NULL) == 0,

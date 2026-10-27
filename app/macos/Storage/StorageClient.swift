@@ -773,7 +773,17 @@ final class StorageClient {
                 // requesting agent's own state dir (Claude Code's
                 // ~/.claude/daemon/control.key). Folder rules, the hook settings
                 // and Kai's home are never exempt; another agent stays blocked.
-                if p.withCString({ kai_own_state_exempt(agent, $0, nil, why) }) == 1 { return true }
+                // Only when every matching rule is a name rule (a rule naming
+                // this file or folder still protects it), over the same policy
+                // snapshot the protect check used.
+                var ownState = false
+                #if KAI_STORAGE_ENFORCE
+                if let gs = grantStore { ownState = kai_approval_store_own_state_exempt(gs, agent, p, nil, why) == 1 }
+                else { ownState = kai_own_state_exempt(pol, agent, p, nil, why) == 1 }
+                #else
+                ownState = kai_own_state_exempt(pol, agent, p, nil, why) == 1
+                #endif
+                if ownState { return true }
                 // An agent READING its own hook config (not Kai's home, not a
                 // secret) is allowed: it must to start, and Kai's hooks live
                 // there, so blocking the read is self-defeating. WRITES to it are

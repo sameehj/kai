@@ -383,6 +383,22 @@ static int under_root(const char *np, const char *root) {
     return hit;
 }
 
+/* Fix 1: a CODEX_HOME that resolves to $HOME, a parent of $HOME, or / would
+ * make the whole home (every project's .env and keys) "Codex state", so it is
+ * ignored for the exemption. */
+static int codex_home_too_wide(const char *ch) {
+    char *c = kai_normalize_path(ch, NULL);
+    char *h = kai_normalize_path("~", NULL);
+    int wide = 1;                                   /* unresolvable: refuse */
+    if (c && h) {
+        size_t cl = strlen(c);
+        wide = !strcmp(c, "/") ||
+               (strncmp(h, c, cl) == 0 && (h[cl] == '\0' || h[cl] == '/'));
+    }
+    free(c); free(h);
+    return wide;
+}
+
 int kai_agent_own_state(const char *agent, const char *path, const char *cwd) {
     if (!agent || !*agent || !path) return 0;
     char *np = kai_normalize_path(path, cwd);
@@ -391,7 +407,7 @@ int kai_agent_own_state(const char *agent, const char *path, const char *cwd) {
     for (size_t i = 0; !hit && i < sizeof AGENT_STATE / sizeof AGENT_STATE[0]; i++)
         hit = !strcmp(AGENT_STATE[i].agent, agent) && under_root(np, AGENT_STATE[i].root);
     const char *ch = getenv("CODEX_HOME");
-    if (!hit && !strcmp(agent, "codex") && ch && *ch) hit = under_root(np, ch);
+    if (!hit && !strcmp(agent, "codex") && ch && *ch && !codex_home_too_wide(ch)) hit = under_root(np, ch);
     free(np);
     return hit;
 }
@@ -402,9 +418,20 @@ int kai_agent_own_state(const char *agent, const char *path, const char *cwd) {
  * ~/.claude/daemon/control.key). Folder rules the user wrote, the built-in
  * control paths (hook settings stay write-protected) and ~/.kai are untouched,
  * and another agent reading the same file is still denied. */
-int kai_own_state_exempt(const char *agent, const char *path, const char *cwd,
-                         const char *rule) {
-    return kai_rule_is_name_pattern(rule) && kai_agent_own_state(agent, path, cwd);
+int kai_own_state_exempt(const kai_policy *p, const char *agent, const char *path,
+                         const char *cwd, const char *rule) {
+    if (!kai_rule_is_name_pattern(rule) || !kai_agent_own_state(agent, path, cwd)) return 0;
+    /* Fix 2: only when EVERY protect rule matching the path is a name pattern.
+     * A rule naming this specific file or folder ("protect ~/.claude/private.key")
+     * is the user's deliberate choice and still protects it. */
+    if (!p) return 1;
+    char *np = kai_normalize_path(path, cwd);
+    if (!np) return 0;
+    int ok = 1;
+    for (int i = 0; ok && i < p->nprotect; i++)
+        if (path_matches(p->protect[i], np) && !kai_rule_is_name_pattern(p->protect[i])) ok = 0;
+    free(np);
+    return ok;
 }
 
 int kai_path_protected_as(const kai_policy *p, const char *agent, const char *path,
@@ -412,7 +439,7 @@ int kai_path_protected_as(const kai_policy *p, const char *agent, const char *pa
     char scratch[256];
     if (!why || !whylen) { why = scratch; whylen = sizeof scratch; }
     if (!kai_path_protected(p, path, cwd, why, whylen)) return 0;
-    if (kai_own_state_exempt(agent, path, cwd, why)) { why[0] = '\0'; return 0; }
+    if (kai_own_state_exempt(p, agent, path, cwd, why)) { why[0] = '\0'; return 0; }
     return 1;
 }
 
