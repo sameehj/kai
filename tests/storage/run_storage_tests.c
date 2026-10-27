@@ -16,6 +16,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <sys/time.h>
 #include <sys/fcntl.h>
 #include <fcntl.h>
 #include <dirent.h>
@@ -1120,6 +1121,45 @@ static void test_enforcement_labels(void) {
     CHECK(!strcmp(kai_status_sentence(2, 0, 2, 0, st, sizeof st), "Internet protection is off"), "internet off");
     CHECK(!strcmp(kai_status_sentence(0, 0, 2, 0, st, sizeof st), "Not protected"), "both off");
     CHECK(!strcmp(kai_status_sentence(2, 2, 2, 1, st, sizeof st), "Kai is paused"), "paused wins");
+
+    /* Fix 3: Internet is never inferred. Unverified (-1) is left out of the
+     * headline, which then speaks for Files alone. */
+    CHECK(!strcmp(kai_status_sentence(2, -1, 3, 0, st, sizeof st), "Files protected \xC2\xB7 3 agents working"),
+          "internet unverified: headline is Files only");
+    CHECK(!strcmp(kai_status_sentence(1, -1, 3, 0, st, sizeof st), "Files: watching only"),
+          "internet unverified, files watching");
+    CHECK(!strcmp(kai_status_sentence(0, -1, 3, 0, st, sizeof st), "Files protection is off"),
+          "internet unverified, files off");
+    CHECK(strstr(kai_status_sentence(2, -1, 3, 0, st, sizeof st), "Internet") == NULL,
+          "unverified Internet never appears in the headline");
+
+    /* Fix 3: a heartbeat counts only if it is fresh, names the wall, is owned
+     * by the expected uid (root in production) and isn't group/world-writable,
+     * so an agent running as the user can't forge one. */
+    char hdir[] = "/tmp/kai-hbXXXXXX";
+    if (mkdtemp(hdir)) {
+        char hb[300]; snprintf(hb, sizeof hb, "%s/network-health.json", hdir);
+        uid_t me = getuid();
+        CHECK(kai_heartbeat_level(hb, "network", me) == -1, "missing heartbeat: not verified");
+        FILE *hf = fopen(hb, "w");
+        if (hf) { fputs("{\"wall\":\"network\",\"mode\":\"block\"}", hf); fclose(hf); }
+        chmod(hb, 0644);
+        CHECK(kai_heartbeat_level(hb, "network", me) == 2, "fresh, right owner, block: level 2");
+        CHECK(kai_heartbeat_level(hb, "storage", me) == -1, "names another wall: not verified");
+        CHECK(kai_heartbeat_level(hb, "network", 0) == -1 || me == 0, "owned by the user, not root: not verified");
+        chmod(hb, 0666);
+        CHECK(kai_heartbeat_level(hb, "network", me) == -1, "world-writable: not verified");
+        chmod(hb, 0644);
+        struct timeval old2[2] = {{time(NULL) - 120, 0}, {time(NULL) - 120, 0}};
+        utimes(hb, old2);
+        CHECK(kai_heartbeat_level(hb, "network", me) == -1, "stale: not verified");
+        hf = fopen(hb, "w");
+        if (hf) { fputs("{\"wall\":\"network\",\"mode\":\"log\"}", hf); fclose(hf); }
+        CHECK(kai_heartbeat_level(hb, "network", me) == 1, "log mode: level 1");
+        unlink(hb); rmdir(hdir);
+    }
+    CHECK(strstr(kai_network_heartbeat_path(), "/Library/Group Containers/") != NULL,
+          "network heartbeat lives in the app-group container");
     /* The scan runs and returns a bounded, sane result (no crash); the live
      * session set is verified in the live test. */
     kai_policy *p = mk("storage block\n");

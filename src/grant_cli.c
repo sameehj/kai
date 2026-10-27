@@ -251,11 +251,6 @@ int kai_cmd_grant(int argc, char **argv) {
 
 static const char *sess_state(const kai_session *s) { return s->ended_utc ? "ended" : "active"; }
 
-static int health_fresh(const char *path, long max_age) {
-    struct stat st;
-    if (stat(path, &st) != 0) return 0;
-    return (long)(time(NULL) - st.st_mtime) <= max_age;
-}
 
 /* Merge the ES registry (authoritative, storage wall active) with the
  * storage-wall-free process scan, deduped by root pid (registry wins). This is
@@ -286,8 +281,9 @@ static int merged_sessions(kai_session **out, int *n) {
 static int sessions_list(int json) {
     kai_session *s = NULL; int n = 0;
     merged_sessions(&s, &n);
-    int storage_active = health_fresh("/tmp/kai-storage-health.json", 30);
-    int network_active = health_fresh("/tmp/kai-network-health.json", 30);
+    /* Verified (root-owned, fresh) heartbeats only; see kai_heartbeat_level. */
+    int storage_active = kai_wall_observed_level("storage") >= 0;
+    int network_active = kai_wall_observed_level("network") >= 0;
     const char *enf = kai_enforcement_label(storage_active, network_active);
     if (json) {
         printf("[");

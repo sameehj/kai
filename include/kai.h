@@ -11,6 +11,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -364,12 +365,21 @@ int kai_sessions_scan(const kai_policy *p, kai_session **out, int *n);
 const char *kai_enforcement_label(int storage_active, int network_active);
 /* The one status sentence ("Protected · 3 agents working", "Watching only",
  * "Files protection is off", ...). files/internet: 0 off, 1 watch, 2 protect;
- * agents < 0 = unknown. Writes into out and returns it. */
+ * internet -1 = not verified (left out of the headline); agents < 0 = unknown.
+ * Writes into out and returns it. */
 const char *kai_status_sentence(int files, int internet, int agents, int paused,
                                 char *out, size_t n);
-/* A wall's reported level from its health snapshot: 2 block, 1 log, 0 off/not
- * running (stale), -1 never reported (fall back to the configured mode). */
+/* The Kai app group (Team-ID-prefixed; matches the entitlements). */
+#define KAI_APP_GROUP "KD446VDTM2.io.github.sameehj.kai"
+/* A wall's VERIFIED level from its root-owned heartbeat: 2 block, 1 log, 0 off,
+ * -1 not verified. Never inferred from the policy. */
 int kai_wall_observed_level(const char *wall);
+/* Verify one heartbeat file: owned by `owner`, not group/world-writable, fresh
+ * (30 s), naming `wall`. Level as above, -1 if any check fails. */
+int kai_heartbeat_level(const char *path, const char *wall, uid_t owner);
+/* Where the (sandboxed) network extension writes its heartbeat: the console
+ * user's app-group container. */
+const char *kai_network_heartbeat_path(void);
 
 /* ---- Discovery (item 5) ---- */
 typedef struct { char exe[1024]; char host[256]; long long last_utc; } kai_discovery;

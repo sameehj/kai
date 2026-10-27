@@ -46,6 +46,7 @@ final class AppModel: ObservableObject {
 
     init() {
         notifyOnBlock = UserDefaults.standard.object(forKey: "notifyOnBlock") as? Bool ?? true
+        AppModel.ensureGroupContainer()
         Task { await refresh() }
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -70,28 +71,24 @@ final class AppModel: ObservableObject {
 
     // MARK: observed status (U1, Phase B item 8) — ONE status model for the
     // popover, the Settings sidebar, the menu-bar label and `kai status`:
-    // libkai's kai_status_sentence over what the walls REPORT. A wall the OS
-    // hasn't activated is off; Files' level comes from its health snapshot
-    // (stale = not running = off); Internet's from its snapshot, or the
-    // configured mode while the sandboxed extension can't write one yet.
+    // libkai's kai_status_sentence over what the walls REPORT in root-owned,
+    // fresh heartbeats (libkai verifies them). A wall the OS hasn't activated
+    // is off; Files unverified = not running = off; Internet unverified is
+    // never inferred from the policy: it stays out of the headline and shows
+    // as "Internet: on (not verified)".
     enum ObservedProtection { case protected, partial, notProtected }
 
     private func levels(storageOn: Bool, networkOn: Bool) -> (files: Int32, internet: Int32, paused: Bool) {
         let files = storageOn ? max(kai_wall_observed_level("storage"), 0) : 0
-        var internet: Int32 = 0
-        if networkOn {
-            let l = kai_wall_observed_level("network")
-            if l >= 0 { internet = l }
-            else {
-                switch policy?.switches["egress"] ?? "log" {
-                case "block": internet = 2
-                case "off": internet = 0
-                default: internet = 1
-                }
-            }
-        }
+        let internet: Int32 = networkOn ? kai_wall_observed_level("network") : 0   // -1 = not verified
         let paused = kai_wall_paused("storage", Int64(Date().timeIntervalSince1970)) != 0
         return (files, internet, paused)
+    }
+
+    /// "Internet: on (not verified)" while the network extension is on but no
+    /// verified heartbeat has arrived; nil otherwise.
+    func internetUnverifiedNote(networkOn: Bool) -> String? {
+        networkOn && kai_wall_observed_level("network") < 0 ? "Internet: on (not verified)" : nil
     }
 
     func observedProtection(storageOn: Bool, networkOn: Bool) -> ObservedProtection {
@@ -103,6 +100,12 @@ final class AppModel: ObservableObject {
 
     /// The one status sentence ("Protected · 3 agents working", "Watching only",
     /// "Files protection is off"). agents < 0: count unknown here.
+    /// Create the user's app-group container (macOS makes it on first access),
+    /// so the root network extension has somewhere to put its heartbeat.
+    static func ensureGroupContainer() {
+        _ = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: KAI_APP_GROUP)
+    }
+
     func statusSentence(storageOn: Bool, networkOn: Bool, agents: Int = -1) -> String {
         let l = levels(storageOn: storageOn, networkOn: networkOn)
         var buf = [CChar](repeating: 0, count: 128)

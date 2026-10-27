@@ -63,6 +63,9 @@ struct MenuView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(model.health == .problem ? Theme.coral : glow)
                 .fixedSize(horizontal: false, vertical: true)
+            if let note = model.internetUnverifiedNote(networkOn: wall.isOn) {
+                Text(note).font(.system(size: 11)).foregroundStyle(Theme.amber)
+            }
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("\(running)").font(Theme.display(34)).foregroundStyle(glow)
                 Text("agent session\(running == 1 ? "" : "s") running")

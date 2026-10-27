@@ -191,10 +191,12 @@ int kai_cmd_status_json(void) {
     cJSON *sh = status_read_health("/tmp/kai-storage-health.json", 30);
     cJSON *so = cJSON_AddObjectToObject(obs, "storage");
     cJSON_AddBoolToObject(so, "running", sh != NULL);
+    cJSON_AddBoolToObject(so, "verified", kai_wall_observed_level("storage") >= 0);
     if (sh) cJSON_AddItemToObject(so, "health", sh);
-    cJSON *nh = status_read_health("/tmp/kai-network-health.json", 30);
+    cJSON *nh = status_read_health(kai_network_heartbeat_path(), 30);
     cJSON *no = cJSON_AddObjectToObject(obs, "network");
     cJSON_AddBoolToObject(no, "running", nh != NULL);
+    cJSON_AddBoolToObject(no, "verified", kai_wall_observed_level("network") >= 0);
     if (nh) cJSON_AddItemToObject(no, "health", nh);
 
     print_json(o);

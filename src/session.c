@@ -301,6 +301,12 @@ const char *kai_status_sentence(int files, int internet, int agents, int paused,
                                 char *out, size_t n) {
     if (!out || !n) return "";
     if (paused) snprintf(out, n, "Kai is paused");
+    /* Internet not verified: left out of the headline, which speaks for Files. */
+    else if (internet < 0 && files <= 0) snprintf(out, n, "Files protection is off");
+    else if (internet < 0 && files == 1) snprintf(out, n, "Files: watching only");
+    else if (internet < 0 && agents > 0)
+        snprintf(out, n, "Files protected \xC2\xB7 %d agent%s working", agents, agents == 1 ? "" : "s");
+    else if (internet < 0) snprintf(out, n, "Files protected");
     else if (files == 0 && internet == 0) snprintf(out, n, "Not protected");
     else if (files == 0) snprintf(out, n, "Files protection is off");
     else if (internet == 0) snprintf(out, n, "Internet protection is off");
@@ -313,24 +319,44 @@ const char *kai_status_sentence(int files, int internet, int agents, int paused,
     return out;
 }
 
-/* A wall's level as it reports it in /tmp/kai-<wall>-health.json: 2 block,
- * 1 log, 0 off or stale (not written within 30 s: not running). -1 when the
- * wall has never written one (the sandboxed network extension can't yet), so
- * the caller falls back to the configured mode. */
-int kai_wall_observed_level(const char *wall) {
-    char path[128];
-    snprintf(path, sizeof path, "/tmp/kai-%s-health.json", wall ? wall : "");
+/* Fix 3: a wall heartbeat counts only if it can't have been forged by an agent
+ * running as the user: owned by `owner` (root in production), not group- or
+ * world-writable, written within 30 s, and naming `wall`. Returns 2 block,
+ * 1 log, 0 off, -1 not verified (missing, stale, wrong owner/mode/wall). */
+int kai_heartbeat_level(const char *path, const char *wall, uid_t owner) {
     struct stat st;
-    if (stat(path, &st) != 0) return -1;
-    if ((long)(time(NULL) - st.st_mtime) > 30) return 0;
+    if (!path || !wall || lstat(path, &st) != 0 || !S_ISREG(st.st_mode)) return -1;
+    if (st.st_uid != owner || (st.st_mode & (S_IWGRP | S_IWOTH))) return -1;
+    if ((long)(time(NULL) - st.st_mtime) > 30) return -1;
     size_t len = 0;
     char *txt = kai_read_file(path, 1 << 16, &len);
     cJSON *o = txt ? cJSON_Parse(txt) : NULL;
     free(txt);
+    const char *w = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "wall")) : NULL;
     const char *m = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "mode")) : NULL;
-    int lvl = !m ? 0 : !strcmp(m, "block") ? 2 : (!strcmp(m, "log") || !strcmp(m, "warn")) ? 1 : 0;
+    int lvl = -1;
+    if (w && !strcmp(w, wall) && m)
+        lvl = !strcmp(m, "block") ? 2 : (!strcmp(m, "log") || !strcmp(m, "warn")) ? 1 : 0;
     cJSON_Delete(o);
     return lvl;
+}
+
+/* The network extension is sandboxed: it can't write /tmp, so its heartbeat
+ * goes in the console user's copy of the Kai app-group container. */
+const char *kai_network_heartbeat_path(void) {
+    static char path[1024];
+    char *h = kai_expand_home("~/Library/Group Containers/" KAI_APP_GROUP "/network-health.json");
+    kai_strlcpy(path, h, sizeof path);
+    free(h);
+    return path;
+}
+
+/* A wall's VERIFIED level (root-owned heartbeat): 2 block, 1 log, 0 off, -1
+ * not verified. Callers never infer it from the policy: Files unverified is
+ * not running (off); Internet unverified is shown as "not verified". */
+int kai_wall_observed_level(const char *wall) {
+    if (wall && !strcmp(wall, "network")) return kai_heartbeat_level(kai_network_heartbeat_path(), "network", 0);
+    return kai_heartbeat_level("/tmp/kai-storage-health.json", "storage", 0);
 }
 
 /* Reject an id that could escape the registry dir or hold a path separator. */

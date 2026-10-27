@@ -23,7 +23,12 @@ private let log = Logger(subsystem: "io.github.sameehj.kai.network", category: "
 final class FilterDataProvider: NEFilterDataProvider {
     private let engine = Engine()
     private var healthTimer: DispatchSourceTimer?
-    private let healthPath = "/tmp/kai-network-health.json"
+    /// Fix 3: the extension is sandboxed and can't write /tmp, so the heartbeat
+    /// goes in the console user's app-group container (libkai's path; HOME is
+    /// set to the console user's home at start). Readers verify it is
+    /// root-owned, not group/world-writable and fresh, so a user-level agent
+    /// can't forge one.
+    private var healthPath: String { String(cString: kai_network_heartbeat_path()) }
 
     // Observed-state snapshot (U1/M0.4): a fresh file proves the network wall is
     // actually running, so `kai status`, the menu headline and session
@@ -34,8 +39,19 @@ final class FilterDataProvider: NEFilterDataProvider {
         let mode = m == KAI_EGRESS_BLOCK ? "block" : (m == KAI_EGRESS_LOG ? "log" : "off")
         let json = "{\"wall\":\"network\",\"mode\":\"\(mode)\",\"enforcing\":\(m == KAI_EGRESS_BLOCK),"
                  + "\"running\":true,\"ts\":\(Int(Date().timeIntervalSince1970))}"
-        try? Data(json.utf8).write(to: URL(fileURLWithPath: healthPath))
+        // Atomic (temp + rename), so a reader never sees a torn file; the new
+        // file is root-owned 0644, which is what readers verify.
+        do {
+            try Data(json.utf8).write(to: URL(fileURLWithPath: healthPath), options: .atomic)
+            healthFailLogged = false
+        } catch {
+            if !healthFailLogged {   // once per failure streak, not every 5 s
+                log.error("heartbeat write failed at \(self.healthPath, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                healthFailLogged = true
+            }
+        }
     }
+    private var healthFailLogged = false
 
     override func startFilter(completionHandler: @escaping (Error?) -> Void) {
         engine.configure(filterConfiguration.vendorConfiguration ?? [:])

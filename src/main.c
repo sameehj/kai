@@ -110,8 +110,9 @@ static int cmd_status(void) {
     int agents = -1;
     int files = kai_wall_observed_level("storage");
     int internet = kai_wall_observed_level("network");
-    if (files < 0) files = 0;                            /* never reported: not running */
-    if (internet < 0) internet = p ? (int)kai_policy_egress_mode(p) : 0;  /* no snapshot yet */
+    if (files < 0) files = 0;                            /* no verified heartbeat: not running */
+    /* Internet is never inferred from the policy: unverified (-1) stays out of
+     * the headline and gets its own line below. */
     if (p) {
         kai_session *s = NULL; int n = 0;
         kai_sessions_scan(p, &s, &n);
@@ -120,9 +121,11 @@ static int cmd_status(void) {
         free(s);
         kai_policy_free(p);
     }
-    printf("%s\n\n", kai_status_sentence(files, internet, agents,
-                                         kai_wall_paused("storage", (long long)time(NULL)) != 0,
-                                         line, sizeof line));
+    printf("%s\n", kai_status_sentence(files, internet, agents,
+                                       kai_wall_paused("storage", (long long)time(NULL)) != 0,
+                                       line, sizeof line));
+    if (internet < 0) printf("Internet: not verified (no fresh heartbeat from the network extension)\n");
+    printf("\n");
     return cmd_doctor();
 }
 
