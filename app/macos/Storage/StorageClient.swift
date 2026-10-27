@@ -599,9 +599,13 @@ final class StorageClient {
             let t0 = profiling ? nowTicks() : 0
             let (paths, op) = extractPaths(msg)
             let tPaths = profiling ? nowTicks() : 0
-            // readdir is a read; every other gated event mutates the target.
+            // readdir is a read; every other gated event mutates the target. A
+            // "create" is a new file (Item 3): mark it creating so a new
+            // key-named file outside a protected folder is allowed+logged (the
+            // helper's existence check keeps an overwrite of an existing one
+            // protected).
             let allow = authorize(msg, paths: paths, op: op, enforce: true, write: op != "readdir",
-                                  timed: profiling, t0: t0, tPaths: tPaths)
+                                  creating: op == "create", timed: profiling, t0: t0, tPaths: tPaths)
             let tResp = profiling ? nowTicks() : 0
             if let c = client { es_respond_auth_result(c, msg, allow ? ES_AUTH_RESULT_ALLOW : ES_AUTH_RESULT_DENY, false) }
             finishTiming(msg, t0: t0, tResp: tResp)
