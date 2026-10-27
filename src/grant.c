@@ -444,6 +444,75 @@ size_t kai_approval_key_read(unsigned char *out, size_t cap) {
     return nread;
 }
 
+void kai_sha256_hex(const void *data, size_t n, char out[65]);  /* sha256.c */
+
+/* Write a pending MCP approval request for the app to show as a card. Keyed by
+ * session+server+tool so re-asking overwrites rather than piling up. */
+static void mcp_request_write(const char *session, const char *server, const char *tool,
+                              const char *host, const char *agent) {
+    char dir[1200];
+    if (snprintf(dir, sizeof dir, "%s/pending", kai_home()) >= (int)sizeof dir) return;
+    mkdir(kai_home(), 0700);
+    mkdir(dir, 0700);
+    char keybuf[400], h[65];
+    snprintf(keybuf, sizeof keybuf, "%s|mcp:%s/%s", session, server, tool ? tool : "");
+    kai_sha256_hex(keybuf, strlen(keybuf), h);
+    char resource[256];
+    snprintf(resource, sizeof resource, "mcp:%.90s/%.90s", server, tool ? tool : "");
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "id", h);
+    cJSON_AddStringToObject(o, "agent", agent && *agent ? agent : "agent");
+    cJSON_AddNumberToObject(o, "pid", 0);
+    cJSON_AddNumberToObject(o, "pidversion", 0);
+    cJSON_AddNumberToObject(o, "strength", 2);
+    cJSON_AddStringToObject(o, "resource", resource);
+    cJSON_AddStringToObject(o, "op", "connect");
+    cJSON_AddNumberToObject(o, "ts", (double)time(NULL));
+    cJSON_AddStringToObject(o, "session", session);   /* from the caller's token, not the payload */
+    cJSON_AddStringToObject(o, "note", "MCP tool - approve for this session");
+    if (host && *host) cJSON_AddStringToObject(o, "declaredHost", host);
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (!js) return;
+    char path[1300], tmp[1400];
+    snprintf(path, sizeof path, "%s/mcp-%.16s.json", dir, h);
+    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
+    FILE *f = fopen(tmp, "wb");
+    if (f) { chmod(tmp, 0600); fputs(js, f);
+             if (fclose(f) == 0) { if (rename(tmp, path) != 0) unlink(tmp); } else unlink(tmp); }
+    free(js);
+}
+
+/* Service side of an MCP call (Step 4 / Change 2). Runs in the signed app, the
+ * only process that may read the approval key. Derives the session from the
+ * CALLER's pid (audit-token identity), never a payload-supplied id. If a valid
+ * session grant already covers the tool -> allow (rc 0). Otherwise stage a
+ * pending card for the user and tell the agent to wait (rc 10). */
+int kai_mcp_service_request(int caller_pid, const char *server, const char *tool,
+                            const char *host, char *msg, size_t msglen) {
+    if (msg && msglen) msg[0] = '\0';
+    if (!server || !*server) { if (msg) kai_strlcpy(msg, "bad MCP request", msglen); return 1; }
+    char session[KAI_SESSION_ID_MAX] = "";
+    if (!kai_session_for_pid(caller_pid, session, sizeof session)) {
+        if (msg) kai_strlcpy(msg, "no Kai session for the caller; MCP denied", msglen);
+        return 72;
+    }
+    char gdir[1200]; snprintf(gdir, sizeof gdir, "%s/grants", kai_home());
+    kai_grant *gs = NULL; int ng = 0;
+    kai_grants_load(gdir, &gs, &ng);
+    unsigned char key[64]; size_t klen = kai_approval_key_read(key, sizeof key);
+    int allowed = (gs && klen) &&
+                  kai_mcp_grant_allows(gs, ng, session, server, tool, (long long)time(NULL), key, klen);
+    free(gs);
+    if (allowed) { if (msg) kai_strlcpy(msg, "granted for this session", msglen); return 0; }
+
+    kai_session sess; char agent[32] = "agent";
+    if (kai_session_get(session, &sess) == 0 && sess.agent[0]) kai_strlcpy(agent, sess.agent, sizeof agent);
+    mcp_request_write(session, server, tool, host, agent);
+    if (msg) snprintf(msg, msglen, "waiting for approval in Kai: %s/%s", server, tool ? tool : "");
+    return 10;
+}
+
 static int host_from_url(const char *url, char *out, size_t n) {
     const char *p = strstr(url, "://");
     p = p ? p + 3 : url;

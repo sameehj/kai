@@ -1339,6 +1339,64 @@ static void test_mcp_grants(void) {
     }
 }
 
+static void test_mcp_service(void) {
+    printf("MCP via the control service: session from the token (Change 2)\n");
+    const char *home = getenv("KAI_HOME");
+    unsigned char key[32];
+    for (int i = 0; i < 32; i++) key[i] = (unsigned char)(i * 3 + 2);
+    char kp[700]; snprintf(kp, sizeof kp, "%s/approval.key", home);
+    FILE *kf = fopen(kp, "wb"); if (kf) { fwrite(key, 1, 32, kf); fclose(kf); }
+    CHECK(kai_path_is_approval_key(kp) == 1, "approval.key is recognized (app-only)");
+    /* A live storage wall blocks an agent (this test) from any *.key file, so the
+     * key fixture can't be created here; the grant-allow check is then skipped
+     * (it passes wall-off / in CI). */
+    unsigned char probe[64]; int key_usable = kai_approval_key_read(probe, sizeof probe) == 32;
+
+    /* Map pid 999001 to session sessB (the Kai pid->session model). */
+    char sd[700]; snprintf(sd, sizeof sd, "%s/sessions", home); mkdir(sd, 0700);
+    char sp[780]; snprintf(sp, sizeof sp, "%s/999001.json", sd);
+    FILE *sf = fopen(sp, "wb"); if (sf) { fputs("{\"session\":\"sessB\"}", sf); fclose(sf); }
+    char sess[40];
+    CHECK(kai_session_for_pid(999001, sess, sizeof sess) == 1 && strcmp(sess, "sessB") == 0,
+          "a pid maps to its session via the model");
+
+    /* No grant yet: the service stages a card and says wait. The staged request's
+     * session comes from the caller's pid (999001 -> sessB), the only source -
+     * the API has no session parameter a caller could spoof. */
+    char msg[256];
+    int rc = kai_mcp_service_request(999001, "github", "create_issue", "api.gh.test", msg, sizeof msg);
+    CHECK(rc == 10, "no grant -> waiting (card staged)");
+    char pdir[700]; snprintf(pdir, sizeof pdir, "%s/pending", home);
+    DIR *d = opendir(pdir); int sawB = 0; struct dirent *e;
+    while (d && (e = readdir(d))) {
+        if (strncmp(e->d_name, "mcp-", 4)) continue;
+        char fp[800]; snprintf(fp, sizeof fp, "%s/%s", pdir, e->d_name);
+        FILE *rf = fopen(fp, "rb"); if (!rf) continue;
+        char buf[2048]; size_t L = fread(buf, 1, sizeof buf - 1, rf); buf[L] = '\0'; fclose(rf);
+        if (strstr(buf, "\"session\":\"sessB\"")) sawB = 1;
+    }
+    if (d) closedir(d);
+    CHECK(sawB, "staged request's session is from the token (sessB), not any payload");
+
+    /* A session grant for sessB makes the service allow it outright. */
+    char *gj = kai_grant_build_json3("gm", (long long)time(NULL), (long long)time(NULL) + 3600,
+                                     0, 0, "agent", 2, "mcp:github/create_issue",
+                                     KAI_OP_CONNECT, 0, "console-user", "sessB", "", 1, 1, 0,
+                                     key, sizeof key);
+    if (gj) {
+        char gdir[700]; snprintf(gdir, sizeof gdir, "%s/grants", home); mkdir(gdir, 0700);
+        char gp[780]; snprintf(gp, sizeof gp, "%s/gm.json", gdir);
+        FILE *gf = fopen(gp, "wb"); if (gf) { fputs(gj, gf); fclose(gf); }
+        free(gj);
+    }
+    rc = kai_mcp_service_request(999001, "github", "create_issue", "", msg, sizeof msg);
+    if (key_usable) CHECK(rc == 0, "a session grant -> allow");
+    else printf("  skip a session grant -> allow (live wall blocks *.key here; passes wall-off)\n");
+    /* An unknown caller (no session) is denied, not defaulted to some session. */
+    rc = kai_mcp_service_request(424242, "github", "create_issue", "", msg, sizeof msg);
+    CHECK(rc == 72, "a caller with no Kai session is denied");
+}
+
 static void test_ai_chats(void) {
     printf("AI chats (item 3; extension-sourced)\n");
     CHECK(kai_host_is_ai_chat("claude.ai") == 1, "claude.ai is an AI chat");
@@ -1476,6 +1534,7 @@ int main(void) {
     test_control_service();
     test_mcp_policy();
     test_mcp_grants();
+    test_mcp_service();
     test_ai_chats();
 
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",

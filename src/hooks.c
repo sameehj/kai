@@ -321,49 +321,6 @@ static int patch_touches_protected(const kai_policy *p, const char *text, const 
 
 /* Fail closed on a broken policy, in the output shape each event accepts
  * (Codex validates hook output strictly). */
-/* Step 4: stage an MCP approval request so the Kai app can offer "allow this
- * server (and its host) for the session" - creating session grants the hook then
- * honors on the next call. Written to <home>/pending (a request, not a grant;
- * the user still approves). Keyed by session+server+tool so re-asking overwrites
- * rather than piling up. The signed hook kai may write here (not the policy
- * store). No URLs or argument values - site/host only. */
-void kai_sha256_hex(const void *data, size_t n, char out[65]);  /* sha256.c */
-static void stage_mcp_request(const char *session, const char *server, const char *tool,
-                              const char *host, const char *agent) {
-    if (!session || !*session || !server) return;
-    char dir[1200];
-    if (snprintf(dir, sizeof dir, "%s/pending", kai_home()) >= (int)sizeof dir) return;
-    mkdir(kai_home(), 0700);
-    mkdir(dir, 0700);
-    char keybuf[400], h[65];
-    snprintf(keybuf, sizeof keybuf, "%s|mcp:%s/%s", session, server, tool ? tool : "");
-    kai_sha256_hex(keybuf, strlen(keybuf), h);
-    char resource[256];
-    snprintf(resource, sizeof resource, "mcp:%.90s/%.90s", server, tool ? tool : "");
-    cJSON *o = cJSON_CreateObject();
-    cJSON_AddStringToObject(o, "id", h);
-    cJSON_AddStringToObject(o, "agent", agent && *agent ? agent : "agent");
-    cJSON_AddNumberToObject(o, "pid", 0);
-    cJSON_AddNumberToObject(o, "pidversion", 0);
-    cJSON_AddNumberToObject(o, "strength", 2);          /* session-verified */
-    cJSON_AddStringToObject(o, "resource", resource);
-    cJSON_AddStringToObject(o, "op", "connect");
-    cJSON_AddNumberToObject(o, "ts", (double)time(NULL));
-    cJSON_AddStringToObject(o, "session", session);
-    cJSON_AddStringToObject(o, "note", "MCP tool - approve for this session");
-    if (host && *host) cJSON_AddStringToObject(o, "declaredHost", host);
-    char *js = cJSON_PrintUnformatted(o);
-    cJSON_Delete(o);
-    if (!js) return;
-    char path[1300], tmp[1400];
-    snprintf(path, sizeof path, "%s/mcp-%.16s.json", dir, h);
-    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
-    FILE *f = fopen(tmp, "wb");
-    if (f) { chmod(tmp, 0600); fputs(js, f);
-             if (fclose(f) == 0) { if (rename(tmp, path) != 0) unlink(tmp); } else unlink(tmp); }
-    free(js);
-}
-
 static void deny_policy_error(const char *ev, const char *err) {
     char msg[400];
     snprintf(msg, sizeof msg, "Kai policy error: %s", err);
@@ -716,44 +673,34 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
          * and annotations like readOnlyHint are never read and never decide. */
         char mcp_server[64] = "", mcp_tool[64] = "";
         if (kai_mcp_parse_tool(tool, mcp_server, sizeof mcp_server, mcp_tool, sizeof mcp_tool)) {
-            /* A session-bound MCP grant approved earlier this session allows the
-             * call outright (session B, with no such grant, is asked again). The
-             * signed hook kai is read-exempt, so it can verify the grant's HMAC;
-             * an agent cannot forge one. */
-            int granted = 0;
-            if (session && *session) {
-                char gdir[1200]; snprintf(gdir, sizeof gdir, "%s/grants", kai_home());
-                kai_grant *gs = NULL; int ng = 0;
-                kai_grants_load(gdir, &gs, &ng);
-                unsigned char key[64]; size_t klen = kai_approval_key_read(key, sizeof key);
-                if (gs && klen)
-                    granted = kai_mcp_grant_allows(gs, ng, session, mcp_server, mcp_tool,
-                                                   (long long)time(NULL), key, klen);
-                free(gs);
-            }
-            kai_action a = granted ? KAI_ACT_NONE : kai_mcp_decide(p, mcp_server, mcp_tool);
-            /* MCP is Kai-card-only. We NEVER return Claude's native "ask": in auto
-             * mode the agent could approve that prompt itself, with no Kai
-             * decision. allow (granted or policy-allow) -> run; everything else ->
-             * deny. For the ask case the agent is told to approve in Kai; one Kai
-             * card then grants the tool and its declared host for the session. */
-            if (a == KAI_ACT_NONE) {
-                decision = KAI_ACT_NONE;
-            } else {
-                decision = KAI_ACT_BLOCK;
-                ask = 0;
-            }
+            /* MCP is Kai-card-only. The hook never reads grants or the approval
+             * key (an agent-tree process must not): it asks the app's control
+             * service, which runs as the signed app - the only reader of the key.
+             * The service derives the session from our audit token, honors a
+             * session grant (-> allow), or stages a Kai card (-> waiting). We
+             * NEVER return Claude's native "ask": auto mode could approve that
+             * with no Kai decision. */
+            kai_action a = kai_mcp_decide(p, mcp_server, mcp_tool);
             snprintf(rule, sizeof rule, "mcp:%.26s/%.26s", mcp_server, mcp_tool);
-            char host[256] = "";
-            if (a == KAI_ACT_WARN) {
-                kai_mcp_declared_host(mcp_server, cwd, host, sizeof host);
-                stage_mcp_request(session, mcp_server, mcp_tool, host, source);
-                snprintf(reason, sizeof reason,
-                         "Waiting for approval in Kai: %s \xC2\xB7 %s. Approve in Kai, then retry.",
-                         mcp_server, mcp_tool);
+            if (a == KAI_ACT_NONE) {
+                decision = KAI_ACT_NONE;                       /* policy allows outright */
             } else if (a == KAI_ACT_BLOCK) {
+                decision = KAI_ACT_BLOCK; ask = 0;
                 snprintf(reason, sizeof reason, "MCP blocked by policy: %s \xC2\xB7 %s",
                          mcp_server, mcp_tool);
+            } else {
+                char host[256] = ""; kai_mcp_declared_host(mcp_server, cwd, host, sizeof host);
+                char *rv[3] = { mcp_server, mcp_tool, host };
+                char svc[256] = "";
+                int rc = kai_control_request("mcp", 3, rv, svc, sizeof svc);
+                if (rc == 0) {
+                    decision = KAI_ACT_NONE;                   /* a session grant covers it */
+                } else {
+                    decision = KAI_ACT_BLOCK; ask = 0;
+                    snprintf(reason, sizeof reason,
+                             "Waiting for approval in Kai: %s \xC2\xB7 %s. Approve in Kai, then retry.",
+                             mcp_server, mcp_tool);
+                }
             }
             subject = strdup(mcp_tool);
         } else if (hit_path) {

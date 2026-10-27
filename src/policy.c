@@ -622,6 +622,17 @@ int kai_path_is_policy_store(const char *path) {
     return 0;
 }
 
+/* The approval key signs grants. Only the app process (and, in their own code,
+ * the extensions) may read it; never kai running in an agent tree - otherwise an
+ * agent could read the key and forge a grant. The storage wall blocks every
+ * other reader, Kai-signed or not. */
+int kai_path_is_approval_key(const char *path) {
+    if (!path || !*path) return 0;
+    char fp[1300];
+    snprintf(fp, sizeof fp, "%s/approval.key", kai_home());
+    return strcmp(path, fp) == 0;
+}
+
 kai_policy *kai_policy_from_string(const char *text, char *err, size_t errlen) {
     return parse(text, "string", err, errlen);
 }

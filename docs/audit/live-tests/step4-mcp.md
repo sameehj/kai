@@ -58,13 +58,32 @@ No MCP proxy. Kai decides MCP tool calls from what the hooks already see.
     an expired grant does not allow; `.mcp.json` host parsed; unknown server has
     no host.
 
-## Still a judgment call (confirm live)
-- **Surface:** the hook currently returns Claude Code's native `ask` AND stages a
-  Kai card, so the user can either allow once (Claude) or grant the whole session
-  (Kai card, which also covers the host). If you'd rather MCP asks surface ONLY
-  as the Kai card (deny-until-approved), that's a one-line change in the hook.
-- **Cursor/Codex identity:** only Claude's `mcp__` naming is parsed; other agents
-  fall through to "normal tool call" (the plan's "unknown → normal").
+## Surface = Kai card only (resolved)
+- The hook **never** returns Claude Code's native `ask` for MCP — in auto mode the
+  agent could approve that itself with no Kai decision. Without a grant it returns
+  **deny**: "Waiting for approval in Kai: <server> · <tool>. Approve in Kai, then
+  retry." One Kai card grants the tool and its declared host for the session.
+
+## Requests go through the XPC service, not files (Change 2)
+- The hook no longer writes `<home>/pending` and no longer reads grants or the
+  approval key. It makes ONE XPC call (`kai_control_request("mcp", …)`); the
+  service (the signed app) does everything key-dependent.
+- `kai_mcp_service_request` (grant.c): derives the session from the **caller's
+  audit token** (`kai_session_for_pid`), never a payload id; honors a session
+  grant (→ allow) or stages the pending card (→ waiting). A caller with no Kai
+  session is denied.
+- **Key safety:** the approval key is now unreadable by `kai` in an agent tree —
+  `kai_path_is_approval_key` + the storage wall block every non-app reader
+  (`approval-key-app-only`). Only the app (and the extensions, in their own code)
+  read it.
+- Test (`test_mcp_service`): a staged request's session comes from the token
+  (sessB), not any payload; a no-session caller is denied; a session grant →
+  allow (this last check skips under a live wall that blocks `*.key`; passes
+  wall-off / CI; round-trip verified separately).
+
+## Cursor/Codex identity (unchanged)
+- Only Claude's `mcp__` naming is parsed; other agents fall through to "normal
+  tool call" (the plan's "unknown → normal").
 
 ## Live "done when" (needs you + the running app)
 The Oct 22 MCP task: one ask; approving in the Kai card covers the tool AND its

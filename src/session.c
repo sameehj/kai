@@ -221,6 +221,38 @@ int kai_chat_load(kai_chat **out, int *n) {
     return c;
 }
 
+/* The session a process belongs to, from the Kai-observed pid->session map
+ * (<home>/sessions/<pid>.json), walking up the ancestry. This is the session
+ * model: the control service uses it to stamp a request's session from the
+ * CALLER's audit token, so a caller cannot claim another session's id. 1 if
+ * found. */
+int kai_session_for_pid(int pid, char *out, size_t n) {
+    if (n) out[0] = '\0';
+    for (int i = 0; i < 24 && pid > 1; i++) {
+        char path[640];
+        snprintf(path, sizeof path, "%s/sessions/%d.json", kai_home(), pid);
+        size_t len = 0;
+        char *txt = kai_read_file(path, 1 << 16, &len);
+        if (txt) {
+            cJSON *o = cJSON_Parse(txt);
+            free(txt);
+            if (o) {
+                const char *s = cJSON_GetStringValue(cJSON_GetObjectItem(o, "session"));
+                if (s && *s) kai_strlcpy(out, s, n);
+                cJSON_Delete(o);
+                if (out[0]) return 1;
+            }
+        }
+        kai_proc pr;
+        if (kai_proc_read_fast(pid, &pr) != 0) break;
+        int parent = pr.ppid;
+        kai_proc_free(&pr);
+        if (parent <= 1 || parent == pid) break;
+        pid = parent;
+    }
+    return out[0] != '\0';
+}
+
 int kai_classify_session(const char *cmdline, int has_tty, int parent_is_launchd,
                          long long age_sec, int nested_in_same_agent) {
     if (nested_in_same_agent) return KAI_KIND_NESTED;         /* inside another session's tree */

@@ -666,8 +666,20 @@ final class StorageClient {
             // The wider control store (e.g. the session registry, which the
             // extension writes) still just bars agent-tree writers. Reads stay
             // exempt so an agent-run `kai denials`/`kai status` still works.
+            let isApp = esString(proc.pointee.signing_id) == "io.github.sameehj.kai"
+            // The approval key (grant HMAC secret) is readable ONLY by the app.
+            // The extensions read it in their own code; every other process -
+            // including a Kai-signed CLI an agent could drive - is blocked, read
+            // or write, so an agent tree can never obtain it and forge a grant.
+            if !isApp {
+                for p in paths where kai_path_is_approval_key(p) == 1 {
+                    dlog("BLOCK \(op) approval-key non-app pid \(pid(proc)) \(p)")
+                    audit(decision: "block", agent: "(kai non-app)", op: op, path: p,
+                          why: "approval-key-app-only")
+                    return false
+                }
+            }
             if write {
-                let isApp = esString(proc.pointee.signing_id) == "io.github.sameehj.kai"
                 let under = classify(proc)   // agent in ancestry? nil/"" = none
                 for p in paths {
                     if kai_path_is_policy_store(p) == 1 {

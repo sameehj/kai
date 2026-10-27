@@ -47,6 +47,16 @@ int kai_control_service_apply(const char *op, int argc, char **argv,
     if (msg && msglen) msg[0] = '\0';
     if (!op) { if (msg) kai_strlcpy(msg, "bad request", msglen); return 1; }
 
+    /* An MCP call: not a policy/grant write, so it is NOT subject to the
+     * agent-refusal (agents legitimately make MCP requests). The service stamps
+     * the session from the caller's audit token and only stages a card or honors
+     * an existing grant - it never creates a grant here. */
+    if (strcmp(op, "mcp") == 0) {
+        return kai_mcp_service_request(caller_pid, argc > 0 ? argv[0] : "",
+                                       argc > 1 ? argv[1] : "", argc > 2 ? argv[2] : "",
+                                       msg, msglen);
+    }
+
     kai_caller_pid_set(caller_pid);
     int rc;
     const char *verb = argc > 0 ? argv[0] : "";

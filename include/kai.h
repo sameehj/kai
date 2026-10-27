@@ -172,8 +172,18 @@ kai_action kai_mcp_decide(const kai_policy *p, const char *server, const char *t
 /* The host a server declares in .mcp.json (a proposal, never authority): lets
  * the approval card offer "also allow <host> for this session". 1 if found. */
 int kai_mcp_declared_host(const char *server, const char *cwd, char *out, size_t n);
-/* Read the approval key bytes; returns the length read (0 if unavailable). */
+/* Read the approval key bytes; returns the length read (0 if unavailable). Only
+ * the app and the walls may read the key - never kai running in an agent tree. */
 size_t kai_approval_key_read(unsigned char *out, size_t cap);
+/* The session a process belongs to, from the Kai pid->session map (walks the
+ * ancestry). The control service uses this to stamp a request from the caller's
+ * audit token, never a payload-supplied id. 1 if found. */
+int kai_session_for_pid(int pid, char *out, size_t n);
+/* Service side of an MCP call: derive the session from caller_pid, allow (rc 0)
+ * if a session grant covers it, else stage a pending card (rc 10). Runs in the
+ * app (the only reader of the approval key). */
+int kai_mcp_service_request(int caller_pid, const char *server, const char *tool,
+                            const char *host, char *msg, size_t msglen);
 
 /* How far the user may override Kai's protection of a matched resource. S4 acts
  * on these; the storage/network walls already make non-builtin protections
@@ -198,6 +208,8 @@ int kai_path_is_control_store(const char *path);
  * process in v1. Narrower than the control store: excludes the registry, which
  * the storage extension writes. */
 int kai_path_is_policy_store(const char *path);
+/* The approval key: only the app may read it (never agent-tree kai). */
+int kai_path_is_approval_key(const char *path);
 
 /* ---- the one authenticated control path (v1 Step 3) ----
  * The signed Kai app hosts an XPC Mach service; it is the only writer of the
