@@ -24,6 +24,96 @@
 #include <time.h>
 #include <unistd.h>
 
+/* ---- Kai -> agent hints (Item 7) ----
+ * Fixed text from a catalog (never generated). The pattern is always: let the
+ * tool's own agent or keychain helper hold the secret, and have the USER run the
+ * step in their own Terminal. A hint NEVER tells the agent to run the command
+ * itself, read a key, or disable/lower a wall. */
+static const struct { const char *key; const char *text; } KAI_HINTS[] = {
+    {"git",    "Kai protects private keys. For GitHub, prefer HTTPS with gh (no key file): "
+               "ask the user to run `gh auth login` in their own Terminal. For other SSH "
+               "remotes, ask them to run `ssh-add --apple-use-keychain ~/.ssh/<key>`, then "
+               "retry. Don't run these yourself or change Kai's settings."},
+    {"ssh",    "Kai protects private keys; ssh works through ssh-agent. Ask the user to run "
+               "`ssh-add --apple-use-keychain ~/.ssh/<key>` in their own Terminal, then retry. "
+               "Don't run it yourself or change Kai's settings."},
+    {"scp",    "Kai protects private keys; scp works through ssh-agent. Ask the user to run "
+               "`ssh-add --apple-use-keychain ~/.ssh/<key>` in their own Terminal, then retry."},
+    {"gh",     "For GitHub, ask the user to run `gh auth login` in their own Terminal (it stores "
+               "the token in the macOS Keychain, no key file). Then retry. Don't change Kai's settings."},
+    {"aws",    "AWS credentials are protected. Ask the user to run `aws sso login` (or set up a "
+               "credential_process helper) in their own Terminal, then retry."},
+    {"gcloud", "Google Cloud credentials are protected. Ask the user to run `gcloud auth login` "
+               "in their own Terminal, then retry."},
+    {"npm",    "The npm token is protected. Ask the user to run `npm login` in their own Terminal "
+               "(auth on demand rather than a token file), then retry."},
+    {"gpg",    "GPG keys are protected. Ask the user to set up gpg-agent with pinentry-mac in their "
+               "own Terminal, then retry."},
+    {"docker", "Docker registry credentials are protected. Ask the user to run `docker login` with "
+               "the osxkeychain credential store in their own Terminal, then retry."},
+};
+static const char *KAI_HINT_FALLBACK =
+    "This needs a secret Kai protects. Ask the user to run this step themselves in their own "
+    "Terminal; don't run it yourself or change Kai's settings.";
+
+/* The hint text for a catalog key, or the fallback. Always non-NULL, fixed. */
+const char *kai_hint_text(const char *key) {
+    if (key)
+        for (size_t i = 0; i < sizeof KAI_HINTS / sizeof KAI_HINTS[0]; i++)
+            if (strcmp(KAI_HINTS[i].key, key) == 0) return KAI_HINTS[i].text;
+    return KAI_HINT_FALLBACK;
+}
+
+/* ssh-add -l lists identities loaded in the agent; it never reads key files.
+ * Exit 0 = keys present. Used to hint only when the agent is empty. */
+static int ssh_agent_has_keys(void) {
+    return system("ssh-add -l >/dev/null 2>&1") == 0;
+}
+
+/* Did the storage wall log a block for this session in the last `secs` seconds?
+ * (Scans the tail of the audit log; the hint attaches only when one exists.) */
+static int recent_storage_denial_for(const char *session, int secs) {
+    FILE *f = fopen(kai_audit_path(), "rb");
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    long off = sz > 65536 ? sz - 65536 : 0;
+    fseek(f, off, SEEK_SET);
+    char *buf = malloc((size_t)(sz - off) + 1);
+    if (!buf) { fclose(f); return 0; }
+    size_t n = fread(buf, 1, (size_t)(sz - off), f);
+    buf[n] = '\0'; fclose(f);
+    time_t now = time(NULL);
+    int found = 0;
+    for (char *line = strtok(buf, "\n"); line; line = strtok(NULL, "\n")) {
+        if (!strstr(line, "\"source\":\"storage\"") || !strstr(line, "\"decision\":\"block\"")) continue;
+        if (session && *session && !strstr(line, session)) continue;
+        char *tsp = strstr(line, "\"ts\":\"");
+        if (!tsp) continue;
+        struct tm tmv; memset(&tmv, 0, sizeof tmv);
+        if (strptime(tsp + 6, "%Y-%m-%dT%H:%M:%SZ", &tmv)) {
+            time_t t = timegm(&tmv);
+            if (now - t <= secs && now - t >= -2) found = 1;   /* keep scanning for the latest */
+        }
+    }
+    free(buf);
+    return found;
+}
+
+/* Map a shell command (or tool) to a hint key by the program it runs, or NULL. */
+const char *kai_hint_key_for_command(const char *cmd) {
+    if (!cmd) return NULL;
+    static const char *const keys[] = {"gh", "git", "ssh", "scp", "aws", "gcloud", "npm", "gpg", "docker"};
+    for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
+        size_t n = strlen(keys[i]);
+        const char *c = cmd;
+        while (*c == ' ' || *c == '\t') c++;
+        if (strncmp(c, keys[i], n) == 0 && (c[n] == ' ' || c[n] == '\0' || c[n] == '\t'))
+            return keys[i];
+    }
+    return NULL;
+}
+
 static const char *cjstr(const cJSON *o, const char *k) {
     const cJSON *v = cJSON_GetObjectItemCaseSensitive(o, k);
     return (cJSON_IsString(v) && v->valuestring) ? v->valuestring : NULL;
@@ -601,11 +691,31 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
     char *subject = NULL;   /* what the decision is about: command, path, prompt */
     char match[160] = "";   /* the part of it that matched, if known */
     next_kind kind = NEXT_TOOL;
+    const char *hint_key = NULL;   /* Item 7: set for a git/ssh/gh/... PreToolUse command */
 
     if (!p) {
         /* broken policy: fail closed on tool/prompt events */
         deny_policy_error(ev, err);
         cJSON_Delete(root);
+        return 0;
+    }
+
+    /* Item 7: at session start, tell the agent up front how Kai's protection
+     * works and what to ask the user to do, so it never guesses "no internet". */
+    if (ev && strcmp(ev, "SessionStart") == 0) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON *h = cJSON_CreateObject();
+        cJSON_AddStringToObject(h, "hookEventName", "SessionStart");
+        cJSON_AddStringToObject(h, "additionalContext",
+            "Kai protects private keys and credentials on this machine. Git over SSH works "
+            "through ssh-agent, and GitHub over HTTPS works through gh. If a command fails on "
+            "a protected path (e.g. ~/.ssh), ask the user to run `gh auth login` (GitHub) or "
+            "`ssh-add --apple-use-keychain ~/.ssh/<key>` in their own Terminal, then retry. "
+            "Never ask them to turn Kai off.");
+        cJSON_AddItemToObject(o, "hookSpecificOutput", h);
+        char *s = cJSON_PrintUnformatted(o);
+        if (s) { printf("%s\n", s); free(s); }
+        cJSON_Delete(o); kai_policy_free(p); cJSON_Delete(root);
         return 0;
     }
 
@@ -655,6 +765,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             }
         }
         char *cmd = command_text(ti);
+        hint_key = kai_hint_key_for_command(cmd);   /* Item 7: git/ssh/gh/... for a hint */
         int is_patch = tool && !strcmp(tool, "apply_patch");
         sb_t all;
         sb_init(&all);
@@ -821,7 +932,26 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             cJSON_Delete(root);
             return 0;
         }
-        /* a tool result says nothing about how the agent took a block */
+        /* Item 7: if a git/ssh/gh command just failed because the storage wall
+         * blocked it for THIS session (a denial in the last 10 s), attach the
+         * matching catalog hint so the agent tells the user the right next step
+         * instead of "no internet". Only when such a denial actually exists. */
+        const cJSON *ti = cJSON_GetObjectItemCaseSensitive(root, "tool_input");
+        char *cmd = command_text(ti);
+        const char *hk = kai_hint_key_for_command(cmd);
+        if (hk && recent_storage_denial_for(session, 10)) {
+            char msg[900];
+            snprintf(msg, sizeof msg, "%s (Kai blocked a protected path for this command; run "
+                     "`kai denials --mine` to see what.)", kai_hint_text(hk));
+            cJSON *o = cJSON_CreateObject();
+            cJSON *h = cJSON_AddObjectToObject(o, "hookSpecificOutput");
+            cJSON_AddStringToObject(h, "hookEventName", "PostToolUse");
+            cJSON_AddStringToObject(h, "additionalContext", msg);
+            char *s = cJSON_PrintUnformatted(o);
+            if (s) { printf("%s\n", s); free(s); }
+            cJSON_Delete(o);
+        }
+        free(cmd);
         kai_policy_free(p);
         cJSON_Delete(root);
         return 0;
@@ -874,6 +1004,21 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             printf("%s\n", s);
             free(s); cJSON_Delete(o);
         }
+    }
+    /* Item 7: before a git/ssh/scp/gh command that Kai is allowing, if the
+     * ssh-agent holds no keys, tell the agent up front how to make it work (ask
+     * the user to load a key / use gh) instead of letting it fail on ~/.ssh and
+     * guess. PreToolUse allow only; never for a block (that carries its own
+     * reason) or an ask. */
+    if (ev && strcmp(ev, "PreToolUse") == 0 && decision < KAI_ACT_BLOCK && !ask &&
+        hint_key && !ssh_agent_has_keys()) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON *h = cJSON_AddObjectToObject(o, "hookSpecificOutput");
+        cJSON_AddStringToObject(h, "hookEventName", "PreToolUse");
+        cJSON_AddStringToObject(h, "additionalContext", kai_hint_text(hint_key));
+        char *s = cJSON_PrintUnformatted(o);
+        if (s) { printf("%s\n", s); free(s); }
+        cJSON_Delete(o);
     }
     /* Record decisions, not traffic: an allowed tool call is the normal case
      * and logging every one buried the real events (and grew the log on

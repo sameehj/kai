@@ -242,6 +242,13 @@ int kai_control_service_apply(const char *op, int argc, char **argv,
  * the agent-aware write. */
 void kai_caller_pid_set(int pid);
 int  kai_policy_last_was_pending(void);
+/* ---- Kai -> agent hints (Item 7): fixed catalog text, never generated ---- */
+/* Hint text for a catalog key (git/ssh/scp/gh/aws/gcloud/npm/gpg/docker), or a
+ * fallback. Always non-NULL. Phrased as "ask the user to run it", never the agent. */
+const char *kai_hint_text(const char *key);
+/* The hint key a shell command maps to by the program it runs, or NULL. */
+const char *kai_hint_key_for_command(const char *cmd);
+
 /* Identify an XPC caller from its audit token bytes (sizeof(audit_token_t)):
  * validates the signature (anchored to Apple) and fills Team ID, signing id and
  * pid. Returns 1 if valid. Lets the Swift service verify a caller without any

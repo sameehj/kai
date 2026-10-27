@@ -1231,6 +1231,27 @@ static void test_ssh_public(void) {
     kai_policy_free(p);
 }
 
+static void test_hints(void) {
+    printf("agent hints: catalog renders, no wall-off language (item 7)\n");
+    const char *keys[] = {"git", "ssh", "scp", "gh", "aws", "gcloud", "npm", "gpg", "docker"};
+    int all_ok = 1, no_offtalk = 1;
+    for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
+        const char *t = kai_hint_text(keys[i]);
+        if (!t || !*t) all_ok = 0;
+        if (t && (strstr(t, "disable") || strstr(t, "turn off") || strstr(t, "storage off"))) no_offtalk = 0;
+    }
+    CHECK(all_ok, "every catalog entry renders non-empty text");
+    CHECK(no_offtalk, "no hint says disable / turn off / storage off");
+    const char *fb = kai_hint_text("nonexistent");
+    CHECK(fb && strstr(fb, "their own Terminal"), "fallback tells the user to run it themselves");
+    CHECK(strcmp(kai_hint_text("git"), fb) != 0, "a known key differs from the fallback");
+    CHECK(kai_hint_key_for_command("git push origin main") &&
+          strcmp(kai_hint_key_for_command("git push origin main"), "git") == 0, "git command maps to git");
+    CHECK(kai_hint_key_for_command("gh pr create") &&
+          strcmp(kai_hint_key_for_command("gh pr create"), "gh") == 0, "gh command maps to gh");
+    CHECK(kai_hint_key_for_command("ls -la") == NULL, "a plain command has no hint key");
+}
+
 static void test_pause_registry(void) {
     printf("pause markers live in the protected registry (item 4)\n");
     const char *home = getenv("KAI_HOME");
@@ -1620,6 +1641,7 @@ int main(void) {
     test_agent_catalog();
     test_discovery();
     test_ssh_public();
+    test_hints();
     test_pause_registry();
     test_session_forgery();
     test_new_secret_file();

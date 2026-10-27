@@ -134,6 +134,7 @@ static int install_claude(const char *exe) {
     ensure_event(hooks, "PreToolUse", "Bash|Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Glob|LS", exe);
     ensure_event(hooks, "PreToolUse", "mcp__.*", exe);
     ensure_event(hooks, "PostToolUse", NULL, exe);
+    ensure_event(hooks, "SessionStart", NULL, exe); /* Item 7: up-front protection/SSH hint */
     ensure_event(hooks, "Stop", NULL, exe); /* the end of a turn: did the agent give up after a block? */
     char *out = cJSON_Print(root);
     int rc = write_file(path, out);

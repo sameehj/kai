@@ -56,6 +56,17 @@ struct PendingRequest: Decodable, Identifiable {
     var strengthLabel: String { strength >= 2 ? "strong" : strength == 1 ? "medium" : "weak" }
     var isMCP: Bool { resource.hasPrefix("mcp:") }
     var opLabel: String { op == "connect" ? "connect" : (op == "open" || op == "readdir") ? "read" : "write" }
+    /// Item 7: the command the USER runs in their own Terminal to let this work
+    /// without Kai opening the secret (keychain/agent holds it). Nil if none fits.
+    var hintCommand: String? {
+        let r = resource.lowercased()
+        if r.contains("/.ssh/") || r.hasSuffix(".pem") { return "ssh-add --apple-use-keychain ~/.ssh/<key>" }
+        if r.contains("/.aws/") { return "aws sso login" }
+        if r.contains("gcloud") { return "gcloud auth login" }
+        if r.contains(".npmrc") { return "npm login" }
+        if r.contains("/.gnupg/") { return "gpg-agent with pinentry-mac" }
+        return nil
+    }
 }
 
 /// An active grant, decoded from its stored JSON for display/revocation.
@@ -355,6 +366,18 @@ struct ApprovalCard: View {
             }
             Text("Verified: \(req.agent) · pid \(req.pid) · identity \(req.strengthLabel)")
                 .font(.caption).foregroundColor(.secondary)
+            // Item 7: the same hint as the agent gets — the command YOU run in
+            // your own Terminal so the tool's agent/keychain holds the secret.
+            if let hc = req.hintCommand {
+                HStack(spacing: 6) {
+                    Text("To avoid this, run in your Terminal:").font(.caption2).foregroundColor(.secondary)
+                    Text(hc).font(.system(.caption2, design: .monospaced))
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(hc, forType: .string)
+                    }.buttonStyle(.plain).font(.caption2).foregroundStyle(Theme.lime)
+                }
+            }
             if req.op != "connect" {
                 Text("Allowing file access does not change the network wall.")
                     .font(.caption2).foregroundColor(.secondary)
