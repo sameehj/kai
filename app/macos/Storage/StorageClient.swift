@@ -724,6 +724,11 @@ final class StorageClient {
                 // there, so blocking the read is self-defeating. WRITES to it are
                 // still blocked below (anti-tamper); Kai's home stays read-blocked.
                 if !write && kai_control_read_allowed(why) == 1 { return true }
+                // Public ssh files (known_hosts, config, *.pub) are readable by
+                // agents: ssh needs them to verify a host, then authenticates via
+                // ssh-agent without ever opening the private key (which stays
+                // blocked). Writes stay protected.
+                if !write && p.withCString({ kai_ssh_public_file($0) }) == 1 { return true }
                 if enforce && mode == KAI_STORAGE_BLOCK {
                     #if KAI_STORAGE_ENFORCE
                     // S6: a paused session skips enforcement for SOFT-protected

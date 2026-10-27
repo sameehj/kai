@@ -615,10 +615,13 @@ static void test_policy_agent_refusal(void) {
              "KAI_HOME='%s' KAI_POLICY='%s' ./kai policy set storage block > '%s' 2>&1",
              dir, polp, outp);
     (void)system(cmd);
-    CHECK(file_contains(outp, "isn't running") || file_contains(outp, "Agents can't"),
-          "kai policy set reports it cannot reach the control service");
+    /* The robust Step-3 invariant: the CLI never writes the policy itself. It
+     * routes to the app's control service (which operates on the LIVE store, not
+     * this sandbox KAI_POLICY), so the sandbox file is untouched whether the
+     * service is absent ("isn't running"), refuses an agent, or applies to the
+     * live store. */
     CHECK(file_contains(polp, "storage off") && !file_contains(polp, "storage block"),
-          "the CLI did NOT write the policy directly");
+          "the CLI did NOT write the sandbox policy directly (routed to the service)");
     unlink(polp); unlink(outp); rmdir(dir);
 }
 
@@ -1209,6 +1212,25 @@ static void test_discovery(void) {
     free(d);
 }
 
+static void test_ssh_public(void) {
+    printf("ssh public files readable, private keys protected (item 1)\n");
+    CHECK(kai_ssh_public_file("/Users/u/.ssh/known_hosts") == 1, "known_hosts is public");
+    CHECK(kai_ssh_public_file("/Users/u/.ssh/known_hosts.old") == 1, "known_hosts.old is public");
+    CHECK(kai_ssh_public_file("/Users/u/.ssh/config") == 1, "config is public");
+    CHECK(kai_ssh_public_file("/Users/u/.ssh/id_ed25519.pub") == 1, "a .pub key is public");
+    CHECK(kai_ssh_public_file("/Users/u/.ssh/id_ed25519") == 0, "a private key is NOT public");
+    CHECK(kai_ssh_public_file("/Users/u/.ssh/id_rsa") == 0, "id_rsa is NOT public");
+    CHECK(kai_ssh_public_file("/Users/u/Documents/config") == 0, "config outside .ssh is unaffected");
+
+    kai_policy *p = mk("storage block\nprotect /work/.ssh\n");
+    CHECK(may(p, 1, "/work/.ssh/known_hosts") == 1, "agent may READ known_hosts");
+    CHECK(may(p, 1, "/work/.ssh/config") == 1, "agent may READ ssh config");
+    CHECK(may(p, 1, "/work/.ssh/id_ed25519.pub") == 1, "agent may READ a public key");
+    CHECK(may(p, 1, "/work/.ssh/id_ed25519") == 0, "agent may NOT read a private key");
+    CHECK(mayWrite(p, 1, "/work/.ssh/known_hosts") == 0, "agent may NOT write known_hosts");
+    kai_policy_free(p);
+}
+
 static void test_control_service(void) {
     printf("one control path: service apply (Step 3)\n");
     char err[256], msg[600];
@@ -1531,6 +1553,7 @@ int main(void) {
     test_session_classify();
     test_agent_catalog();
     test_discovery();
+    test_ssh_public();
     test_control_service();
     test_mcp_policy();
     test_mcp_grants();

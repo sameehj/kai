@@ -36,7 +36,10 @@ int kai_storage_open_allowed(const kai_policy *p, int is_agent, int write,
      * untouched. A read of a non-protected path is the common case. */
     if (!p || !is_agent || !path) return 1;
     if (!kai_path_protected(p, path, NULL, why, whylen)) return 1;
-    (void)write;
+    /* Public ssh files (known_hosts, config, *.pub) are readable by agents so
+     * git-over-ssh can verify a host; the private key stays protected and is
+     * supplied by ssh-agent, never opened. Writes stay protected. */
+    if (!write && kai_ssh_public_file(path)) { if (why && whylen) why[0] = '\0'; return 1; }
     /* Every protected path is denied to agents, reads and writes alike —
      * including Kai's own ~/.kai and the agents' hook settings. The only
      * processes allowed through are Kai's own code-signed components, which

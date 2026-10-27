@@ -143,6 +143,9 @@ int kai_control_read_allowed(const char *rule);
  * carry the OVERRIDE tier (grant-overridable), since they change which websites
  * the Mac trusts. */
 int kai_rule_is_trust_store(const char *rule);
+/* A public, non-secret file inside a .ssh dir (known_hosts[.old], config, *.pub):
+ * agents may READ these; private keys stay protected. 1 if it is one. */
+int kai_ssh_public_file(const char *path);
 /* Is `name` an agent product the storage and network walls recognize? (The
  * policy carries the built-in agent rules both walls classify by.) */
 int kai_agent_wall_recognized(const kai_policy *p, const char *name);

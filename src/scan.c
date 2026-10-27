@@ -335,6 +335,23 @@ static int rule_is_secret_class(const char *rule) {
     return 0;
 }
 
+/* Public, non-secret files inside a .ssh dir: known_hosts(.old), config, and
+ * *.pub. These hold host fingerprints, options and PUBLIC keys - never a private
+ * key - so an agent may READ them (ssh needs known_hosts/config to verify a host
+ * and git-over-ssh then authenticates through ssh-agent, never opening the
+ * private key). Private keys (id_*, no .pub) are not matched here and stay
+ * protected. Writes are decided separately. */
+int kai_ssh_public_file(const char *path) {
+    if (!path || !strstr(path, "/.ssh/")) return 0;
+    const char *b = strrchr(path, '/');
+    b = b ? b + 1 : path;
+    if (!strcmp(b, "known_hosts") || !strcmp(b, "known_hosts.old") || !strcmp(b, "config"))
+        return 1;
+    size_t n = strlen(b);
+    if (n >= 4 && !strcmp(b + n - 4, ".pub")) return 1;
+    return 0;
+}
+
 kai_override_tier_t kai_override_tier(const char *rule) {
     if (kai_rule_is_kai_home(rule) || kai_rule_is_builtin(rule)) return KAI_TIER_NEVER;
     if (rule_is_secret_class(rule)) return KAI_TIER_BREAKGLASS;  /* keys / credentials */

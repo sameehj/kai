@@ -124,6 +124,19 @@ Shell commands are read the way a shell would read them: quotes and escapes are 
 
 These are still **hook-level checks**: a tripwire, not a sandbox. Anything a program computes at run time (a path built from variables, a script that reads a file itself) is out of their reach. That's what the OS-level walls are for.
 
+#### SSH and git keep working — load your key into the agent
+
+Kai protects **private** keys, not the public bits of `~/.ssh`. An agent may still read `known_hosts`, `known_hosts.old`, `config` and `*.pub` (host verification and public keys), but never a private key file like `id_ed25519` or `id_rsa`.
+
+So `git push`/`git fetch`/`ssh` over SSH work with both walls on **as long as the private key is loaded into ssh-agent** — then ssh authenticates through the agent and never opens the key file:
+
+```sh
+ssh-add --apple-use-keychain ~/.ssh/id_ed25519   # once; stores it in the macOS Keychain
+ssh-add -l                                        # confirm it's loaded
+```
+
+Add `AddKeysToAgent yes` and `UseKeychain yes` to `~/.ssh/config` to load it automatically on first use. The same pattern applies to other secrets Kai protects — let the tool's own keychain/agent hold the secret so no process opens the file: `gh auth login` (GitHub over HTTPS), `aws sso login` (AWS), `gcloud auth login` (Google Cloud), `npm login` (npm), `gpg-agent` with pinentry-mac (GPG), `docker login` with the osxkeychain store (Docker).
+
 Agents also can't switch Kai off from inside: their own hook settings (`~/.claude/settings.json`, `~/.cursor/hooks.json`, `~/.codex/hooks.json` and `config.toml`, project-level copies too) and `~/.kai` are always protected, whatever the policy says.
 
 ### Keep company context in your control
