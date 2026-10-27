@@ -362,6 +362,14 @@ int kai_sessions_scan(const kai_policy *p, kai_session **out, int *n);
 /* The enforcement label for a session given which walls are observed active.
  * Never claims "protected" for a session no active wall can attribute. */
 const char *kai_enforcement_label(int storage_active, int network_active);
+/* The one status sentence ("Protected · 3 agents working", "Watching only",
+ * "Files protection is off", ...). files/internet: 0 off, 1 watch, 2 protect;
+ * agents < 0 = unknown. Writes into out and returns it. */
+const char *kai_status_sentence(int files, int internet, int agents, int paused,
+                                char *out, size_t n);
+/* A wall's reported level from its health snapshot: 2 block, 1 log, 0 off/not
+ * running (stale), -1 never reported (fall back to the configured mode). */
+int kai_wall_observed_level(const char *wall);
 
 /* ---- Discovery (item 5) ---- */
 typedef struct { char exe[1024]; char host[256]; long long last_utc; } kai_discovery;

@@ -54,7 +54,7 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
     var actionLabel: String? {
         if isPrompt { return "Prompt" }
         if isNetwork { return "Connection" }
-        if isStorage { return "Protected file (storage wall)" }
+        if isStorage { return "Protected file" }
         switch tool ?? "" {
         case "Bash", "Shell", "shell": return "Command"
         case "Read": return "File read"

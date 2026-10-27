@@ -367,9 +367,15 @@ final class Engine {
         func esc(_ s: String) -> String {
             s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
         }
+        // The session (and its project, for the card's "session \"kai\"") the
+        // storage wall recorded for this process, so the card can name it and a
+        // "this session" approval binds to it.
+        let sess = sessionFor(pid: pid, pidv: pidv)
+        let sessFields = (sess.sid.isEmpty ? "" : "\"session\":\"\(esc(sess.sid))\",") +
+                         (sess.project.isEmpty ? "" : "\"project\":\"\(esc(sess.project))\",")
         let json = "{\"id\":\"\(id)\",\"agent\":\"\(esc(agent))\",\"pid\":\(pid)," +
                    "\"pidversion\":\(pidv),\"strength\":1,\"resource\":\"\(esc(dest))\"," +
-                   "\"op\":\"connect\",\"ts\":\(Int(Date().timeIntervalSince1970))}"
+                   sessFields + "\"op\":\"connect\",\"ts\":\(Int(Date().timeIntervalSince1970))}"
         let fp = dir + "/" + id + ".json"
         let fd = open(fp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0o644)
         if fd >= 0 { fchmod(fd, 0o644); let b = Array(json.utf8)

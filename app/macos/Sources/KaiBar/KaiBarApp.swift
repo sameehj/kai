@@ -18,7 +18,7 @@ struct KaiBarApp: App {
                 .environmentObject(storage)
         } label: {
             Image(systemName: model.menuBarSymbol)
-                .accessibilityLabel("Kai: \(model.headline)")
+                .accessibilityLabel("Kai: \(model.health == .problem ? model.headline : model.statusSentence(storageOn: storage.isOn, networkOn: wall.isOn))")
         }
         .menuBarExtraStyle(.window)
 

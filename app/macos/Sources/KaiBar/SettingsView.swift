@@ -2,33 +2,39 @@
 import AppKit
 import SwiftUI
 
+/// Phase B item 10: Agent Control (the main page) and Activity, then four
+/// settings pages named for what they protect - Files, Internet, Chats - and
+/// Advanced for everything technical.
 enum SettingsPage: String, CaseIterable, Identifiable {
-    case agentControl, general, protection, files, network, storage, permissions, company, activity
+    case agentControl, activity, files, internet, chats, advanced
     var id: String { rawValue }
+    /// A page saved by an older Kai ("storage", "network", "general", ...).
+    init(stored raw: String) {
+        switch raw {
+        case "storage": self = .files
+        case "network": self = .internet
+        case "general", "protection", "permissions", "company": self = .advanced
+        default: self = SettingsPage(rawValue: raw) ?? .agentControl
+        }
+    }
     var title: String {
         switch self {
         case .agentControl: return "Agent Control"
-        case .general: return "General"
-        case .protection: return "Agent hooks"
-        case .files: return "Protected files"
-        case .network: return "Network wall"
-        case .storage: return "Storage wall"
-        case .permissions: return "Permissions"
-        case .company: return "Company data"
         case .activity: return "Activity"
+        case .files: return "Files"
+        case .internet: return "Internet"
+        case .chats: return "Chats"
+        case .advanced: return "Advanced"
         }
     }
     var icon: String {
         switch self {
         case .agentControl: return "person.2.gobackward"
-        case .general: return "gearshape"
-        case .protection: return "shield"
-        case .files: return "folder"
-        case .network: return "globe"
-        case .storage: return "externaldrive"
-        case .permissions: return "key"
-        case .company: return "doc.text"
         case .activity: return "waveform.path.ecg"
+        case .files: return "folder"
+        case .internet: return "globe"
+        case .chats: return "bubble.left.and.bubble.right"
+        case .advanced: return "slider.horizontal.3"
         }
     }
 }
@@ -37,8 +43,8 @@ struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var wall: NetworkWall
     @EnvironmentObject var storage: StorageWall
-    @AppStorage("settingsPage") private var pageRaw = SettingsPage.general.rawValue
-    private var page: SettingsPage { SettingsPage(rawValue: pageRaw) ?? .general }
+    @AppStorage("settingsPage") private var pageRaw = SettingsPage.agentControl.rawValue
+    private var page: SettingsPage { SettingsPage(stored: pageRaw) }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -75,12 +81,13 @@ struct SettingsView: View {
                     // Item 4: observed enforcement only, never a blanket "All
                     // protected" from agent-hook state.
                     Text(model.health == .problem ? model.headline
-                         : model.observedHeadline(storageOn: storage.isOn, networkOn: wall.isOn))
+                         : model.statusSentence(storageOn: storage.isOn, networkOn: wall.isOn))
                         .font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(1)
                 }
             }
             .padding(.horizontal, 8).padding(.bottom, 18).padding(.top, 8)
             ForEach(SettingsPage.allCases) { p in
+                if p == .files { CapsLabel("Settings").padding(.horizontal, 10).padding(.top, 14).padding(.bottom, 2) }
                 Button { pageRaw = p.rawValue } label: {
                     HStack(spacing: 10) {
                         Image(systemName: p.icon).frame(width: 18)
@@ -107,14 +114,11 @@ struct SettingsView: View {
     @ViewBuilder private var content: some View {
         switch page {
         case .agentControl: AgentControlPage()
-        case .general: GeneralPage()
-        case .protection: ProtectionPage()
-        case .files: FilesPage()
-        case .network: NetworkPage()
-        case .storage: StoragePage()
-        case .permissions: PermissionsPage()
-        case .company: CompanyPage()
         case .activity: ActivityPage()
+        case .files: VStack(alignment: .leading, spacing: 18) { StoragePage(); FilesPage() }
+        case .internet: NetworkPage()
+        case .chats: ChatsPage()
+        case .advanced: AdvancedPage()
         }
     }
 }
@@ -264,29 +268,42 @@ private struct EditableList: View {
 
 private struct GeneralPage: View {
     @EnvironmentObject var model: AppModel
+    var showAgents = true
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            PageHeader(icon: "gearshape", title: "General", subtitle: "Which agents Kai protects, and how the app behaves.")
-            CapsLabel("Agents")
-            ForEach(Agent.allCases) { AgentCard(agent: $0) }
-            Text("Turning an agent on adds Kai's hooks to its settings file and keeps a backup. Restart open agent sessions to pick up the change.")
-                .font(.system(size: 12)).foregroundStyle(Theme.muted)
-            CapsLabel("App")
-            Card(padding: 14) {
-                VStack(spacing: 12) {
-                    row("Notify me when Kai blocks something", isOn: $model.notifyOnBlock)
-                    row("Open Kai at login", isOn: Binding(get: { model.launchAtLogin },
-                                                           set: { model.launchAtLogin = $0 }))
-                }
+            if showAgents { agents } else { app }
+        }
+    }
+
+    @ViewBuilder private var agents: some View {
+        CapsLabel("Built into your agents")
+        ForEach(Agent.allCases.filter { $0 != .chrome }) { AgentCard(agent: $0) }
+        Text("Turning an agent on adds Kai's checks to its settings file (its hooks) and keeps a backup. Restart open agent sessions to pick up the change.")
+            .font(.system(size: 12)).foregroundStyle(Theme.muted)
+    }
+
+    @ViewBuilder private var app: some View {
+        CapsLabel("App")
+        Card(padding: 14) {
+            VStack(spacing: 12) {
+                row("Notify me when Kai blocks something", isOn: $model.notifyOnBlock)
+                row("Open Kai at login", isOn: Binding(get: { model.launchAtLogin },
+                                                       set: { model.launchAtLogin = $0 }))
             }
-            CapsLabel("About")
-            Card(padding: 14) {
-                VStack(alignment: .leading, spacing: 8) {
-                    info("Version", model.status?.version ?? "—")
-                    info("Command-line tool", model.cliPath ?? "not found")
-                    info("Policy file", model.status?.policy.source ?? "—")
-                    Button("Edit Policy File…") { model.openPolicyFile() }.buttonStyle(GhostButtonStyle())
-                }
+        }
+        CapsLabel("AI gateway (optional)")
+        Card(padding: 14) {
+            Text("A local proxy that cleans requests to model APIs before they leave this Mac. Off unless you run it: kai gateway")
+                .font(.system(size: 12)).foregroundStyle(Theme.muted).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        CapsLabel("About")
+        Card(padding: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                info("Version", model.status?.version ?? "—")
+                info("Command-line tool", model.cliPath ?? "not found")
+                info("Policy file", model.status?.policy.source ?? "—")
+                Button("Edit Policy File…") { model.openPolicyFile() }.buttonStyle(GhostButtonStyle())
             }
         }
     }
@@ -311,8 +328,8 @@ private struct ProtectionPage: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            PageHeader(icon: "shield", title: "Agent hooks",
-                       subtitle: "What the agent hooks (Claude Code, Cursor, Codex) do when they find something sensitive in a tool call or prompt. These check the agents' own actions; the network and storage walls cover everything else.")
+            Text("What the checks built into Claude Code, Cursor and Codex do when they find something sensitive in a tool call or prompt. Files and Internet protection cover everything else.")
+                .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             SwitchRow(key: "secrets", title: "Secrets found in text",
                       help: "API keys, tokens, private keys, passwords and database URLs.",
                       options: [("redact", "Redact", "Replace with a marker"), ("block", "Block", "Stop the request"),
@@ -384,9 +401,7 @@ private struct FilesPage: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            PageHeader(icon: "folder", title: "Protected files",
-                       subtitle: "Files and folders agents may never read.")
-            EditableList(kind: "protect", title: "Agents may never read",
+            EditableList(kind: "protect", title: "Your protected items",
                          help: "Folders, files or patterns like *.pem and .env.*",
                          items: model.policy?.protect ?? [], placeholder: "~/path or pattern", canChoose: true)
             EditableList(kind: "allow", title: "Exceptions",
@@ -402,8 +417,8 @@ private struct NetworkPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            PageHeader(icon: "globe", title: "Network wall",
-                       subtitle: "Where your agents can send data. Other apps are never touched.",
+            PageHeader(icon: "globe", title: "Internet",
+                       subtitle: "Agents can only reach sites you've allowed. Other apps are never touched.",
                        trailing: AnyView(statusPill))
             if !wall.isOn {
                 Card(padding: 14, stroke: Color(hex: 0x3A4420)) {
@@ -419,9 +434,9 @@ private struct NetworkPage: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("When an agent connects to a host that is not on your list")
                     .font(.system(size: 13)).foregroundStyle(Theme.muted)
-                ChoiceCards(options: [("log", "Log only", "See what agents reach. Nothing is blocked."),
-                                      ("block", "Block", "Only hosts on your list are reachable."),
-                                      ("off", "Off", "The wall is paused.")],
+                ChoiceCards(options: [("log", "Watch", "See where agents go. Nothing is blocked."),
+                                      ("block", "Protect", "Only sites on your list are reachable."),
+                                      ("off", "Off", "Agents reach anything.")],
                             selected: model.policy?.switches["egress"] ?? "log") { model.setSwitch("egress", $0) }
                     .disabled(model.busy || model.policy == nil)
             }
@@ -452,7 +467,7 @@ private struct NetworkPage: View {
             HStack(alignment: .firstTextBaseline) {
                 Text("Hosts your agents reached").font(Theme.display(16, .semibold))
                 Spacer()
-                Text("Allow the ones you trust before switching to Block")
+                Text("Allow the ones you trust before switching to Protect")
                     .font(.system(size: 11)).foregroundStyle(Theme.muted)
             }
             let hosts = model.reachedHosts
@@ -466,8 +481,8 @@ private struct NetworkPage: View {
                 .font(Theme.label).tracking(1).foregroundStyle(Theme.muted)
                 .padding(.horizontal, 14).padding(.vertical, 9)
                 if hosts.isEmpty {
-                    Text(wall.isOn ? "Nothing yet: every host your agents used is allowed."
-                                   : "Turn the wall on to see where your agents connect.")
+                    Text(wall.isOn ? "Nothing yet: every site your agents used is allowed."
+                                   : "Turn Internet protection on to see where your agents connect.")
                         .font(.system(size: 13)).foregroundStyle(Theme.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(14)
@@ -504,17 +519,17 @@ private struct StoragePage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            PageHeader(icon: "externaldrive", title: "Storage wall",
-                       subtitle: "Stops agents opening protected files at all — even from a script, which the agent hooks can't catch. Machine-wide (every agent). macOS Endpoint Security.")
+            PageHeader(icon: "folder", title: "Files",
+                       subtitle: "Agents can't open your keys, passwords and Kai's settings — even from a script. Every agent on this Mac; their own working files stay usable.")
             Card(padding: 14) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Storage wall").font(.system(size: 14, weight: .semibold))
+                        Text("Files protection").font(.system(size: 14, weight: .semibold))
                         Text(storage.summary).font(.system(size: 12))
                             .foregroundStyle(storage.isOn ? Theme.lime : Theme.muted)
                     }
                     Spacer()
-                    Toggle("Storage wall", isOn: Binding(get: { storage.isOn },
+                    Toggle("Files protection", isOn: Binding(get: { storage.isOn },
                                                          set: { $0 ? storage.turnOn() : storage.turnOff() }))
                         .toggleStyle(KaiToggleStyle()).labelsHidden()
                         .disabled(storage.state == .activating || storage.state == .checking)
@@ -525,7 +540,7 @@ private struct StoragePage: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("One more step: Full Disk Access").font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(Theme.amber)
-                        Text("macOS requires Full Disk Access for the storage wall. Turn on Kai in the list, "
+                        Text("macOS requires Full Disk Access for Files protection. Turn on Kai in the list, "
                            + "then it starts on its own within a few seconds — no need to come back here.")
                             .font(.system(size: 12)).foregroundStyle(Theme.muted)
                             .fixedSize(horizontal: false, vertical: true)
@@ -546,9 +561,9 @@ private struct StoragePage: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("When an agent opens a file your policy protects")
                     .font(.system(size: 13)).foregroundStyle(Theme.muted)
-                ChoiceCards(options: [("log", "Watch", "Log what it would block. Never blocks."),
-                                      ("block", "Block", "Deny agents those files."),
-                                      ("off", "Off", "The wall is paused.")],
+                ChoiceCards(options: [("log", "Watch", "See what would be blocked."),
+                                      ("block", "Protect", "Block it."),
+                                      ("off", "Off", "Agents open anything.")],
                             selected: model.policy?.switches["storage"] ?? "off") { model.setSwitch("storage", $0) }
                     .disabled(model.busy || model.policy == nil)
             }
@@ -570,8 +585,8 @@ private struct CompanyPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            PageHeader(icon: "doc.text", title: "Company data",
-                       subtitle: "Words and names that must not reach a model. Matched in prompts and tool arguments.")
+            Text("Words and names that must not reach a model. Matched in prompts, tool arguments and AI chats.")
+                .font(.system(size: 12)).foregroundStyle(Theme.muted)
             Card(padding: 14) {
                 VStack(alignment: .leading, spacing: 10) {
                     let terms = model.policy?.terms ?? []
@@ -634,6 +649,44 @@ private struct CompanyPage: View {
     }
 }
 
+/// Phase B item 10: Chats - what Kai checks in AI chats in the browser.
+private struct ChatsPage: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            PageHeader(icon: "bubble.left.and.bubble.right", title: "Chats",
+                       subtitle: "Kai checks what you paste into AI chats in Chrome.")
+            AgentCard(agent: .chrome)
+            Text("Chats use the same secret checks and company terms as your agents (Advanced → Company data). Files and Internet protection don't apply to the browser.")
+                .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// Phase B item 10: everything technical, one page with sections.
+private struct AdvancedPage: View {
+    @AppStorage("advancedSection") private var section = "agents"
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            PageHeader(icon: "slider.horizontal.3", title: "Advanced",
+                       subtitle: "How Kai is built into your agents, their checks, company terms, permissions and the app.")
+            Picker("", selection: $section) {
+                Text("Agents").tag("agents")
+                Text("Checks").tag("checks")
+                Text("Company data").tag("company")
+                Text("Permissions").tag("permissions")
+                Text("App").tag("app")
+            }.pickerStyle(.segmented).labelsHidden().frame(width: 520)
+            switch section {
+            case "checks": ProtectionPage()
+            case "company": CompanyPage()
+            case "permissions": PermissionsPage()
+            case "app": GeneralPage(showAgents: false)
+            default: GeneralPage(showAgents: true)
+            }
+        }
+    }
+}
+
 // Item 3: Agent Control — the sessions list + per-session detail (grant, revoke,
 // pause), as the first Settings page. Reuses the session views from the Agents
 // window; data from `kai sessions`/`kai agents` (works with the storage wall off).
@@ -652,7 +705,7 @@ private struct AgentControlPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             PageHeader(icon: "person.2.gobackward", title: "Agent Control",
-                       subtitle: "Every agent session Kai sees — enforced or not — with its permissions. Grant, revoke or pause one session without touching the others. Sessions appear even with the storage wall off.")
+                       subtitle: "Every agent session Kai sees, with its permissions. Revoke or pause one session without touching the others.")
             // A plain HStack (not a nested split view, which collapsed inside the
             // Settings window's own split): a fixed-width list + a detail, both
             // filling the height.
@@ -722,11 +775,11 @@ private struct PermissionsPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            PageHeader(icon: "key", title: "Permissions",
-                       subtitle: "Every active grant across sessions and projects, and the recent history of grants, uses, expiries and revocations. Grants are created only from Kai — never by an agent.")
-            CapsLabel("Active grants")
+            Text("Every permission you gave, across sessions and projects, and their recent history. Permissions are given only in Kai — never by an agent.")
+                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+            CapsLabel("Active permissions")
             if grants.grantGroups.isEmpty {
-                Text("No active grants.").font(.system(size: 13)).foregroundStyle(Theme.muted)
+                Text("No active permissions.").font(.system(size: 13)).foregroundStyle(Theme.muted)
             } else {
                 ForEach(grants.grantGroups) { g in
                     Card(padding: 12) {
@@ -751,7 +804,7 @@ private struct PermissionsPage: View {
             CapsLabel("Recent history").padding(.top, 4)
             Picker("", selection: $filter) {
                 Text("All").tag("all")
-                Text("Granted").tag("granted")
+                Text("Given").tag("granted")
                 Text("Used").tag("used")
                 Text("Ended").tag("ended")
             }.pickerStyle(.segmented).labelsHidden().frame(width: 320)

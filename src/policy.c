@@ -210,7 +210,7 @@ const char *kai_agent_coverage_note(const char *name) {
         return "Runs inside your editor — Kai covers only the shells it starts, "
                "not your own editing.";
     case KAI_AGENT_BROWSER:
-        return "Browser extension — the network and storage walls don't apply.";
+        return "Browser extension: Files and Internet protection don't apply.";
     default:
         return kai_agent_catalog_verified(name) ? NULL
              : "Profile not yet verified against an installed copy.";

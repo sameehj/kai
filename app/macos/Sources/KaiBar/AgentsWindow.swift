@@ -75,10 +75,10 @@ struct SessionRow: Decodable, Identifiable, Equatable {
     }
     /// Never say "protected": the label comes straight from observed enforcement.
     var enforcementShort: String {
-        if enforcement.hasPrefix("Enforced by both") { return "both walls" }
-        if enforcement.hasPrefix("Network") { return "network only" }
-        if enforcement.hasPrefix("Storage") { return "storage only" }
-        return "not enforced"
+        if enforcement.hasPrefix("Enforced: Files and Internet") { return "Files + Internet" }
+        if enforcement.hasPrefix("Enforced: Internet") { return "Internet only" }
+        if enforcement.hasPrefix("Enforced: Files") { return "Files only" }
+        return "seen only"
     }
     /// When the session's pause expires (nil if not paused), for "Paused until HH:MM".
     var pausedUntil: Date? {
@@ -242,8 +242,8 @@ struct SessionRowView: View {
                 HStack(spacing: 6) {
                     Text(session.displayAgent).fontWeight(.medium)
                     Text(session.enforcementShort).font(.caption2)
-                        .foregroundStyle(session.enforcementShort == "both walls" ? .green
-                                         : session.enforcementShort == "not enforced" ? .secondary : .orange)
+                        .foregroundStyle(session.enforcementShort == "Files + Internet" ? .green
+                                         : session.enforcementShort == "seen only" ? .secondary : .orange)
                     if !session.isActive { Text("ended").font(.caption2).foregroundStyle(.secondary) }
                 }
                 if !session.topic.isEmpty {   // hook-reported topic, or hidden
@@ -275,8 +275,7 @@ struct SessionDetail: View {
                         // id. A scan-only session (no ES session) or one the storage
                         // wall doesn't cover can't be paused.
                         let storageCovered = session.source == "es" &&
-                            (session.enforcement.hasPrefix("Enforced by both")
-                             || session.enforcement.hasPrefix("Storage"))
+                            session.enforcement.hasPrefix("Enforced: Files")
                         if storageCovered {
                             Button("Pause Kai for this session (15 min)") {
                                 grants.pauseSession(session.id, minutes: 15)
@@ -316,7 +315,7 @@ struct SessionDetail: View {
 
                 Text("Permissions").font(.headline)
                 if sessionGrants.isEmpty {
-                    Text("No active grants for this session.").font(.caption).foregroundStyle(.secondary)
+                    Text("No permissions for this session.").font(.caption).foregroundStyle(.secondary)
                 } else {
                     ForEach(sessionGrants) { g in
                         HStack {

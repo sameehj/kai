@@ -7,7 +7,7 @@ struct MenuView: View {
     @EnvironmentObject var wall: NetworkWall
     @EnvironmentObject var storage: StorageWall
     @Environment(\.openWindow) private var openWindow
-    @AppStorage("settingsPage") private var settingsPage = SettingsPage.general.rawValue
+    @AppStorage("settingsPage") private var settingsPage = SettingsPage.agentControl.rawValue
     @State private var dismissedBlock: String?
     @StateObject private var grantManager = GrantManager()
     @StateObject private var agents = AgentsModel()
@@ -59,7 +59,7 @@ struct MenuView: View {
         }.count
         return VStack(alignment: .leading, spacing: 3) {
             // headline from the shared measured status (observed enforcement)
-            Text(model.observedHeadline(storageOn: storage.isOn, networkOn: wall.isOn))
+            Text(model.statusSentence(storageOn: storage.isOn, networkOn: wall.isOn, agents: running))
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(model.health == .problem ? Theme.coral : glow)
                 .fixedSize(horizontal: false, vertical: true)
@@ -71,7 +71,7 @@ struct MenuView: View {
             HStack(spacing: 6) {
                 Text("\(needs) needs you").foregroundStyle(needs > 0 ? Theme.amber : Theme.muted)
                 Text("·").foregroundStyle(Theme.muted)
-                Text("\(activeGrants) active grant\(activeGrants == 1 ? "" : "s")").foregroundStyle(Theme.muted)
+                Text("\(activeGrants) permission\(activeGrants == 1 ? "" : "s")").foregroundStyle(Theme.muted)
                 Text("·").foregroundStyle(Theme.muted)
                 Text("\(blockedToday) blocked today").foregroundStyle(Theme.muted)
             }.font(.system(size: 11))
@@ -84,7 +84,14 @@ struct MenuView: View {
             if !grantManager.pendingPolicy.isEmpty || !grantManager.pending.isEmpty {
                 CapsLabel("Needs you")
                 ForEach(grantManager.pendingPolicy) { PendingPolicyCard(change: $0, manager: grantManager) }
-                ForEach(grantManager.pending) { ApprovalCard(req: $0, manager: grantManager) }
+                // Repeats within a session collapse into one card with a count.
+                ForEach(grantManager.pendingGroups) {
+                    ApprovalCard(req: $0.rep, count: $0.count, manager: grantManager)
+                }
+                if grantManager.pendingGroups.count > 1 {
+                    Button("Keep all blocked") { grantManager.dismissAllPending() }
+                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                }
             }
         }
     }
@@ -211,7 +218,7 @@ struct MenuView: View {
             Text("Kai").font(Theme.display(18))
             Spacer()
             if model.busy { ProgressView().controlSize(.small) }
-            Button { open(.general) } label: {
+            Button { open(.files) } label: {
                 Image(systemName: "gearshape")
                     .font(.system(size: 15))
                     .foregroundStyle(Theme.muted)
@@ -239,7 +246,7 @@ struct MenuView: View {
         // stays focused on observed protection and what needs the user.
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                CapsLabel("System protection")
+                CapsLabel("Protection")
                 Spacer()
                 Button("Agents") { open(.agentControl) }
                     .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
@@ -266,7 +273,7 @@ struct MenuView: View {
             ForEach(items) { EventLine(event: $0.event, count: $0.count) }
             let hosts = model.reachedHosts.count
             if hosts > 0 {
-                Button { open(.network) } label: {
+                Button { open(.internet) } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "eye").foregroundStyle(Theme.muted)
                         Text("\(hosts) new host\(hosts == 1 ? "" : "s") noticed (not blocked)")
@@ -328,7 +335,7 @@ struct StatusHero: View {
 
     private var title: String {
         if model.health == .problem { return model.headline }
-        return model.observedHeadline(storageOn: storage.isOn, networkOn: wall.isOn)
+        return model.statusSentence(storageOn: storage.isOn, networkOn: wall.isOn)
     }
 
     private var subtitle: String {
@@ -491,9 +498,9 @@ struct NetworkCard: View {
     private var subtitle: String {
         guard wall.isOn else { return wall.summary }
         switch model.policy?.switches["egress"] ?? "log" {
-        case "block": return "Block mode · only allowed hosts"
-        case "off": return "Paused in policy"
-        default: return "Log mode · nothing blocked"
+        case "block": return "Protect · agents reach only sites you allowed"
+        case "off": return "Off"
+        default: return "Watch · see where agents go, nothing blocked"
         }
     }
 
@@ -512,13 +519,13 @@ struct NetworkCard: View {
                 .frame(width: 32, height: 32)
                 .background(Theme.lime.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
-                Text("Network wall").font(.system(size: 14, weight: .semibold))
+                Text("Internet").font(.system(size: 14, weight: .semibold))
                 Text(subtitle).font(.system(size: 12))
                     .foregroundStyle(warn ? Theme.amber : Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            Toggle("Network wall", isOn: Binding(get: { wall.isOn },
+            Toggle("Internet", isOn: Binding(get: { wall.isOn },
                                                  set: { $0 ? wall.turnOn() : wall.turnOff() }))
                 .toggleStyle(KaiToggleStyle()).labelsHidden()
                 .disabled(wall.state == .activating || wall.state == .checking)
@@ -537,11 +544,11 @@ struct StorageCard: View {
 
     private var subtitle: String {
         switch storage.state {
-        case .off: return "Off: agents can still open protected files directly"
+        case .off: return "Off: agents can open your keys and passwords"
         case .on:
             switch model.policy?.switches["storage"] ?? "off" {
-            case "block": return "Block mode · protected files denied to agents"
-            case "log": return "Watching · logs what it would block"
+            case "block": return "Protect · agents can't open your keys and passwords"
+            case "log": return "Watch · see what would be blocked"
             default: return "On"
             }
         default: return storage.summary
@@ -561,13 +568,13 @@ struct StorageCard: View {
                 .frame(width: 32, height: 32)
                 .background(Theme.lime.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
-                Text("Storage wall").font(.system(size: 14, weight: .semibold))
+                Text("Files").font(.system(size: 14, weight: .semibold))
                 Text(subtitle).font(.system(size: 12))
                     .foregroundStyle(warn ? Theme.amber : Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            Toggle("Storage wall", isOn: Binding(get: { storage.isOn },
+            Toggle("Files", isOn: Binding(get: { storage.isOn },
                                                  set: { $0 ? storage.turnOn() : storage.turnOff() }))
                 .toggleStyle(KaiToggleStyle()).labelsHidden()
                 .disabled(storage.state == .activating || storage.state == .checking)
@@ -586,8 +593,8 @@ struct PopoverSessionRow: View {
     let session: SessionRow
     var grants: Int = 0
     private var badge: Color {
-        session.enforcementShort == "both walls" ? Theme.lime
-        : session.enforcementShort == "not enforced" ? Theme.muted : Theme.amber
+        session.enforcementShort == "Files + Internet" ? Theme.lime
+        : session.enforcementShort == "seen only" ? Theme.muted : Theme.amber
     }
     var body: some View {
         HStack(spacing: 8) {
@@ -597,7 +604,7 @@ struct PopoverSessionRow: View {
                     Text(session.projectName).font(.system(size: 13, weight: .medium))
                     Text(session.enforcementShort).font(.system(size: 11)).foregroundStyle(Theme.muted)
                     if grants > 0 {
-                        Text("\(grants) grant\(grants == 1 ? "" : "s")")
+                        Text("\(grants) permission\(grants == 1 ? "" : "s")")
                             .font(.system(size: 11)).foregroundStyle(Theme.lime)
                     }
                 }

@@ -284,11 +284,53 @@ const char *kai_session_kind_name(int kind) {
     }
 }
 
+/* Phase B item 6: user-facing names are what is protected (Files = the storage
+ * wall, Internet = the network wall), not the walls. */
 const char *kai_enforcement_label(int storage_active, int network_active) {
-    if (storage_active && network_active) return "Enforced by both walls";
-    if (network_active && !storage_active) return "Network wall only";
-    if (storage_active && !network_active) return "Storage wall only";
-    return "Seen, not enforced: storage wall off";
+    if (storage_active && network_active) return "Enforced: Files and Internet";
+    if (network_active && !storage_active) return "Enforced: Internet only";
+    if (storage_active && !network_active) return "Enforced: Files only";
+    return "Seen only: Files and Internet are off";
+}
+
+/* Phase B item 8: the ONE status sentence, shared by the popover, the Settings
+ * sidebar, the menu-bar label and `kai status`. files/internet: 0 off (not
+ * running or set off), 1 watch (log), 2 protect (block), from what the walls
+ * REPORT, never the policy. agents < 0 = count unknown (no suffix). */
+const char *kai_status_sentence(int files, int internet, int agents, int paused,
+                                char *out, size_t n) {
+    if (!out || !n) return "";
+    if (paused) snprintf(out, n, "Kai is paused");
+    else if (files == 0 && internet == 0) snprintf(out, n, "Not protected");
+    else if (files == 0) snprintf(out, n, "Files protection is off");
+    else if (internet == 0) snprintf(out, n, "Internet protection is off");
+    else if (files == 1 && internet == 1) snprintf(out, n, "Watching only");
+    else if (files == 1) snprintf(out, n, "Partly protected \xC2\xB7 Files is watching only");
+    else if (internet == 1) snprintf(out, n, "Partly protected \xC2\xB7 Internet is watching only");
+    else if (agents > 0)
+        snprintf(out, n, "Protected \xC2\xB7 %d agent%s working", agents, agents == 1 ? "" : "s");
+    else snprintf(out, n, "Protected");
+    return out;
+}
+
+/* A wall's level as it reports it in /tmp/kai-<wall>-health.json: 2 block,
+ * 1 log, 0 off or stale (not written within 30 s: not running). -1 when the
+ * wall has never written one (the sandboxed network extension can't yet), so
+ * the caller falls back to the configured mode. */
+int kai_wall_observed_level(const char *wall) {
+    char path[128];
+    snprintf(path, sizeof path, "/tmp/kai-%s-health.json", wall ? wall : "");
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    if ((long)(time(NULL) - st.st_mtime) > 30) return 0;
+    size_t len = 0;
+    char *txt = kai_read_file(path, 1 << 16, &len);
+    cJSON *o = txt ? cJSON_Parse(txt) : NULL;
+    free(txt);
+    const char *m = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "mode")) : NULL;
+    int lvl = !m ? 0 : !strcmp(m, "block") ? 2 : (!strcmp(m, "log") || !strcmp(m, "warn")) ? 1 : 0;
+    cJSON_Delete(o);
+    return lvl;
 }
 
 /* Reject an id that could escape the registry dir or hold a path separator. */

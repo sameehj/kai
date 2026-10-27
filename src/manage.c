@@ -307,13 +307,13 @@ int kai_cmd_agents(int argc, char **argv) {
             cJSON_AddStringToObject(a, "name", chats[i].site);
             cJSON_AddStringToObject(a, "kind", "ai-chat");
             cJSON_AddStringToObject(a, "source", "browser extension");
-            cJSON_AddStringToObject(a, "coverage", "walls don't apply");
+            cJSON_AddStringToObject(a, "coverage", "Files and Internet protection don't apply");
             cJSON_AddNumberToObject(a, "open_tabs", chats[i].open_tabs);
             cJSON_AddNumberToObject(a, "redactions", chats[i].redactions);
             cJSON_AddNumberToObject(a, "overrides", chats[i].overrides);
             cJSON_AddItemToArray(arr, a);
         } else {
-            if (i == 0) printf("\nAI chats (browser extension - walls don't apply):\n");
+            if (i == 0) printf("\nChats (browser extension - Files and Internet protection don't apply):\n");
             printf("  %-22s %d open, %d redacted, %d sent anyway\n",
                    chats[i].site, chats[i].open_tabs, chats[i].redactions, chats[i].overrides);
         }

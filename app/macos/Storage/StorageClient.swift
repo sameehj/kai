@@ -297,8 +297,9 @@ final class StorageClient {
         // to it (and cover its whole tree).
         var sessionField = ""
         #if KAI_STORAGE_ENFORCE
-        let sid = sessionFor(pid(proc), UInt32(token.val.7)).sid
-        if !sid.isEmpty { sessionField = "\"session\":\"\(esc(sid))\"," }
+        let sess = sessionFor(pid(proc), UInt32(token.val.7))
+        if !sess.sid.isEmpty { sessionField = "\"session\":\"\(esc(sess.sid))\"," }
+        if !sess.project.isEmpty { sessionField += "\"project\":\"\(esc(sess.project))\"," }
         #endif
         let json = "{\"id\":\"\(id)\",\"agent\":\"\(esc(agent))\",\"pid\":\(pid(proc))," +
                    "\"pidversion\":\(UInt64(token.val.7)),\"strength\":\(strength)," +

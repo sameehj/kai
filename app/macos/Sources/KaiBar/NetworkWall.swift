@@ -29,7 +29,7 @@ final class NetworkWall: NSObject, ObservableObject {
         case .off: return "Off"
         case .activating: return "Turning on…"
         case .needsApproval: return "Approve Kai in System Settings → Privacy & Security"
-        case .on: return "On: agent traffic is checked"
+        case .on: return "On: Kai checks where agents connect"
         case .failed(let msg): return msg
         }
     }

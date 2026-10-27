@@ -4,6 +4,7 @@ import Foundation
 import LocalAuthentication
 import ServiceManagement
 import UserNotifications
+import KaiCore
 
 enum Agent: String, CaseIterable, Identifiable {
     case claude, cursor, codex, chrome
@@ -13,7 +14,7 @@ enum Agent: String, CaseIterable, Identifiable {
         case .claude: return "Claude Code"
         case .cursor: return "Cursor"
         case .codex: return "Codex"
-        case .chrome: return "Chrome AI chats"
+        case .chrome: return "Chats (Chrome)"
         }
     }
 }
@@ -67,35 +68,46 @@ final class AppModel: ObservableObject {
         return missed ? .partial : .protecting
     }
 
-    // MARK: observed wall state (U1) — the headline reflects what the walls are
-    // MEASURED to be doing, never what the policy is configured to. `running` is
-    // taken from the OS extension state the app already tracks (StorageWall /
-    // NetworkWall .isOn), which is reliable; the storage health snapshot is used
-    // only to tell block from log. The network wall emits no health snapshot yet
-    // (M0.4 TODO), so its mode is not distinguished here.
+    // MARK: observed status (U1, Phase B item 8) — ONE status model for the
+    // popover, the Settings sidebar, the menu-bar label and `kai status`:
+    // libkai's kai_status_sentence over what the walls REPORT. A wall the OS
+    // hasn't activated is off; Files' level comes from its health snapshot
+    // (stale = not running = off); Internet's from its snapshot, or the
+    // configured mode while the sandboxed extension can't write one yet.
     enum ObservedProtection { case protected, partial, notProtected }
 
-    private var storageIsLogging: Bool {
-        let m = status?.walls?.observed?.storage?.health?.mode
-        return m == "log" || m == "warn"
+    private func levels(storageOn: Bool, networkOn: Bool) -> (files: Int32, internet: Int32, paused: Bool) {
+        let files = storageOn ? max(kai_wall_observed_level("storage"), 0) : 0
+        var internet: Int32 = 0
+        if networkOn {
+            let l = kai_wall_observed_level("network")
+            if l >= 0 { internet = l }
+            else {
+                switch policy?.switches["egress"] ?? "log" {
+                case "block": internet = 2
+                case "off": internet = 0
+                default: internet = 1
+                }
+            }
+        }
+        let paused = kai_wall_paused("storage", Int64(Date().timeIntervalSince1970)) != 0
+        return (files, internet, paused)
     }
 
     func observedProtection(storageOn: Bool, networkOn: Bool) -> ObservedProtection {
-        let storageEnforcing = storageOn && !storageIsLogging
-        if storageEnforcing && networkOn { return .protected }
-        if !storageOn && !networkOn { return .notProtected }
+        let l = levels(storageOn: storageOn, networkOn: networkOn)
+        if l.files == 2 && l.internet == 2 && !l.paused { return .protected }
+        if l.files == 0 && l.internet == 0 { return .notProtected }
         return .partial
     }
 
-    /// U1 headline, from observed enforcement only.
-    func observedHeadline(storageOn: Bool, networkOn: Bool) -> String {
-        var weak: [String] = []
-        if !storageOn { weak.append("storage is off") }
-        else if storageIsLogging { weak.append("storage is logging") }
-        if !networkOn { weak.append("network is off") }
-        if weak.isEmpty { return "Protected" }
-        if !storageOn && !networkOn { return "Not protected" }
-        return "Partly protected: " + weak.joined(separator: ", ")
+    /// The one status sentence ("Protected · 3 agents working", "Watching only",
+    /// "Files protection is off"). agents < 0: count unknown here.
+    func statusSentence(storageOn: Bool, networkOn: Bool, agents: Int = -1) -> String {
+        let l = levels(storageOn: storageOn, networkOn: networkOn)
+        var buf = [CChar](repeating: 0, count: 128)
+        return String(cString: kai_status_sentence(l.files, l.internet, Int32(agents), l.paused ? 1 : 0,
+                                                   &buf, buf.count))
     }
 
     var menuBarSymbol: String {

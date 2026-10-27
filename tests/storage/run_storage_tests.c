@@ -1095,12 +1095,31 @@ static void test_session_pause(void) {
  * claims "protected" for a session no wall can attribute. */
 static void test_enforcement_labels(void) {
     printf("session enforcement labels (redesign)\n");
-    CHECK(!strcmp(kai_enforcement_label(1, 1), "Enforced by both walls"), "both walls");
-    CHECK(!strcmp(kai_enforcement_label(0, 1), "Network wall only"), "network only");
-    CHECK(!strcmp(kai_enforcement_label(1, 0), "Storage wall only"), "storage only");
+    /* Phase B item 6: user-facing names are Files and Internet, not walls. */
+    CHECK(!strcmp(kai_enforcement_label(1, 1), "Enforced: Files and Internet"), "both walls");
+    CHECK(!strcmp(kai_enforcement_label(0, 1), "Enforced: Internet only"), "network only");
+    CHECK(!strcmp(kai_enforcement_label(1, 0), "Enforced: Files only"), "storage only");
     const char *off = kai_enforcement_label(0, 0);
-    CHECK(strstr(off, "not enforced") != NULL, "no wall: labelled not enforced");
+    CHECK(strstr(off, "Seen only") != NULL, "no wall: labelled seen only");
     CHECK(strcasestr(off, "protect") == NULL, "no wall: never labelled 'protected'");
+    CHECK(strcasestr(off, "wall") == NULL, "no wall: no 'wall' jargon");
+
+    /* Phase B item 8: the one status sentence (popover, sidebar, kai status).
+     * Levels: 0 off, 1 watch, 2 protect; agents < 0 = count unknown. */
+    char st[128];
+    CHECK(!strcmp(kai_status_sentence(2, 2, 3, 0, st, sizeof st), "Protected \xC2\xB7 3 agents working"),
+          "both protecting, 3 agents");
+    CHECK(!strcmp(kai_status_sentence(2, 2, 1, 0, st, sizeof st), "Protected \xC2\xB7 1 agent working"),
+          "singular agent");
+    CHECK(!strcmp(kai_status_sentence(2, 2, 0, 0, st, sizeof st), "Protected"), "no agents: no count");
+    CHECK(!strcmp(kai_status_sentence(2, 2, -1, 0, st, sizeof st), "Protected"), "unknown count: no count");
+    CHECK(!strcmp(kai_status_sentence(1, 1, 2, 0, st, sizeof st), "Watching only"), "both watching");
+    CHECK(!strcmp(kai_status_sentence(2, 1, 2, 0, st, sizeof st), "Partly protected \xC2\xB7 Internet is watching only"),
+          "one watching");
+    CHECK(!strcmp(kai_status_sentence(0, 2, 2, 0, st, sizeof st), "Files protection is off"), "files off");
+    CHECK(!strcmp(kai_status_sentence(2, 0, 2, 0, st, sizeof st), "Internet protection is off"), "internet off");
+    CHECK(!strcmp(kai_status_sentence(0, 0, 2, 0, st, sizeof st), "Not protected"), "both off");
+    CHECK(!strcmp(kai_status_sentence(2, 2, 2, 1, st, sizeof st), "Kai is paused"), "paused wins");
     /* The scan runs and returns a bounded, sane result (no crash); the live
      * session set is verified in the live test. */
     kai_policy *p = mk("storage block\n");

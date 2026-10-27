@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 int kai_cmd_hook(int argc, char **argv);
 int kai_cmd_install(int argc, char **argv);
@@ -98,6 +99,31 @@ static int cmd_redact(void) {
     free(clean); free(txt);
     kai_policy_free(p);
     return 0;
+}
+
+/* Phase B item 8: `kai status` leads with the same one sentence the app shows,
+ * from what the walls report (never the policy), then the doctor checks. */
+static int cmd_doctor(void);
+static int cmd_status(void) {
+    char err[256], line[128];
+    kai_policy *p = kai_policy_load(NULL, err, sizeof err);
+    int agents = -1;
+    int files = kai_wall_observed_level("storage");
+    int internet = kai_wall_observed_level("network");
+    if (files < 0) files = 0;                            /* never reported: not running */
+    if (internet < 0) internet = p ? (int)kai_policy_egress_mode(p) : 0;  /* no snapshot yet */
+    if (p) {
+        kai_session *s = NULL; int n = 0;
+        kai_sessions_scan(p, &s, &n);
+        agents = 0;
+        for (int i = 0; i < n; i++) if (s[i].kind == KAI_KIND_SESSION && !s[i].ended_utc) agents++;
+        free(s);
+        kai_policy_free(p);
+    }
+    printf("%s\n\n", kai_status_sentence(files, internet, agents,
+                                         kai_wall_paused("storage", (long long)time(NULL)) != 0,
+                                         line, sizeof line));
+    return cmd_doctor();
 }
 
 static int cmd_doctor(void) {
@@ -232,7 +258,7 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "init") == 0) return cmd_init();
     if (strcmp(cmd, "doctor") == 0) return cmd_doctor();
     if (strcmp(cmd, "status") == 0)
-        return (rest > 0 && strcmp(restv[0], "--json") == 0) ? kai_cmd_status_json() : cmd_doctor();
+        return (rest > 0 && strcmp(restv[0], "--json") == 0) ? kai_cmd_status_json() : cmd_status();
     if (strcmp(cmd, "policy") == 0) return kai_cmd_policy(rest, restv);
     if (strcmp(cmd, "gateway") == 0) return cmd_gateway(rest, restv);
     if (strcmp(cmd, "agent-of") == 0) return cmd_agent_of(rest, restv);

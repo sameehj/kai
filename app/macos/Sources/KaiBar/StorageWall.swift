@@ -31,7 +31,7 @@ final class StorageWall: NSObject, ObservableObject {
         case .off: return "Off"
         case .activating: return "Turning on…"
         case .needsApproval: return "Approve Kai in System Settings → Privacy & Security"
-        case .on: return "On: agents can't open protected files"
+        case .on: return "On: Kai checks which files agents open"
         case .failed(let m): return m
         }
     }
@@ -130,7 +130,7 @@ extension StorageWall: OSSystemExtensionRequestDelegate {
             // Code 4 = extension not found (a non-storage build); say so plainly.
             let ns = error as NSError
             if ns.domain == OSSystemExtensionErrorDomain && ns.code == 4 {
-                self.state = .failed("This Kai build has no storage extension (use make try-app-storage)")
+                self.state = .failed("This Kai build has no Files protection (use make try-app-storage)")
             } else {
                 self.state = self.turningOff ? .off : .failed(ns.localizedDescription)
             }

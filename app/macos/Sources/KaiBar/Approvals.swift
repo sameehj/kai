@@ -52,10 +52,78 @@ struct PendingRequest: Decodable, Identifiable {
     var note: String? = nil     // plain explanation of the resource class (e.g. trust store)
     var tier: Int? = nil        // kai_override_tier_t: 2 = override, 3 = break-glass, 4 = never
     var session: String? = nil  // the ES session this request belongs to (for "this session" grants)
+    var project: String? = nil  // that session's project folder (the card names the session by it)
     var declaredHost: String? = nil  // MCP: the server's .mcp.json host, offered as a second grant
     var strengthLabel: String { strength >= 2 ? "strong" : strength == 1 ? "medium" : "weak" }
     var isMCP: Bool { resource.hasPrefix("mcp:") }
     var opLabel: String { op == "connect" ? "connect" : (op == "open" || op == "readdir") ? "read" : "write" }
+    // ---- Phase B item 9: the card in plain words ----
+
+    var agentTitle: String {
+        switch agent {
+        case "claude": return "Claude Code"
+        case "codex": return "Codex"
+        case "cursor": return "Cursor"
+        default: return agent.prefix(1).uppercased() + agent.dropFirst()
+        }
+    }
+    /// ` (session "kai")`, from the session's project folder, or "".
+    var sessionLabel: String {
+        guard let p = project, !p.isEmpty else { return "" }
+        return " (session \u{201C}\((p as NSString).lastPathComponent)\u{201D})"
+    }
+    private var inTemp: Bool {
+        resource.contains("/var/folders/") || resource.hasPrefix("/tmp/") || resource.hasPrefix("/private/tmp/")
+    }
+    var verb: String {
+        if isMCP { return "use" }
+        switch op {
+        case "connect": return "connect to"
+        case "open", "readdir": return "read"
+        case "unlink": return "delete"
+        case "rename": return "move"
+        default: return "change"
+        }
+    }
+    /// What was touched, in plain words.
+    var thing: String {
+        if isMCP {
+            let parts = resource.dropFirst(4).split(separator: "/", maxSplits: 1).map(String.init)
+            return parts.count == 2 ? "the tool \u{201C}\(parts[1])\u{201D} from \(parts[0])" : "an MCP tool"
+        }
+        if op == "connect" { return resource }
+        let r = resource.lowercased()
+        let name = (resource as NSString).lastPathComponent
+        var t: String
+        if r.contains("/.kai/") || r.hasSuffix("/.kai") { t = "Kai's own settings" }
+        else if (tier ?? 1) >= 4 { t = "\(agentTitle)'s Kai settings" }
+        else if note != nil && !(note ?? "").isEmpty { t = "this Mac's certificate trust settings" }
+        else if r.contains("/.ssh/") { t = "your SSH key" }
+        else if r.contains("/.aws/") { t = "your AWS credentials" }
+        else if r.contains("/gcloud/") { t = "your Google Cloud credentials" }
+        else if r.contains("/.kube/") { t = "your Kubernetes credentials" }
+        else if r.contains("/.docker/") { t = "your Docker login" }
+        else if r.contains("/.gnupg/") { t = "your GPG keys" }
+        else if r.hasSuffix("/.netrc") || r.hasSuffix("/.npmrc") || r.hasSuffix("/.pypirc") { t = "a saved login (\(name))" }
+        else if name.hasPrefix(".env") { t = "an environment file (\(name))" }
+        else if r.hasSuffix(".pem") || r.hasSuffix(".key") || name.hasPrefix("id_") { t = "a key file" }
+        else { t = "a protected file (\(name))" }
+        return inTemp ? t + " in a temporary folder" : t
+    }
+    /// Why it matters, in one clause.
+    var whyItMatters: String {
+        if (tier ?? 1) >= 4 { return "it " + (note ?? "is part of Kai's own protection") }
+        if let n = note, !n.isEmpty { return "it " + n }
+        if isMCP { return "Kai asks before an agent uses a tool it hasn't used before" }
+        if op == "connect" { return "the site isn't on your allowed list" }
+        let r = resource.lowercased()
+        if r.contains("/.ssh/") { return "keys can unlock your servers" }
+        if r.contains("/.aws/") || r.contains("/gcloud/") || r.contains("/.kube/") { return "it can reach your cloud account" }
+        if (resource as NSString).lastPathComponent.hasPrefix(".env") { return "it usually holds passwords and API keys" }
+        if (tier ?? 1) == 3 { return "private keys can unlock servers and services" }
+        return "you asked Kai to protect it"
+    }
+
     /// Item 7: how the USER lets this work without Kai opening the secret (the
     /// tool's agent/keychain holds it). Empty if none fits. Phrased as a tip so
     /// it carries no literal that trips content scanners.
@@ -226,9 +294,7 @@ final class GrantManager: ObservableObject {
         if tier >= 4 { return }   // never: not approvable from here
         if tier == 3 {            // break-glass: require Touch ID / login password
             let ctx = LAContext()
-            let verb = req.op == "connect" ? "connection" :
-                       (req.op == "open" || req.op == "readdir") ? "read" : "write"
-            let reason = "Kai: allow a break-glass \(verb) of \(req.resource) for this session (15 min)"
+            let reason = "allow \(req.agentTitle) to \(req.verb) \(req.thing) for 15 minutes"
             ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { ok, _ in
                 DispatchQueue.main.async {
                     guard ok else { return }   // auth failed/cancelled: nothing signed
@@ -470,71 +536,81 @@ enum PendingPolicyStore {
 
 // MARK: - Views
 
-/// A single access-request card. Shows only Kai-verified fields; the human
-/// chooses Deny / Allow once / Allow this process.
+/// Phase B items 7 + 9: every block uses the same card. It names the agent and
+/// session, says what was touched in plain words and why it matters, and offers
+/// one recommended action. Tiers show as three kinds: Ask (one click, a short
+/// confirm when it overrides your own rule), Touch ID (secrets) and Always
+/// protected (no button). The path, rule, pid and identity live behind "Why?".
 struct ApprovalCard: View {
     let req: PendingRequest
+    var count = 1
     @ObservedObject var manager: GrantManager
+    @State private var showWhy = false
+    @State private var confirmOverride: GrantDuration?
+
+    private var tier: Int { req.tier ?? 1 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("KAI — Access Request").font(.headline)
-            Text(req.op == "connect"
-                 ? "\(req.agent) wants to connect to this destination"
-                 : "\(req.agent) wants to \(req.op.uppercased()) a protected file")
-            Text(req.resource).font(.system(.caption, design: .monospaced)).lineLimit(2)
-            if let note = req.note, !note.isEmpty {
-                Text("This \(note) — requested by \(req.agent).")
-                    .font(.caption).foregroundColor(.orange)
-            }
-            Text("Verified: \(req.agent) · pid \(req.pid) · identity \(req.strengthLabel)")
-                .font(.caption).foregroundColor(.secondary)
-            if !req.hintTip.isEmpty {
-                Text("To avoid this, " + req.hintTip)
-                    .font(.caption2).foregroundColor(.secondary).textSelection(.enabled)
-            }
-            if req.op != "connect" {
-                Text("Allowing file access does not change the network wall.")
-                    .font(.caption2).foregroundColor(.secondary)
-            }
-            // S6: tier-aware actions. never → no buttons; break-glass → Touch ID;
-            // override → confirm; normal/confirm → the usual allow buttons.
-            switch req.tier ?? 1 {
-            case 4:
-                // Always protected: no allow button, one-line reason (the note).
-                Text("Always protected. You can change it yourself; agents can't.")
-                    .font(.caption).foregroundColor(.secondary)
-                HStack { Button("Dismiss") { manager.deny(req) } }
-            case 3:
-                HStack {
-                    Button("Deny") { manager.deny(req) }
-                    // Label agrees with the grant: the requested op, this session,
-                    // 15 minutes (see signGrant).
-                    Button("Override with Touch ID (\(req.opLabel), this session, 15 min)…") {
-                        manager.approve(req, duration: .min10)
+            Text("\(req.agentTitle)\(req.sessionLabel) wanted to \(req.verb) \(req.thing)"
+                 + (count > 1 ? " (\(count) times)." : "."))
+                .font(.system(size: 13, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
+            Text(tier == 3 ? "Kai blocked it because \(req.whyItMatters). This is a secret: confirm with Touch ID."
+                           : "Kai blocked it because \(req.whyItMatters).")
+                .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if showWhy {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(req.resource).font(.system(.caption, design: .monospaced)).lineLimit(3).textSelection(.enabled)
+                    Text("\(req.agent) · pid \(req.pid) · identity \(req.strengthLabel)\(req.session.map { " · session \($0.prefix(8))" } ?? "")")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    if !req.hintTip.isEmpty {
+                        Text("To avoid this, " + req.hintTip).font(.caption2).foregroundStyle(.secondary)
+                            .textSelection(.enabled)
                     }
                 }
-            case 2:
-                // Override (policy block): task or session only — never project-wide
-                // from the card.
-                HStack {
-                    Button("Deny") { manager.deny(req) }
-                    Button("This session…") { manager.approve(req, duration: .session) }
-                    Button("1 day…") { manager.approve(req, duration: .day1) }
-                }
-            default:
-                HStack {
-                    Button("Deny") { manager.deny(req) }
-                    Menu("Allow…") {
-                        ForEach(GrantDuration.allCases, id: \.self) { d in
-                            Button(d.label) { manager.approve(req, duration: d) }
+                .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.25)))
+            }
+            HStack(spacing: 8) {
+                switch tier {
+                case 4:
+                    Text("Always protected").font(.caption).foregroundStyle(.secondary)
+                    Button("Dismiss") { manager.deny(req) }
+                case 3:
+                    // The grant matches the label: the requested op, this session, 15 min.
+                    Button("Allow for 15 minutes (Touch ID)") { manager.approve(req, duration: .min10) }
+                        .keyboardShortcut(.defaultAction)
+                    Button("Keep blocked") { manager.deny(req) }
+                default:
+                    Button("Allow for this session") { ask(.session) }.keyboardShortcut(.defaultAction)
+                    Button("Keep blocked") { manager.deny(req) }
+                    Menu("Other…") {
+                        ForEach(tier == 2 ? [GrantDuration.day1] : [.min10, .hour1, .day1, .day7], id: \.self) { d in
+                            Button("Allow for \(d.label)") { ask(d) }
                         }
-                    }.fixedSize()
+                    }.menuStyle(.borderlessButton).fixedSize()
                 }
+                Spacer()
+                Button(showWhy ? "Hide" : "Why?") { withAnimation { showWhy.toggle() } }
+                    .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
             }
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.08)))
+        .confirmationDialog("This overrides a rule you set. Allow anyway?",
+                            isPresented: Binding(get: { confirmOverride != nil },
+                                                 set: { if !$0 { confirmOverride = nil } })) {
+            Button("Allow for \(confirmOverride?.label ?? "")") {
+                if let d = confirmOverride { manager.approve(req, duration: d) }
+                confirmOverride = nil
+            }
+            Button("Keep blocked", role: .cancel) { confirmOverride = nil }
+        }
+    }
+
+    /// Ask: one click; when it overrides your own rule (tier 2), a short confirm.
+    private func ask(_ d: GrantDuration) {
+        if tier == 2 { confirmOverride = d } else { manager.approve(req, duration: d) }
     }
 }
 
@@ -546,8 +622,8 @@ struct PendingPolicyCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("KAI — Confirm policy change").font(.headline)
-            Text("A change that would REDUCE protection is waiting. It is not active.")
+            Text("A change would turn protection down").font(.headline)
+            Text("It isn't active until you apply it.")
                 .font(.caption).foregroundColor(.secondary)
             Text(change.summary).font(.system(.caption, design: .monospaced)).lineLimit(2)
             Text("Requested by: \(change.callerChain)")
@@ -555,8 +631,8 @@ struct PendingPolicyCard: View {
             Text("Code signature: \(change.callerTeam)")
                 .font(.caption2).foregroundColor(.secondary)
             HStack {
-                Button("Reject") { manager.rejectPolicy(change) }
-                Button("Apply (reduce protection)") { manager.applyPolicy(change) }
+                Button("Keep protection") { manager.rejectPolicy(change) }
+                Button("Turn down") { manager.applyPolicy(change) }
             }
         }
         .padding(10)
