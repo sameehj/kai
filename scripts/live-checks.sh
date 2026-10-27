@@ -125,6 +125,8 @@ check5() {
 }
 
 for n in ${1:-1 2 3 4 5}; do "check$n"; echo; done
-rm -rf "$D"
+# Deleting the scratch key is a write the wall (correctly) denies an agent;
+# remove it from your own Terminal instead.
+rm -rf "$D" 2>/dev/null || echo "Scratch key left in $D (the wall blocks an agent deleting it): run  rm -rf $D  in Terminal"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
