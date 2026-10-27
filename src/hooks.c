@@ -833,7 +833,20 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
     }
 
     if (!(ev && strcmp(ev, "PreToolUse") == 0)) ask = 0;
-    const char *dec_str = ask ? "ask" : (decision >= KAI_ACT_BLOCK) ? "block" : "warn";
+    /* Item 4: hooks honour pause. A paused session (or a paused storage wall)
+     * skips SOFT blocks - the action proceeds and is logged as would-block.
+     * Never-tier (Kai's own control store) and asks are unaffected. */
+    int would_block = 0;
+    if (decision >= KAI_ACT_BLOCK && !ask && kai_rule_is_builtin(rule) == 0) {
+        long long pnow = (long long)time(NULL);
+        if ((session && *session && kai_session_paused(session, pnow)) ||
+            kai_wall_paused("storage", pnow)) {
+            would_block = 1;
+            decision = KAI_ACT_WARN;   /* not a block: let the action proceed */
+        }
+    }
+    const char *dec_str = would_block ? "would-block"
+                          : ask ? "ask" : (decision >= KAI_ACT_BLOCK) ? "block" : "warn";
     if (decision >= KAI_ACT_BLOCK) {
         /* PreToolUse uses permissionDecision; prompt/other use top-level decision */
         if (ev && strcmp(ev, "PreToolUse") == 0) {

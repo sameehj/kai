@@ -146,7 +146,8 @@ struct MenuView: View {
             ForEach(paused) { s in
                 HStack(spacing: 8) {
                     Image(systemName: "pause.circle.fill").foregroundStyle(Theme.amber)
-                    Text("Kai paused for \(s.displayAgent)\(s.projectName.isEmpty ? "" : " · \(s.projectName)")")
+                    Text("Kai paused for \(s.displayAgent)\(s.projectName.isEmpty ? "" : " · \(s.projectName)")"
+                         + (s.pausedUntilLabel.isEmpty ? "" : " — until \(s.pausedUntilLabel)"))
                         .font(.system(size: 12))
                     Spacer()
                     Button("Resume") { grantManager.pauseSession(s.id, minutes: 0) }

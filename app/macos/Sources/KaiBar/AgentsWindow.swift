@@ -80,6 +80,16 @@ struct SessionRow: Decodable, Identifiable, Equatable {
         if enforcement.hasPrefix("Storage") { return "storage only" }
         return "not enforced"
     }
+    /// When the session's pause expires (nil if not paused), for "Paused until HH:MM".
+    var pausedUntil: Date? {
+        let t = id.withCString { kai_session_pause_until($0) }
+        return t > 0 ? Date(timeIntervalSince1970: TimeInterval(t)) : nil
+    }
+    var pausedUntilLabel: String {
+        guard let d = pausedUntil else { return "" }
+        let f = DateFormatter(); f.dateFormat = "HH:mm"
+        return f.string(from: d)
+    }
 }
 
 @MainActor
@@ -261,11 +271,24 @@ struct SessionDetail: View {
                     Text(session.displayAgent).font(.title2).fontWeight(.semibold)
                     Spacer()
                     if session.isActive {
-                        Button("Pause Kai for this session (15 min)") {
-                            grants.pauseSession(session.id, minutes: 15)
+                        // Item 4: pause acts through the storage wall by ES session
+                        // id. A scan-only session (no ES session) or one the storage
+                        // wall doesn't cover can't be paused.
+                        let storageCovered = session.source == "es" &&
+                            (session.enforcement.hasPrefix("Enforced by both")
+                             || session.enforcement.hasPrefix("Storage"))
+                        if storageCovered {
+                            Button("Pause Kai for this session (15 min)") {
+                                grants.pauseSession(session.id, minutes: 15)
+                            }
+                            .help("Skips Kai for this session for 15 minutes, then auto-resumes. "
+                                  + "Kai's own settings stay protected.")
+                        } else {
+                            Button("Pause Kai for this session (15 min)") {}
+                                .disabled(true)
+                                .help("Pausing needs the storage wall active for this session.")
+                            Text("needs the storage wall").font(.caption).foregroundColor(.secondary)
                         }
-                        .help("Skips Kai for this session for 15 minutes, then auto-resumes. "
-                              + "Kai's own settings stay protected.")
                     }
                 }
                 if !session.topic.isEmpty {

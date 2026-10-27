@@ -351,7 +351,9 @@ int kai_grants_load(const char *dir, kai_grant **out, int *n) {
 int kai_wall_paused(const char *wall, long long now) {
     if (!wall) return 0;
     char fp[PATH_MAX];
-    if (snprintf(fp, sizeof fp, "%s/pause-%s", kai_home(), wall) >= (int)sizeof fp) return 0;
+    /* Item 4: pause markers live in the protected registry so an agent-tree
+     * process can't write one (the storage wall denies control-store writes). */
+    if (snprintf(fp, sizeof fp, "%s/registry/pause-%s", kai_home(), wall) >= (int)sizeof fp) return 0;
     size_t n = 0;
     char *t = kai_read_file(fp, 64, &n);
     if (!t) return 0;
@@ -365,7 +367,9 @@ int kai_wall_pause_write(const char *wall, long long minutes) {
     if (!wall) return -1;
     char fp[PATH_MAX];
     mkdir(kai_home(), 0700);
-    if (snprintf(fp, sizeof fp, "%s/pause-%s", kai_home(), wall) >= (int)sizeof fp) return -1;
+    char rdir[PATH_MAX];
+    if (snprintf(rdir, sizeof rdir, "%s/registry", kai_home()) < (int)sizeof rdir) mkdir(rdir, 0700);
+    if (snprintf(fp, sizeof fp, "%s/registry/pause-%s", kai_home(), wall) >= (int)sizeof fp) return -1;
     if (minutes <= 0) { unlink(fp); return 0; }       /* resume now */
     long long until = (long long)time(NULL) + minutes * 60;
     int fd = open(fp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);

@@ -1231,6 +1231,26 @@ static void test_ssh_public(void) {
     kai_policy_free(p);
 }
 
+static void test_pause_registry(void) {
+    printf("pause markers live in the protected registry (item 4)\n");
+    const char *home = getenv("KAI_HOME");
+    char wp[700], sp[700];
+    snprintf(wp, sizeof wp, "%s/registry/pause-storage", home);
+    snprintf(sp, sizeof sp, "%s/registry/pause-session-abc", home);
+    CHECK(kai_path_is_control_store(wp) == 1, "a wall pause marker is control-store (agent writes denied)");
+    CHECK(kai_path_is_control_store(sp) == 1, "a session pause marker is control-store");
+    long long now = (long long)time(NULL);
+    kai_wall_pause_write("storage", 15);
+    CHECK(kai_wall_paused("storage", now) == 1, "wall pause round-trips from the registry");
+    kai_wall_pause_write("storage", 0);
+    CHECK(kai_wall_paused("storage", now) == 0, "resume clears it");
+    kai_session_pause_write("sesPZ", 15);
+    CHECK(kai_session_paused("sesPZ", now) == 1, "session pause round-trips");
+    CHECK(kai_session_pause_until("sesPZ") > now, "pause-until is in the future");
+    kai_session_pause_write("sesPZ", 0);
+    CHECK(kai_session_paused("sesPZ", now) == 0, "session resume clears it");
+}
+
 static void test_session_forgery(void) {
     printf("session map: pidversion guards pid reuse (item 6)\n");
     const char *home = getenv("KAI_HOME");
@@ -1600,6 +1620,7 @@ int main(void) {
     test_agent_catalog();
     test_discovery();
     test_ssh_public();
+    test_pause_registry();
     test_session_forgery();
     test_new_secret_file();
     test_control_service();

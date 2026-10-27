@@ -410,6 +410,8 @@ const char *kai_session_reports_dir(void);
  * kai_session_paused only for SOFT-protected resources; never-tier (the control
  * store) still applies while paused. */
 int kai_session_paused(const char *session, long long now);
+/* The epoch a session's pause expires at, or 0 if not paused (for "Paused until"). */
+long long kai_session_pause_until(const char *session);
 int kai_session_pause_write(const char *session, long long minutes);
 
 /* ---- Scoped Approvals (M0 engine) ----

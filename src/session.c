@@ -403,7 +403,8 @@ int kai_session_end(const char *id, long long ended_utc) {
 int kai_session_paused(const char *session, long long now) {
     if (!id_ok(session)) return 0;
     char fp[1200];
-    snprintf(fp, sizeof fp, "%s/pause-session-%s", kai_home(), session);
+    /* Item 4: in the protected registry, so an agent can't pause its own session. */
+    snprintf(fp, sizeof fp, "%s/registry/pause-session-%s", kai_home(), session);
     size_t n = 0;
     char *t = kai_read_file(fp, 64, &n);
     if (!t) return 0;
@@ -412,11 +413,27 @@ int kai_session_paused(const char *session, long long now) {
     return until > now;              /* expired/absent => not paused (auto-resume) */
 }
 
+/* The epoch the session's pause expires at (0 if not paused). Lets the UI show
+ * "Paused until HH:MM". */
+long long kai_session_pause_until(const char *session) {
+    if (!id_ok(session)) return 0;
+    char fp[1200];
+    snprintf(fp, sizeof fp, "%s/registry/pause-session-%s", kai_home(), session);
+    size_t n = 0;
+    char *t = kai_read_file(fp, 64, &n);
+    if (!t) return 0;
+    long long until = strtoll(t, NULL, 10);
+    free(t);
+    return until > (long long)time(NULL) ? until : 0;
+}
+
 int kai_session_pause_write(const char *session, long long minutes) {
     if (!id_ok(session)) return -1;
     mkdir(kai_home(), 0700);
+    char rdir[1200];
+    snprintf(rdir, sizeof rdir, "%s/registry", kai_home()); mkdir(rdir, 0700);
     char fp[1200];
-    snprintf(fp, sizeof fp, "%s/pause-session-%s", kai_home(), session);
+    snprintf(fp, sizeof fp, "%s/registry/pause-session-%s", kai_home(), session);
     if (minutes <= 0) { unlink(fp); return 0; }   /* resume */
     if (minutes > 24 * 60) minutes = 24 * 60;      /* cap at 1 day: a longer pause
                                                       is the wall switched off, so
