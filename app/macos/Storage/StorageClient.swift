@@ -849,15 +849,21 @@ final class StorageClient {
             // build/ folder carries the same signing id but must not write.
             let isApp = esString(proc.pointee.signing_id) == "io.github.sameehj.kai" &&
                         path(proc.pointee.executable) == "/Applications/Kai.app/Contents/MacOS/Kai"
-            // The approval key (grant HMAC secret) is readable ONLY by the app.
-            // The extensions read it in their own code; every other process -
-            // including a Kai-signed CLI an agent could drive - is blocked, read
-            // or write, so an agent tree can never obtain it and forge a grant.
-            if !isApp {
+            // The approval key (grant HMAC secret): the app reads and writes it;
+            // the NETWORK EXTENSION may read it (it verifies endpoint grants -
+            // without it no network approval could ever be honored, and it
+            // retried every few seconds, flooding Activity with "Kai non-app"
+            // blocks). Every other process - including a Kai-signed CLI an agent
+            // could drive - is blocked, so an agent tree can never obtain it.
+            let signer = esString(proc.pointee.signing_id)
+            let exe = path(proc.pointee.executable)
+            let isNetworkExt = signer == "io.github.sameehj.kai.network" &&
+                               exe.hasPrefix("/Library/SystemExtensions/")
+            if !isApp && !(isNetworkExt && !write) {
                 for p in paths where kai_path_is_approval_key(p) == 1 {
-                    dlog("BLOCK \(op) approval-key non-app pid \(pid(proc)) \(p)")
-                    audit(decision: "block", agent: "(kai non-app)", op: op, path: p,
-                          why: "approval-key-app-only")
+                    dlog("BLOCK \(op) approval-key \(signer) pid \(pid(proc)) \(p)")
+                    auditKaiComponent(signer: signer, exe: exe, pid: pid(proc), op: op, path: p,
+                                      why: "approval-key-app-only")
                     return false
                 }
             }
@@ -866,9 +872,9 @@ final class StorageClient {
                 for p in paths {
                     if kai_path_is_policy_store(p) == 1 {
                         if !isApp {
-                            dlog("BLOCK \(op) policy-store non-app pid \(pid(proc)) \(p)")
-                            audit(decision: "block", agent: "(kai non-app)", op: op, path: p,
-                                  why: "policy-store-app-only")
+                            dlog("BLOCK \(op) policy-store \(signer) pid \(pid(proc)) \(p)")
+                            auditKaiComponent(signer: signer, exe: exe, pid: pid(proc), op: op, path: p,
+                                              why: "policy-store-app-only")
                             return false
                         }
                     } else if kai_path_is_control_store(p) == 1, let under, !under.isEmpty {
@@ -989,6 +995,29 @@ final class StorageClient {
         }
         if timed { prof(.policy, tPolicy, nowTicks()) }
         return true
+    }
+
+    /// A Kai component the wall blocked, NAMED (not "Kai non-app"), at most
+    /// once per component + file every 10 minutes so a retry loop can't flood
+    /// Activity.
+    private var componentBlocksSeen: [String: Date] = [:]
+    private func auditKaiComponent(signer: String, exe: String, pid: pid_t, op: String, path p: String, why: String) {
+        let key = signer + "|" + exe + "|" + p
+        lock.lock()
+        if let t = componentBlocksSeen[key], Date().timeIntervalSince(t) < 600 { lock.unlock(); return }
+        if componentBlocksSeen.count > 1024 { componentBlocksSeen.removeAll() }
+        componentBlocksSeen[key] = Date()
+        lock.unlock()
+        let name: String
+        switch signer {
+        case "io.github.sameehj.kai":
+            name = exe == "/Applications/Kai.app/Contents/MacOS/Kai" ? "Kai app" : "Kai app copy at \((exe as NSString).deletingLastPathComponent)"
+        case "io.github.sameehj.kai.network": name = "Kai network extension"
+        case "io.github.sameehj.kai.storage": name = "Kai storage extension"
+        case "kai": name = "kai command-line tool"
+        default: name = "Kai component \(signer.isEmpty ? exe : signer)"
+        }
+        audit(decision: "block", agent: "\(name) (pid \(pid))", op: op, path: p, why: why)
     }
 
     // MARK: console user + audit
