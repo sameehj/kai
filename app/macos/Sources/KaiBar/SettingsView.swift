@@ -763,11 +763,18 @@ private struct AgentControlPage: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The Settings window wraps pages in a ScrollView, where "fill the
+            // height" collapses to the minimum: give the list + detail a real
+            // height (the window is 640 tall).
+            .frame(maxWidth: .infinity, minHeight: 470, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // The data is cached (shared store), so it may not CHANGE when the page
+        // opens: pick a session on appear too, not only on a change.
+        .onAppear { selectDefault() }
         .task { await model.refresh(); selectDefault() }
         .onChange(of: model.sessions) { _ in selectDefault() }
+        .onChange(of: model.loaded) { _ in selectDefault() }
     }
 
     /// Select the first session once data arrives, so the detail isn't empty.
