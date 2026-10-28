@@ -1245,6 +1245,7 @@ int kai_cmd_hook(int argc, char **argv) {
     else if (strcmp(agent, "codex") == 0) rc = hook_claude(json, NULL, "codex");
     else if (strcmp(agent, "cursor") == 0) rc = hook_cursor(json);
     else { fprintf(stderr, "kai hook: expected 'claude', 'codex' or 'cursor'\n"); rc = 1; }
+    kai_hook_seen(agent);   /* skipped for health probes (audit suppressed) */
     free(json);
     return rc;
 }

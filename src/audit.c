@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial */
 #include "internal.h"
+#include <sys/time.h>
 
 #include <fcntl.h>
 #include <stdlib.h>
@@ -183,6 +184,29 @@ void kai_denial_audit(const char *source, const char *agent, const char *decisio
  * they decide is not something that happened, so it isn't recorded. */
 static int g_suppress;
 void kai_audit_suppress(int on) { g_suppress = on; }
+int kai_audit_suppressed(void) { return g_suppress; }
+
+/* A2: a real hook call (not a health probe) stamps <kai home>/hookseen/<agent>
+ * so `kai status` can say when an agent last ran Kai's checks. Outside the
+ * control store, so the signed hook may write it from an agent's tree; agents
+ * themselves can't write anything under Kai's home. */
+void kai_hook_seen(const char *agent) {
+    if (!agent || !*agent || strchr(agent, '/') || g_suppress) return;
+    char dir[1200], path[1300];
+    snprintf(dir, sizeof dir, "%s/hookseen", kai_home());
+    mkdir(kai_home(), 0700);
+    mkdir(dir, 0700);
+    snprintf(path, sizeof path, "%s/%s", dir, agent);
+    int fd = open(path, O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd >= 0) { futimes(fd, NULL); close(fd); }
+}
+
+long long kai_hook_last_seen(const char *agent) {
+    char path[1300];
+    snprintf(path, sizeof path, "%s/hookseen/%s", kai_home(), agent ? agent : "");
+    struct stat st;
+    return stat(path, &st) == 0 ? (long long)st.st_mtime : 0;
+}
 
 int kai_audit_write(const kai_audit_entry *e) {
     if (g_suppress) return 0;

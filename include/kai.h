@@ -744,6 +744,9 @@ void kai_denial_audit(const char *source, const char *agent, const char *decisio
                       const char *matched_rule, const char *detail);
 /* Verify the chain. Returns 0 if intact; fills nlines and err. */
 int kai_audit_verify(const char *path, int *nlines, char *err, size_t errlen);
+/* A real hook call stamps <kai home>/hookseen/<agent>; when was it? 0 = never. */
+void kai_hook_seen(const char *agent);
+long long kai_hook_last_seen(const char *agent);
 const char *kai_home(void);       /* $KAI_HOME or ~/.kai */
 const char *kai_audit_path(void); /* <home>/audit.log    */
 

@@ -75,6 +75,11 @@ static int agent_installed(const char *rel, const char *needle, int *detected) {
     return on;
 }
 
+/* Exposed for `kai status` / `kai doctor` (status.c). */
+int kai_agent_hooks_installed(const char *rel, const char *needle, int *detected) {
+    return agent_installed(rel, needle, detected);
+}
+
 static int file_exists(const char *path) {
     struct stat st;
     return stat(path, &st) == 0;

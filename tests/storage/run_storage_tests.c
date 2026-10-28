@@ -1916,6 +1916,31 @@ static void test_codex_argv_upload(void) {
     snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
 }
 
+/* A2: "last used" is measured - every real hook call stamps
+ * <kai home>/hookseen/<agent>; a health probe (kai status) doesn't, so status
+ * can tell "Codex has never run Kai's hooks" from "Active". */
+static void test_hook_seen(void) {
+    printf("hook calls are measured for kai status (A2)\n");
+    char dir[] = "/tmp/kai-seenXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char cmd[1600], seen[700];
+    snprintf(seen, sizeof seen, "%s/hookseen/codex", dir);
+    snprintf(cmd, sizeof cmd,
+             "printf '%%s' '{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"kai_health_probe\":true,"
+             "\"tool_input\":{\"command\":\"ls\"},\"cwd\":\"/tmp\"}' | KAI_HOME='%s' KAI_POLICY=policy/default.policy "
+             "./kai hook codex > /dev/null 2>&1", dir);
+    (void)system(cmd);
+    CHECK(access(seen, F_OK) != 0, "a health probe is not a real call (no stamp)");
+    CHECK(kai_hook_last_seen("codex") == 0 || strcmp(getenv("KAI_HOME"), dir) != 0, "...nothing recorded");
+    snprintf(cmd, sizeof cmd,
+             "printf '%%s' '{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"session_id\":\"s\","
+             "\"tool_input\":{\"command\":\"ls\"},\"cwd\":\"/tmp\"}' | KAI_HOME='%s' KAI_POLICY=policy/default.policy "
+             "./kai hook codex > /dev/null 2>&1", dir);
+    (void)system(cmd);
+    CHECK(access(seen, F_OK) == 0, "a real hook call (even an allowed one) is stamped");
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
 static void test_endpoint_grants(void) {
     printf("endpoint grants: no grant = no connection (security fix)\n");
     char dir[] = "/tmp/kai-egrantXXXXXX";
@@ -2286,6 +2311,7 @@ int main(void) {
     test_pause_state();
     test_one_kai();
     test_endpoint_grants();
+    test_hook_seen();
     test_codex_argv_upload();
     test_persistence_paths();
     test_approval_key_access();

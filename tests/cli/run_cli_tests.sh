@@ -21,6 +21,18 @@ has "status is json with version" "$out" '"version"'
 has "status: built-in policy before init" "$out" '"source":	"built-in"'
 has "status: claude not installed" "$out" '"installed":	false'
 
+echo "== status (measured, A2) =="
+st=$("$KAI" status)
+has "status: agent checks section" "$st" "Agent checks"
+has "status: an unused agent is not claimed active" "$st" "Not detected"
+has "status: OS protection line" "$st" "OS protection"
+has "status: coverage line" "$st" "Coverage"
+hasnt "status: no agent reported Active in an empty home" "$st" "Active ("
+has "status: points to kai doctor" "$st" "kai doctor"
+dr=$("$KAI" doctor 2>&1)
+has "doctor: checks the policy" "$dr" "policy loads"
+has "doctor: says what it couldn't measure" "$dr" "not measured"
+
 echo "== policy set =="
 "$KAI" policy set on_upload ask >/dev/null
 has "set creates the policy file" "$(ls "$KAI_HOME")" "policy"
@@ -165,8 +177,12 @@ echo "== install / uninstall =="
 mkdir -p "$HOME/.claude"
 printf '{"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}' > "$HOME/.claude/settings.json"
 "$KAI" install claude >/dev/null
+once=$(count "$(cat "$HOME/.claude/settings.json")" 'hook claude')
 "$KAI" install claude >/dev/null
-[ "$(count "$(cat "$HOME/.claude/settings.json")" 'hook claude')" = 5 ] && pass "install twice adds hooks once" || fail "install duplicated hooks"
+# Idempotence, not a hard-coded count (it was 5 until the SessionStart hook
+# made it 6 and this check failed for a stale reason).
+[ "$once" -ge 5 ] && [ "$(count "$(cat "$HOME/.claude/settings.json")" 'hook claude')" = "$once" ] \
+  && pass "install twice adds hooks once" || fail "install duplicated hooks"
 has "install keeps the user's own Stop hook" "$(cat "$HOME/.claude/settings.json")" 'echo mine'
 has "status: claude installed" "$("$KAI" status --json)" '"installed":	true'
 claude_health() { "$KAI" status --json | python3 -I -c 'import json,sys; c=json.load(sys.stdin)["claude"]; print(c.get("working"), c.get("problem"))'; }
@@ -217,7 +233,7 @@ s=$(cat "$CODEX_HOME/hooks.json")
 hasnt "codex entries carry no _kai marker" "$s" '_kai'
 has "codex hooks fail closed when Kai is missing" "$(fails_closed "$CODEX_HOME/hooks.json" codex)" 'ok'
 has "status: codex installed" "$(codex_installed)" "True"
-has "doctor reports codex" "$("$KAI" doctor)" 'codex hooks: installed'
+has "doctor reports codex" "$("$KAI" doctor)" 'Codex: hooks in'
 "$KAI" uninstall codex >/dev/null
 s=$(cat "$CODEX_HOME/hooks.json")
 hasnt "uninstall removes kai codex hooks" "$s" 'hook codex'

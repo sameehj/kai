@@ -103,61 +103,8 @@ static int cmd_redact(void) {
     return 0;
 }
 
-/* Phase B item 8: `kai status` leads with the same one sentence the app shows,
- * from what the walls report (never the policy), then the doctor checks. */
-static int cmd_doctor(void);
-static int cmd_status(void) {
-    char err[256], line[128];
-    kai_policy *p = kai_policy_load(NULL, err, sizeof err);
-    int agents = -1;
-    int files = kai_wall_observed_level("storage");
-    int internet = kai_wall_observed_level("network");
-    if (files < 0) files = 0;                            /* no verified heartbeat: not running */
-    /* Internet is never inferred from the policy: unverified (-1) stays out of
-     * the headline and gets its own line below. */
-    if (p) {
-        /* The one session definition (Agent Control): working now. */
-        agents = kai_sessions_working_count();
-        kai_policy_free(p);
-    }
-    printf("%s\n", kai_status_sentence(files, internet, agents,
-                                       kai_wall_paused("storage", (long long)time(NULL)) != 0,
-                                       line, sizeof line));
-    if (internet < 0) printf("Internet: not verified (no fresh heartbeat from the network extension)\n");
-    printf("\n");
-    return cmd_doctor();
-}
-
-static int cmd_doctor(void) {
-    char err[256];
-    kai_policy *p = kai_policy_load(NULL, err, sizeof err);
-    if (!p) { printf("policy: ERROR — %s\n", err); return 1; }
-    printf("policy: OK (source: %s)\n", kai_policy_source(p));
-    kai_policy_free(p);
-
-    char *cc = kai_expand_home("~/.claude/settings.json");
-    char *cu = kai_expand_home("~/.cursor/hooks.json");
-    size_t n;
-    char *s;
-    s = kai_read_file(cc, 4 * 1024 * 1024, &n);
-    printf("claude hooks: %s\n", (s && strstr(s, "hook claude")) ? "installed" : "not installed");
-    free(s);
-    s = kai_read_file(cu, 4 * 1024 * 1024, &n);
-    printf("cursor hooks: %s\n", (s && strstr(s, "hook cursor")) ? "installed" : "not installed");
-    free(s);
-    char *cx = kai_codex_hooks_path();
-    s = kai_read_file(cx, 4 * 1024 * 1024, &n);
-    printf("codex hooks: %s\n", (s && strstr(s, "hook codex")) ? "installed" : "not installed");
-    free(s);
-    free(cc); free(cu); free(cx);
-
-    int nl; char verr[256];
-    if (kai_audit_verify(NULL, &nl, verr, sizeof verr) == 0)
-        printf("audit log: OK (%d records, chain intact)\n", nl);
-    else
-        printf("audit log: %s\n", nl == 0 ? "empty" : verr);
-    return 0;
-}
+int kai_cmd_status_text(void);   /* status.c: measured state (Release Plan A2) */
+int kai_cmd_doctor(void);
 
 static int cmd_log(int argc, char **argv) {
     const char *sub = argc > 0 ? argv[0] : "tail";
@@ -258,9 +205,9 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "scan") == 0) return cmd_scan(rest, restv);
     if (strcmp(cmd, "redact") == 0) return cmd_redact();
     if (strcmp(cmd, "init") == 0) return cmd_init();
-    if (strcmp(cmd, "doctor") == 0) return cmd_doctor();
+    if (strcmp(cmd, "doctor") == 0) return kai_cmd_doctor();
     if (strcmp(cmd, "status") == 0)
-        return (rest > 0 && strcmp(restv[0], "--json") == 0) ? kai_cmd_status_json() : cmd_status();
+        return (rest > 0 && strcmp(restv[0], "--json") == 0) ? kai_cmd_status_json() : kai_cmd_status_text();
     if (strcmp(cmd, "policy") == 0) return kai_cmd_policy(rest, restv);
     if (strcmp(cmd, "gateway") == 0) return cmd_gateway(rest, restv);
     if (strcmp(cmd, "agent-of") == 0) return cmd_agent_of(rest, restv);
