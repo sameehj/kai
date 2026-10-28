@@ -857,9 +857,8 @@ final class StorageClient {
             // could drive - is blocked, so an agent tree can never obtain it.
             let signer = esString(proc.pointee.signing_id)
             let exe = path(proc.pointee.executable)
-            let isNetworkExt = signer == "io.github.sameehj.kai.network" &&
-                               exe.hasPrefix("/Library/SystemExtensions/")
-            if !isApp && !(isNetworkExt && !write) {
+            let team = esString(proc.pointee.team_id)
+            if kai_approval_key_access(signer, team, exe, write ? 1 : 0) == 0 {   // unit-tested in libkai
                 for p in paths where kai_path_is_approval_key(p) == 1 {
                     dlog("BLOCK \(op) approval-key \(signer) pid \(pid(proc)) \(p)")
                     auditKaiComponent(signer: signer, exe: exe, pid: pid(proc), op: op, path: p,
@@ -879,8 +878,8 @@ final class StorageClient {
                         }
                     } else if kai_path_is_control_store(p) == 1, let under, !under.isEmpty {
                         dlog("BLOCK \(op) kai-signed-under-agent \(under) pid \(pid(proc)) \(p)")
-                        audit(decision: "block", agent: under + " (kai)", op: op, path: p,
-                              why: "kai-control-store")
+                        auditKaiComponent(signer: signer, exe: exe, pid: pid(proc), op: op, path: p,
+                                          why: "kai-control-store", under: under)
                         return false
                     }
                 }
@@ -1001,8 +1000,9 @@ final class StorageClient {
     /// once per component + file every 10 minutes so a retry loop can't flood
     /// Activity.
     private var componentBlocksSeen: [String: Date] = [:]
-    private func auditKaiComponent(signer: String, exe: String, pid: pid_t, op: String, path p: String, why: String) {
-        let key = signer + "|" + exe + "|" + p
+    private func auditKaiComponent(signer: String, exe: String, pid: pid_t, op: String, path p: String,
+                                   why: String, under: String = "") {
+        let key = signer + "|" + exe + "|" + p + "|" + why + "|" + under
         lock.lock()
         if let t = componentBlocksSeen[key], Date().timeIntervalSince(t) < 600 { lock.unlock(); return }
         if componentBlocksSeen.count > 1024 { componentBlocksSeen.removeAll() }
@@ -1017,7 +1017,8 @@ final class StorageClient {
         case "kai": name = "kai command-line tool"
         default: name = "Kai component \(signer.isEmpty ? exe : signer)"
         }
-        audit(decision: "block", agent: "\(name) (pid \(pid))", op: op, path: p, why: why)
+        audit(decision: "block", agent: "\(name)\(under.isEmpty ? "" : " run by \(under)") (pid \(pid))",
+              op: op, path: p, why: why)
     }
 
     // MARK: console user + audit

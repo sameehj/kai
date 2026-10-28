@@ -15,7 +15,7 @@ import ServiceManagement
 import os
 
 enum ControlServiceAgent {
-    static let plistName = "io.github.sameehj.kai.control.plist"
+    static let plistName = "io.github.sameehj.kai.controlservice.plist"
     private static let log = Logger(subsystem: "io.github.sameehj.kai", category: "control")
 
     /// Called only by the release instance (/Applications/Kai.app). Always

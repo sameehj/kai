@@ -3,14 +3,14 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>io.github.sameehj.kai.control</string>
+  <string>io.github.sameehj.kai.controlservice</string>
   <!-- The app itself hosts the listener; launchd launches it on demand and
        routes the Mach service to the instance that checks the listener in. -->
   <key>BundleProgram</key>
   <string>Contents/MacOS/Kai</string>
   <key>MachServices</key>
   <dict>
-    <key>io.github.sameehj.kai.control</key>
+    <key>io.github.sameehj.kai.controlservice</key>
     <true/>
   </dict>
   <key>AssociatedBundleIdentifiers</key>

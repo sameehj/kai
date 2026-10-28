@@ -237,8 +237,11 @@ int kai_path_is_approval_key(const char *path);
 
 /* ---- the one authenticated control path (v1 Step 3) ----
  * The signed Kai app hosts an XPC Mach service; it is the only writer of the
- * policy store. The `kai` CLI is a client. */
-#define KAI_CONTROL_MACH_NAME "io.github.sameehj.kai.control"
+ * policy store. The `kai` CLI is a client. The name is also the LaunchAgent
+ * label. (Renamed from ".control" on 2026-10-28: macOS kept that registration
+ * pointing at a deleted build/Kai.app copy and wouldn't let it go; a new name
+ * gets a fresh registration for /Applications/Kai.app.) */
+#define KAI_CONTROL_MACH_NAME "io.github.sameehj.kai.controlservice"
 /* CLI side: send a write command ("policy"/"grant" + argv) to the app's service
  * and relay its message. Returns the service's exit code, or non-zero with a
  * clear message if the app isn't running. Never writes the store itself. */
@@ -403,6 +406,9 @@ int kai_pause_state(const char *sid, long long now);
  * only it hosts the control service. */
 #define KAI_RELEASE_TEAM "KD446VDTM2"
 int kai_app_is_release(const char *bundle_path, const char *team);
+/* May this Kai-signed process open the approval key? (exact signing id + Team
+ * ID + location; the app r/w, the network extension read-only, nothing else) */
+int kai_approval_key_access(const char *signing_id, const char *team, const char *exe, int write);
 /* Exclusive single-instance lock; fd to keep open, or -1 (held / can't open). */
 int kai_app_lock_acquire(const char *path);
 /* Anything paused (Kai or any session)? For the menu-bar icon. */

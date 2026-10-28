@@ -875,6 +875,20 @@ private struct ActivityPage: View {
         }
     }
 
+    /// Identical decisions (same who, what, rule and target) collapse into ONE
+    /// row with a count - a component retrying the same blocked open becomes
+    /// "×956", not 956 rows. The newest one represents the group.
+    private var grouped: [(event: AuditEvent, count: Int)] {
+        var order: [String] = []
+        var groups: [String: (event: AuditEvent, count: Int)] = [:]
+        for e in shown {
+            let k = "\(e.agentName)|\(e.decision)|\(e.rule)|\(e.excerpt ?? "")|\(e.detail)"
+            if let g = groups[k] { groups[k] = (g.event, g.count + 1) }
+            else { groups[k] = (e, 1); order.append(k) }
+        }
+        return order.compactMap { groups[$0] }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             PageHeader(icon: "waveform.path.ecg", title: "Activity",
@@ -915,8 +929,10 @@ private struct ActivityPage: View {
                 Text(filter == "network" ? "No connections noticed yet." : "No blocks, warnings or noticed hosts yet.")
                     .font(.system(size: 13)).foregroundStyle(Theme.muted)
             }
-            ForEach(shown.prefix(150)) { e in
-                ActivityRow(event: e, followUp: model.followUp(for: e), expanded: expanded.contains(e.id)) {
+            ForEach(grouped.prefix(150), id: \.event.id) { g in
+                let e = g.event
+                ActivityRow(event: e, followUp: model.followUp(for: e), expanded: expanded.contains(e.id),
+                            count: g.count) {
                     if expanded.contains(e.id) { expanded.remove(e.id) } else { expanded.insert(e.id) }
                 }
             }
@@ -931,6 +947,7 @@ private struct ActivityRow: View {
     let event: AuditEvent
     let followUp: AuditEvent?
     let expanded: Bool
+    var count: Int = 1
     let toggle: () -> Void
     @State private var report: ReportInfo?
 
@@ -982,6 +999,12 @@ private struct ActivityRow: View {
             Text(event.verb).font(.system(size: 13, weight: .semibold))
             + Text(" · \(event.agentName)").font(.system(size: 13))
             + Text(event.actionLabel.map { " · \($0)" } ?? "").font(.system(size: 13)).foregroundColor(Theme.muted)
+            if count > 1 {
+                Text("×\(count)").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ink)
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(Theme.muted, in: Capsule())
+                    .help("\(count) identical records; the latest is shown")
+            }
             Spacer()
             if let d = event.date { Text(ago(d)).font(.system(size: 11)).foregroundStyle(Theme.muted) }
             Image(systemName: expanded ? "chevron.up" : "chevron.down")

@@ -1894,6 +1894,48 @@ static void test_endpoint_grants(void) {
     char cmd[700]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
 }
 
+/* Who may open the approval key (the grant-signing secret). The storage wall
+ * calls exactly this function. Values are the real signing identities
+ * (codesign -dv): app io.github.sameehj.kai, network extension
+ * io.github.sameehj.kai.network, CLI "kai", all Team KD446VDTM2. */
+static void test_approval_key_access(void) {
+    printf("approval key: app r/w, network extension read-only, nothing else\n");
+    const char *T = "KD446VDTM2";
+    const char *NETX = "/Library/SystemExtensions/296C8CE4-3AE3-499A-89CB-DA286EF6BE62/"
+                       "io.github.sameehj.kai.network.systemextension/Contents/MacOS/io.github.sameehj.kai.network";
+    CHECK(kai_approval_key_access("io.github.sameehj.kai.network", T, NETX, 0) == 1,
+          "network extension (exact signing id + Team ID, installed) may READ it");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai.network", T, NETX, 1) == 0,
+          "...but never write it");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai.network", "OTHERTEAM1", NETX, 0) == 0,
+          "same signing id, another Team ID: denied");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai.network", "", NETX, 0) == 0,
+          "same signing id, unsigned (no Team ID): denied");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai.network", T, "/tmp/io.github.sameehj.kai.network", 0) == 0,
+          "same identity, not an installed system extension: denied");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai.network.evil", T, NETX, 0) == 0,
+          "a signing id that only STARTS with the extension's: denied");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai.networ", T, NETX, 0) == 0,
+          "a signing id that is a prefix of the extension's: denied");
+    /* The kai CLI has the same Team ID; an agent can run it. Denied, read or
+     * write, wherever it runs (the decision doesn't depend on the caller's
+     * ancestry, so "inside an agent" is covered - and the live check below
+     * runs it inside one). */
+    CHECK(kai_approval_key_access("kai", T, "/Applications/Kai.app/Contents/Resources/kai", 0) == 0,
+          "the kai CLI (same Team ID) may NOT read it");
+    CHECK(kai_approval_key_access("kai", T, "/Applications/Kai.app/Contents/Resources/kai", 1) == 0,
+          "the kai CLI may NOT write it");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai", T, "/Applications/Kai.app/Contents/MacOS/Kai", 0) == 1 &&
+          kai_approval_key_access("io.github.sameehj.kai", T, "/Applications/Kai.app/Contents/MacOS/Kai", 1) == 1,
+          "the installed app reads and writes it");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai", T, "/Users/u/kai/build/Kai.app/Contents/MacOS/Kai", 0) == 0,
+          "a copy of the app elsewhere: denied");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai.storage", T, "/Library/SystemExtensions/x/io.github.sameehj.kai.storage", 0) == 0,
+          "the storage extension doesn't need it: denied");
+    CHECK(kai_approval_key_access(NULL, T, NETX, 0) == 0 && kai_approval_key_access("io.github.sameehj.kai.network", NULL, NETX, 0) == 0 &&
+          kai_approval_key_access("io.github.sameehj.kai.network", T, NULL, 0) == 0, "missing fields: denied");
+}
+
 static void test_control_service(void) {
     printf("one control path: service apply (Step 3)\n");
     char err[256], msg[600];
@@ -2215,6 +2257,7 @@ int main(void) {
     test_pause_state();
     test_one_kai();
     test_endpoint_grants();
+    test_approval_key_access();
     test_grant_tiers();
     test_session_pause();
     test_enforcement_labels();

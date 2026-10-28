@@ -527,6 +527,22 @@ int kai_app_lock_acquire(const char *path) {
     return fd;
 }
 
+/* Who may open the approval key (the grant-signing secret). The storage wall
+ * asks this for every Kai-signed process. Exact signing identifier + Team ID +
+ * where it runs from:
+ *   the installed app (/Applications/Kai.app)         read + write
+ *   the network extension (installed system extension) read only - it verifies
+ *                                                      endpoint grants
+ *   anything else, incl. the `kai` CLI an agent can run  denied */
+int kai_approval_key_access(const char *signing_id, const char *team, const char *exe, int write) {
+    if (!signing_id || !team || !exe || strcmp(team, KAI_RELEASE_TEAM) != 0) return 0;
+    if (!strcmp(signing_id, "io.github.sameehj.kai"))
+        return !strcmp(exe, "/Applications/Kai.app/Contents/MacOS/Kai");
+    if (!strcmp(signing_id, "io.github.sameehj.kai.network"))
+        return !write && !strncmp(exe, "/Library/SystemExtensions/", 26);
+    return 0;
+}
+
 int kai_pause_state(const char *sid, long long now) {
     return kai_pause_state_at("/tmp/kai-storage-health.json", 0, sid, now);
 }

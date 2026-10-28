@@ -171,7 +171,7 @@ targets:
           # looks for it (Contents/Library/LaunchAgents).
           la="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchAgents"
           mkdir -p "$la"
-          cp "$SRCROOT/Sources/LaunchAgents/io.github.sameehj.kai.control.plist" "$la/"
+          cp "$SRCROOT/Sources/LaunchAgents/io.github.sameehj.kai.controlservice.plist" "$la/"
           cp "$SRCROOT/../../integrations/browser/icons/"*.png "$ext/icons/"
           if [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
             codesign --force --options runtime --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$dest"

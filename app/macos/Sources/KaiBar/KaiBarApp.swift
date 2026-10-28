@@ -48,7 +48,7 @@ enum KaiInstance {
     /// That one must NOT hand over to the menu-bar instance - it's the only one
     /// that can check the service in - and shows no menu-bar icon.
     static let isControlAgent: Bool =
-        ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] == "io.github.sameehj.kai.control"
+        ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] == KAI_CONTROL_MACH_NAME
 
     static func ownTeamID() -> String {
         var code: SecCode?
