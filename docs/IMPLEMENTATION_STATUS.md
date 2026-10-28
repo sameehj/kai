@@ -7,6 +7,26 @@ missing. Produced from a read-only audit of the source (v `0.1.0`); every claim
 is tied to code. **A feature existing in code is not a security guarantee** —
 the status column says how far each one is actually established.
 
+## Update — PR #2 (`fix/ux-review-phase-a`, 2026-10-28)
+
+Sections below predate this branch where they say the storage wall or the
+approval UI are unbuilt or not live; this is what changed (details in the PR).
+
+| Area | Now | Status |
+| --- | --- | --- |
+| Files (storage wall) | Enforcing in Block on a development-signed Mac; agents may use their own working files (`kai_agent_own_state`); every block gets a decision card | **V live** on this Mac (live check 1); unit-tested |
+| Internet (network wall) | Status from a root-owned, verified heartbeat in the app-group container; never inferred from the policy | **V live** (heartbeat verified) |
+| Approvals UI | Decision cards (Ask / Touch ID / Always protected), session permissions, Revoke, break-glass writes honored | compile + unit; card flow **not yet live-checked** (live check 2) |
+| Sessions | One session id (Kai's, from the registry) for pause, activity, permissions and topics; working / idle / ended; IDE apps as one row | **V live** for the list; unit-tested |
+| Pause | Per session and global, shown as Pausing… until the wall's heartbeat confirms; hooks and wall read the same marker | unit-tested; live check pending |
+| One Kai | Second copy hands over and quits; lock backstop; only `/Applications/Kai.app` with the release signature hosts the control service | unit-tested; live check pending |
+| CLI status | `kai status` leads with the one status sentence (verified walls, working sessions) | **V** |
+| Tests inside an agent | Hook-settings cases skip with "needs a non-agent shell" | **V** |
+
+Still open: DNS (port 53) always allowed (`docs/ESCAPES.md`), the S8
+three-session acceptance run, MCP approval live run, signed XPC
+registration live run, and the browser AI-chats live run.
+
 Companion docs: `docs/WALLS.md` (wall design), `docs/THREAT_MODEL.md`,
 `docs/SECURITY-VALIDATION.md`, `docs/ESCAPES.md` (known bypasses),
 `docs/SCOPED_APPROVALS.md` (the approvals design + its own Phase-0 audit),
@@ -163,7 +183,7 @@ Self-labelled **experimental / developer preview**.
 |---|---|---|
 | Surface: init, hook, install/uninstall, scan, redact, log, policy, status, gateway, agent-of, sni, report, storaged, version | V | `main.c:211-241` |
 | `status --json`: policy + per-agent (installed/detected/working via live deny-probe) + chrome ping + audit intact | V / U (probes) | `manage.c:81-151`, `health.c` |
-| **No network/storage wall status in CLI** (app-only) | M | §9 |
+| Wall status in the CLI: `kai status` leads with the status sentence from the walls' verified heartbeats; `kai status --json` adds `verified` per wall | V (PR #2) | `main.c cmd_status`, `session.c kai_wall_observed_level` |
 | `report <id>`: writes a local Markdown file + prints a GitHub issue URL; **nothing sent until the user opens it** | V | `report.c:172-268` |
 | `policy set/add/remove/show` with parse-before-write + built-in-rule exemption guard | V | `manage.c` |
 | `storaged`: dev monitor via `eslogger`, **never blocks** | V (monitor) | `storaged.c` |
@@ -186,8 +206,8 @@ Self-labelled **experimental / developer preview**.
 | **M0 grant engine**: HMAC-signed grants, JSON store, load, match, `kai_storage_decide` gate; builtin paths never grantable; identity bound to pid+pidversion; enforcement-time expiry; exact realpath resource; weak-identity→one-shot | **V (offline, this change)** | 20 unit tests pass |
 | M1 CLI `kai grant list/create/revoke` (create = unsigned, not honored) | **V — C-unit + smoke** | — |
 | M2 approval store (rwlock, generations, debounced reload, immediate revoke, atomic one-shot) | **V — C-unit-tested** | incl. 16-thread concurrency + perf |
-| M4 enforcement wiring (`StorageClient`, enforce-gated; async pending + deny; reload) | **compile-verified** (sysext), NOT live | — |
-| M3 approval UI (`approval.key` gen, in-process sign on click, Deny/Allow-once/session, Active grants/Revoke) | **compile-verified** (app), NOT live | — |
+| M4 enforcement wiring (`StorageClient`, enforce-gated; async pending + deny; reload) | **V live** (Block enforcing on a dev-signed Mac, PR #2) | live check 1 |
+| M3 approval UI (`approval.key` gen, in-process sign on click, decision cards, permissions/Revoke) | compile + unit; card approval **not yet live-checked** | live check 2 |
 | M5 live validation | M — human-gated, unstarted | — |
 
 Audit of M0–M1 fixed a real one-shot double-consume bug (now an in-memory
@@ -235,9 +255,10 @@ signing path. Nothing here is live-enforced.
 - **Opt-in / experimental:** network wall (verified in log mode; block has
   documented gaps), AI gateway (manual, request-only), browser extension
   (unpublished).
-- **Gated / off by default:** storage wall (Apple entitlement pending; off by
-  default) — the richest recent work (v12, profiler) but not shipping-enforced.
-- **In progress:** Scoped Approvals (M0 engine landed; UI/CLI/live wiring next).
+- **Gated for distribution:** storage wall (Files) — enforcing live on
+  development builds; shipping to other Macs needs Apple's Endpoint Security
+  entitlement.
+- **In progress:** Scoped Approvals live validation (S8 three-session run).
 
 *Generated from a source audit; update the status columns as live validation
 and milestones land. Nothing in producing this document changed enforcement
