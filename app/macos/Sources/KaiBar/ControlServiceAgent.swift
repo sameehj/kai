@@ -18,18 +18,23 @@ enum ControlServiceAgent {
     static let plistName = "io.github.sameehj.kai.control.plist"
     private static let log = Logger(subsystem: "io.github.sameehj.kai", category: "control")
 
+    /// Called only by the release instance (/Applications/Kai.app). Always
+    /// re-registers, so the service points at THIS app: any other copy that
+    /// registered it (live: an old build/Kai.app had taken it, launchd kept
+    /// failing to start it, and every `kai policy` call hung) is replaced.
     static func registerIfNeeded() {
         guard #available(macOS 13.0, *) else { return }
         let svc = SMAppService.agent(plistName: plistName)
-        guard svc.status != .enabled else { return }
-        do {
-            try svc.register()
-            log.info("control-service agent registered")
-        } catch {
-            // Non-fatal: the app UI still writes policy and grants in-process.
-            // Only the CLI -> service path needs the agent, and the CLI reports a
-            // clear "open Kai" message if it can't reach the service.
-            log.error("control agent register failed: \(error.localizedDescription, privacy: .public)")
+        svc.unregister { _ in
+            do {
+                try svc.register()
+                log.info("control-service agent registered to the installed app")
+            } catch {
+                // Non-fatal: the app UI still writes policy and grants in-process.
+                // Only the CLI -> service path needs the agent, and the CLI reports a
+                // clear "open Kai" message if it can't reach the service.
+                log.error("control agent register failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 }

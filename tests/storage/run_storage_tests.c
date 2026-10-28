@@ -1846,6 +1846,54 @@ static void test_one_kai(void) {
     char rd[320]; snprintf(rd, sizeof rd, "%s/run", dir); rmdir(rd); rmdir(dir);
 }
 
+/* SECURITY (live, Oct 28): the network wall checked endpoint grants with the
+ * FILE decision, whose first step allows anything that isn't a protected path -
+ * and a hostname never is. So every non-allowlisted destination was "allowed by
+ * grant" with no grant at all, since Oct 23. An endpoint is allowed only by a
+ * real, signed CONNECT grant for that exact destination. */
+static void test_endpoint_grants(void) {
+    printf("endpoint grants: no grant = no connection (security fix)\n");
+    char dir[] = "/tmp/kai-egrantXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char gdir[600], polp[600];
+    snprintf(gdir, sizeof gdir, "%s/grants", dir);
+    snprintf(polp, sizeof polp, "%s/policy", dir);
+    mkdir(gdir, 0700);
+    FILE *pf = fopen(polp, "w");
+    if (pf) { fputs("egress block\n", pf); fclose(pf); }
+    const long long FUTURE = (long long)time(NULL) + 3600;
+    kai_grant_subject sub = { .pid = 100, .pidversion = 5, .agent = "claude", .strength = KAI_ID_STRONG };
+    char why[256];
+
+    kai_approval_store *s = kai_approval_store_open(polp, gdir, GKEY, GKEYLEN, 0);
+    CHECK(s != NULL, "store opens");
+    CHECK(kai_approval_store_decide_endpoint(s, "example.com", &sub, 1000, why, sizeof why) == 0,
+          "no grant: a destination is NOT allowed");
+    CHECK(kai_approval_store_decide_endpoint(s, "192.178.223.138:0", &sub, 1000, why, sizeof why) == 0,
+          "no grant: a raw address is NOT allowed");
+    kai_approval_store_close(s);
+
+    kai_grant g = mkgrant("example.com", KAI_OP_CONNECT, KAI_GRANT_PROCESS, KAI_ID_STRONG, 100, 5, FUTURE);
+    write_grant_file(gdir, &g);
+    s = kai_approval_store_open(polp, gdir, GKEY, GKEYLEN, 0);
+    CHECK(kai_approval_store_decide_endpoint(s, "example.com", &sub, 1000, why, sizeof why) == 1,
+          "a signed connect grant for that destination allows it");
+    CHECK(kai_approval_store_decide_endpoint(s, "evil.example.net", &sub, 1000, why, sizeof why) == 0,
+          "...and only that destination");
+    kai_grant_subject other = sub; other.pid = 101;
+    CHECK(kai_approval_store_decide_endpoint(s, "example.com", &other, 1000, why, sizeof why) == 0,
+          "...and only for the process (or session) it was granted to");
+    kai_approval_store_close(s);
+
+    kai_grant r = mkgrant("example.org", KAI_OP_READ, KAI_GRANT_PROCESS, KAI_ID_STRONG, 100, 5, FUTURE);
+    write_grant_file(gdir, &r);
+    s = kai_approval_store_open(polp, gdir, GKEY, GKEYLEN, 0);
+    CHECK(kai_approval_store_decide_endpoint(s, "example.org", &sub, 1000, why, sizeof why) == 0,
+          "a READ grant is not a connect grant");
+    kai_approval_store_close(s);
+    char cmd[700]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
 static void test_control_service(void) {
     printf("one control path: service apply (Step 3)\n");
     char err[256], msg[600];
@@ -2166,6 +2214,7 @@ int main(void) {
     test_one_session_identity();
     test_pause_state();
     test_one_kai();
+    test_endpoint_grants();
     test_grant_tiers();
     test_session_pause();
     test_enforcement_labels();

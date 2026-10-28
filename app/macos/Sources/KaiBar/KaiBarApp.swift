@@ -12,7 +12,9 @@ struct KaiBarApp: App {
     @StateObject private var storage = StorageWall()
 
     var body: some Scene {
-        MenuBarExtra {
+        // The launchd-started control-service instance runs with no icon: one
+        // visible Kai, plus the background service.
+        MenuBarExtra(isInserted: .constant(!KaiInstance.isControlAgent)) {
             MenuView()
                 .environmentObject(model)
                 .environmentObject(wall)
@@ -41,6 +43,13 @@ enum KaiInstance {
     /// Only it hosts the control service; any other copy is a DEV copy.
     static let isRelease: Bool = kai_app_is_release(Bundle.main.bundlePath, ownTeamID()) == 1
 
+    /// launchd starts a separate instance of the app to host the control
+    /// service (its LaunchAgent; launchd sets XPC_SERVICE_NAME to the label).
+    /// That one must NOT hand over to the menu-bar instance - it's the only one
+    /// that can check the service in - and shows no menu-bar icon.
+    static let isControlAgent: Bool =
+        ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] == "io.github.sameehj.kai.control"
+
     static func ownTeamID() -> String {
         var code: SecCode?
         guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return "" }
@@ -57,20 +66,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lockFD: Int32 = -1
 
     func applicationWillFinishLaunching(_ notification: Notification) {
-        // A second copy of the same app hands over to the first and quits.
-        let me = NSRunningApplication.current
-        if let id = Bundle.main.bundleIdentifier,
-           let first = NSRunningApplication.runningApplications(withBundleIdentifier: id)
-               .first(where: { $0.processIdentifier != me.processIdentifier }) {
-            first.activate()
-            exit(0)
-        }
-        // Backstop for any other copy (another bundle id, a race): an exclusive
-        // lock in Kai's home, held for the app's life. A copy that can't take
-        // it (another Kai holds it) or can't open it doesn't run.
+        if KaiInstance.isControlAgent { return }   // the background service, not a second UI
+        // One menu-bar Kai: an exclusive lock in Kai's home, held for the app's
+        // life, taken only by menu-bar instances (never the launchd-started
+        // control service, which is also this app). A second copy that can't
+        // take it activates the running one and quits.
         let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
         lockFD = kai_app_lock_acquire(home + "/.kai/run/app.lock")
-        if lockFD < 0 { exit(0) }
+        if lockFD < 0 {
+            let me = NSRunningApplication.current
+            if let id = Bundle.main.bundleIdentifier {
+                NSRunningApplication.runningApplications(withBundleIdentifier: id)
+                    .filter { $0.processIdentifier != me.processIdentifier }
+                    .forEach { $0.activate() }
+            }
+            exit(0)
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

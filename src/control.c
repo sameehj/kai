@@ -188,8 +188,23 @@ int kai_control_request(const char *op, int argc, char **argv, char *msg, size_t
         xpc_array_set_string(arr, XPC_ARRAY_APPEND, argv[i] ? argv[i] : "");
     xpc_dictionary_set_value(req, "argv", arr);
 
-    xpc_object_t reply = xpc_connection_send_message_with_reply_sync(conn, req);
+    /* Never hang: if the service doesn't answer in 10 s (launchd can't start
+     * it - e.g. an old copy of Kai stole its registration), say so. */
+    __block xpc_object_t reply = NULL;
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    xpc_connection_send_message_with_reply(conn, req, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
+                                           ^(xpc_object_t r) { reply = xpc_retain(r); dispatch_semaphore_signal(done); });
+    int timed_out = dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 10LL * NSEC_PER_SEC)) != 0;
     int rc = 70;
+    if (timed_out) {
+        if (msg) kai_strlcpy(msg,
+                             "Kai's control service didn't answer. Open Kai (the installed app in "
+                             "/Applications) - it re-registers the service - then try again.",
+                             msglen);
+        xpc_connection_cancel(conn);           /* the late reply, if any, is dropped */
+        xpc_release(arr); xpc_release(req);
+        return rc;
+    }
     if (reply && xpc_get_type(reply) == XPC_TYPE_DICTIONARY) {
         rc = (int)xpc_dictionary_get_int64(reply, "rc");
         const char *m = xpc_dictionary_get_string(reply, "message");

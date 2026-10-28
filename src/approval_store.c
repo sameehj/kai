@@ -260,6 +260,28 @@ int kai_approval_store_decide(kai_approval_store *s, const char *resolved_path,
     return allow;
 }
 
+/* SECURITY: endpoints (network destinations) are decided ONLY by a matching,
+ * signed CONNECT grant. Never by kai_approval_store_decide: its first step
+ * allows anything that isn't a protected FILE path, and a hostname never is,
+ * so every destination passed as "granted" (live, Oct 28; since Oct 23). */
+int kai_approval_store_decide_endpoint(kai_approval_store *s, const char *dest,
+                                       const kai_grant_subject *subj, long long now,
+                                       char *why, size_t whylen) {
+    if (why && whylen) why[0] = '\0';
+    if (!s || !dest || !*dest || !subj) return 0;
+    pthread_rwlock_rdlock(&s->lock);
+    int allow = 0;
+    int idx = kai_grant_match(s->grants, s->ngrants, subj, dest, KAI_OP_CONNECT, now,
+                              s->keylen ? s->key : NULL, s->keylen);
+    if (idx >= 0) {
+        const kai_grant *g = &s->grants[idx];
+        allow = g->scope == KAI_GRANT_ONESHOT ? consume_oneshot(s, idx) : 1;
+        if (allow && why) kai_strlcpy(why, "scoped egress grant", whylen);
+    }
+    pthread_rwlock_unlock(&s->lock);
+    return allow;
+}
+
 int kai_approval_store_protected(kai_approval_store *s, const char *path,
                                  const char *cwd, char *why, size_t whylen) {
     if (!s) return 0;

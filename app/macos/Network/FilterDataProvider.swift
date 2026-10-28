@@ -374,8 +374,10 @@ final class Engine {
                                          agent: ap, strength: 1 /* medium */,
                                          session_id: sp, project: pp)
             var why = [CChar](repeating: 0, count: 256)
-            ok = kai_approval_store_decide(gs, dest, nil, Int32(KAI_OP_CONNECT.rawValue), &subj,
-                                           Int64(Date().timeIntervalSince1970), &why, why.count) == 1
+            // Endpoint decision only: a signed CONNECT grant for this exact
+            // destination. (The file decision allowed every hostname.)
+            ok = kai_approval_store_decide_endpoint(gs, dest, &subj,
+                                                    Int64(Date().timeIntervalSince1970), &why, why.count) == 1
         }}}
         return ok
     }

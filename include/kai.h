@@ -654,6 +654,10 @@ int kai_approval_store_revoke(kai_approval_store *s, const char *id_prefix);
  * lock. Lets a caller make the "is this protected / which rule" check against
  * the same coherent, reloaded snapshot the grant decision uses, instead of a
  * separately-loaded policy. Returns 1 protected (fills why), else 0. */
+/* A network destination is allowed only by a matching, signed CONNECT grant. */
+int kai_approval_store_decide_endpoint(kai_approval_store *s, const char *dest,
+                                       const kai_grant_subject *subj, long long now,
+                                       char *why, size_t whylen);
 int kai_approval_store_own_state_exempt(kai_approval_store *s, const char *agent,
                                         const char *path, const char *cwd, const char *rule);
 int kai_approval_store_protected(kai_approval_store *s, const char *path,
