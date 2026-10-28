@@ -370,6 +370,22 @@ static char *command_text(const cJSON *ti) {
     const cJSON *c = cJSON_GetObjectItemCaseSensitive(ti, "command");
     if (!c) c = cJSON_GetObjectItemCaseSensitive(ti, "cmd");
     if (cJSON_IsString(c) && c->valuestring) return strdup(c->valuestring);
+    /* Codex sends ["bash","-lc","<script>"]: check the SCRIPT, which is what
+     * runs. Joined as "bash -lc curl …", rules anchored at a pipeline's start
+     * (uploads) never matched (A1 coverage run found Codex uploads allowed). */
+    if (cJSON_IsArray(c) && cJSON_GetArraySize(c) >= 3) {
+        const cJSON *a0 = cJSON_GetArrayItem(c, 0), *a1 = cJSON_GetArrayItem(c, 1),
+                    *a2 = cJSON_GetArrayItem(c, 2);
+        if (cJSON_IsString(a0) && cJSON_IsString(a1) && cJSON_IsString(a2)) {
+            const char *sh = strrchr(a0->valuestring, '/');
+            sh = sh ? sh + 1 : a0->valuestring;
+            int is_shell = !strcmp(sh, "sh") || !strcmp(sh, "bash") || !strcmp(sh, "zsh") ||
+                           !strcmp(sh, "dash") || !strcmp(sh, "ksh");
+            const char *f = a1->valuestring;
+            int is_c = f[0] == '-' && f[1] && strchr(f + 1, 'c') && strspn(f + 1, "lic") == strlen(f + 1);
+            if (is_shell && is_c) return strdup(a2->valuestring);
+        }
+    }
     if (cJSON_IsArray(c)) {
         sb_t b;
         sb_init(&b);

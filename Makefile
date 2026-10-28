@@ -80,6 +80,7 @@ test: kai
 	@if sh tests/hook_writes_ok.sh; then sh tests/browser/run_native_tests.sh tests/cli/kai-test; \
 	 else echo "browser tests: skipped - needs a non-agent shell (Files protection blocks agent hook settings)"; fi
 	python3 -I tests/corpus/run_corpus.py ./kai
+	python3 -I tests/coverage/run_coverage.py ./kai
 	@if sh tests/hook_writes_ok.sh; then python3 -I tests/escape/run_escape.py ./kai; \
 	 else echo "escape suite: skipped - needs a non-agent shell (Files protection blocks agent hook settings)"; fi
 
