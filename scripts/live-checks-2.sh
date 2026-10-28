@@ -21,6 +21,13 @@ bad()  { echo "  FAIL  $1"; fail=$((fail + 1)); }
 ask()  { printf '  -> %s [y/n] ' "$1"; read -r a </dev/tty; [ "$a" = y ]; }
 wait_enter() { printf '  -> %s  [Enter when done] ' "$1"; read -r _ </dev/tty; }
 
+# The checks wait for your clicks: they need a terminal to read Enter / y/n
+# from. Claude Code's `!` gives none, so stop instead of running past them.
+if ! ( : </dev/tty ) 2>/dev/null; then
+    echo "These checks wait for your clicks, so they need a real terminal, and"
+    echo "Claude Code's '!' has none. Ask Claude to drive them step by step instead."
+    exit 2
+fi
 [ -x "$KAI" ] || { echo "Kai isn't installed at /Applications/Kai.app"; exit 2; }
 "$KAI" agent-of $$ >/dev/null 2>&1 || { echo "Run this inside Claude Code:  ! sh $0"; exit 2; }
 
@@ -66,8 +73,9 @@ check3() {
     n=$(pgrep -x Kai | wc -l | tr -d ' ')
     [ "$n" = 1 ] && ok "launching $COPY left exactly one Kai running" || bad "$n Kai processes after launching a second copy"
     ask "Is there exactly one Kai icon in the menu bar?" && ok "one menu-bar icon" || bad "more than one icon"
-    ask "Does Activity show 'claude launched a Kai app: …build/Kai.app… (not the installed one)'?" \
-        && ok "the agent launch is logged" || bad "the agent launch wasn't logged"
+    sleep 1
+    "$KAI" log 2>/dev/null | tail -50 | grep -a -q "launched a Kai app" \
+        && ok "Activity logs the agent's launch of a Kai app" || bad "the agent launch wasn't logged"
     OLD="$HERE/../../../build/Kai.app"
     [ -d "$OLD" ] && echo "  note: $OLD predates the one-Kai code and can't hand over; delete it: rm -rf '$OLD'"
 }

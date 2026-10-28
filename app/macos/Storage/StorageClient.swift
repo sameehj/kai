@@ -648,18 +648,42 @@ final class StorageClient {
         return result
     }
 
-    /// One Kai: a Kai.app started by an agent (directly, or via `open`, whose
-    /// RESPONSIBLE process is the agent) is logged to Activity.
+    /// An agent running /usr/bin/open on a Kai.app. LaunchServices then starts
+    /// the app with launchd as parent and the app as its own responsible
+    /// process, so the launch itself can't be traced to the agent: remember the
+    /// request for a few seconds instead (live check 3 found this).
+    private var agentOpens: [(at: Date, agent: String)] = []
+    private func noteAgentOpen(_ msg: UnsafePointer<es_message_t>, agent: String) {
+        guard path(msg.pointee.event.exec.target.pointee.executable) == "/usr/bin/open" else { return }
+        var exec = msg.pointee.event.exec
+        let n = es_exec_arg_count(&exec)
+        var mentionsKai = false
+        for i in 0..<n where esString(es_exec_arg(&exec, i)).contains("Kai.app") { mentionsKai = true }
+        guard mentionsKai else { return }
+        lock.lock()
+        agentOpens = agentOpens.filter { Date().timeIntervalSince($0.at) < 10 } + [(Date(), agent)]
+        lock.unlock()
+    }
+
+    /// One Kai: a Kai.app started by an agent - directly, as its responsible
+    /// process, or through `open` (noteAgentOpen) - is logged to Activity.
     private func noteKaiAppLaunch(_ proc: UnsafeMutablePointer<es_process_t>) {
         let exe = path(proc.pointee.executable)
         guard exe.hasSuffix(".app/Contents/MacOS/Kai") else { return }
-        lock.lock(); let pol = policy; lock.unlock()
+        lock.lock()
+        let pol = policy
+        let viaOpen = agentOpens.last(where: { Date().timeIntervalSince($0.at) < 10 })?.agent
+        if viaOpen != nil { agentOpens.removeAll() }
+        lock.unlock()
         var name = [CChar](repeating: 0, count: 64)
         let rp = pidOf(proc.pointee.responsible_audit_token)
-        let byAgent = kai_process_agent(pol, rp, &name, name.count, nil) == 1 ||
-                      kai_process_agent(pol, proc.pointee.ppid, &name, name.count, nil) == 1
-        guard byAgent else { return }
-        let agent = String(cString: name)
+        var agent = viaOpen ?? ""
+        if agent.isEmpty,
+           kai_process_agent(pol, rp, &name, name.count, nil) == 1 ||
+           kai_process_agent(pol, proc.pointee.ppid, &name, name.count, nil) == 1 {
+            agent = String(cString: name)
+        }
+        guard !agent.isEmpty else { return }
         kai_audit("app", "launch", "note", "kai_launched_by_agent",
                   "\(agent) launched a Kai app: \(exe)" +
                   (exe == "/Applications/Kai.app/Contents/MacOS/Kai" ? "" : " (not the installed one; it won't host the control service)"))
@@ -689,6 +713,7 @@ final class StorageClient {
                 if let v, !v.isEmpty {
                     mintSession(target, agent: v)                  // agents get/inherit a session
                     noteActivity(target)                           // a command ran: working
+                    noteAgentOpen(msg, agent: v)                   // `open …Kai.app` (see noteKaiAppLaunch)
                 }
                 #endif
             } else {

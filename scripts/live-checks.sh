@@ -26,6 +26,13 @@ denied() { ! "$@" >/dev/null 2>&1; }   # the command failed (the wall denied it)
 net_mode() { "$KAI" status --json | /usr/bin/python3 -I -c \
     'import json,sys; print(json.load(sys.stdin)["walls"]["configured"]["network"])'; }
 
+# The checks wait for your clicks: they need a terminal to read Enter / y/n
+# from. Claude Code's `!` gives none, so stop instead of running past them.
+if ! ( : </dev/tty ) 2>/dev/null; then
+    echo "These checks wait for your clicks, so they need a real terminal, and"
+    echo "Claude Code's '!' has none. Ask Claude to drive them step by step instead."
+    exit 2
+fi
 [ -x "$KAI" ] || { echo "Kai isn't installed at /Applications/Kai.app"; exit 2; }
 if ! "$KAI" agent-of $$ >/dev/null 2>&1; then
     echo "This shell is not an agent's. Run it inside Claude Code:  ! sh scripts/live-checks.sh"
