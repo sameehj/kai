@@ -25,6 +25,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 int kai_cmd_hook(int argc, char **argv);
 int kai_cmd_install(int argc, char **argv);
@@ -109,15 +111,33 @@ int kai_cmd_doctor(void);
 static int cmd_log(int argc, char **argv) {
     const char *sub = argc > 0 ? argv[0] : "tail";
     if (strcmp(sub, "verify") == 0) {
-        int nl; char err[256];
-        if (kai_audit_verify(NULL, &nl, err, sizeof err) == 0) {
-            printf("OK: %d records, chain intact\n", nl);
-            return 0;
-        }
-        printf("FAIL: %s\n", err);
-        return 1;
+        int nl; char err[256], rerr[256];
+        if (kai_audit_verify(NULL, &nl, err, sizeof err) != 0) { printf("FAIL: %s\n", err); return 1; }
+        int rot = kai_audit_verify_rotation(rerr, sizeof rerr);
+        if (rot < 0) { printf("FAIL: %s\n", rerr); return 1; }
+        printf("OK: %d records, chain intact%s\n", nl, rot > 0 ? "; continues from audit.log.1 (intact)" : "");
+        return 0;
     }
     if (strcmp(sub, "show") == 0) return kai_cmd_log_show(argc - 1, argv + 1);
+    if (strcmp(sub, "export") == 0) {
+        /* A5: the user's own copy - the rotated file (audit.log.1) then the
+         * current one, as JSON lines, after checking the chain; mode 0600. */
+        if (argc < 2) { fprintf(stderr, "usage: kai log export <file>\n"); return 2; }
+        int nl; char err[256];
+        int intact = kai_audit_verify(NULL, &nl, err, sizeof err) == 0;
+        int fd = open(argv[1], O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+        if (fd < 0) { fprintf(stderr, "kai log export: can't create %s (it may already exist)\n", argv[1]); return 1; }
+        char old[1200]; snprintf(old, sizeof old, "%s.1", kai_audit_path());
+        const char *parts[] = {old, kai_audit_path()};
+        for (int i = 0; i < 2; i++) {
+            size_t n = 0; char *t = kai_read_file(parts[i], 256u << 20, &n);
+            if (t) { if (write(fd, t, n) != (ssize_t)n) { close(fd); free(t); return 1; } free(t); }
+        }
+        close(fd);
+        printf("Exported to %s (%d records in the current log, chain %s)\n", argv[1], nl,
+               intact ? "intact" : "BROKEN - see kai log verify");
+        return intact ? 0 : 1;
+    }
     /* tail: the raw records, one JSON object per line */
     size_t n;
     char *txt = kai_read_file(kai_audit_path(), 16 * 1024 * 1024, &n);

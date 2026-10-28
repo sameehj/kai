@@ -55,3 +55,19 @@ The same operations attempted by a live Claude Code session against a dummy fixt
 | A Python script the agent wrote opens `.env` | **Not stopped**: the hook saw `python3 read.py`; the script read the file |
 
 Not covered at all in Preview 1: anything the agent does without a hook event (a script's own file and network access, background processes). OS-level protection (Files, Internet) is in private testing.
+
+## Chats: AI chat sites in Chrome (browser extension)
+
+Manual runs with a dummy key, recorded in `tests/coverage/chats_manual.json`. The extension checks pastes and sends; it does not look at attached files, so an attachment is a known bypass on every site.
+
+| Site | Tested | Paste | Typed + Enter | Send button | Attached file |
+|---|---|---|---|---|---|
+| chatgpt.com | not tested | not tested | not tested | not tested | not checked (known bypass) |
+| claude.ai | not tested | not tested | not tested | not tested | not checked (known bypass) |
+| gemini.google.com | not tested | not tested | not tested | not tested | not checked (known bypass) |
+| chat.deepseek.com | not tested | not tested | not tested | not tested | not checked (known bypass) |
+| www.perplexity.ai | not tested | not tested | not tested | not tested | not checked (known bypass) |
+| copilot.microsoft.com | not tested | not tested | not tested | not tested | not checked (known bypass) |
+| chat.mistral.ai | not tested | not tested | not tested | not tested | not checked (known bypass) |
+| grok.com | not tested | not tested | not tested | not tested | not checked (known bypass) |
+| poe.com | not tested | not tested | not tested | not tested | not checked (known bypass) |

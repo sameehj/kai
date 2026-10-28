@@ -468,6 +468,12 @@ static size_t utf8_floor(const char *s, size_t n) {
     return n;
 }
 
+/* A5: a prompt is never stored in the audit log, not even redacted - only
+ * that there was one, and its length. */
+static void prompt_context(const char *prompt, char *out, size_t outlen) {
+    if (outlen) snprintf(out, outlen, "(prompt, %zu characters - not kept)", prompt ? strlen(prompt) : 0);
+}
+
 static void log_context(const kai_policy *p, const char *text, const char *match,
                         char *out, size_t outlen, char *mout, size_t moutlen) {
     if (outlen) out[0] = '\0';
@@ -592,7 +598,8 @@ static void follow_up(const kai_policy *p, const char *source, const char *sessi
         if (o && cJSON_IsNumber(t) && time(NULL) - (time_t)t->valuedouble <= FOLLOW_UP_SECONDS &&
             !blocked_rule) { /* blocked again: that block is its own record */
             char ctx[KAI_AUDIT_TARGET_MAX], detail[200];
-            log_context(p, raw, NULL, ctx, sizeof ctx, NULL, 0);
+            if (kind == NEXT_PROMPT) prompt_context(raw, ctx, sizeof ctx);
+            else log_context(p, raw, NULL, ctx, sizeof ctx, NULL, 0);
             describe_next(kind, cjstr(o, "tool"), cjstr(o, "target"), tool, ctx, detail, sizeof detail);
             kai_audit_entry e = {source, "AfterBlock", "note", cjstr(o, "rule"), detail,
                                  tool, ctx, NULL, session, cwd};
@@ -1051,7 +1058,8 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
      * An exception the user made is recorded too, so it never acts unseen. */
     char ctx[KAI_AUDIT_TARGET_MAX] = "", mctx[160] = "";
     if (decision != KAI_ACT_NONE || exempted[0]) {
-        log_context(p, subject, match, ctx, sizeof ctx, mctx, sizeof mctx);
+        if (ev && !strcmp(ev, "UserPromptSubmit")) prompt_context(subject, ctx, sizeof ctx);
+        else log_context(p, subject, match, ctx, sizeof ctx, mctx, sizeof mctx);
         kai_audit_entry e = {source, event_label, dec_str, rule, reason, tool, ctx, mctx, session, cwd};
         if (decision == KAI_ACT_NONE) {
             e.decision = "exempt";
@@ -1184,7 +1192,7 @@ static int hook_cursor(const char *json) {
             char *s = cJSON_PrintUnformatted(o);
             printf("%s\n", s); free(s); cJSON_Delete(o);
             char ctx[KAI_AUDIT_TARGET_MAX];
-            log_context(p, prompt, NULL, ctx, sizeof ctx, NULL, 0);
+            prompt_context(prompt, ctx, sizeof ctx);
             kai_audit_entry e = {"cursor", ev, "block", "prompt", sm, NULL, ctx, NULL, session, cwd};
             kai_audit_write(&e);
             follow_up(p, "cursor", session, NEXT_PROMPT, NULL, prompt, cwd, "prompt", ctx);

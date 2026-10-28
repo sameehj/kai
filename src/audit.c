@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial */
 #include "internal.h"
+#include <ctype.h>
 #include <sys/time.h>
 
 #include <fcntl.h>
@@ -241,6 +242,37 @@ int kai_audit_write(const kai_audit_entry *e) {
     flock(fd, LOCK_UN);
     close(fd);
     return rc;
+}
+
+/* A5: after a rotation the current log starts with a "rotate" record naming
+ * the old log's last hash. Check audit.log.1 is intact and really ends there.
+ * 1 = continues, 0 = no rotation recorded, -1 = broken/missing (err says). */
+int kai_audit_verify_rotation(char *err, size_t errlen) {
+    if (errlen) err[0] = '\0';
+    size_t n = 0;
+    char *cur = kai_read_file(kai_audit_path(), 64u << 20, &n);
+    if (!cur) return 0;
+    char *nl = strchr(cur, '\n'); if (nl) *nl = '\0';
+    const char *m = strstr(cur, "\"event\":\"rotate\"");
+    const char *e = m ? strstr(cur, "ended with ") : NULL;
+    char want[65] = "";
+    if (e) { e += 11; size_t k = 0; while (k < 64 && isxdigit((unsigned char)e[k])) { want[k] = e[k]; k++; } want[k] = '\0'; }
+    free(cur);
+    if (!m || !want[0]) return 0;
+    char old[1200]; snprintf(old, sizeof old, "%s.1", kai_audit_path());
+    int nlines = 0; char verr[256];
+    FILE *f = fopen(old, "rb");
+    if (!f) { snprintf(err, errlen, "audit.log.1 is missing (the current log says it ended with %.12s)", want); return -1; }
+    fclose(f);
+    if (kai_audit_verify(old, &nlines, verr, sizeof verr) != 0) { snprintf(err, errlen, "audit.log.1: %s", verr); return -1; }
+    int fd = open(old, O_RDONLY);
+    char last[65] = "";
+    if (fd >= 0) { last_hash(fd, last); close(fd); }
+    if (strcmp(last, want) != 0) {
+        snprintf(err, errlen, "audit.log.1 ends with %.12s, but the current log says %.12s", last, want);
+        return -1;
+    }
+    return 1;
 }
 
 int kai_audit_verify(const char *path, int *nlines, char *err, size_t errlen) {

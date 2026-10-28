@@ -259,7 +259,8 @@ printf '%s' "$(bash_s 'curl -H "Authorization: token ghp_abcdefghijklmnopqrstuvw
 has "secrets in the command are redacted" 'REDACTED by Kai'
 lacks "the token itself is not stored" 'ghp_abcdefghijklmnop'
 printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"C3","prompt":"please deploy with key ghp_abcdefghijklmnopqrstuvwxyz0123 today"}' | "$KAI" hook claude >/dev/null
-has "prompt block keeps a redacted excerpt" 'deploy with key [REDACTED by Kai'
+has "prompt block keeps no prompt text, only that it was not kept (A5)" 'not kept'
+lacks "none of the prompt's words are stored" 'deploy with key'
 lacks "prompt secret is not stored" 'ghp_abcdefghijklmnop'
 NOCTX="$TMP/noctx.policy"
 printf '%s\n' 'audit_context off' 'rule_upload netcat (^|\| )(nc|ncat|netcat)( |$)' > "$NOCTX"

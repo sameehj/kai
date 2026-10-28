@@ -192,3 +192,28 @@ void kai_require_sandbox_home(void) {
         abort();
     }
 }
+
+/* Compare Kai versions: MAJOR.MINOR.PATCH[-preview.N]. A pre-release is older
+ * than its release; numeric parts compare as numbers. <0, 0, >0 like strcmp. */
+int kai_version_cmp(const char *a, const char *b) {
+    long va[4] = {0, 0, 0, -1}, vb[4] = {0, 0, 0, -1};   /* [3] = pre-release no., -1 = none */
+    const char *s[2] = {a ? a : "", b ? b : ""};
+    long *v[2] = {va, vb};
+    for (int k = 0; k < 2; k++) {
+        const char *p = s[k];
+        for (int i = 0; i < 3 && *p; i++) {
+            v[k][i] = strtol(p, (char **)&p, 10);
+            if (*p == '.') p++;
+        }
+        const char *pre = strchr(s[k], '-');
+        if (pre) {
+            const char *dot = strrchr(pre, '.');
+            v[k][3] = dot ? strtol(dot + 1, NULL, 10) : 0;
+        }
+    }
+    for (int i = 0; i < 3; i++) if (va[i] != vb[i]) return va[i] < vb[i] ? -1 : 1;
+    if (va[3] == vb[3]) return 0;
+    if (va[3] < 0) return 1;      /* a is the release, b a pre-release */
+    if (vb[3] < 0) return -1;
+    return va[3] < vb[3] ? -1 : 1;
+}

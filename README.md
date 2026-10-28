@@ -5,14 +5,16 @@
 
   # Kai
 
-  ### Your AI agent needs access to your work. Not your secrets.
+  ### Give AI more work, not more access.
 
-  Kai is an open-source, local-first tool that helps you control what AI coding agents can access and share.
+  Kai Preview watches what Claude Code, Codex and Cursor do and can stop risky actions inside those agents: reading your secrets, sending them out, or pasting them into AI chats.
 
   [Get started](#-get-started) · [How it works](#-how-kai-works) · [Security boundaries](#-what-kai-doesnt-promise) · [Roadmap](#-roadmap)
 
   **macOS + Linux** · **Claude Code + Cursor** · **Codex (preview)** · **Open source**
 </div>
+
+> **This preview is a guardrail, not a sandbox.** Its checks run inside each agent, so a program the agent writes and runs can get around them. See [the coverage table](#-what-preview-1-checks-per-agent) for exactly what's checked. OS-level protection for Files and Internet is in private testing and comes in a later release.
 
 ---
 
@@ -177,7 +179,7 @@ See [`policy/default.policy`](policy/default.policy) for the complete policy gra
 
 ### Review what happened
 
-Kai records its decisions (blocks, redactions, warnings; not the many allowed actions) in a hash-chained audit log that never stores the matched secrets. Each record says what it was about: the tool, a short excerpt of the command, path or prompt with every detected secret replaced by `[REDACTED by Kai: …]`, and the part that matched. After a block, Kai also notes what the agent did next (tried a different command, switched tools, or stopped). Redaction is only as good as the detectors, so `kai policy set audit_context off` keeps just the rule and reason.
+Kai records its decisions (blocks, redactions, warnings; not the many allowed actions) in a hash-chained audit log that never stores the matched secrets. Each record says what it was about: the tool, a short excerpt of the command or path with every detected secret replaced by `[REDACTED by Kai: …]`, and the part that matched. **Prompts are never stored**, not even redacted: a blocked prompt is recorded as "(prompt, N characters - not kept)". The log is readable only by you (mode 600), rotates at its size limit to `audit.log.1` (one old file is kept, so the history is bounded), and `kai log verify` checks the chain. `kai log export <file>` writes your own copy (both files, 600). After a block, Kai also notes what the agent did next (tried a different command, switched tools, or stopped). Redaction is only as good as the detectors, so `kai policy set audit_context off` keeps just the rule and reason.
 
 ```sh
 kai log show          # recent decisions in words, with what the agent did next

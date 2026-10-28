@@ -143,6 +143,7 @@ int kai_cmd_status_text(void) {
     struct stat st;
     int exists = stat(kai_audit_path(), &st) == 0;
     int intact = exists ? kai_audit_verify(NULL, &nl, verr, sizeof verr) == 0 : 1;
+    if (intact && exists && kai_audit_verify_rotation(verr, sizeof verr) < 0) intact = 0;
     if (!exists) printf("%-16s %s\n", "Audit log", "Empty (nothing recorded yet)");
     else if (intact) printf("%-16s Healthy (%d records, chain intact)\n", "Audit log", nl);
     else printf("%-16s BROKEN: %s\n", "Audit log", verr);
@@ -204,7 +205,7 @@ int kai_cmd_doctor(void) {
     int nl = 0; char verr[256] = "";
     struct stat st;
     if (stat(kai_audit_path(), &st) == 0) {
-        if (kai_audit_verify(NULL, &nl, verr, sizeof verr) == 0)
+        if (kai_audit_verify(NULL, &nl, verr, sizeof verr) == 0 && kai_audit_verify_rotation(verr, sizeof verr) >= 0)
             printf("✓ audit log %s: %d records, hash chain intact, mode %o\n", kai_audit_path(), nl,
                    (unsigned)(st.st_mode & 0777));
         else { printf("✗ audit log: %s\n", verr); problems++; }

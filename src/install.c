@@ -8,6 +8,8 @@
 #include "internal.h"
 
 #include <stdio.h>
+#include <dirent.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -19,23 +21,56 @@ static char *read_or_empty(const char *path) {
     return s ? s : strdup("");
 }
 
+/* A4: atomic - a temp file in the same folder, then rename - so an install
+ * killed half-way leaves the old file or the new one, never a torn one. Keeps
+ * the existing file's permissions. */
 static int write_file(const char *path, const char *data) {
-    FILE *f = fopen(path, "wb");
+    char tmp[1300];
+    snprintf(tmp, sizeof tmp, "%s.kai-tmp.%d", path, (int)getpid());
+    struct stat st;
+    mode_t mode = stat(path, &st) == 0 ? (st.st_mode & 0777) : 0644;
+    FILE *f = fopen(tmp, "wb");
     if (!f) return -1;
     size_t len = strlen(data);
     size_t w = fwrite(data, 1, len, f);
-    int close_rc = fclose(f);
-    return w == len && close_rc == 0 ? 0 : -1;
+    int ok = w == len && fflush(f) == 0 && fsync(fileno(f)) == 0;
+    ok = (fclose(f) == 0) && ok;
+    chmod(tmp, mode);
+    if (!ok || rename(tmp, path) != 0) { unlink(tmp); return -1; }
+    return 0;
 }
 
+/* A4: <file>.kai-bak is the user's ORIGINAL, from before Kai first touched the
+ * file - never overwritten; <file>.kai-bak.prev is the state before this
+ * install. (One backup, rewritten each time, lost the original on the 2nd.) */
 static void backup(const char *path) {
     char *cur = read_or_empty(path);
     if (*cur) {
-        char bak[1200];
+        char bak[1200], prev[1250];
         snprintf(bak, sizeof bak, "%s.kai-bak", path);
-        write_file(bak, cur);
+        snprintf(prev, sizeof prev, "%s.kai-bak.prev", path);
+        struct stat st;
+        if (stat(bak, &st) != 0) write_file(bak, cur);
+        write_file(prev, cur);
     }
     free(cur);
+}
+
+/* A4 prerequisite: an existing settings file must be valid JSON (an object),
+ * or Kai refuses and changes nothing. It used to treat it as empty and write
+ * back only its own hooks. */
+static int settings_ok(const char *path) {
+    char *cur = read_or_empty(path);
+    int ok = 1;
+    if (*cur) {
+        cJSON *o = cJSON_Parse(cur);
+        ok = cJSON_IsObject(o);
+        cJSON_Delete(o);
+    }
+    free(cur);
+    if (!ok) fprintf(stderr, "%s isn't valid JSON, so Kai changed nothing. Fix it (or move it aside), "
+                             "then run kai install again.\n", path);
+    return ok;
 }
 
 static void mkparents(const char *path) {
@@ -122,6 +157,7 @@ static void ensure_event(cJSON *hooks, const char *event, const char *matcher,
 
 static int install_claude(const char *exe) {
     char *path = kai_expand_home("~/.claude/settings.json");
+    if (!settings_ok(path)) { free(path); return 3; }
     mkparents(path);
     backup(path);
     cJSON *root = load_clean(path);
@@ -362,6 +398,7 @@ static cJSON *load_json_object(const char *path) {
 
 static int install_codex(const char *exe) {
     char *path = kai_codex_hooks_path();
+    if (!settings_ok(path)) { free(path); return 3; }
     mkparents(path);
     backup(path);
     cJSON *root = load_json_object(path);
@@ -427,9 +464,34 @@ static int codex_present(void) {
     return ok;
 }
 
+/* A4: never install an older Kai over a newer one. <kai home>/installed-version
+ * records the newest version that installed hooks. */
+static int version_guard(void) {
+    char p[1200]; snprintf(p, sizeof p, "%s/installed-version", kai_home());
+    size_t n = 0; char *v = kai_read_file(p, 256, &n);
+    if (v) {
+        v[strcspn(v, "\r\n")] = '\0';
+        int newer = kai_version_cmp(v, KAI_VERSION) > 0;
+        if (newer) fprintf(stderr, "Kai %s is installed; this is the older %s. Kai changed nothing.\n",
+                           v, KAI_VERSION);
+        free(v);
+        if (newer) return 0;
+    }
+    return 1;
+}
+
+static void version_record(void) {
+    char p[1200]; snprintf(p, sizeof p, "%s/installed-version", kai_home());
+    mkdir(kai_home(), 0700);
+    char line[64]; snprintf(line, sizeof line, "%s\n", KAI_VERSION);
+    write_file(p, line);
+}
+
 int kai_cmd_install(int argc, char **argv) {
     const char *exe = kai_exe_path();
     const char *which = argc > 0 ? argv[0] : "";
+    if (!version_guard()) return 3;
+    version_record();
     if (strcmp(which, "claude") == 0) return install_claude(exe);
     if (strcmp(which, "cursor") == 0) return install_cursor(exe);
     if (strcmp(which, "codex") == 0) return install_codex(exe);
@@ -443,8 +505,28 @@ int kai_cmd_install(int argc, char **argv) {
     return 1;
 }
 
+/* rm -rf for --purge (Kai's own home only). */
+static int remove_tree(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return 0;
+    if (S_ISDIR(st.st_mode)) {
+        DIR *d = opendir(path);
+        struct dirent *e;
+        while (d && (e = readdir(d))) {
+            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+            char c[1400]; snprintf(c, sizeof c, "%s/%s", path, e->d_name);
+            remove_tree(c);
+        }
+        if (d) closedir(d);
+        return rmdir(path);
+    }
+    return unlink(path);
+}
+
 int kai_cmd_uninstall(int argc, char **argv) {
-    const char *which = argc > 0 ? argv[0] : "all";
+    const char *which = argc > 0 && strcmp(argv[0], "--purge") ? argv[0] : "all";
+    int purge = 0;
+    for (int i = 0; i < argc; i++) if (!strcmp(argv[i], "--purge")) purge = 1;
     int rc = 0;
     if (strcmp(which, "claude") == 0 || strcmp(which, "all") == 0)
         rc |= uninstall_file("~/.claude/settings.json");
@@ -454,5 +536,15 @@ int kai_cmd_uninstall(int argc, char **argv) {
         rc |= uninstall_codex();
     if (strcmp(which, "chrome") == 0 || strcmp(which, "browser") == 0 || strcmp(which, "all") == 0)
         rc |= kai_browser_uninstall();
+    /* Hooks first (no hook may call a missing binary); the user's policy and
+     * logs stay unless they ask for --purge, explicitly. */
+    if (purge) {
+        if (rc != 0) {
+            fprintf(stderr, "Some hooks weren't removed, so Kai's home was kept.\n");
+            return rc;
+        }
+        if (remove_tree(kai_home()) == 0) printf("Removed %s (policy, logs, permissions)\n", kai_home());
+        else { fprintf(stderr, "Couldn't remove %s\n", kai_home()); rc = 1; }
+    }
     return rc;
 }

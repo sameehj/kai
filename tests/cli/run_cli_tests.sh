@@ -167,6 +167,14 @@ print("ok" if not bad else "; ".join(bad))
 PY
 }
 
+echo "== log export (A5) =="
+# (exit 1 here is right: the audit section above tampers with the log on purpose,
+# and export says the chain is broken - it still writes the user's copy)
+"$KAI" log export "$TMP/export.jsonl" >/dev/null 2>&1; [ -f "$TMP/export.jsonl" ] && pass "kai log export writes a file" || fail "kai log export failed"
+[ "$(stat -f %Lp "$TMP/export.jsonl" 2>/dev/null)" = 600 ] && pass "...readable only by you (600)" || fail "export mode isn't 600"
+"$KAI" log export "$TMP/export.jsonl" >/dev/null 2>&1 && fail "export overwrote an existing file" || pass "...and never overwrites an existing file"
+[ "$(wc -l < "$TMP/export.jsonl" | tr -d ' ')" -ge 1 ] && pass "...with the records" || fail "export is empty"
+
 # Install/uninstall write agent hook settings. Inside an agent with Files
 # protection on, Kai blocks that even in this throwaway HOME: skip these cases
 # ("needs a non-agent shell") rather than fail them. CI runs them.
@@ -218,6 +226,24 @@ hasnt "uninstall removes kai hooks" "$s" 'hook claude'
 has "uninstall keeps user hooks" "$s" 'echo mine'
 has "uninstall keeps other settings" "$s" '"theme"'
 
+echo "== install lifecycle (A4) =="
+# Invalid settings: Kai refuses and changes nothing (it used to replace the file with only its hooks).
+printf '{"theme": "dark", oops' > "$HOME/.claude/settings.json"
+"$KAI" install claude >/dev/null 2>&1 && fail "install accepted invalid settings" || pass "install refuses invalid settings JSON"
+[ "$(cat "$HOME/.claude/settings.json")" = '{"theme": "dark", oops' ] && pass "...and left the file untouched" || fail "invalid settings were rewritten"
+# The first backup (the user's original) survives later installs.
+printf '{"theme":"original"}' > "$HOME/.claude/settings.json"
+rm -f "$HOME/.claude/settings.json.kai-bak" "$HOME/.claude/settings.json.kai-bak.prev"
+"$KAI" install claude >/dev/null
+"$KAI" install claude >/dev/null
+has "the original stays in .kai-bak after a second install" "$(cat "$HOME/.claude/settings.json.kai-bak")" '"original"'
+[ -f "$HOME/.claude/settings.json.kai-bak.prev" ] && pass "the state before the latest install is in .kai-bak.prev" || fail "no .kai-bak.prev"
+# An older Kai never installs over a newer one.
+printf '99.0.0\n' > "$KAI_HOME/installed-version"
+"$KAI" install claude >/dev/null 2>&1 && fail "an older kai installed over a newer one" || pass "installing an older Kai over a newer one refuses"
+rm -f "$KAI_HOME/installed-version"
+"$KAI" install claude >/dev/null && [ -f "$KAI_HOME/installed-version" ] && pass "install records its version" || fail "no installed-version"
+
 echo "== codex install / uninstall =="
 export CODEX_HOME="$TMP/codex-home"
 codex_installed() { "$KAI" status --json | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["codex"]["installed"])'; }
@@ -244,6 +270,12 @@ python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if "P
   && pass "uninstall drops events left empty" || fail "empty codex event left behind"
 unset CODEX_HOME
 fi
+
+echo "== uninstall --purge (A4) =="
+"$KAI" uninstall all >/dev/null 2>&1
+[ -d "$KAI_HOME" ] && pass "plain uninstall keeps policy and logs" || fail "plain uninstall removed Kai's home"
+"$KAI" uninstall all --purge >/dev/null 2>&1
+[ ! -e "$KAI_HOME" ] && pass "uninstall --purge removes Kai's home" || fail "--purge left Kai's home"
 
 rm -rf "$TMP"
 echo ""

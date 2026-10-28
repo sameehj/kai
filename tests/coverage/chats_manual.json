@@ -1,0 +1,68 @@
+{
+  "_how": "Fill in after a manual run in Chrome with the Kai extension and a dummy key (see docs/COVERAGE.md, Chats). Values: 'cleaned', 'held', 'not stopped', or 'not tested'. Set 'tested' to the date and browser version.",
+  "sites": {
+    "chatgpt.com": {
+      "tested": "",
+      "paste": "not tested",
+      "enter": "not tested",
+      "button": "not tested",
+      "attach": "not tested"
+    },
+    "claude.ai": {
+      "tested": "",
+      "paste": "not tested",
+      "enter": "not tested",
+      "button": "not tested",
+      "attach": "not tested"
+    },
+    "gemini.google.com": {
+      "tested": "",
+      "paste": "not tested",
+      "enter": "not tested",
+      "button": "not tested",
+      "attach": "not tested"
+    },
+    "chat.deepseek.com": {
+      "tested": "",
+      "paste": "not tested",
+      "enter": "not tested",
+      "button": "not tested",
+      "attach": "not tested"
+    },
+    "www.perplexity.ai": {
+      "tested": "",
+      "paste": "not tested",
+      "enter": "not tested",
+      "button": "not tested",
+      "attach": "not tested"
+    },
+    "copilot.microsoft.com": {
+      "tested": "",
+      "paste": "not tested",
+      "enter": "not tested",
+      "button": "not tested",
+      "attach": "not tested"
+    },
+    "chat.mistral.ai": {
+      "tested": "",
+      "paste": "not tested",
+      "enter": "not tested",
+      "button": "not tested",
+      "attach": "not tested"
+    },
+    "grok.com": {
+      "tested": "",
+      "paste": "not tested",
+      "enter": "not tested",
+      "button": "not tested",
+      "attach": "not tested"
+    },
+    "poe.com": {
+      "tested": "",
+      "paste": "not tested",
+      "enter": "not tested",
+      "button": "not tested",
+      "attach": "not tested"
+    }
+  }
+}
