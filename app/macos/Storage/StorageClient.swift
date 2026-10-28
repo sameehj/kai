@@ -648,6 +648,23 @@ final class StorageClient {
         return result
     }
 
+    /// One Kai: a Kai.app started by an agent (directly, or via `open`, whose
+    /// RESPONSIBLE process is the agent) is logged to Activity.
+    private func noteKaiAppLaunch(_ proc: UnsafeMutablePointer<es_process_t>) {
+        let exe = path(proc.pointee.executable)
+        guard exe.hasSuffix(".app/Contents/MacOS/Kai") else { return }
+        lock.lock(); let pol = policy; lock.unlock()
+        var name = [CChar](repeating: 0, count: 64)
+        let rp = pidOf(proc.pointee.responsible_audit_token)
+        let byAgent = kai_process_agent(pol, rp, &name, name.count, nil) == 1 ||
+                      kai_process_agent(pol, proc.pointee.ppid, &name, name.count, nil) == 1
+        guard byAgent else { return }
+        let agent = String(cString: name)
+        kai_audit("app", "launch", "note", "kai_launched_by_agent",
+                  "\(agent) launched a Kai app: \(exe)" +
+                  (exe == "/Applications/Kai.app/Contents/MacOS/Kai" ? "" : " (not the installed one; it won't host the control service)"))
+    }
+
     private func muteFS(_ proc: UnsafeMutablePointer<es_process_t>, _ on: Bool) {
         guard filter == .process, let c = client else { return }
         var token = proc.pointee.audit_token
@@ -678,6 +695,7 @@ final class StorageClient {
                 #if KAI_STORAGE_ENFORCE
                 noteActivity(target)   // `kai hook …` (Kai-signed) inherits the agent's session at fork: a hook event
                 #endif
+                noteKaiAppLaunch(target)
             }
         case ES_EVENT_TYPE_NOTIFY_FORK:
             let parent = pid(msg.pointee.process)
@@ -802,7 +820,10 @@ final class StorageClient {
             // The wider control store (e.g. the session registry, which the
             // extension writes) still just bars agent-tree writers. Reads stay
             // exempt so an agent-run `kai denials`/`kai status` still works.
-            let isApp = esString(proc.pointee.signing_id) == "io.github.sameehj.kai"
+            // The policy-store writer is the INSTALLED app: an older copy in a
+            // build/ folder carries the same signing id but must not write.
+            let isApp = esString(proc.pointee.signing_id) == "io.github.sameehj.kai" &&
+                        path(proc.pointee.executable) == "/Applications/Kai.app/Contents/MacOS/Kai"
             // The approval key (grant HMAC secret) is readable ONLY by the app.
             // The extensions read it in their own code; every other process -
             // including a Kai-signed CLI an agent could drive - is blocked, read

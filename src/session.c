@@ -20,6 +20,8 @@
 #include <time.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/file.h>
 #include <signal.h>
 #ifdef __APPLE__
 #include <libproc.h>
@@ -499,6 +501,30 @@ int kai_any_pause_active(long long now) {
         if (!strncmp(e->d_name, "pause-session-", 14) && kai_session_paused(e->d_name + 14, now)) any = 1;
     closedir(d);
     return any;
+}
+
+/* One Kai: the release instance - the only one that hosts the control
+ * service (the sole writer of policy and permissions) - is the app installed
+ * at /Applications/Kai.app with the release Team ID. Any other copy (a build/
+ * folder, an old build an agent launched) is a dev copy. */
+int kai_app_is_release(const char *bundle_path, const char *team) {
+    return bundle_path && team && !strcmp(bundle_path, "/Applications/Kai.app") &&
+           !strcmp(team, KAI_RELEASE_TEAM);
+}
+
+/* Backstop to the bundle-id handover: an exclusive lock held for the app's
+ * life. Returns the fd to keep open, or -1 if another Kai holds it or the lock
+ * can't be opened (a copy that can't reach Kai's home must not run). */
+int kai_app_lock_acquire(const char *path) {
+    if (!path) return -1;
+    char dir[1200];
+    kai_strlcpy(dir, path, sizeof dir);
+    char *slash = strrchr(dir, '/');
+    if (slash) { *slash = '\0'; mkdir(dir, 0700); }
+    int fd = open(path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd < 0) return -1;
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0) { close(fd); return -1; }
+    return fd;
 }
 
 int kai_pause_state(const char *sid, long long now) {

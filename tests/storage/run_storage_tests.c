@@ -1797,6 +1797,37 @@ static void test_pause_state(void) {
     unlink(hb); rmdir(dir);
 }
 
+/* One Kai: only /Applications/Kai.app with the release signature is the
+ * release instance (hosts the control service); one instance at a time,
+ * enforced by an exclusive lock as a backstop to the bundle-id handover. */
+static void test_one_kai(void) {
+    printf("one Kai: release instance + single-instance lock (fix 3)\n");
+    CHECK(kai_app_is_release("/Applications/Kai.app", "KD446VDTM2") == 1, "installed + Team ID: release");
+    CHECK(kai_app_is_release("/Users/u/kai/build/Kai.app", "KD446VDTM2") == 0, "a build/ copy: not release");
+    CHECK(kai_app_is_release("/Applications/Kai.app", "") == 0, "unsigned: not release");
+    CHECK(kai_app_is_release("/Applications/Kai.app", "OTHERTEAM1") == 0, "another team: not release");
+    CHECK(kai_app_is_release("/Applications/Kai.app/../Evil.app", "KD446VDTM2") == 0, "a path trick: not release");
+    CHECK(kai_app_is_release(NULL, "KD446VDTM2") == 0, "no path: not release");
+
+    char dir[] = "/tmp/kai-lockXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char lp[300]; snprintf(lp, sizeof lp, "%s/run/app.lock", dir);
+    int fd = kai_app_lock_acquire(lp);
+    CHECK(fd >= 0, "the first instance takes the lock (creating its dir)");
+    pid_t c = fork();
+    if (c == 0) _exit(kai_app_lock_acquire(lp) >= 0 ? 1 : 0);   /* a second instance */
+    int st = 0; waitpid(c, &st, 0);
+    CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0, "a second instance can't take it: it quits");
+    if (fd >= 0) close(fd);
+    c = fork();
+    if (c == 0) _exit(kai_app_lock_acquire(lp) >= 0 ? 0 : 1);
+    waitpid(c, &st, 0);
+    CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0, "once the first quits, the next one can start");
+    CHECK(kai_app_lock_acquire("/nonexistent-root-dir/x/app.lock") < 0, "can't open the lock: refuse (fail closed)");
+    unlink(lp);
+    char rd[320]; snprintf(rd, sizeof rd, "%s/run", dir); rmdir(rd); rmdir(dir);
+}
+
 static void test_control_service(void) {
     printf("one control path: service apply (Step 3)\n");
     char err[256], msg[600];
@@ -2116,6 +2147,7 @@ int main(void) {
     test_session_model();
     test_one_session_identity();
     test_pause_state();
+    test_one_kai();
     test_grant_tiers();
     test_session_pause();
     test_enforcement_labels();

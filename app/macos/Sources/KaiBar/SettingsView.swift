@@ -77,7 +77,10 @@ struct SettingsView: View {
             HStack(spacing: 10) {
                 Image("KaiLogo").resizable().frame(width: 30, height: 30).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("Kai").font(Theme.display(16))
+                    HStack(spacing: 6) {
+                        Text("Kai").font(Theme.display(16))
+                        if !KaiInstance.isRelease { DevBadge() }
+                    }
                     // Item 4: observed enforcement only, never a blanket "All
                     // protected" from agent-hook state.
                     Text(model.health == .problem ? model.headline

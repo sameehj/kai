@@ -95,10 +95,15 @@ chrome-zip:
 #                             can't load (CI, quick local builds)
 #   make app-dev KAI_TEAM=..  signed with your Apple team; network wall works
 #   make install-app          copy build/Kai.app to /Applications
+#   The app's bundle id: the release id by default; `make app` builds a .dev id
+#   (it embeds no usable extensions, whose ids must sit under the app's).
+#   Whatever the id, only /Applications/Kai.app with the release signature
+#   hosts the control service (KaiInstance.isRelease).
+export KAI_APP_ID ?= io.github.sameehj.kai
 XCODE_FLAGS = -project app/macos/Kai.xcodeproj -scheme Kai -configuration Release \
               -derivedDataPath build/dd
 app: kai
-	cd app/macos && xcodegen generate --quiet
+	cd app/macos && KAI_APP_ID=io.github.sameehj.kai.dev xcodegen generate --quiet
 	xcodebuild $(XCODE_FLAGS) CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual \
 	  DEVELOPMENT_TEAM= CODE_SIGN_ENTITLEMENTS= $(XCODE_EXTRA) -quiet build
 	rm -rf build/Kai.app && cp -R build/dd/Build/Products/Release/Kai.app build/Kai.app

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
 import AppKit
+import Security
 import SwiftUI
 import KaiCore
 
@@ -32,7 +33,46 @@ struct KaiBarApp: App {
     }
 }
 
+/// One Kai. A second copy isn't just confusing: any copy signed with the
+/// Team ID could try to host the control service (the only writer of policy
+/// and permissions) with old rules, and an agent can launch one.
+enum KaiInstance {
+    /// The release instance: /Applications/Kai.app with the release signature.
+    /// Only it hosts the control service; any other copy is a DEV copy.
+    static let isRelease: Bool = kai_app_is_release(Bundle.main.bundlePath, ownTeamID()) == 1
+
+    static func ownTeamID() -> String {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return "" }
+        var st: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &st) == errSecSuccess, let st else { return "" }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(st, SecCSFlags(rawValue: kSecCSSigningInformation), &info)
+                == errSecSuccess, let d = info as? [String: Any] else { return "" }
+        return d[kSecCodeInfoTeamIdentifier as String] as? String ?? ""
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var lockFD: Int32 = -1
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // A second copy of the same app hands over to the first and quits.
+        let me = NSRunningApplication.current
+        if let id = Bundle.main.bundleIdentifier,
+           let first = NSRunningApplication.runningApplications(withBundleIdentifier: id)
+               .first(where: { $0.processIdentifier != me.processIdentifier }) {
+            first.activate()
+            exit(0)
+        }
+        // Backstop for any other copy (another bundle id, a race): an exclusive
+        // lock in Kai's home, held for the app's life. A copy that can't take
+        // it (another Kai holds it) or can't open it doesn't run.
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        lockFD = kai_app_lock_acquire(home + "/.kai/run/app.lock")
+        if lockFD < 0 { exit(0) }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu-bar only: no Dock icon even when run outside a bundle.
         NSApp.setActivationPolicy(.accessory)
@@ -40,6 +80,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // writer of the policy store. Start its XPC service so the `kai` CLI can
         // ask it to make changes. The Mach name must be advertised by the app's
         // launchd agent for CLI lookups to reach it (see ControlServiceAgent).
+        // Only the release instance: a DEV copy never hosts it or registers
+        // its LaunchAgent.
+        guard KaiInstance.isRelease else { return }
         ControlServiceAgent.registerIfNeeded()
         _ = kai_control_service_start()
     }

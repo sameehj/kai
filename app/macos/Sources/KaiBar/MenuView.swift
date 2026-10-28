@@ -210,6 +210,7 @@ struct MenuView: View {
         HStack(spacing: 10) {
             Image("KaiLogo").resizable().frame(width: 26, height: 26).accessibilityHidden(true)
             Text("Kai").font(Theme.display(18))
+            if !KaiInstance.isRelease { DevBadge() }
             Spacer()
             if model.busy { ProgressView().controlSize(.small) }
             Button { open(.files) } label: {
@@ -723,5 +724,16 @@ struct PauseControl: View {
             .buttonStyle(.plain).foregroundStyle(Theme.muted)
             .help("Lets this through for 15 minutes, logged, then resumes by itself. Kai's own settings stay protected.")
         }
+    }
+}
+
+/// A copy that isn't /Applications/Kai.app with the release signature: it
+/// never hosts the control service, and says so.
+struct DevBadge: View {
+    var body: some View {
+        Text("DEV").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.ink)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Theme.amber, in: Capsule())
+            .help("A development copy: it doesn't run Kai's control service. The installed Kai in /Applications does.")
     }
 }

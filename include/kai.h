@@ -397,6 +397,12 @@ int kai_heartbeat_level(const char *path, const char *wall, uid_t owner);
  * lists it). sid NULL = the global pause. */
 enum { KAI_PAUSE_NONE = 0, KAI_PAUSE_PENDING = 1, KAI_PAUSE_ACTIVE = 2 };
 int kai_pause_state(const char *sid, long long now);
+/* One Kai: the release instance is /Applications/Kai.app signed by this team;
+ * only it hosts the control service. */
+#define KAI_RELEASE_TEAM "KD446VDTM2"
+int kai_app_is_release(const char *bundle_path, const char *team);
+/* Exclusive single-instance lock; fd to keep open, or -1 (held / can't open). */
+int kai_app_lock_acquire(const char *path);
 /* Anything paused (Kai or any session)? For the menu-bar icon. */
 int kai_any_pause_active(long long now);
 int kai_pause_state_at(const char *heartbeat, uid_t owner, const char *sid, long long now);
