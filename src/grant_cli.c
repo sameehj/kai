@@ -17,6 +17,7 @@
 #include "cJSON.h"
 
 #include <stdio.h>
+#include <dirent.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -560,6 +561,45 @@ int kai_cmd_snapshot(int argc, char **argv) {
     kai_cmd_agents(1, a);
     fflush(stdout);
     printf("}\n");
+    return 0;
+}
+
+/* `kai pending [--json]`: the decision cards waiting for you (read-only) -
+ * what Kai's popover shows under "Needs you". */
+int kai_cmd_pending(int argc, char **argv) {
+    int json = argc > 0 && !strcmp(argv[0], "--json");
+    char dir[1200]; snprintf(dir, sizeof dir, "%s/pending", kai_home());
+    DIR *d = opendir(dir);
+    cJSON *arr = cJSON_CreateArray();
+    struct dirent *e;
+    while (d && (e = readdir(d))) {
+        size_t nl = strlen(e->d_name);
+        if (e->d_name[0] == '.' || nl < 6 || strcmp(e->d_name + nl - 5, ".json")) continue;
+        char p[1400]; snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+        size_t len = 0; char *t = kai_read_file(p, 1 << 16, &len);
+        cJSON *o = t ? cJSON_Parse(t) : NULL;
+        free(t);
+        if (o) cJSON_AddItemToArray(arr, o);
+    }
+    if (d) closedir(d);
+    if (json) {
+        char *js = cJSON_PrintUnformatted(arr);
+        printf("%s\n", js ? js : "[]");
+        free(js);
+    } else {
+        cJSON *o = NULL; int n = 0;
+        cJSON_ArrayForEach(o, arr) {
+            const char *ag = cJSON_GetStringValue(cJSON_GetObjectItem(o, "agent"));
+            const char *op = cJSON_GetStringValue(cJSON_GetObjectItem(o, "op"));
+            const char *rs = cJSON_GetStringValue(cJSON_GetObjectItem(o, "resource"));
+            const char *ss = cJSON_GetStringValue(cJSON_GetObjectItem(o, "session"));
+            printf("%-8s %-8s %-40s session %s\n", ag ? ag : "?", op ? op : "?", rs ? rs : "?",
+                   ss && *ss ? ss : "(none)");
+            n++;
+        }
+        if (!n) printf("(nothing waiting)\n");
+    }
+    cJSON_Delete(arr);
     return 0;
 }
 
