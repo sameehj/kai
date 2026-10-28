@@ -168,6 +168,8 @@ int kai_new_secret_file(const kai_policy *p, const char *path, int o_creat);
 /* Is `name` an agent product the storage and network walls recognize? (The
  * policy carries the built-in agent rules both walls classify by.) */
 int kai_agent_wall_recognized(const kai_policy *p, const char *name);
+/* Number of agent rules (built-ins + policy `agent` lines). */
+int kai_policy_agent_count(const kai_policy *p);
 
 /* Agent product kind, from the shipped catalog: how Kai finds its sessions. */
 typedef enum {

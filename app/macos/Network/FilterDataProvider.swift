@@ -37,7 +37,13 @@ final class FilterDataProvider: NEFilterDataProvider {
     private func writeHealth() {
         let m = engine.mode
         let mode = m == KAI_EGRESS_BLOCK ? "block" : (m == KAI_EGRESS_LOG ? "log" : "off")
+        // What the wall actually did, not just its mode: outbound flows seen,
+        // how many were an agent's, blocked; paused; can it write the audit log.
+        // ("Enforcing" with zero agent flows is a claim, not a measurement.)
+        let st = engine.stats()
         let json = "{\"wall\":\"network\",\"mode\":\"\(mode)\",\"enforcing\":\(m == KAI_EGRESS_BLOCK),"
+                 + "\"flows\":\(st.flows),\"agent_flows\":\(st.agentFlows),\"blocked\":\(st.blocked),"
+                 + "\"paused\":\(st.paused),\"audit_writable\":\(st.auditWritable),\"policy_agents\":\(st.policyAgents),"
                  + "\"running\":true,\"ts\":\(Int(Date().timeIntervalSince1970))}"
         // Atomic (temp + rename), so a reader never sees a torn file; the new
         // file is root-owned 0644, which is what readers verify.
@@ -86,7 +92,9 @@ final class FilterDataProvider: NEFilterDataProvider {
               let token = flow.sourceAppAuditToken else { return .allow() }
         let pid = Engine.pid(fromAuditToken: token)
         guard pid > 0 else { return .allow() }
-        guard let agent = engine.agent(pid: pid, token: token) else {
+        let agentName = engine.agent(pid: pid, token: token)
+        engine.countFlow(agent: agentName != nil)
+        guard let agent = agentName else {
             // The network wall is agent-only: a process Kai doesn't recognize as
             // an agent is never inspected, recorded, or gated here. AI-chat
             // visibility comes from the browser extension over native messaging,
@@ -164,6 +172,18 @@ final class FilterDataProvider: NEFilterDataProvider {
 /// Policy, caches and audit logging, shared by the provider callbacks.
 final class Engine {
     enum Found { case host(String), needMore, none }
+
+    // Heartbeat counters (see writeHealth).
+    private var nFlows = 0, nAgentFlows = 0, nBlocked = 0
+    func countFlow(agent: Bool) {
+        lock.lock(); nFlows += 1; if agent { nAgentFlows += 1 }; lock.unlock()
+    }
+    func stats() -> (flows: Int, agentFlows: Int, blocked: Int, paused: Bool, auditWritable: Bool, policyAgents: Int) {
+        lock.lock(); defer { lock.unlock() }
+        let writable = !auditPath.isEmpty && access(auditPath, W_OK) == 0
+        let agents = policy.map { Int(kai_policy_agent_count($0)) } ?? -1
+        return (nFlows, nAgentFlows, nBlocked, paused, writable, agents)
+    }
     struct FlowContext { let agent: String; let ip: String; let port: String; let hint: String?
                          let pid: pid_t; let pidv: UInt32 }
 
@@ -331,6 +351,7 @@ final class Engine {
             return true
         }
         let block = mode == KAI_EGRESS_BLOCK
+        if block { nBlocked += 1 }
         let detail = host == nil
             ? "\(what ?? "connection") to \(ip):\(port), host unknown"
             : "connection to \(host!) (\(ip):\(port)) is not on the allowlist"

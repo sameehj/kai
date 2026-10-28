@@ -715,3 +715,8 @@ kai_egress_mode kai_policy_egress_mode(const kai_policy *p) {
 kai_storage_mode kai_policy_storage_mode(const kai_policy *p) {
     return p ? p->storage_mode : KAI_STORAGE_OFF;
 }
+
+/* How many agent rules the policy carries (built-ins + `agent` lines). The
+ * network extension reports it in its heartbeat: 0 would mean it can't
+ * recognize any agent, so it gates nothing. */
+int kai_policy_agent_count(const kai_policy *p) { return p ? p->nagents : 0; }

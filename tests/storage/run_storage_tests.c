@@ -1206,6 +1206,11 @@ static void test_enforcement_labels(void) {
         char hb[300]; snprintf(hb, sizeof hb, "%s/network-health.json", hdir);
         uid_t me = getuid();
         CHECK(kai_heartbeat_level(hb, "network", me) == -1, "missing heartbeat: not verified");
+    {
+        kai_policy *pa = mk("egress block\n");
+        CHECK(pa && kai_policy_agent_count(pa) >= 3, "built-in agent rules are always loaded (network wall can recognize agents)");
+        kai_policy_free(pa);
+    }
         FILE *hf = fopen(hb, "w");
         if (hf) { fputs("{\"wall\":\"network\",\"mode\":\"block\"}", hf); fclose(hf); }
         chmod(hb, 0644);
