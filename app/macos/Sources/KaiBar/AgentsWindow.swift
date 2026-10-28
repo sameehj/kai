@@ -301,11 +301,11 @@ struct SessionDetail: View {
                         let storageCovered = session.source == "es" &&
                             session.enforcement.hasPrefix("Enforced: Files")
                         if storageCovered {
-                            Button("Pause Kai for this session (15 min)") {
-                                grants.pauseSession(session.id, minutes: 15)
-                            }
-                            .help("Skips Kai for this session for 15 minutes, then auto-resumes. "
-                                  + "Kai's own settings stay protected.")
+                            PauseControl(state: grants.pauseState(session.id), until: grants.pauseEnds(session.id),
+                                         pause: { grants.pauseSession(session.id, minutes: 15) },
+                                         resume: { grants.pauseSession(session.id, minutes: 0) },
+                                         extend: { grants.extendPause(session.id) })
+                                .frame(maxWidth: 360)
                         } else {
                             // The wall keys sessions to the agent root (Phase A item
                             // 5), so this shows only until the wall first sees the

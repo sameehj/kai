@@ -392,6 +392,14 @@ int kai_wall_observed_level(const char *wall);
 /* Verify one heartbeat file: owned by `owner`, not group/world-writable, fresh
  * (30 s), naming `wall`. Level as above, -1 if any check fails. */
 int kai_heartbeat_level(const char *path, const char *wall, uid_t owner);
+/* Pause as a visible state: NONE, PENDING (marker written, the wall hasn't
+ * confirmed it - "Pausing…"), ACTIVE (marker + the wall's verified heartbeat
+ * lists it). sid NULL = the global pause. */
+enum { KAI_PAUSE_NONE = 0, KAI_PAUSE_PENDING = 1, KAI_PAUSE_ACTIVE = 2 };
+int kai_pause_state(const char *sid, long long now);
+/* Anything paused (Kai or any session)? For the menu-bar icon. */
+int kai_any_pause_active(long long now);
+int kai_pause_state_at(const char *heartbeat, uid_t owner, const char *sid, long long now);
 /* Where the (sandboxed) network extension writes its heartbeat: the console
  * user's app-group container. */
 const char *kai_network_heartbeat_path(void);

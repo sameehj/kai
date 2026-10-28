@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
 import SwiftUI
+import KaiCore
 
 /// The panel that drops down from the menu-bar icon.
 struct MenuView: View {
@@ -121,6 +122,12 @@ struct MenuView: View {
                         let gc = grantManager.grants.filter { $0.session_id == s.id }.count
                         Button { openAgentControl() } label: { PopoverSessionRow(session: s, grants: gc) }
                             .buttonStyle(.plain)
+                        if grantManager.pauseState(s.id) == Int32(KAI_PAUSE_NONE) {
+                            PauseControl(state: Int32(KAI_PAUSE_NONE), until: nil,
+                                         pause: { grantManager.pauseSession(s.id, minutes: 15) },
+                                         resume: {}, extend: {})
+                                .padding(.leading, 15)
+                        }
                     }
                 }
                 if idleCount > 0 {
@@ -156,45 +163,25 @@ struct MenuView: View {
     // Phase A item 5: one guaranteed way out. Pauses both walls for 15 minutes
     // and resumes by itself; while paused, a banner with the end time + Resume.
     @ViewBuilder private var globalPause: some View {
-        if let until = grantManager.pausedUntil {
-            HStack(spacing: 8) {
-                Image(systemName: "pause.circle.fill").foregroundStyle(Theme.amber)
-                Text("Kai is paused · resumes at \(until.formatted(date: .omitted, time: .shortened))")
-                    .font(.system(size: 12))
-                Spacer()
-                Button("Resume") { grantManager.pauseAll(minutes: 0) }
-                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
-            }
-            .padding(10)
-            .background(Theme.amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
-        } else {
-            Button { grantManager.pauseAll(minutes: 15) } label: {
-                Label("Pause Kai for 15 minutes", systemImage: "pause.circle")
-                    .font(.system(size: 12))
-            }
-            .buttonStyle(.plain).foregroundStyle(Theme.muted)
-            .help("Lets agents through for 15 minutes, logged, then turns back on by itself. "
-                  + "Kai's own settings stay protected.")
-        }
+        PauseControl(state: grantManager.pauseState(nil), until: grantManager.pauseEnds(nil),
+                     pauseLabel: "Pause Kai for 15 minutes",
+                     pause: { grantManager.pauseAll(minutes: 15) },
+                     resume: { grantManager.pauseAll(minutes: 0) },
+                     extend: { grantManager.extendPause(nil) })
     }
 
     // Item 1: a persistent banner while any session is paused, with Resume.
     // (Pauses auto-resume and are capped at 1 day in the engine.)
     @ViewBuilder private var pauseBanner: some View {
         let paused = agents.pausedSessions
-        if !paused.isEmpty {
-            ForEach(paused) { s in
-                HStack(spacing: 8) {
-                    Image(systemName: "pause.circle.fill").foregroundStyle(Theme.amber)
-                    Text("Kai paused for \(s.displayAgent)\(s.projectName.isEmpty ? "" : " · \(s.projectName)")"
-                         + (s.pausedUntilLabel.isEmpty ? "" : " — until \(s.pausedUntilLabel)"))
-                        .font(.system(size: 12))
-                    Spacer()
-                    Button("Resume") { grantManager.pauseSession(s.id, minutes: 0) }
-                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
-                }
-                .padding(10)
-                .background(Theme.amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        ForEach(paused) { s in
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(s.displayAgent)\(s.projectName.isEmpty ? "" : " · \(s.projectName)")")
+                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.muted)
+                PauseControl(state: grantManager.pauseState(s.id), until: grantManager.pauseEnds(s.id),
+                             pause: { grantManager.pauseSession(s.id, minutes: 15) },
+                             resume: { grantManager.pauseSession(s.id, minutes: 0) },
+                             extend: { grantManager.extendPause(s.id) })
             }
         }
     }
@@ -690,4 +677,51 @@ func ago(_ d: Date) -> String {
     if s < 3600 { return "\(s / 60)m" }
     if s < 86400 { return "\(s / 3600)h" }
     return "\(s / 86400)d"
+}
+
+/// Pause as a visible state, the same everywhere (popover, rows, session
+/// header): "Pause 15 min" when active; "Pausing…" until the wall confirms;
+/// "Paused · resumes HH:MM" with Resume and "+15 min" when it holds.
+struct PauseControl: View {
+    let state: Int32
+    let until: Date?
+    var pauseLabel = "Pause 15 min"
+    let pause: () -> Void
+    let resume: () -> Void
+    let extend: () -> Void
+
+    var body: some View {
+        switch Int(state) {
+        case KAI_PAUSE_ACTIVE:
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Image(systemName: "pause.circle.fill").foregroundStyle(Theme.amber)
+                    Text("Paused · resumes \(until.map { $0.formatted(date: .omitted, time: .shortened) } ?? "soon")")
+                        .font(.system(size: 12))
+                    Spacer()
+                    Button("+15 min", action: extend)
+                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    Button("Resume", action: resume)
+                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
+                }
+                Text("Kai's own settings stay protected.").font(.system(size: 11)).foregroundStyle(Theme.muted)
+            }
+            .padding(8)
+            .background(Theme.amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+        case KAI_PAUSE_PENDING:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text("Pausing…").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                Spacer()
+                Button("Cancel", action: resume)
+                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.muted)
+            }
+        default:
+            Button(action: pause) {
+                Label(pauseLabel, systemImage: "pause.circle").font(.system(size: 12))
+            }
+            .buttonStyle(.plain).foregroundStyle(Theme.muted)
+            .help("Lets this through for 15 minutes, logged, then resumes by itself. Kai's own settings stay protected.")
+        }
+    }
 }

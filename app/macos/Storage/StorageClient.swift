@@ -167,12 +167,17 @@ final class StorageClient {
         #endif
         var enforcing = false
         var gen: UInt = 0
+        var pausedList = ""
         #if KAI_STORAGE_ENFORCE
+        // What this wall has APPLIED: the UI shows a pause as active only once
+        // it is listed here (until then, "Pausing…"). Session ids are UUIDs.
+        lock.lock(); pausedList = pausedSessions.sorted().map { "\"\($0)\"" }.joined(separator: ","); lock.unlock()
         enforcing = (mode == KAI_STORAGE_BLOCK)
         if let gs = grantStore { gen = kai_approval_store_generation(gs) }
         #endif
         let json = "{\"wall\":\"storage\",\"mode\":\"\(modeName)\",\"enforcing\":\(enforcing)," +
                    "\"filter\":\"\(filter)\",\"grant_generation\":\(gen)," +
+                   "\"paused\":\(pausedStorage),\"paused_sessions\":[\(pausedList)]," +
                    "\"ts\":\(Int(Date().timeIntervalSince1970))}"
         writeFileNoFollow("/tmp/kai-storage-health.json", Array(json.utf8), append: false)
     }

@@ -114,6 +114,7 @@ final class AppModel: ObservableObject {
     }
 
     var menuBarSymbol: String {
+        if kai_any_pause_active(Int64(Date().timeIntervalSince1970)) != 0 { return "pause.circle" }
         if let t = lastBlockAt, Date().timeIntervalSince(t) < 30 { return "xmark.shield.fill" }
         switch health {
         case .protecting: return "checkmark.shield"

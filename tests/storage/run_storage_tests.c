@@ -1758,6 +1758,45 @@ static void test_one_session_identity(void) {
     unlink(sp); unlink(polp); unlink(outp); rmdir(dir);
 }
 
+/* Pause as a visible state: "paused" only once the marker the hooks read is
+ * there AND the wall's (verified) heartbeat lists the session; marker only =
+ * "pausing"; neither = active. The global pause uses the same model. */
+static void test_pause_state(void) {
+    printf("pause state: pausing until the wall confirms (fix 2)\n");
+    char dir[] = "/tmp/kai-pstXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char hb[300]; snprintf(hb, sizeof hb, "%s/storage-health.json", dir);
+    uid_t me = getuid();
+    long long now = (long long)time(NULL);
+    kai_session_record("es-ps", "claude", "", (int)getpid(), 0, "/w", "", now);
+    FILE *f = fopen(hb, "w");
+    if (f) { fputs("{\"wall\":\"storage\",\"mode\":\"block\",\"paused\":false,\"paused_sessions\":[]}", f); fclose(f); }
+    chmod(hb, 0644);
+    CHECK(kai_pause_state_at(hb, me, "es-ps", now) == KAI_PAUSE_NONE, "no marker: active");
+    CHECK(kai_any_pause_active(now) == 0, "nothing paused: icon shows protected");
+    kai_session_pause_write("es-ps", 15);
+    CHECK(kai_any_pause_active(now) == 1, "a session paused: icon shows paused");
+    CHECK(kai_pause_state_at(hb, me, "es-ps", now) == KAI_PAUSE_PENDING,
+          "marker written, wall hasn't listed it yet: pausing");
+    f = fopen(hb, "w");
+    if (f) { fputs("{\"wall\":\"storage\",\"mode\":\"block\",\"paused\":false,\"paused_sessions\":[\"es-ps\"]}", f); fclose(f); }
+    CHECK(kai_pause_state_at(hb, me, "es-ps", now) == KAI_PAUSE_ACTIVE, "marker + wall lists it: paused");
+    CHECK(kai_pause_state_at(hb, 0, "es-ps", now) == KAI_PAUSE_PENDING || me == 0,
+          "an unverified heartbeat (wrong owner) never confirms a pause");
+    kai_session_pause_write("es-ps", 0);
+    CHECK(kai_pause_state_at(hb, me, "es-ps", now) == KAI_PAUSE_NONE, "resumed: active again (marker gone)");
+
+    /* global pause: same model, NULL session */
+    CHECK(kai_pause_state_at(hb, me, NULL, now) == KAI_PAUSE_NONE, "global: not paused");
+    kai_wall_pause_write("storage", 15);
+    CHECK(kai_pause_state_at(hb, me, NULL, now) == KAI_PAUSE_PENDING, "global marker only: pausing");
+    f = fopen(hb, "w");
+    if (f) { fputs("{\"wall\":\"storage\",\"mode\":\"block\",\"paused\":true,\"paused_sessions\":[]}", f); fclose(f); }
+    CHECK(kai_pause_state_at(hb, me, NULL, now) == KAI_PAUSE_ACTIVE, "global marker + wall paused: paused");
+    kai_wall_pause_write("storage", 0);
+    unlink(hb); rmdir(dir);
+}
+
 static void test_control_service(void) {
     printf("one control path: service apply (Step 3)\n");
     char err[256], msg[600];
@@ -2076,6 +2115,7 @@ int main(void) {
     test_session_live();
     test_session_model();
     test_one_session_identity();
+    test_pause_state();
     test_grant_tiers();
     test_session_pause();
     test_enforcement_labels();

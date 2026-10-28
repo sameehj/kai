@@ -464,6 +464,47 @@ int kai_heartbeat_level(const char *path, const char *wall, uid_t owner) {
     return lvl;
 }
 
+/* Pause as a visible state. The pause marker is what the hooks read; the
+ * storage wall's verified heartbeat lists what it has applied ("paused" for
+ * the global pause, "paused_sessions" per session). Only both together are
+ * KAI_PAUSE_ACTIVE; the marker alone is KAI_PAUSE_PENDING ("Pausing…"), so
+ * the UI never shows a pause that isn't happening. sid NULL = global. */
+int kai_pause_state_at(const char *heartbeat, uid_t owner, const char *sid, long long now) {
+    int marker = sid ? kai_session_paused(sid, now) : kai_wall_paused("storage", now);
+    if (!marker) return KAI_PAUSE_NONE;
+    if (kai_heartbeat_level(heartbeat, "storage", owner) < 0) return KAI_PAUSE_PENDING;
+    size_t len = 0;
+    char *txt = kai_read_file(heartbeat, 1 << 16, &len);
+    cJSON *o = txt ? cJSON_Parse(txt) : NULL;
+    free(txt);
+    int applied = 0;
+    if (o && !sid) applied = cJSON_IsTrue(cJSON_GetObjectItem(o, "paused"));
+    if (o && sid) {
+        cJSON *e = NULL;
+        cJSON_ArrayForEach(e, cJSON_GetObjectItem(o, "paused_sessions"))
+            if (cJSON_IsString(e) && !strcmp(e->valuestring, sid)) { applied = 1; break; }
+    }
+    cJSON_Delete(o);
+    return applied ? KAI_PAUSE_ACTIVE : KAI_PAUSE_PENDING;
+}
+
+/* Is anything paused right now (Kai as a whole, or any session)? For the
+ * menu-bar icon. Reads the pause markers (registry/pause-session-<id>). */
+int kai_any_pause_active(long long now) {
+    if (kai_wall_paused("storage", now)) return 1;
+    DIR *d = opendir(kai_session_dir());
+    if (!d) return 0;
+    struct dirent *e; int any = 0;
+    while (!any && (e = readdir(d)))
+        if (!strncmp(e->d_name, "pause-session-", 14) && kai_session_paused(e->d_name + 14, now)) any = 1;
+    closedir(d);
+    return any;
+}
+
+int kai_pause_state(const char *sid, long long now) {
+    return kai_pause_state_at("/tmp/kai-storage-health.json", 0, sid, now);
+}
+
 /* The network extension is sandboxed: it can't write /tmp, so its heartbeat
  * goes in the console user's copy of the Kai app-group container. */
 const char *kai_network_heartbeat_path(void) {

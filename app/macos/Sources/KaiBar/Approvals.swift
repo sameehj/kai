@@ -476,6 +476,25 @@ final class GrantManager: ObservableObject {
         refresh()
     }
 
+    /// Pause as a visible state (libkai kai_pause_state): .none, .pending
+    /// ("Pausing…" until the wall's heartbeat confirms), .active. sid nil = Kai.
+    func pauseState(_ sid: String?) -> Int32 {
+        let now = Int64(Date().timeIntervalSince1970)
+        if let sid { return sid.withCString { kai_pause_state($0, now) } }
+        return kai_pause_state(nil, now)
+    }
+    func pauseEnds(_ sid: String?) -> Date? {
+        guard let sid else { return pausedUntil }
+        let t = sid.withCString { kai_session_pause_until($0) }
+        return t > 0 ? Date(timeIntervalSince1970: TimeInterval(t)) : nil
+    }
+    /// "+15 min": extend whatever is left by 15 minutes.
+    func extendPause(_ sid: String?) {
+        let left = max(0, Int((pauseEnds(sid)?.timeIntervalSinceNow ?? 0) / 60))
+        if let sid { pauseSession(sid, minutes: left + 15) } else { pauseAll(minutes: left + 15) }
+        refresh()
+    }
+
     /// The later of the two walls' pause expiries, if still in the future.
     private func wallPausedUntil() -> Date? {
         let now = Date().timeIntervalSince1970
