@@ -155,6 +155,12 @@ print("ok" if not bad else "; ".join(bad))
 PY
 }
 
+# Install/uninstall write agent hook settings. Inside an agent with Files
+# protection on, Kai blocks that even in this throwaway HOME: skip these cases
+# ("needs a non-agent shell") rather than fail them. CI runs them.
+if ! sh "$(dirname "$0")/../hook_writes_ok.sh"; then
+    echo "== install / uninstall: skipped - needs a non-agent shell (Files protection blocks agent hook settings) =="
+else
 echo "== install / uninstall =="
 mkdir -p "$HOME/.claude"
 printf '{"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}' > "$HOME/.claude/settings.json"
@@ -221,6 +227,7 @@ has "uninstall keeps other keys" "$s" '"other"'
 python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if "PostToolUse" not in d["hooks"] else 1)' "$CODEX_HOME/hooks.json" \
   && pass "uninstall drops events left empty" || fail "empty codex event left behind"
 unset CODEX_HOME
+fi
 
 rm -rf "$TMP"
 echo ""
