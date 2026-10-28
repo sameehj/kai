@@ -61,21 +61,35 @@ struct kai_approval_store {
     long long grants_mtime;
 };
 
-/* newest mtime of any *.json under dir (0 if none / unreadable) */
+/* A change signature for the grants folder (0 if missing / unreadable). B4: it
+ * must change when ANY grant file goes, not only the newest - the app revokes
+ * by deleting a file, and the extensions' stores reload only when this moves.
+ * So: the folder's own mtime, every entry's mtime (ns) and the entry count. */
+static long long ts_ns(const struct stat *st) {
+#ifdef __APPLE__
+    return (long long)st->st_mtimespec.tv_sec * 1000000000LL + st->st_mtimespec.tv_nsec;
+#else
+    return (long long)st->st_mtim.tv_sec * 1000000000LL + st->st_mtim.tv_nsec;
+#endif
+}
+
 static long long grants_dir_mtime(const char *dir) {
+    struct stat dst;
+    if (stat(dir, &dst) != 0) return 0;
     DIR *d = opendir(dir);
     if (!d) return 0;
-    long long newest = 1; /* dir exists but maybe empty: non-zero so "exists" is distinct */
+    unsigned long long sig = (unsigned long long)ts_ns(&dst), n = 0;
     struct dirent *e;
     char path[PATH_MAX];
     while ((e = readdir(d))) {
         if (e->d_name[0] == '.') continue;
         if (snprintf(path, sizeof path, "%s/%s", dir, e->d_name) >= (int)sizeof path) continue;
         struct stat st;
-        if (stat(path, &st) == 0 && (long long)st.st_mtime > newest) newest = (long long)st.st_mtime;
+        if (stat(path, &st) == 0) { sig += (unsigned long long)ts_ns(&st) * 31u; n++; }
     }
     closedir(d);
-    return newest;
+    sig ^= n * 0x9E3779B97F4A7C15ULL;
+    return (long long)(sig | 1);   /* non-zero: the folder exists */
 }
 
 static long long file_mtime(const char *path) {
@@ -322,6 +336,21 @@ int kai_approval_store_decide_endpoint(kai_approval_store *s, const char *dest,
     }
     pthread_rwlock_unlock(&s->lock);
     return allow;
+}
+
+int kai_approval_store_rule(kai_approval_store *s, const char *identity, const char *dest, int op,
+                            char *id_out, size_t idn) {
+    if (id_out && idn) id_out[0] = '\0';
+    if (!s) return 0;
+    char dir[PATH_MAX];
+    kai_strlcpy(dir, s->grants_dir, sizeof dir);
+    char *slash = strrchr(dir, '/');
+    if (!slash) return 0;
+    kai_strlcpy(slash + 1, "rules", sizeof dir - (size_t)(slash + 1 - dir));
+    pthread_rwlock_rdlock(&s->lock);
+    int r = kai_rule_lookup(dir, identity, dest, op, s->keylen ? s->key : NULL, s->keylen, id_out, idn);
+    pthread_rwlock_unlock(&s->lock);
+    return r;
 }
 
 int kai_approval_store_protected(kai_approval_store *s, const char *path,

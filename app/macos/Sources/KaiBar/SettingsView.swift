@@ -457,21 +457,16 @@ private struct NetworkPage: View {
                              + "db.yourcompany.com:5432, 10.0.0.0/8, 203.0.113.5:22. This Mac, model APIs, GitHub "
                              + "and package registries are built in.",
                          items: model.policy?.egressAllow ?? [], placeholder: "artifacts.yourcompany.com or 10.0.0.0/8")
+            // B2 agent profiles: what the built-in model hosts allow, and the limit.
+            Text("Built in for every agent: the model and sign-in hosts (anthropic.com, openai.com, cursor.sh and "
+               + "others). Kai can't tell the model connection from other data sent to the same host.")
+                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .onAppear { wall.refresh() }
     }
 
-    private var statusPill: some View {
-        HStack(spacing: 6) {
-            Circle().fill(wall.isOn ? Theme.lime : Theme.muted).frame(width: 8, height: 8)
-            Text(wall.isOn ? "On" : "Off")
-        }
-        .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(wall.isOn ? Theme.lime : Theme.muted)
-        .padding(.horizontal, 12).padding(.vertical, 6)
-        .background((wall.isOn ? Theme.lime : Theme.muted).opacity(0.10), in: Capsule())
-        .overlay(Capsule().stroke(wall.isOn ? Color(hex: 0x3A4420) : Theme.border))
-    }
+    private var statusPill: some View { WallPill(word: wall.stateWord) }
 
     private var hosts: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -531,7 +526,8 @@ private struct StoragePage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             PageHeader(icon: "folder", title: "Files",
-                       subtitle: "Agents can't open your keys, passwords and Kai's settings — even from a script. Every agent on this Mac; their own working files stay usable.")
+                       subtitle: "Agents can't open your keys, passwords and Kai's settings — even from a script. Every agent on this Mac; their own working files stay usable.",
+                       trailing: AnyView(WallPill(word: storage.stateWord)))
             Card(padding: 14) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -541,7 +537,10 @@ private struct StoragePage: View {
                     }
                     Spacer()
                     Toggle("Files protection", isOn: Binding(get: { storage.isOn },
-                                                         set: { $0 ? storage.turnOn() : storage.turnOff() }))
+                                                         set: { on in
+                                                             if on { storage.turnOn(); return }
+                                                             Task { if await OwnerAuth.shared.confirm("turn off Files protection") { storage.turnOff() } }
+                                                         }))
                         .toggleStyle(KaiToggleStyle()).labelsHidden()
                         .disabled(storage.state == .activating || storage.state == .checking)
                 }
@@ -812,6 +811,43 @@ private struct PermissionsPage: View {
         }
     }
 
+    // B2: rules (every future session) and Keep blocked, by verified agent
+    // identity and exact host. Removing one never lowers protection.
+    @ViewBuilder private var rulesSection: some View {
+        let allow = grants.rules.filter(\.isAllow)
+        let kept = grants.rules.filter { !$0.isAllow }
+        CapsLabel("Rules").padding(.top, 4)
+        if allow.isEmpty {
+            Text("No rules. Make one from a card: More… → Create a rule.")
+                .font(.system(size: 13)).foregroundStyle(Theme.muted)
+        }
+        ForEach(allow) { r in ruleRow(r, line: "\(r.agentTitle) may connect to \(r.dest) in every session") }
+        if !kept.isEmpty {
+            CapsLabel("Kept blocked").padding(.top, 4)
+            Text("Kai doesn't ask about these again; each attempt is still blocked and recorded.")
+                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+            ForEach(kept) { r in ruleRow(r, line: "\(r.agentTitle) can't connect to \(r.dest)") }
+        }
+    }
+
+    private func ruleRow(_ r: DecisionRule, line: String) -> some View {
+        Card(padding: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(line).font(.system(size: 13))
+                    Text("Signed as \(r.identity)").font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Theme.muted).lineLimit(1).textSelection(.enabled)
+                    Text(r.isAllow ? "Kai can't tell what is sent over this encrypted connection."
+                                   : "Only this host, only this agent.")
+                        .font(.system(size: 11)).foregroundStyle(Theme.muted)
+                }
+                Spacer()
+                Button(r.isAllow ? "Remove" : "Ask again") { grants.removeRule(r) }
+                    .buttonStyle(GhostButtonStyle())
+            }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Every permission you gave, across sessions and projects, and their recent history. Permissions are given only in Kai — never by an agent.")
@@ -832,6 +868,9 @@ private struct PermissionsPage: View {
                                     .foregroundStyle(Theme.muted).lineLimit(1)
                                 Text(g.status).font(.system(size: 11))
                                     .foregroundStyle(g.status == "expired" ? Theme.muted : Theme.lime)
+                                if let m = g.members.first {
+                                    Text(m.authorityLabel).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                                }
                             }
                             Spacer()
                             Button(g.count > 1 ? "Revoke all" : "Revoke") { grants.revokeGroup(g) }
@@ -840,6 +879,7 @@ private struct PermissionsPage: View {
                     }
                 }
             }
+            rulesSection
             CapsLabel("Recent history").padding(.top, 4)
             Picker("", selection: $filter) {
                 Text("All").tag("all")
@@ -1103,5 +1143,30 @@ private struct ExcerptView: View {
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Theme.ink, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+/// B3: a wall's state in one word (not installed · off · starting · watching ·
+/// protecting · unhealthy), from macOS and the measured heartbeat.
+struct WallPill: View {
+    let word: String
+    private var color: Color {
+        switch word {
+        case "protecting": return Theme.lime
+        case "watching", "starting": return Theme.amber
+        case "unhealthy": return Theme.coral
+        default: return Theme.muted
+        }
+    }
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(color).frame(width: 8, height: 8)
+            Text(word.prefix(1).uppercased() + word.dropFirst())
+        }
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(color)
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(color.opacity(0.10), in: Capsule())
+        .overlay(Capsule().stroke(color.opacity(0.4)))
     }
 }

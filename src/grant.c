@@ -19,6 +19,7 @@
 #include "kai.h"
 #include "cJSON.h"
 
+#include <ctype.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -26,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -620,4 +622,146 @@ int kai_grant_resolve(const char *path, char *buf, size_t buflen) {
     kai_strlcpy(buf, nz, buflen);
     free(nz);
     return 1;
+}
+
+/* ---- B2: persistent decisions (Keep blocked, Allow rules) ----
+ * One signed file per decision under <kai home>/rules. Each binds to the
+ * VERIFIED agent identity (signing id + team, never a process name or an
+ * agent-supplied id) and an exact destination. Keep blocked only stops a card
+ * from being shown again; an Allow rule lets the destination through for every
+ * future session of that agent, so it needs owner authentication when made
+ * (signed into the rule) and a real hostname (never an IP from an unknown host).
+ * Both are signed: an agent can't write ~/.kai, and a file copied from
+ * elsewhere won't verify under this Mac's approval key. */
+static int rule_canonical(const kai_decision_rule *r, char *buf, size_t n) {
+    int w = snprintf(buf, n, "rule1\n%s\n%d\n%s\n%s\n%s\n%d\n%lld\n%d",
+                     r->id, r->kind, r->identity, r->agent, r->dest, r->op,
+                     r->created_utc, r->authenticated);
+    return w > 0 && (size_t)w < n;
+}
+
+static int rule_hmac_ok(const kai_decision_rule *r, const unsigned char *key, size_t keylen) {
+    if (!key || !keylen || strlen(r->hmac) != 64) return 0;
+    char canon[3072], hex[65];
+    uint8_t mac[32];
+    if (!rule_canonical(r, canon, sizeof canon)) return 0;
+    hmac_sha256(key, keylen, canon, strlen(canon), mac);
+    hex32(mac, hex);
+    unsigned diff = 0;
+    for (int i = 0; i < 64; i++) diff |= (unsigned)(r->hmac[i] ^ hex[i]);
+    return diff == 0;
+}
+
+static int is_ip_literal(const char *d) {
+    if (d[0] == '[') return 1;                       /* [v6]:port */
+    for (const char *p = d; *p && *p != ':'; p++)
+        if (!(isdigit((unsigned char)*p) || *p == '.')) return 0;
+    return 1;
+}
+
+int kai_rule_dest_ok(int kind, const char *dest) {
+    if (!dest || !*dest || strlen(dest) >= KAI_GRANT_RES_MAX) return 0;
+    /* A connection with no known hostname gets "this connection" only: no Allow
+     * rule from an address that may front many sites. */
+    if (kind == KAI_RULE_ALLOW && dest[0] != '/' && is_ip_literal(dest)) return 0;
+    return 1;
+}
+
+char *kai_rule_build_json(const char *id, int kind, const char *identity, const char *agent,
+                          const char *dest, int op, long long created, int authenticated,
+                          const unsigned char *key, size_t keylen) {
+    if (!id || !*id || !identity || !*identity || !key || !keylen) return NULL;
+    if (kind != KAI_RULE_ALLOW && kind != KAI_RULE_KEEP_BLOCKED) return NULL;
+    if (kind == KAI_RULE_ALLOW && !authenticated) return NULL;
+    if (!kai_rule_dest_ok(kind, dest)) return NULL;
+    kai_decision_rule r;
+    memset(&r, 0, sizeof r);
+    kai_strlcpy(r.id, id, sizeof r.id);
+    r.kind = kind;
+    kai_strlcpy(r.identity, identity, sizeof r.identity);
+    kai_strlcpy(r.agent, agent ? agent : "", sizeof r.agent);
+    kai_strlcpy(r.dest, dest, sizeof r.dest);
+    r.op = op;
+    r.created_utc = created;
+    r.authenticated = authenticated ? 1 : 0;
+    char canon[3072];
+    uint8_t mac[32];
+    if (!rule_canonical(&r, canon, sizeof canon)) return NULL;
+    hmac_sha256(key, keylen, canon, strlen(canon), mac);
+    hex32(mac, r.hmac);
+    cJSON *o = cJSON_CreateObject();
+    if (!o) return NULL;
+    char cr[32];
+    snprintf(cr, sizeof cr, "%lld", r.created_utc);
+    cJSON_AddStringToObject(o, "id", r.id);
+    cJSON_AddStringToObject(o, "kind", kind == KAI_RULE_ALLOW ? "allow" : "keep_blocked");
+    cJSON_AddStringToObject(o, "identity", r.identity);
+    cJSON_AddStringToObject(o, "agent", r.agent);
+    cJSON_AddStringToObject(o, "dest", r.dest);
+    cJSON_AddNumberToObject(o, "op", r.op);
+    cJSON_AddStringToObject(o, "created_utc", cr);
+    cJSON_AddNumberToObject(o, "authenticated", r.authenticated);
+    cJSON_AddStringToObject(o, "hmac", r.hmac);
+    char *out = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    return out;
+}
+
+int kai_rule_from_json(const char *json, kai_decision_rule *out) {
+    if (!json || !out) return 0;
+    cJSON *o = cJSON_Parse(json);
+    if (!o) return 0;
+    memset(out, 0, sizeof *out);
+    char kind[24];
+    cpy(out->id, sizeof out->id, o, "id");
+    cpy(kind, sizeof kind, o, "kind");
+    out->kind = !strcmp(kind, "allow") ? KAI_RULE_ALLOW
+              : !strcmp(kind, "keep_blocked") ? KAI_RULE_KEEP_BLOCKED : 0;
+    cpy(out->identity, sizeof out->identity, o, "identity");
+    cpy(out->agent, sizeof out->agent, o, "agent");
+    cpy(out->dest, sizeof out->dest, o, "dest");
+    out->op = num_int(o, "op");
+    out->created_utc = num_str(o, "created_utc");
+    out->authenticated = num_int(o, "authenticated");
+    cpy(out->hmac, sizeof out->hmac, o, "hmac");
+    cJSON_Delete(o);
+    return out->id[0] && out->kind;
+}
+
+const char *kai_rules_dir(void) {
+    static char buf[1100];
+    snprintf(buf, sizeof buf, "%s/rules", kai_home());
+    return buf;
+}
+
+int kai_rule_lookup(const char *dir, const char *identity, const char *dest, int op,
+                    const unsigned char *key, size_t keylen, char *id_out, size_t idn) {
+    if (id_out && idn) id_out[0] = '\0';
+    if (!identity || !*identity || !dest || !*dest) return 0;   /* unverified: no rules */
+    DIR *d = opendir(dir ? dir : kai_rules_dir());
+    if (!d) return 0;
+    int found = 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        size_t nl = strlen(e->d_name);
+        if (nl < 6 || strcmp(e->d_name + nl - 5, ".json") != 0) continue;
+        char fp[PATH_MAX];
+        if (snprintf(fp, sizeof fp, "%s/%s", dir ? dir : kai_rules_dir(), e->d_name) >= (int)sizeof fp) continue;
+        size_t n = 0;
+        char *js = kai_read_file(fp, 16384, &n);
+        kai_decision_rule r;
+        int ok = js && kai_rule_from_json(js, &r);
+        free(js);
+        if (!ok || !rule_hmac_ok(&r, key, keylen)) continue;           /* forged/tampered */
+        if (r.op != op || strcmp(r.identity, identity) != 0 || strcasecmp(r.dest, dest) != 0) continue;
+        if (r.kind == KAI_RULE_ALLOW && (!r.authenticated || !kai_rule_dest_ok(r.kind, r.dest))) continue;
+        /* Keep blocked wins over an Allow for the same thing: the tighter one. */
+        if (r.kind == KAI_RULE_KEEP_BLOCKED || !found) {
+            if (id_out && idn) kai_strlcpy(id_out, r.id, idn);
+            found = r.kind;
+        }
+        if (found == KAI_RULE_KEEP_BLOCKED) break;
+    }
+    closedir(d);
+    return found;
 }

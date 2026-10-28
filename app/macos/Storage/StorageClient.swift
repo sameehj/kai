@@ -175,7 +175,11 @@ final class StorageClient {
         enforcing = (mode == KAI_STORAGE_BLOCK)
         if let gs = grantStore { gen = kai_approval_store_generation(gs) }
         #endif
+        // B4: which policy this wall runs, so status can tell current from stale.
+        var fp = [CChar](repeating: 0, count: 16)
+        kai_policy_fingerprint(&fp, fp.count)
         let json = "{\"wall\":\"storage\",\"mode\":\"\(modeName)\",\"enforcing\":\(enforcing)," +
+                   "\"policy\":\"\(String(cString: fp))\"," +
                    "\"filter\":\"\(filter)\",\"grant_generation\":\(gen)," +
                    "\"paused\":\(pausedStorage),\"paused_sessions\":[\(pausedList)]," +
                    "\"ts\":\(Int(Date().timeIntervalSince1970))}"

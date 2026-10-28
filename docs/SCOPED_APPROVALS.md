@@ -687,3 +687,25 @@ key into the Keychain with a code-signature ACL, and (2) switch to asymmetric
 signing so the extension holds only a public key. Both are recommended for the
 next milestone; neither is a critical vulnerability forcing an immediate
 redesign.
+
+## Persistent decisions and owner authentication (B2, 2026-10-28)
+
+**Four identities, kept apart.**
+- *Verified agent identity*: the signing identity of the agent's own binary, read from its code signature (`kai_pid_code_identity`, anchored to Apple). Examples: `com.anthropic.claude-code (Q6L2SF6YDW)`, `codex (2DC432GLL2)`, `com.todesktop.230313mzl4w4u92 (VDXQ22DGB9)` for Cursor.
+- *Process identity*: pid + pidversion from the audit token.
+- *Session provenance*: the session the process was tied to, and how strongly (Kai's launch, process ancestry, or name only).
+- *Grant authority*: who approved, how (click, click + confirm, Touch ID or password) and when. It is signed into the grant.
+
+Each card's *Why?* shows the first three; each permission row in Settings shows the fourth.
+
+**Binding.** Session permissions apply to processes whose session the walls attributed. Persistent decisions bind to the verified agent identity and an exact host. They never bind to a process name or an id the agent supplied. A process with no verified signature gets no persistent decisions.
+
+**Keep blocked** is remembered as a signed decision in `<kai home>/rules`. Later attempts are blocked and audited ("kept blocked") without a card. *Ask again* in Settings → Permissions removes it.
+
+**Rules** (More… → *Create a rule…*) allow one exact host for one verified agent in every future session. The confirm sheet says what the rule covers and that Kai can't see what is sent over the encrypted connection. Making a rule needs owner authentication, which is signed into the rule. A rule is never made for a connection whose hostname Kai doesn't know: that card offers *Allow this connection* (one-shot, this process) and *Keep blocked*. When both an Allow rule and Keep blocked match, Keep blocked wins.
+
+**Telemetry** to known telemetry and crash-report hosts is denied silently and audited, with one passive hint per agent. For Claude Code the hint is: "set `DISABLE_TELEMETRY=1`".
+
+**Owner authentication.** Allow for this session, Keep blocked, Revoke and Pause 15 min take one click. Turning Files or Internet to Watch or Off, switching an extension off, and creating a rule need owner authentication. One authentication covers 30 minutes; sleeping or locking the Mac resets it. Break-glass access to secrets asks every time. Pause and approvals exist only in Kai's app: `kai pause` no longer pauses. Every pause and approval posts a notification.
+
+Evidence: unit tests (`persistent decisions` in `tests/storage`), plus a live run on network extension v20 on 2026-10-28. In that run, a card from Claude Code carried `com.anthropic.claude-code (Q6L2SF6YDW)`; a bare-IP card said the hostname was unknown and carried no identity; sentry.io and a real Claude Code datadoghq.com attempt were denied without a card and audited. **Not yet tested by clicking:** Keep blocked remembered across attempts, Create a rule (with Touch ID), the 30-minute window.

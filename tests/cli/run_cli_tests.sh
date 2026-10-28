@@ -33,6 +33,13 @@ dr=$("$KAI" doctor 2>&1)
 has "doctor: checks the policy" "$dr" "policy loads"
 has "doctor: says what it couldn't measure" "$dr" "not measured"
 
+echo "== pause (B2: only from Kai's app) =="
+pm=$("$KAI" pause all 15 2>&1); prc=$?
+[ "$prc" = 4 ] && pass "kai pause is refused (exit 4)" || fail "kai pause exit $prc"
+has "kai pause points to the menu bar" "$pm" "menu bar"
+[ ! -e "$KAI_HOME/registry/pause-storage" ] && [ ! -e "$KAI_HOME/registry/pause-network" ] \
+    && pass "kai pause wrote nothing" || fail "kai pause wrote a pause marker"
+
 echo "== policy set =="
 "$KAI" policy set on_upload ask >/dev/null
 has "set creates the policy file" "$(ls "$KAI_HOME")" "policy"

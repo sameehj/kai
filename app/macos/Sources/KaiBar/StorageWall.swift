@@ -12,9 +12,24 @@
 import AppKit
 import Foundation
 import SystemExtensions
+import KaiCore
 
 @MainActor
 final class StorageWall: NSObject, ObservableObject {
+    /// B3: the state word Settings shows, from macOS's answer and the
+    /// measured heartbeat.
+    var stateWord: String {
+        let os: Int32
+        switch state {
+        case .needsApproval: os = Int32(KAI_WALL_OS_NOT_INSTALLED)
+        case .off: os = Int32(KAI_WALL_OS_OFF)
+        case .checking, .activating: os = Int32(KAI_WALL_OS_STARTING)
+        case .failed: os = Int32(KAI_WALL_OS_FAILED)
+        case .on: os = Int32(KAI_WALL_OS_ON)
+        }
+        return String(cString: kai_wall_state_word(os, kai_wall_observed_level("storage")))
+    }
+
     enum State: Equatable {
         case checking, off, activating, needsApproval, on, failed(String)
     }

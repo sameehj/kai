@@ -41,7 +41,11 @@ final class FilterDataProvider: NEFilterDataProvider {
         // how many were an agent's, blocked; paused; can it write the audit log.
         // ("Enforcing" with zero agent flows is a claim, not a measurement.)
         let st = engine.stats()
+        // B4: which policy this wall runs, so status can tell current from stale.
+        var fp = [CChar](repeating: 0, count: 16)
+        kai_policy_fingerprint(&fp, fp.count)
         let json = "{\"wall\":\"network\",\"mode\":\"\(mode)\",\"enforcing\":\(m == KAI_EGRESS_BLOCK),"
+                 + "\"policy\":\"\(String(cString: fp))\","
                  + "\"flows\":\(st.flows),\"agent_flows\":\(st.agentFlows),\"blocked\":\(st.blocked),"
                  + "\"paused\":\(st.paused),\"audit_writable\":\(st.auditWritable),\"policy_agents\":\(st.policyAgents),"
                  + "\"running\":true,\"ts\":\(Int(Date().timeIntervalSince1970))}"
@@ -344,20 +348,81 @@ final class Engine {
         var why = [CChar](repeating: 0, count: 256)
         if kai_egress_endpoint_allowed(p, host, ip, Int32(port) ?? 0, &why, why.count) == 1 { return true }
         let target = host ?? "\(ip):\(port)"
+        let block = mode == KAI_EGRESS_BLOCK
+        // B2: telemetry and crash reports are an optional channel: denied
+        // without a card, audited, and one passive hint per agent in the app.
+        if let h = host, kai_host_is_telemetry(h) == 1 {
+            if block { nBlocked += 1 }
+            auditLocked(agent: agent, decision: block ? "block" : "log", target: target,
+                        detail: "telemetry to \(h) (\(ip):\(port)); not asked about")
+            if block { noteTelemetryHint(agent: agent, host: h) }
+            return !block
+        }
+        // B2: the user's own decisions, bound to the agent's verified signing
+        // identity and this exact host (never to an IP with no known name).
+        let ident = host == nil ? "" : identityLocked(pid: pid)
+        if !ident.isEmpty, let gs = grantStore {
+            var rid = [CChar](repeating: 0, count: 40)
+            switch kai_approval_store_rule(gs, ident, target, Int32(KAI_OP_CONNECT.rawValue), &rid, rid.count) {
+            case Int32(KAI_RULE_ALLOW):
+                kai_grant_audit("used", String(cString: rid), agent, target, Int32(KAI_OP_CONNECT.rawValue),
+                                "allow", "your rule for \(ident)")
+                return true
+            case Int32(KAI_RULE_KEEP_BLOCKED):
+                if block { nBlocked += 1 }
+                auditLocked(agent: agent, decision: block ? "block" : "log", target: target,
+                            detail: "kept blocked: you chose Keep blocked for this agent and host")
+                return !block
+            default: break
+            }
+        }
         // M1.4: a valid human-approved endpoint grant allows this destination.
         if endpointGrantAllows(pid: pid, pidv: pidv, agent: agent, dest: target) {
             kai_grant_audit("used", "(granted)", agent, target, Int32(KAI_OP_CONNECT.rawValue),
                             "allow", "scoped egress grant")
             return true
         }
-        let block = mode == KAI_EGRESS_BLOCK
         if block { nBlocked += 1 }
         let detail = host == nil
             ? "\(what ?? "connection") to \(ip):\(port), host unknown"
             : "connection to \(host!) (\(ip):\(port)) is not on the allowlist"
         auditLocked(agent: agent, decision: block ? "block" : "log", target: target, detail: detail)
-        if block { requestEgressApproval(pid: pid, pidv: pidv, agent: agent, dest: target) }
+        if block { requestEgressApproval(pid: pid, pidv: pidv, agent: agent, dest: target,
+                                         identity: ident, hostKnown: host != nil) }
         return !block
+    }
+
+    /// B2: the verified signing identity of the agent this process belongs to
+    /// ("com.anthropic.claude-code (Q6L2SF6YDW)"), "" when unknown or unsigned.
+    /// The agent's own process, not the child (curl) that opened the socket.
+    /// Cached briefly per agent pid; only reached for a flow that isn't allowed.
+    private var identityCache: [pid_t: (String, Date)] = [:]
+    private func identityLocked(pid: pid_t) -> String {
+        guard let pol = policy, pid > 0 else { return "" }
+        var name = [CChar](repeating: 0, count: 64)
+        var apid: Int32 = 0
+        guard kai_process_agent(pol, pid, &name, name.count, &apid) == 1, apid > 0 else { return "" }
+        if let (v, t) = identityCache[apid], Date().timeIntervalSince(t) < 60 { return v }
+        var out = [CChar](repeating: 0, count: 200)
+        let v = kai_pid_code_identity(apid, &out, out.count) == 1 ? String(cString: out) : ""
+        if identityCache.count > 1024 { identityCache.removeAll() }
+        identityCache[apid] = (v, Date())
+        return v
+    }
+
+    /// B2: one passive hint per agent ("Claude Code telemetry is blocked ...").
+    /// The app reads <kai home>/hints/telemetry-<agent>.
+    private var telemetryHinted = Set<String>()
+    private func noteTelemetryHint(agent: String, host: String) {
+        guard !telemetryHinted.contains(agent) else { return }
+        telemetryHinted.insert(agent)
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        let dir = home + "/.kai/hints"
+        mkdir(dir, 0o700)
+        let fp = dir + "/telemetry-" + agent.filter { $0.isLetter || $0.isNumber || $0 == "-" }
+        FileManager.default.createFile(atPath: fp, contents: Data("\(host)\n".utf8),
+                                       attributes: [.posixPermissions: 0o600])
+        if let o = owner { chown(dir, o.uid, o.gid); chown(fp, o.uid, o.gid) }
     }
 
     /// Does a valid endpoint grant authorize this agent process to reach `dest`?
@@ -424,7 +489,8 @@ final class Engine {
 
     /// Stage an async approval request for a blocked destination (deduped), so
     /// the user can approve it instead of the agent only seeing a dead socket.
-    private func requestEgressApproval(pid: pid_t, pidv: UInt32, agent: String, dest: String) {
+    private func requestEgressApproval(pid: pid_t, pidv: UInt32, agent: String, dest: String,
+                                       identity: String, hostKnown: Bool) {
         let key = "\(pid):\(dest)"
         if let last = pendingSeen[key], Date().timeIntervalSince(last) < 600 { return }
         if pendingSeen.count > 4096 { pendingSeen.removeAll() }
@@ -444,7 +510,8 @@ final class Engine {
                          (sess.project.isEmpty ? "" : "\"project\":\"\(esc(sess.project))\",")
         let json = "{\"id\":\"\(id)\",\"agent\":\"\(esc(agent))\",\"pid\":\(pid)," +
                    "\"pidversion\":\(pidv),\"strength\":1,\"resource\":\"\(esc(dest))\"," +
-                   sessFields + "\"op\":\"connect\",\"ts\":\(Int(Date().timeIntervalSince1970))}"
+                   sessFields + (identity.isEmpty ? "" : "\"identity\":\"\(esc(identity))\",") +
+                   "\"hostKnown\":\(hostKnown),\"op\":\"connect\",\"ts\":\(Int(Date().timeIntervalSince1970))}"
         let fp = dir + "/" + id + ".json"
         let fd = open(fp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0o644)
         if fd >= 0 { fchmod(fd, 0o644); let b = Array(json.utf8)

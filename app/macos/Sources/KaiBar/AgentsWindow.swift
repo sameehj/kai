@@ -337,7 +337,7 @@ struct SessionDetail: View {
                         // wall doesn't cover can't be paused.
                         let storageCovered = session.source == "es" &&
                             session.enforcement.hasPrefix("Enforced: Files")
-                        if storageCovered {
+                        if storageCovered && DevFlags.perSessionPause {
                             PauseControl(state: grants.pauseState(session.id), until: grants.pauseEnds(session.id),
                                          pause: { grants.pauseSession(session.id, minutes: 15) },
                                          resume: { grants.pauseSession(session.id, minutes: 0) },

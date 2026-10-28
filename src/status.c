@@ -216,11 +216,60 @@ int kai_cmd_doctor(void) {
     }
 
     if (app_installed()) {
-        int f = kai_wall_observed_level("storage"), n = kai_wall_observed_level("network");
-        printf("%s Files (storage wall): %s\n", f >= 1 ? "✓" : "!",
-               f < 0 ? "no verified heartbeat (not running)" : wall_word(f, 1));
-        printf("%s Internet (network wall): %s\n", n >= 1 ? "✓" : "!",
-               n < 0 ? "no verified heartbeat (not running or not verified)" : wall_word(n, 1));
+        /* B4: two measures, reported apart. Health: is each extension running,
+         * is its heartbeat fresh, does it run the current policy. Coverage:
+         * which agent work it actually attributes and checks. */
+        char cur[16], fp[32], ts[32];
+        kai_policy_fingerprint(cur, sizeof cur);
+        printf("Extension health\n");
+        const char *walls[2][2] = {{"storage", "Files"}, {"network", "Internet"}};
+        for (int i = 0; i < 2; i++) {
+            int lvl = kai_wall_observed_level(walls[i][0]);
+            if (lvl < 0) {
+                printf("  ! %s: no verified heartbeat (not running, or not verified)\n", walls[i][1]);
+                continue;
+            }
+            long long age = kai_heartbeat_field(walls[i][0], "ts", ts, sizeof ts)
+                          ? (long long)time(NULL) - atoll(ts) : -1;
+            int have = kai_heartbeat_field(walls[i][0], "policy", fp, sizeof fp);
+            int stale = have && strcmp(fp, cur) != 0;
+            printf("  %s %s: running, %s, heartbeat %llds old, policy %s\n", stale ? "!" : "✓", walls[i][1],
+                   wall_word(lvl, 1), age, !have ? "version not reported (older extension)"
+                   : stale ? "not the current file yet (reloads within seconds)" : "current");
+        }
+        printf("Enforcement coverage\n");
+        kai_policy *pol = kai_policy_load(NULL, err, sizeof err);
+        kai_session *scan = NULL, *reg = NULL;
+        int ns = 0, nr = 0, attributed = 0, total = 0;
+        if (pol && kai_sessions_scan(pol, &scan, &ns) == 0) {
+            if (kai_sessions_load(&reg, &nr) != 0) nr = 0;
+            for (int i = 0; i < ns; i++) {
+                if (scan[i].kind != KAI_KIND_SESSION) continue;
+                total++;
+                for (int j = 0; j < nr; j++)
+                    if (reg[j].source == KAI_SESS_ES && reg[j].root_pid == scan[i].root_pid && kai_session_live(&reg[j])) {
+                        attributed++; break;
+                    }
+            }
+        }
+        free(scan); free(reg);
+        if (pol) kai_policy_free(pol);
+        int f = kai_wall_observed_level("storage");
+        if (f < 0) printf("  · Files: not running, so no agent session is attributed or checked by it\n");
+        else printf("  %s Files: %d of %d running agent session%s attributed%s\n", attributed == total ? "✓" : "!",
+                    attributed, total, total == 1 ? "" : "s",
+                    attributed == total ? "" : " (the others get no session permissions until Files sees them)");
+        char flows[32] = "", blocked[32] = "";
+        if (kai_heartbeat_field("network", "agent_flows", flows, sizeof flows)) {
+            kai_heartbeat_field("network", "blocked", blocked, sizeof blocked);
+            printf("  · Internet: %s agent connection%s seen, %s blocked since the extension started%s\n", flows,
+                   strcmp(flows, "1") ? "s" : "", blocked[0] ? blocked : "0",
+                   strcmp(flows, "0") ? "" : " (none seen: nothing measured yet)");
+        } else {
+            printf("  · Internet: not running or not verified, so no agent connection is checked by it\n");
+        }
+        printf("  · Known gaps: while an extension restarts or after it crashes, its checks stop until it is "
+               "back (fail-open). See docs/RUNTIME.md.\n");
     } else {
         printf("· OS protection (Files, Internet): not included in this preview\n");
     }

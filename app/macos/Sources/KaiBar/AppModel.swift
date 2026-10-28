@@ -78,7 +78,7 @@ final class AppModel: ObservableObject {
     // as "Internet: on (not verified)".
     enum ObservedProtection { case protected, partial, notProtected }
 
-    private func levels(storageOn: Bool, networkOn: Bool) -> (files: Int32, internet: Int32, paused: Bool) {
+    func levels(storageOn: Bool, networkOn: Bool) -> (files: Int32, internet: Int32, paused: Bool) {
         let files = storageOn ? max(kai_wall_observed_level("storage"), 0) : 0
         let internet: Int32 = networkOn ? kai_wall_observed_level("network") : 0   // -1 = not verified
         let paused = kai_wall_paused("storage", Int64(Date().timeIntervalSince1970)) != 0
@@ -423,8 +423,7 @@ final class AppModel: ObservableObject {
     }
 
     private func confirmWithOwner(_ reason: String) async -> Bool {
-        let ctx = LAContext()
-        return (try? await ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)) ?? false
+        await OwnerAuth.shared.confirm(reason)   // B2: one authentication covers 30 minutes
     }
 
     func addTerm(text: String, action: String, replacement: String) {
@@ -477,6 +476,19 @@ enum Notifier {
     static func requestPermission() {
         guard available else { return }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    /// B2: every pause and approval is announced, so one an agent caused by
+    /// driving the screen (Accessibility) doesn't go unseen.
+    static func say(_ title: String, _ body: String = "") {
+        guard available else { return }
+        let c = UNMutableNotificationContent()
+        c.title = title
+        c.body = body
+        let req = UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil)
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            if granted { UNUserNotificationCenter.current().add(req) }
+        }
     }
 
     /// count > 1: several blocks of the same rule arrived together.

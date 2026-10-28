@@ -20,6 +20,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <errno.h>
+#include <stdint.h>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <signal.h>
@@ -569,6 +570,55 @@ const char *kai_network_heartbeat_path(void) {
 int kai_wall_observed_level(const char *wall) {
     if (wall && !strcmp(wall, "network")) return kai_heartbeat_level(kai_network_heartbeat_path(), "network", 0);
     return kai_heartbeat_level("/tmp/kai-storage-health.json", "storage", 0);
+}
+
+void kai_sha256(const void *data, size_t n, uint8_t out[32]); /* src/sha256.c */
+
+/* B3: the one word Settings shows for a wall, from what macOS says about the
+ * extension (os) and the measured heartbeat level (-1 none/unverified, 0 off,
+ * 1 watch, 2 protect). Never "protecting" without a verified heartbeat. */
+const char *kai_wall_state_word(int os, int level) {
+    switch (os) {
+    case KAI_WALL_OS_NOT_INSTALLED: return "not installed";
+    case KAI_WALL_OS_OFF:           return "off";
+    case KAI_WALL_OS_STARTING:      return "starting";
+    case KAI_WALL_OS_FAILED:        return "unhealthy";
+    default:
+        return level == 2 ? "protecting" : level == 1 ? "watching" : level == 0 ? "off" : "unhealthy";
+    }
+}
+
+/* B4: which policy a wall has loaded - the first 12 hex digits of the SHA-256
+ * of the policy file, or "built-in" when there is none. */
+void kai_policy_fingerprint(char *out, size_t n) {
+    size_t len = 0;
+    char *txt = kai_read_file(kai_policy_file(), 4u << 20, &len);
+    if (!txt) { kai_strlcpy(out, "built-in", n); return; }
+    uint8_t h[32];
+    kai_sha256(txt, len, h);
+    free(txt);
+    snprintf(out, n, "%02x%02x%02x%02x%02x%02x", h[0], h[1], h[2], h[3], h[4], h[5]);
+}
+
+/* B4: a field from a wall's VERIFIED heartbeat (same checks as the level), as
+ * text. 1 found, 0 no verified heartbeat or no such field. */
+int kai_heartbeat_field(const char *wall, const char *key, char *out, size_t n) {
+    if (n) out[0] = '\0';
+    int net = wall && !strcmp(wall, "network");
+    const char *path = net ? kai_network_heartbeat_path() : "/tmp/kai-storage-health.json";
+    if (kai_heartbeat_level(path, net ? "network" : "storage", 0) < 0) return 0;
+    size_t len = 0;
+    char *txt = kai_read_file(path, 1 << 16, &len);
+    cJSON *o = txt ? cJSON_Parse(txt) : NULL;
+    free(txt);
+    const cJSON *v = o ? cJSON_GetObjectItem(o, key) : NULL;
+    int ok = 1;
+    if (cJSON_IsString(v)) kai_strlcpy(out, v->valuestring, n);
+    else if (cJSON_IsNumber(v)) snprintf(out, n, "%lld", (long long)v->valuedouble);
+    else if (cJSON_IsBool(v)) kai_strlcpy(out, cJSON_IsTrue(v) ? "true" : "false", n);
+    else ok = 0;
+    cJSON_Delete(o);
+    return ok;
 }
 
 /* Reject an id that could escape the registry dir or hold a path separator. */

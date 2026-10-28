@@ -382,6 +382,17 @@ const char *kai_status_sentence(int files, int internet, int agents, int paused,
 /* A wall's VERIFIED level from its root-owned heartbeat: 2 block, 1 log, 0 off,
  * -1 not verified. Never inferred from the policy. */
 int kai_wall_observed_level(const char *wall);
+/* B3: wall state words for Settings: not installed · off · starting ·
+ * watching · protecting · unhealthy. */
+enum { KAI_WALL_OS_NOT_INSTALLED = 0, KAI_WALL_OS_OFF = 1, KAI_WALL_OS_STARTING = 2,
+       KAI_WALL_OS_ON = 3, KAI_WALL_OS_FAILED = 4 };
+const char *kai_wall_state_word(int os, int level);
+/* B4: the loaded policy's fingerprint (12 hex of SHA-256, or "built-in"); the
+ * walls put it in their heartbeat so status can say whether they run the
+ * current policy. */
+void kai_policy_fingerprint(char *out, size_t n);
+/* A field from a wall's verified heartbeat, as text. 1 found, else 0. */
+int kai_heartbeat_field(const char *wall, const char *key, char *out, size_t n);
 /* Verify one heartbeat file: owned by `owner`, not group/world-writable, fresh
  * (30 s), naming `wall`. Level as above, -1 if any check fails. */
 int kai_heartbeat_level(const char *path, const char *wall, uid_t owner);
@@ -560,6 +571,41 @@ char *kai_grant_build_json3(const char *id, long long created, long long expires
 int kai_grant_satisfies_tier(const kai_grant *g, kai_override_tier_t tier);
 int kai_grant_session_ended(const kai_grant *g);
 
+/* ---- B2: persistent decisions ----
+ * Keep blocked (no card again; still audited) and Allow rules (every future
+ * session), bound to the VERIFIED agent identity ("<signing id> (<team>)" from
+ * kai_pid_code_identity) and an exact destination. Signed with the approval
+ * key; an Allow rule must carry owner authentication and a real hostname. */
+enum { KAI_RULE_ALLOW = 1, KAI_RULE_KEEP_BLOCKED = 2 };
+typedef struct {
+    char id[40];
+    int kind;
+    char identity[160];
+    char agent[64];
+    char dest[KAI_GRANT_RES_MAX];
+    int op;
+    long long created_utc;
+    int authenticated;
+    char hmac[65];
+} kai_decision_rule;
+const char *kai_rules_dir(void);          /* <kai home>/rules */
+int kai_rule_dest_ok(int kind, const char *dest); /* no Allow rule for an IP */
+char *kai_rule_build_json(const char *id, int kind, const char *identity, const char *agent,
+                          const char *dest, int op, long long created, int authenticated,
+                          const unsigned char *key, size_t keylen);
+int kai_rule_from_json(const char *json, kai_decision_rule *out);
+/* KAI_RULE_ALLOW, KAI_RULE_KEEP_BLOCKED (wins over an Allow) or 0. Only
+ * verified rules count. dir NULL = kai_rules_dir(). */
+int kai_rule_lookup(const char *dir, const char *identity, const char *dest, int op,
+                    const unsigned char *key, size_t keylen, char *id_out, size_t idn);
+/* Known telemetry/crash-report hosts (B2): denied silently, audited, one
+ * passive hint per agent instead of a card. */
+int kai_host_is_telemetry(const char *host);
+/* The verified code-signing identity of a running process: "<signing id>
+ * (<team>)", or "<signing id> (Apple)" for Apple's own. 1 when the signature
+ * is valid (anchored to Apple), else 0 and out = "". */
+int kai_pid_code_identity(int pid, char *out, size_t n);
+
 /* Load every *.json grant under dir (e.g. <home>/grants). Caller free()s *out.
  * A grant with a durable "<dir>/<id>.used" marker (a spent one-shot) is skipped. */
 int kai_grants_load(const char *dir, kai_grant **out, int *n);
@@ -665,6 +711,11 @@ int kai_approval_store_own_state_exempt(kai_approval_store *s, const char *agent
                                         const char *path, const char *cwd, const char *rule);
 int kai_approval_store_protected(kai_approval_store *s, const char *path,
                                  const char *cwd, char *why, size_t whylen);
+/* B2: the user's Keep blocked / Allow rule for (verified identity, dest, op),
+ * read from the "rules" folder beside the grants folder and verified with the
+ * store's key. KAI_RULE_ALLOW, KAI_RULE_KEEP_BLOCKED or 0. */
+int kai_approval_store_rule(kai_approval_store *s, const char *identity, const char *dest, int op,
+                            char *id_out, size_t idn);
 
 /* ---- Storage ES-handler profiler (dev/benchmark only; default OFF) ----
  * Lock-free, fixed-size, zero-allocation aggregation so it can be called from

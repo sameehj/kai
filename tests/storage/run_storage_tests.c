@@ -388,6 +388,45 @@ static void *mut_mutator(void *p) {
     return NULL;
 }
 
+/* B4: revocation reaches the extensions' read-only stores. The app revokes by
+ * deleting the grant file; the extension's next (debounced) reload must drop
+ * it even when it wasn't the newest file in the folder. */
+static void test_revocation_reaches_ro_store(void) {
+    printf("revocation reaches a read-only store (B4)\n");
+    char dir[] = "/tmp/kai-revXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char gdir[600], polp[600], fa[700];
+    snprintf(gdir, sizeof gdir, "%s/grants", dir);
+    snprintf(polp, sizeof polp, "%s/policy", dir);
+    mkdir(gdir, 0700);
+    FILE *pf = fopen(polp, "w");
+    if (pf) { fputs("protect /secrets\n", pf); fclose(pf); }
+    const long long FUTURE = (long long)time(NULL) + 3600;
+    kai_grant_subject sub = { .pid = 100, .pidversion = 5, .agent = "claude", .strength = KAI_ID_STRONG };
+    char why[256];
+    kai_grant a = mkgrant("/secrets/a", KAI_OP_READ, KAI_GRANT_PROCESS, KAI_ID_STRONG, 100, 5, FUTURE);
+    kai_grant b = mkgrant("/secrets/b", KAI_OP_READ, KAI_GRANT_PROCESS, KAI_ID_STRONG, 100, 5, FUTURE);
+    snprintf(a.id, sizeof a.id, "rev-a"); kai_grant_sign(&a, GKEY, GKEYLEN);
+    snprintf(b.id, sizeof b.id, "rev-b"); kai_grant_sign(&b, GKEY, GKEYLEN);
+    write_grant_file(gdir, &a);
+    write_grant_file(gdir, &b);
+    /* a is older than b, so b stays the newest file after a goes */
+    snprintf(fa, sizeof fa, "%s/%s.json", gdir, a.id);
+    struct timeval old[2] = {{(time_t)(time(NULL) - 120), 0}, {(time_t)(time(NULL) - 120), 0}};
+    utimes(fa, old);
+    kai_approval_store *s = kai_approval_store_open_ro(polp, gdir, GKEY, GKEYLEN, 0);
+    CHECK(s && kai_approval_store_decide(s, "/secrets/a", NULL, KAI_OP_READ, &sub, 1000, why, sizeof why) == 1,
+          "the extension honors grant a");
+    unlink(fa);                                   /* the app's Revoke */
+    kai_approval_store_reload(s, 0);              /* the extension's next debounced reload */
+    CHECK(kai_approval_store_decide(s, "/secrets/a", NULL, KAI_OP_READ, &sub, 1000, why, sizeof why) == 0,
+          "a revoked grant that wasn't the newest file stops at the next reload");
+    CHECK(kai_approval_store_decide(s, "/secrets/b", NULL, KAI_OP_READ, &sub, 1000, why, sizeof why) == 1,
+          "the other grant still holds");
+    kai_approval_store_close(s);
+    char cmd[700]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
 static void test_approval_store(void) {
     printf("approval store (M2)\n");
     char dir[] = "/tmp/kai-store-testXXXXXX";
@@ -2062,6 +2101,106 @@ static void test_audit_rotation_chain(void) {
     snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
 }
 
+/* B2: Keep blocked / Allow rules bound to the verified agent identity and an
+ * exact destination; telemetry hosts; the identity of a real process. */
+static void write_rule(const char *dir, const char *name, const char *json) {
+    char fp[700];
+    snprintf(fp, sizeof fp, "%s/%s.json", dir, name);
+    FILE *f = fopen(fp, "w");
+    if (f) { fputs(json ? json : "", f); fclose(f); }
+}
+
+static void test_decision_rules(void) {
+    printf("persistent decisions: identity + destination (B2)\n");
+    char dir[] = "/tmp/kai-rulesXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    const unsigned char key[] = "rules-test-key-0123456789abcdef";
+    const unsigned char other[] = "another-macs-key-0123456789abcd";
+    const char *claude = "com.anthropic.claude-code (Q6L2SF6YDW)";
+    const char *cursor = "com.todesktop.230313mzl4w4u92 (VDXQ22DGB9)";
+    char id[40];
+
+    CHECK(kai_rule_lookup(dir, claude, "up.example.net", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "no rules: nothing matches");
+    CHECK(kai_rule_build_json("a1", KAI_RULE_ALLOW, claude, "claude", "up.example.net", KAI_OP_CONNECT,
+                              1000, 0, key, sizeof key - 1) == NULL,
+          "an Allow rule needs owner authentication");
+    CHECK(kai_rule_build_json("a2", KAI_RULE_ALLOW, claude, "claude", "203.0.113.5:443", KAI_OP_CONNECT,
+                              1000, 1, key, sizeof key - 1) == NULL,
+          "no Allow rule from an address with no known hostname");
+    CHECK(kai_rule_build_json("a3", KAI_RULE_ALLOW, "", "claude", "up.example.net", KAI_OP_CONNECT,
+                              1000, 1, key, sizeof key - 1) == NULL,
+          "no rule without a verified identity");
+
+    char *kb = kai_rule_build_json("kb1", KAI_RULE_KEEP_BLOCKED, claude, "claude", "up.example.net",
+                                   KAI_OP_CONNECT, 1000, 0, key, sizeof key - 1);
+    CHECK(kb != NULL, "Keep blocked needs no authentication");
+    write_rule(dir, "kb1", kb);
+    free(kb);
+    CHECK(kai_rule_lookup(dir, claude, "UP.example.net", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id)
+              == KAI_RULE_KEEP_BLOCKED && !strcmp(id, "kb1"),
+          "Keep blocked is remembered for this agent and destination");
+    CHECK(kai_rule_lookup(dir, cursor, "up.example.net", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "...not for another agent");
+    CHECK(kai_rule_lookup(dir, claude, "down.example.net", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "...not for another destination");
+    CHECK(kai_rule_lookup(dir, claude, "x.up.example.net", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "...not for a subdomain (exact match)");
+    CHECK(kai_rule_lookup(dir, "", "up.example.net", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "an unverified process matches no rule");
+
+    char *al = kai_rule_build_json("al1", KAI_RULE_ALLOW, cursor, "cursor", "api.example.org", KAI_OP_CONNECT,
+                                   1000, 1, key, sizeof key - 1);
+    CHECK(al != NULL, "an authenticated Allow rule for a hostname is built");
+    write_rule(dir, "al1", al);
+    CHECK(kai_rule_lookup(dir, cursor, "api.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id)
+              == KAI_RULE_ALLOW, "the Allow rule matches its agent and host");
+    CHECK(kai_rule_lookup(dir, claude, "api.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "...and binds to that agent's identity only");
+    CHECK(kai_rule_lookup(dir, cursor, "api.example.org", KAI_OP_CONNECT, other, sizeof other - 1, id, sizeof id) == 0,
+          "a rule signed on another Mac (another key) is ignored");
+
+    /* tampering: move the Allow to another host */
+    char *t = al ? strdup(al) : NULL;
+    char *at = t ? strstr(t, "api.example.org") : NULL;
+    if (at) memcpy(at, "evl", 3);
+    write_rule(dir, "al1", t);
+    CHECK(kai_rule_lookup(dir, cursor, "evl.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "an edited rule doesn't verify");
+    free(t);
+    write_rule(dir, "al1", al);
+
+    /* an Allow and a Keep blocked for the same thing: the tighter one wins */
+    char *kb2 = kai_rule_build_json("kb2", KAI_RULE_KEEP_BLOCKED, cursor, "cursor", "api.example.org",
+                                    KAI_OP_CONNECT, 1001, 0, key, sizeof key - 1);
+    write_rule(dir, "kb2", kb2);
+    free(kb2);
+    CHECK(kai_rule_lookup(dir, cursor, "api.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id)
+              == KAI_RULE_KEEP_BLOCKED, "Keep blocked wins over an Allow");
+    free(al);
+
+    CHECK(!strcmp(kai_wall_state_word(KAI_WALL_OS_ON, 2), "protecting")
+              && !strcmp(kai_wall_state_word(KAI_WALL_OS_ON, 1), "watching")
+              && !strcmp(kai_wall_state_word(KAI_WALL_OS_ON, -1), "unhealthy")
+              && !strcmp(kai_wall_state_word(KAI_WALL_OS_STARTING, 2), "starting")
+              && !strcmp(kai_wall_state_word(KAI_WALL_OS_NOT_INSTALLED, -1), "not installed")
+              && !strcmp(kai_wall_state_word(KAI_WALL_OS_FAILED, 2), "unhealthy"),
+          "wall states: never \"protecting\" without a verified heartbeat (B3)");
+    CHECK(kai_host_is_telemetry("sentry.io") && kai_host_is_telemetry("o4507.ingest.us.sentry.io")
+              && kai_host_is_telemetry("http-intake.logs.us5.datadoghq.com"),
+          "telemetry hosts are recognized");
+    CHECK(!kai_host_is_telemetry("notsentry.io") && !kai_host_is_telemetry("api.anthropic.com")
+              && !kai_host_is_telemetry(NULL), "...and nothing else");
+
+    char ident[200];
+    CHECK(kai_pid_code_identity(1, ident, sizeof ident) == 1 && strstr(ident, "(Apple)") != NULL,
+          "launchd's verified identity is Apple's");
+    CHECK(kai_pid_code_identity(-1, ident, sizeof ident) == 0 && ident[0] == '\0',
+          "no process: no identity");
+
+    char cmd[700]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
 static void test_endpoint_grants(void) {
     printf("endpoint grants: no grant = no connection (security fix)\n");
     char dir[] = "/tmp/kai-egrantXXXXXX";
@@ -2433,6 +2572,8 @@ int main(void) {
     test_one_kai();
     test_endpoint_grants();
     test_audit_rotation_chain();
+    test_decision_rules();
+    test_revocation_reaches_ro_store();
     test_audit_no_prompts();
     test_version_cmp();
     test_component_exceptions();

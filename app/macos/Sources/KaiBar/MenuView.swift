@@ -10,6 +10,7 @@ struct MenuView: View {
     @Environment(\.openWindow) private var openWindow
     @AppStorage("settingsPage") private var settingsPage = SettingsPage.agentControl.rawValue
     @State private var dismissedBlock: String?
+    @State private var showPermissions = false
     @StateObject private var grantManager = GrantManager()
     @ObservedObject private var agents = AgentsModel.shared
 
@@ -27,13 +28,13 @@ struct MenuView: View {
                             dismiss: { withAnimation { dismissedBlock = b.id } },
                             details: { open(.activity) })
             }
-            statusLine
-            globalPause
-            pauseBanner
-            protection
+            pausedBanner
+            if DevFlags.perSessionPause { pauseBanner }
             needsYou
             activeNow
+            protectionsLine
             permissions
+            telemetryHints
             recent
             footer
         }
@@ -46,41 +47,6 @@ struct MenuView: View {
         .foregroundStyle(Color.white)
         .preferredColorScheme(.dark)
         .task { await model.refresh(); wall.refresh(); await agents.refresh() }
-    }
-
-    // Item 2: a short status headline + a full second line (no truncation),
-    // from observed enforcement only — replaces the big shield and the weekly
-    // counters (those stay in the window).
-    private var statusLine: some View {
-        let running = agents.workingNow.count   // the one definition: working now
-        let needs = grantManager.pending.count + grantManager.pendingPolicy.count
-        let activeGrants = grantManager.grants.count
-        let blockedToday = model.events.filter {
-            $0.isBlock && ($0.date.map { Calendar.current.isDateInToday($0) } ?? false)
-        }.count
-        return VStack(alignment: .leading, spacing: 3) {
-            // headline from the shared measured status (observed enforcement)
-            Text(model.statusSentence(storageOn: storage.isOn, networkOn: wall.isOn, agents: running))
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(model.health == .problem ? Theme.coral : glow)
-                .fixedSize(horizontal: false, vertical: true)
-            if let note = model.internetUnverifiedNote(networkOn: wall.isOn) {
-                Text(note).font(.system(size: 11)).foregroundStyle(Theme.amber)
-            }
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("\(running)").font(Theme.display(34)).foregroundStyle(glow)
-                Text("agent\(running == 1 ? "" : "s") working now")
-                    .font(.system(size: 13)).foregroundStyle(Theme.soft)
-            }
-            HStack(spacing: 6) {
-                Text("\(needs) needs you").foregroundStyle(needs > 0 ? Theme.amber : Theme.muted)
-                Text("·").foregroundStyle(Theme.muted)
-                Text("\(activeGrants) permission\(activeGrants == 1 ? "" : "s")").foregroundStyle(Theme.muted)
-                Text("·").foregroundStyle(Theme.muted)
-                Text("\(blockedToday) blocked today").foregroundStyle(Theme.muted)
-            }.font(.system(size: 11))
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var needsYou: some View {
@@ -122,7 +88,7 @@ struct MenuView: View {
                         let gc = grantManager.grants.filter { $0.session_id == s.id }.count
                         Button { openAgentControl() } label: { PopoverSessionRow(session: s, grants: gc) }
                             .buttonStyle(.plain)
-                        if grantManager.pauseState(s.id) == Int32(KAI_PAUSE_NONE) {
+                        if DevFlags.perSessionPause && grantManager.pauseState(s.id) == Int32(KAI_PAUSE_NONE) {
                             PauseControl(state: Int32(KAI_PAUSE_NONE), until: nil,
                                          pause: { grantManager.pauseSession(s.id, minutes: 15) },
                                          resume: {}, extend: {})
@@ -144,8 +110,17 @@ struct MenuView: View {
             // B1: active only here (history lives in Agent Control); every row
             // names agent, resource, scope and time left.
             let active = grantManager.grantGroups.filter { !$0.isExpired }
+            let n = active.reduce(0) { $0 + $1.count }
             if !active.isEmpty {
-                CapsLabel("Permissions")
+                Button { withAnimation { showPermissions.toggle() } } label: {
+                    HStack {
+                        Text("\(n) permission\(n == 1 ? "" : "s")").font(.system(size: 12))
+                        Image(systemName: showPermissions ? "chevron.down" : "chevron.right").font(.system(size: 10))
+                        Spacer()
+                    }.foregroundStyle(Theme.soft).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+            }
+            if !active.isEmpty && showPermissions {
                 ForEach(active) { g in
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 1) {
@@ -165,14 +140,54 @@ struct MenuView: View {
         }
     }
 
-    // Phase A item 5: one guaranteed way out. Pauses both walls for 15 minutes
-    // and resumes by itself; while paused, a banner with the end time + Resume.
-    @ViewBuilder private var globalPause: some View {
-        PauseControl(state: grantManager.pauseState(nil), until: grantManager.pauseEnds(nil),
-                     pauseLabel: "Pause Kai for 15 minutes",
-                     pause: { grantManager.pauseAll(minutes: 15) },
-                     resume: { grantManager.pauseAll(minutes: 0) },
-                     extend: { grantManager.extendPause(nil) })
+    // Phase A item 5 / B3: one guaranteed way out. Pause (footer) stops both
+    // walls for 15 minutes and resumes by itself; while paused, a banner says
+    // what that means, with the end time, Resume and +15 min.
+    @ViewBuilder private var pausedBanner: some View {
+        let st = grantManager.pauseState(nil)
+        if st != Int32(KAI_PAUSE_NONE) {
+            PauseControl(state: st, until: grantManager.pauseEnds(nil),
+                         title: "Kai is paused until \(grantManager.pauseEnds(nil).map { $0.formatted(date: .omitted, time: .shortened) } ?? "soon")",
+                         note: PauseText.global,
+                         pause: {}, resume: { grantManager.pauseAll(minutes: 0) },
+                         extend: { grantManager.extendPause(nil) })
+        }
+    }
+
+    // B3: one line of protections, from measured state. Durable changes
+    // (Watch, Off) live in Settings, behind owner authentication.
+    private var protectionsLine: some View {
+        let l = model.levels(storageOn: storage.isOn, networkOn: wall.isOn)
+        let chrome = model.agentInfo(.chrome)
+        let chats = chrome.installed && chrome.extensionLoaded != false
+        return Button { open(.files) } label: {
+            HStack(spacing: 6) {
+                Text(ProtectionText.mark("Files", level: storage.isOn ? (l.files > 0 ? l.files : -1) : 0))
+                Text("·").foregroundStyle(Theme.muted)
+                Text(ProtectionText.mark("Internet", level: l.internet))
+                Text("·").foregroundStyle(Theme.muted)
+                Text(chats ? "Chats ✓" : "Chats: off")
+                Spacer()
+                Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(Theme.muted)
+            }
+            .font(.system(size: 12)).foregroundStyle(Theme.soft).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open Settings to change Files, Internet or Chats.")
+    }
+
+    // B2: telemetry is denied silently; one passive hint per agent.
+    @ViewBuilder private var telemetryHints: some View {
+        ForEach(grantManager.telemetryHints, id: \.self) { a in
+            HStack(alignment: .top, spacing: 6) {
+                Text(RuleText.telemetry(a)).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                Spacer()
+                Button { grantManager.dismissTelemetryHint(a) } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.plain).font(.system(size: 10)).foregroundStyle(Theme.muted)
+                    .accessibilityLabel("Dismiss")
+            }
+        }
     }
 
     // Item 1: a persistent banner while any session is paused, with Resume.
@@ -211,10 +226,21 @@ struct MenuView: View {
         .animation(.easeInOut(duration: 0.6), value: glow)
     }
 
+    // B3: one header line from capability state ("Protected · 3 agents
+    // working", "Partly protected · Files is watching only", "Kai is paused").
     private var header: some View {
         HStack(spacing: 10) {
             Image("KaiLogo").resizable().frame(width: 26, height: 26).accessibilityHidden(true)
-            Text("Kai").font(Theme.display(18))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(model.statusSentence(storageOn: storage.isOn, networkOn: wall.isOn,
+                                          agents: agents.workingNow.count))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(model.health == .problem ? Theme.coral : glow)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let note = model.internetUnverifiedNote(networkOn: wall.isOn) {
+                    Text(note).font(.system(size: 11)).foregroundStyle(Theme.amber)
+                }
+            }
             if !KaiInstance.isRelease { DevBadge() }
             Spacer()
             if model.busy { ProgressView().controlSize(.small) }
@@ -240,25 +266,11 @@ struct MenuView: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    private var protection: some View {
-        // Interim (before S5): the menu shows the two system walls only. Per-agent
-        // toggles live in Settings → General (agents are on by default); the menu
-        // stays focused on observed protection and what needs the user.
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                CapsLabel("Protection")
-                Spacer()
-                Button("Agents") { open(.agentControl) }
-                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
-            }
-            Text("Covers every agent on this Mac.")
-                .font(.system(size: 11)).foregroundStyle(Theme.muted)
-            NetworkCard()
-            StorageCard()
-        }
+    @ViewBuilder private var recent: some View {
+        if !recentItems.isEmpty { recentList }
     }
 
-    private var recent: some View {
+    private var recentList: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 CapsLabel("Recent")
@@ -266,37 +278,27 @@ struct MenuView: View {
                 Button("See all") { open(.activity) }
                     .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
             }
-            let items = Array(model.importantEventGroups.prefix(3))
-            if items.isEmpty {
-                Text("Nothing blocked yet.").font(.system(size: 13)).foregroundStyle(Theme.muted)
-            }
-            ForEach(items) { EventLine(event: $0.event, count: $0.count) }
-            let hosts = model.reachedHosts.count
-            if hosts > 0 {
-                Button { open(.internet) } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "eye").foregroundStyle(Theme.muted)
-                        Text("\(hosts) new host\(hosts == 1 ? "" : "s") noticed (not blocked)")
-                            .foregroundStyle(Theme.soft)
-                        Spacer()
-                        Text("Review").foregroundStyle(Theme.lime)
-                    }
-                    .font(.system(size: 13))
-                    .padding(.horizontal, 10).padding(.vertical, 8)
-                    .background(Theme.sidebar, in: RoundedRectangle(cornerRadius: 10))
-                    .overlay(RoundedRectangle(cornerRadius: 10)
-                        .stroke(Theme.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
-                }
-                .buttonStyle(.plain)
-            }
+            ForEach(recentItems) { EventLine(event: $0.event, count: $0.count) }
         }
     }
 
+    /// B3: Recent shows only meaningful events from the last hour.
+    private var recentItems: [EventGroup] {
+        let hourAgo = Date().addingTimeInterval(-3600)
+        return Array(model.importantEventGroups.filter { ($0.event.date ?? .distantPast) > hourAgo }.prefix(3))
+    }
+
     private var footer: some View {
-        HStack {
-            Button("Edit Policy") { model.openPolicyFile() }
+        HStack(spacing: 14) {
+            if grantManager.pauseState(nil) == Int32(KAI_PAUSE_NONE) {
+                Button { grantManager.pauseAll(minutes: 15) } label: {
+                    Label("Pause Kai", systemImage: "pause.circle")
+                }
+                .help("Pauses Kai for 15 minutes, then it resumes by itself. Kai's own settings stay protected.")
+            }
+            Button("Settings") { open(.files) }
             Spacer()
-            Button("Quit Kai") { NSApp.terminate(nil) }
+            Button("Quit") { NSApp.terminate(nil) }
         }
         .buttonStyle(.plain)
         .font(.system(size: 12))
@@ -526,7 +528,10 @@ struct NetworkCard: View {
             }
             Spacer()
             Toggle("Internet", isOn: Binding(get: { wall.isOn },
-                                                 set: { $0 ? wall.turnOn() : wall.turnOff() }))
+                                                 set: { on in
+                                                     if on { wall.turnOn(); return }
+                                                     Task { if await OwnerAuth.shared.confirm("turn off Internet protection") { wall.turnOff() } }
+                                                 }))
                 .toggleStyle(KaiToggleStyle()).labelsHidden()
                 .disabled(wall.state == .activating || wall.state == .checking)
         }
@@ -575,7 +580,10 @@ struct StorageCard: View {
             }
             Spacer()
             Toggle("Files", isOn: Binding(get: { storage.isOn },
-                                                 set: { $0 ? storage.turnOn() : storage.turnOff() }))
+                                                 set: { on in
+                                                     if on { storage.turnOn(); return }
+                                                     Task { if await OwnerAuth.shared.confirm("turn off Files protection") { storage.turnOff() } }
+                                                 }))
                 .toggleStyle(KaiToggleStyle()).labelsHidden()
                 .disabled(storage.state == .activating || storage.state == .checking)
         }
@@ -692,6 +700,8 @@ struct PauseControl: View {
     let state: Int32
     let until: Date?
     var pauseLabel = "Pause 15 min"
+    var title: String? = nil
+    var note = "Kai's own settings stay protected."
     let pause: () -> Void
     let resume: () -> Void
     let extend: () -> Void
@@ -702,15 +712,16 @@ struct PauseControl: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
                     Image(systemName: "pause.circle.fill").foregroundStyle(Theme.amber)
-                    Text("Paused · resumes \(until.map { $0.formatted(date: .omitted, time: .shortened) } ?? "soon")")
-                        .font(.system(size: 12))
+                    Text(title ?? "Paused · resumes \(until.map { $0.formatted(date: .omitted, time: .shortened) } ?? "soon")")
+                        .font(.system(size: 12, weight: title == nil ? .regular : .semibold))
                     Spacer()
                     Button("+15 min", action: extend)
                         .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.muted)
                     Button("Resume", action: resume)
                         .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
                 }
-                Text("Kai's own settings stay protected.").font(.system(size: 11)).foregroundStyle(Theme.muted)
+                Text(note).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(8)
             .background(Theme.amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
@@ -740,5 +751,32 @@ struct DevBadge: View {
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(Theme.amber, in: Capsule())
             .help("A development copy: it doesn't run Kai's control service. The installed Kai in /Applications does.")
+    }
+}
+
+/// B3: per-session pause is out of the release contract until it is verified
+/// end to end on the real extensions. Hidden unless a developer turns it on:
+///   defaults write io.github.sameehj.kai devPerSessionPause -bool YES
+enum DevFlags {
+    static var perSessionPause: Bool { UserDefaults.standard.bool(forKey: "devPerSessionPause") }
+}
+
+enum PauseText {
+    /// What a global pause means, exactly: the hooks and Files let soft blocks
+    /// through and log them; the Internet wall lets everything through
+    /// unrecorded; Kai's own files stay blocked.
+    static let global = "Agents aren't being checked and nothing is blocked. Files notes what it would have "
+        + "blocked; Internet activity isn't recorded. Kai's own settings stay protected."
+}
+
+enum ProtectionText {
+    /// "Files ✓", "Files: watching", "Files: off", "Files: not running".
+    static func mark(_ name: String, level: Int32) -> String {
+        switch level {
+        case 2: return "\(name) ✓"
+        case 1: return "\(name): watching"
+        case 0: return "\(name): off"
+        default: return "\(name): not running"
+        }
     }
 }

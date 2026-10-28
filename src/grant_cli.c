@@ -193,26 +193,14 @@ static int grant_create(int argc, char **argv) {
     return 0;
 }
 
-/* kai pause <storage|network|all> <minutes> ; kai resume <...> (M1.7). Refuses
- * agent callers, like grant changes. */
+/* B2: pausing lowers protection, so it is accepted only from Kai's own app UI
+ * (one click, time-boxed), never from a command an agent could run. kai resume
+ * stays: it only turns checks back on. */
 int kai_cmd_pause(int argc, char **argv) {
-    if (refuse_if_agent("pause")) return 3;
-    if (argc < 1) { fprintf(stderr, "usage: kai pause <storage|network|all|session <id>> <minutes>\n"); return 2; }
-    if (!strcmp(argv[0], "session")) {       /* S6: pause one session only */
-        if (argc < 2) { fprintf(stderr, "usage: kai pause session <id> [minutes]\n"); return 2; }
-        long long mins = (argc >= 3) ? strtoll(argv[2], NULL, 10) : 15;
-        if (kai_session_pause_write(argv[1], mins) != 0) { fprintf(stderr, "kai pause: bad session id\n"); return 1; }
-        printf("paused session %s for %lld min (auto-resumes; never-tier still applies)\n", argv[1], mins);
-        return 0;
-    }
-    long long mins = (argc >= 2) ? strtoll(argv[1], NULL, 10) : 15;
-    const char *wall = argv[0];
-    const char *walls[] = { "storage", "network" };
-    for (int i = 0; i < 2; i++)
-        if (!strcmp(wall, "all") || !strcmp(wall, walls[i]))
-            kai_wall_pause_write(walls[i], mins);
-    printf("paused %s for %lld min (auto-resumes)\n", wall, mins);
-    return 0;
+    (void)argc; (void)argv;
+    fprintf(stderr, "Pause Kai from the menu bar: click Kai, then Pause Kai (15 minutes, resumes by itself).\n"
+                    "(There is no pause command, so an agent can't pause Kai.)\n");
+    return 4;
 }
 int kai_cmd_resume(int argc, char **argv) {
     if (refuse_if_agent("resume")) return 3;

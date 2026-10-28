@@ -55,6 +55,15 @@ struct PendingRequest: Decodable, Identifiable {
     var session: String? = nil  // the ES session this request belongs to (for "this session" grants)
     var project: String? = nil  // that session's project folder (the card names the session by it)
     var declaredHost: String? = nil  // MCP: the server's .mcp.json host, offered as a second grant
+    var identity: String? = nil      // B2: the agent's verified signing identity ("" / nil = unverified)
+    var hostKnown: Bool? = nil       // B2: false = a connection with no known hostname
+    /// B2 hostname honesty: the decision had only an address, so the card says
+    /// so and offers this one connection; no rule is made from a guess.
+    var unknownHost: Bool { op == "connect" && hostKnown == false }
+    var verifiedIdentity: String? { (identity ?? "").isEmpty ? nil : identity }
+    /// Keep blocked can be remembered, and a rule made, only for a verified
+    /// agent and a real hostname.
+    var rememberable: Bool { op == "connect" && !unknownHost && verifiedIdentity != nil }
     var strengthLabel: String { strength >= 2 ? "strong" : strength == 1 ? "medium" : "weak" }
     var isMCP: Bool { resource.hasPrefix("mcp:") }
     var opLabel: String { op == "connect" ? "connect" : (op == "open" || op == "readdir") ? "read" : "write" }
@@ -92,7 +101,7 @@ struct PendingRequest: Decodable, Identifiable {
             let parts = resource.dropFirst(4).split(separator: "/", maxSplits: 1).map(String.init)
             return parts.count == 2 ? "the tool \u{201C}\(parts[1])\u{201D} from \(parts[0])" : "an MCP tool"
         }
-        if op == "connect" { return resource }
+        if op == "connect" { return unknownHost ? "\(resource) (hostname unknown)" : resource }
         let r = resource.lowercased()
         let name = (resource as NSString).lastPathComponent
         var t: String
@@ -116,6 +125,7 @@ struct PendingRequest: Decodable, Identifiable {
         if (tier ?? 1) >= 4 { return "it " + (note ?? "is part of Kai's own protection") }
         if let n = note, !n.isEmpty { return "it " + n }
         if isMCP { return "Kai asks before an agent uses a tool it hasn't used before" }
+        if unknownHost { return "it isn't on your allowed list, and Kai couldn't learn which site this address is" }
         if op == "connect" { return "the site isn't on your allowed list" }
         let r = resource.lowercased()
         if r.contains("/.ssh/") { return "keys can unlock your servers" }
@@ -165,7 +175,19 @@ struct ActiveGrant: Decodable, Identifiable {
     let expires_utc: String
     let hmac: String
     var session_id: String? = nil
+    var created_utc: String? = nil
+    var confirmed: Int? = 0
+    var authenticated: Int? = 0
     var opLabel: String { op == 1 ? "write" : op == 2 ? "connect" : "read" }
+    /// B2 grant authority: who approved it, how, and when.
+    var authorityLabel: String {
+        let how = (authenticated ?? 0) == 1 ? "with Touch ID or your password"
+                : (confirmed ?? 0) == 1 ? "with a click and a confirm" : "with a click"
+        let when = Int(created_utc ?? "").map {
+            Date(timeIntervalSince1970: TimeInterval($0)).formatted(date: .abbreviated, time: .shortened)
+        } ?? ""
+        return "Given by you in Kai \(how)" + (when.isEmpty ? "" : " · \(when)")
+    }
     /// B1: scope and duration always agree. A grant bound to a session lasts
     /// until that session ends (its expiry is only a cap), so it never shows
     /// "this process · 7 days".
@@ -254,6 +276,9 @@ final class GrantManager: ObservableObject {
     @Published private(set) var pending: [PendingRequest] = []
     @Published private(set) var grants: [ActiveGrant] = []
     @Published private(set) var pendingPolicy: [PendingPolicyChange] = []
+    @Published private(set) var rules: [DecisionRule] = []
+    /// B2: agents whose telemetry Kai blocked silently (one passive hint each).
+    @Published private(set) var telemetryHints: [String] = []
     /// Phase A item 5: when the global pause ends (nil = not paused).
     @Published private(set) var pausedUntil: Date?
 
@@ -261,6 +286,8 @@ final class GrantManager: ObservableObject {
     private var pendingDir: String { home + "/.kai/pending" }
     private var grantsDir: String { home + "/.kai/grants" }
     private var pendingPolicyDir: String { home + "/.kai/pending-policy" }
+    private var rulesDir: String { home + "/.kai/rules" }
+    private var hintsDir: String { home + "/.kai/hints" }
     private var policyPath: String { home + "/.kai/policy" }
     private var timer: Timer?
 
@@ -313,6 +340,10 @@ final class GrantManager: ObservableObject {
         pending = live
         grants = loadJSON(dir: grantsDir).compactMap { try? JSONDecoder().decode(ActiveGrant.self, from: $0) }
             .sorted { $0.id < $1.id }
+        rules = loadJSON(dir: rulesDir).compactMap { try? JSONDecoder().decode(DecisionRule.self, from: $0) }
+            .sorted { $0.created < $1.created }
+        telemetryHints = ((try? FileManager.default.contentsOfDirectory(atPath: hintsDir)) ?? [])
+            .filter { $0.hasPrefix("telemetry-") }.map { String($0.dropFirst(10)) }.sorted()
         pendingPolicy = loadJSON(dir: pendingPolicyDir)
             .compactMap { try? JSONDecoder().decode(PendingPolicyChange.self, from: $0) }
             .sorted { $0.id < $1.id }
@@ -329,15 +360,22 @@ final class GrantManager: ObservableObject {
     /// first, then a grant for the requested op, bound to the session, capped at
     /// 15 minutes; override/confirm -> the click is the confirmation. The honor
     /// flags are signed into the grant.
+    /// B2: a connection with no known hostname: allow this one connection (a
+    /// one-shot grant for this process and address), never a session or rule.
+    func approveOnce(_ req: PendingRequest) {
+        signGrant(req, duration: .min10, confirmed: false, authenticated: false, breakglass: false, oneShot: true)
+    }
+
     func approve(_ req: PendingRequest, duration: GrantDuration) {
+        if req.unknownHost { approveOnce(req); return }
         let tier = req.tier ?? 1
         if tier >= 4 { return }   // never: not approvable from here
         if tier == 3 {            // break-glass: require Touch ID / login password
-            let ctx = LAContext()
             let reason = "allow \(req.agentTitle) to \(req.verb) \(req.thing) for 15 minutes"
-            ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { ok, _ in
-                DispatchQueue.main.async {
-                    guard ok else { return }   // auth failed/cancelled: nothing signed
+            // break-glass asks every time: never the 30-minute window
+            Task {
+                guard await OwnerAuth.shared.confirm(reason, everyTime: true) else { return }
+                await MainActor.run {
                     self.signGrant(req, duration: .min10, confirmed: true, authenticated: true, breakglass: true)
                 }
             }
@@ -347,7 +385,7 @@ final class GrantManager: ObservableObject {
     }
 
     private func signGrant(_ req: PendingRequest, duration: GrantDuration,
-                           confirmed: Bool, authenticated: Bool, breakglass: Bool) {
+                           confirmed: Bool, authenticated: Bool, breakglass: Bool, oneShot: Bool = false) {
         guard let key = KaiApprovalKey.ensure() else { return }
         let now = Int(Date().timeIntervalSince1970)
         // Break-glass is capped at 15 minutes regardless of choice (its TTL must
@@ -363,15 +401,17 @@ final class GrantManager: ObservableObject {
         // the requesting process. Break-glass binds to the session when there is
         // one, so each process in the task doesn't re-prompt for Touch ID.
         let hasSession = !(req.session ?? "").isEmpty
-        let sessionBound = breakglass ? hasSession : duration.isSession
+        let sessionBound = oneShot ? false : breakglass ? hasSession : duration.isSession
         let sessionId = sessionBound ? (req.session ?? "") : ""
 
         let wrote = emitGrant(id: gid, resource: req.resource, opCode: opCode,
                               destKind: (req.op == "connect") ? 1 : 0, req: req, now: now,
                               expires: expires, sessionId: sessionId, confirmed: confirmed,
-                              authenticated: authenticated, key: key)
+                              authenticated: authenticated, key: key, scope: oneShot ? 1 : 0)
         guard wrote else { return }
         KaiSounds.permissionGranted()
+        Notifier.say("Kai allowed \(req.agentTitle) to \(req.verb) \(req.thing)",
+                     oneShot ? "This connection only." : sessionBound ? "For this session." : "For \(duration.label).")
         kai_grant_audit("approved", gid, req.agent, req.resource, opCode, "sign",
                         breakglass ? "break-glass approved with authentication" : "approved by console user")
 
@@ -395,12 +435,12 @@ final class GrantManager: ObservableObject {
     /// Build and write one signed grant file. Returns true on success.
     private func emitGrant(id: String, resource: String, opCode: Int32, destKind: Int32,
                            req: PendingRequest, now: Int, expires: Int, sessionId: String,
-                           confirmed: Bool, authenticated: Bool, key: Data) -> Bool {
+                           confirmed: Bool, authenticated: Bool, key: Data, scope: Int32 = 0) -> Bool {
         let json: String? = key.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> String? in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return nil }
             guard let c = kai_grant_build_json3(id, Int64(now), Int64(expires), Int32(req.pid),
                                                 req.pidversion, req.agent, Int32(req.strength),
-                                                resource, opCode, 0 /*process scope*/, "console-user",
+                                                resource, opCode, scope /*0 process, 1 once*/, "console-user",
                                                 sessionId, "", destKind,
                                                 confirmed ? 1 : 0, authenticated ? 1 : 0,
                                                 base, key.count) else { return nil }
@@ -413,6 +453,75 @@ final class GrantManager: ObservableObject {
         let fp = grantsDir + "/" + id + ".json"
         return FileManager.default.createFile(atPath: fp, contents: Data(json.utf8),
                                               attributes: [.posixPermissions: 0o600])
+    }
+
+    /// B2: Keep blocked. For a verified agent and a real hostname it is
+    /// remembered (a signed rule): later attempts are audited, not carded.
+    /// Reversible in Settings → Permissions. Otherwise it just dismisses.
+    func keepBlocked(_ req: PendingRequest) {
+        if req.rememberable, let ident = req.verifiedIdentity,
+           writeRule(kind: Int32(KAI_RULE_KEEP_BLOCKED), req: req, identity: ident, authenticated: false) {
+            kai_grant_audit("denied", req.id, req.agent, req.resource, 2, "deny",
+                            "kept blocked by user; remembered for \(ident)")
+            for r in pending where r.op == "connect" && r.resource == req.resource && r.identity == req.identity {
+                clearPending(r)
+            }
+            refresh(); return
+        }
+        deny(req)
+    }
+
+    /// B2: a persistent Allow rule, made deliberately (More… → Create a rule),
+    /// confirmed with owner authentication, bound to the verified identity.
+    func createRule(_ req: PendingRequest) {
+        guard req.rememberable, let ident = req.verifiedIdentity else { return }
+        Task {
+            guard await OwnerAuth.shared.confirm("allow \(req.agentTitle) to connect to \(req.resource) in every future session")
+            else { return }
+            await MainActor.run {
+                if self.writeRule(kind: Int32(KAI_RULE_ALLOW), req: req, identity: ident, authenticated: true) {
+                    KaiSounds.permissionGranted()
+                    Notifier.say("Kai rule: \(req.agentTitle) may connect to \(req.resource)", "In every session, until you remove it.")
+                    kai_grant_audit("approved", req.id, req.agent, req.resource, 2, "sign",
+                                    "rule created with owner authentication for \(ident)")
+                    for r in self.pending where r.op == "connect" && r.resource == req.resource
+                        && r.identity == req.identity { self.clearPending(r) }
+                }
+                self.refresh()
+            }
+        }
+    }
+
+    private func writeRule(kind: Int32, req: PendingRequest, identity: String, authenticated: Bool) -> Bool {
+        guard let key = KaiApprovalKey.ensure() else { return false }
+        let rid = UUID().uuidString
+        let json: String? = key.withUnsafeBytes { raw -> String? in
+            guard let base = raw.bindMemory(to: UInt8.self).baseAddress,
+                  let c = kai_rule_build_json(rid, kind, identity, req.agent, req.resource, 2,
+                                              Int64(Date().timeIntervalSince1970), authenticated ? 1 : 0,
+                                              base, key.count) else { return nil }
+            defer { free(c) }
+            return String(cString: c)
+        }
+        guard let json else { return false }
+        try? FileManager.default.createDirectory(atPath: rulesDir, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        return FileManager.default.createFile(atPath: rulesDir + "/" + rid + ".json", contents: Data(json.utf8),
+                                              attributes: [.posixPermissions: 0o600])
+    }
+
+    /// Removing a rule never lowers protection (an Allow goes away, or a Keep
+    /// blocked goes back to asking), so it is one click.
+    func removeRule(_ r: DecisionRule) {
+        kai_grant_audit("revoked", r.id, r.agent, r.dest, 2, "revoke",
+                        r.kind == "allow" ? "rule removed by user" : "keep blocked removed by user")
+        try? FileManager.default.removeItem(atPath: rulesDir + "/" + r.id + ".json")
+        refresh()
+    }
+
+    func dismissTelemetryHint(_ agent: String) {
+        try? FileManager.default.removeItem(atPath: hintsDir + "/telemetry-" + agent)
+        refresh()
     }
 
     func deny(_ req: PendingRequest) {
@@ -514,6 +623,7 @@ final class GrantManager: ObservableObject {
         for w in ["storage", "network"] { _ = w.withCString { kai_wall_pause_write($0, Int64(minutes)) } }
         kai_audit("pause", "pause", minutes > 0 ? "paused" : "resumed", "",
                   minutes > 0 ? "Kai paused \(minutes)m by user" : "Kai resumed by user")
+        if minutes > 0 { Notifier.say("Kai paused for \(minutes) minutes", PauseText.global) }
         refresh()
     }
 
@@ -607,6 +717,7 @@ struct ApprovalCard: View {
     @ObservedObject var manager: GrantManager
     @State private var showWhy = false
     @State private var confirmOverride: GrantDuration?
+    @State private var showRule = false
 
     private var tier: Int { req.tier ?? 1 }
 
@@ -621,7 +732,12 @@ struct ApprovalCard: View {
             if showWhy {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(req.resource).font(.system(.caption, design: .monospaced)).lineLimit(3).textSelection(.enabled)
-                    Text("\(req.agent) · pid \(req.pid) · identity \(req.strengthLabel)\(req.session.map { " · session \($0.prefix(8))" } ?? "")")
+                    // B2: the identities, kept apart.
+                    Text("Agent: \(req.verifiedIdentity.map { "\($0), verified signature" } ?? "\(req.agent), signature not verified")")
+                        .font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+                    Text("Process: pid \(req.pid) · version \(req.pidversion)")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Text("Session: \(req.session.map { String($0.prefix(8)) } ?? "none") · tied \(req.strengthLabel == "strong" ? "by Kai's launch" : req.strengthLabel == "medium" ? "by process ancestry" : "by name only (weak)")")
                         .font(.caption2).foregroundStyle(.secondary)
                     if !req.hintTip.isEmpty {
                         Text("To avoid this, " + req.hintTip).font(.caption2).foregroundStyle(.secondary)
@@ -642,13 +758,23 @@ struct ApprovalCard: View {
                         .keyboardShortcut(.defaultAction)
                     Button("Keep blocked") { manager.deny(req) }
                 default:
-                    Button("Allow for this session") { ask(.session) }.keyboardShortcut(.defaultAction)
-                    Button("Keep blocked") { manager.deny(req) }
-                    Menu("Other…") {
-                        ForEach(tier == 2 ? [GrantDuration.day1] : [.min10, .hour1, .day1, .day7], id: \.self) { d in
-                            Button("Allow for \(d.label)") { ask(d) }
-                        }
-                    }.menuStyle(.borderlessButton).fixedSize()
+                    if req.unknownHost {
+                        // B2 hostname honesty: only this connection, no rule.
+                        Button("Allow this connection") { manager.approveOnce(req) }.keyboardShortcut(.defaultAction)
+                        Button("Keep blocked") { manager.deny(req) }
+                    } else {
+                        Button("Allow for this session") { ask(.session) }.keyboardShortcut(.defaultAction)
+                        Button("Keep blocked") { manager.keepBlocked(req) }
+                        Menu("More…") {
+                            ForEach(tier == 2 ? [GrantDuration.day1] : [.min10, .hour1, .day1, .day7], id: \.self) { d in
+                                Button("Allow for \(d.label)") { ask(d) }
+                            }
+                            if req.rememberable && tier < 2 {
+                                Divider()
+                                Button("Create a rule…") { showRule = true }
+                            }
+                        }.menuStyle(.borderlessButton).fixedSize()
+                    }
                 }
                 Spacer()
                 Button(showWhy ? "Hide" : "Why?") { withAnimation { showWhy.toggle() } }
@@ -665,6 +791,12 @@ struct ApprovalCard: View {
                 confirmOverride = nil
             }
             Button("Keep blocked", role: .cancel) { confirmOverride = nil }
+        }
+        .confirmationDialog("Allow \(req.agentTitle) to connect to \(req.resource)?", isPresented: $showRule) {
+            Button("Create rule") { manager.createRule(req) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(RuleText.covers(agent: req.agentTitle, identity: req.verifiedIdentity ?? "", host: req.resource))
         }
     }
 
@@ -761,4 +893,43 @@ enum KaiSounds {
     static func approvalNeeded() { play("Ping", key: "soundApprovalNeeded", default: true) }
     static func permissionGranted() { play("Glass", key: "soundPermissionGranted", default: true) }
     static func blocked() { play("Basso", key: "soundBlocked", default: false) }
+}
+
+/// B2: a persistent decision the user made (Keep blocked, or an Allow rule).
+struct DecisionRule: Decodable, Identifiable {
+    let id: String
+    let kind: String          // "allow" | "keep_blocked"
+    let identity: String
+    let agent: String
+    let dest: String
+    let created_utc: String
+    var authenticated: Int? = 0
+    var created: Int { Int(created_utc) ?? 0 }
+    var isAllow: Bool { kind == "allow" }
+    var agentTitle: String {
+        switch agent {
+        case "claude": return "Claude Code"
+        case "codex": return "Codex"
+        case "cursor": return "Cursor"
+        default: return agent.prefix(1).uppercased() + agent.dropFirst()
+        }
+    }
+}
+
+enum RuleText {
+    /// What an Allow rule covers, said before it is made and shown with it.
+    static func covers(agent: String, identity: String, host: String) -> String {
+        "Covers \(agent) signed as \(identity), in every session from now on, until you remove it in "
+        + "Settings → Permissions. Only \(host), not its subdomains or other agents. "
+        + "Kai can't tell what is sent over this encrypted connection. Needs Touch ID or your password."
+    }
+    /// B2: one passive hint per agent whose telemetry was blocked.
+    static func telemetry(_ agent: String) -> String {
+        switch agent {
+        case "claude": return "Claude Code telemetry is blocked. To stop the attempts, set DISABLE_TELEMETRY=1."
+        default:
+            let t = agent.prefix(1).uppercased() + agent.dropFirst()
+            return "\(t) telemetry is blocked. Kai doesn't ask about it."
+        }
+    }
 }

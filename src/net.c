@@ -11,6 +11,7 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 /* host == entry, or host ends with "." + entry. Case-insensitive. */
 static int host_covered(const char *host, const char *entry) {
@@ -139,6 +140,26 @@ static int read_ip(const char *ip, unsigned char *addr, int *family) {
 static int is_loopback(const unsigned char *addr, int family) {
     static const unsigned char v6lo[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
     return family == AF_INET ? addr[0] == 127 : memcmp(addr, v6lo, 16) == 0;
+}
+
+/* B2: hosts that only collect telemetry or crash reports. Matching is on the
+ * domain or a subdomain of it. */
+int kai_host_is_telemetry(const char *host) {
+    static const char *const T[] = {
+        "sentry.io", "datadoghq.com", "datadoghq.eu", "statsig.com", "statsigapi.net",
+        "featuregates.org", "segment.io", "segment.com", "mixpanel.com", "amplitude.com",
+        "posthog.com", "honeycomb.io", "bugsnag.com", "newrelic.com", "launchdarkly.com",
+        "events.launchdarkly.com", "app-measurement.com",
+    };
+    if (!host || !*host) return 0;
+    size_t hl = strlen(host);
+    for (size_t i = 0; i < sizeof T / sizeof T[0]; i++) {
+        size_t tl = strlen(T[i]);
+        if (hl == tl ? !strcasecmp(host, T[i])
+                     : hl > tl && host[hl - tl - 1] == '.' && !strcasecmp(host + hl - tl, T[i]))
+            return 1;
+    }
+    return 0;
 }
 
 int kai_egress_endpoint_allowed(const kai_policy *p, const char *host, const char *ip, int port,
