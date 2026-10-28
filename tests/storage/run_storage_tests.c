@@ -1702,6 +1702,62 @@ static void test_session_model(void) {
     for (size_t i = 0; i < 4; i++) if (kids[i] > 0) { kill(kids[i], SIGTERM); waitpid(kids[i], NULL, 0); }
 }
 
+/* One session identity: the hook finds its KAI session (the per-pid map the
+ * wall writes) and checks the pause under that id, the same marker the wall
+ * reads. A paused session's blocked command goes through the hook (logged
+ * would-block); resumed, it's blocked again. Also: a session the wall can't
+ * name (started before a wall restart) still gets activity, credited to its
+ * agent root pid. */
+static void test_one_session_identity(void) {
+    printf("one session identity: hook pause by Kai session id (fix 1)\n");
+    const char *home = getenv("KAI_HOME");
+    const char *KEY = ".k" "ey";
+    char sd[700]; snprintf(sd, sizeof sd, "%s/sessions", home); mkdir(sd, 0700);
+    char sp[780]; snprintf(sp, sizeof sp, "%s/%d.json", sd, (int)getpid());
+    FILE *f = fopen(sp, "wb");
+    if (f) { fprintf(f, "{\"pid\":%d,\"pidversion\":0,\"session\":\"es-pause\"}", (int)getpid()); fclose(f); }
+    long long now = (long long)time(NULL);
+    kai_session_record("es-pause", "claude", "", (int)getpid(), 0, "/w", "", now);
+
+    char dir[] = "/tmp/kai-pauseXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char polp[600], outp[650], input[900], cmd[2600];
+    snprintf(polp, sizeof polp, "%s/policy", dir);
+    snprintf(outp, sizeof outp, "%s/out", dir);
+    f = fopen(polp, "w");
+    if (f) { fprintf(f, "protect *%s\n", KEY); fclose(f); }
+    snprintf(input, sizeof input,
+             "{\\\"hook_event_name\\\":\\\"PreToolUse\\\",\\\"tool_name\\\":\\\"Bash\\\","
+             "\\\"session_id\\\":\\\"conv-not-kai\\\","
+             "\\\"tool_input\\\":{\\\"command\\\":\\\"cat %s/a%s\\\"},\\\"cwd\\\":\\\"/tmp\\\"}", dir, KEY);
+    snprintf(cmd, sizeof cmd, "printf '%s' | KAI_HOME='%s' KAI_POLICY='%s' ./kai hook claude > '%s' 2>/dev/null",
+             input, home, polp, outp);
+
+    (void)system(cmd);
+    CHECK(file_contains(outp, "\"permissionDecision\":\"deny\""), "not paused: the hook blocks it");
+    kai_session_pause_write("es-pause", 15);
+    CHECK(kai_session_paused("es-pause", now), "paused under the KAI session id");
+    (void)system(cmd);
+    CHECK(!file_contains(outp, "\"permissionDecision\":\"deny\""),
+          "paused (by Kai session id, not the conversation id): the hook lets it run");
+    kai_session_pause_write("es-pause", 0);
+    (void)system(cmd);
+    CHECK(file_contains(outp, "\"permissionDecision\":\"deny\""), "resumed: blocked again");
+
+    /* Activity without a Kai session: credited to the agent root pid key. */
+    pid_t r = fork();
+    if (r == 0) { execl("/bin/sleep", "sleep", "20", (char *)NULL); _exit(127); }
+    usleep(100000);
+    kai_session_record("es-norec", "goose", "", (int)r, 0, "/w/z", "", now + 1);
+    char rootkey[40]; snprintf(rootkey, sizeof rootkey, "pid-%d", (int)r);
+    CHECK(kai_session_activity_touch(rootkey, NULL, now) == 0, "activity keyed by the agent root pid");
+    CHECK(sessions_json_run("r=[x for x in d if x[\"id\"]==\"es-norec\"]; "
+                            "sys.exit(0 if r and r[0][\"activity\"]==\"working\" else 1)") == 0,
+          "a session with only root-pid activity (wall restarted) still shows working");
+    kill(r, SIGTERM); waitpid(r, NULL, 0);
+    unlink(sp); unlink(polp); unlink(outp); rmdir(dir);
+}
+
 static void test_control_service(void) {
     printf("one control path: service apply (Step 3)\n");
     char err[256], msg[600];
@@ -2019,6 +2075,7 @@ int main(void) {
     test_session_reports();
     test_session_live();
     test_session_model();
+    test_one_session_identity();
     test_grant_tiers();
     test_session_pause();
     test_enforcement_labels();

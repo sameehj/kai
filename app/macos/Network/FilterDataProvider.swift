@@ -94,6 +94,7 @@ final class FilterDataProvider: NEFilterDataProvider {
             return .allow()
         }
         let pidv = Engine.pidVersion(fromAuditToken: token)
+        engine.noteActivity(pid: pid, pidv: pidv)   // a network event is agent activity
 
         let mode = engine.mode
         if mode == KAI_EGRESS_OFF { return .allow() }
@@ -356,6 +357,35 @@ final class Engine {
                                            Int64(Date().timeIntervalSince1970), &why, why.count) == 1
         }}}
         return ok
+    }
+
+    /// Agent Control "working": record a network event against the session the
+    /// storage wall named for this process (at most every 30 s per session),
+    /// or, if it named none, the agent root's "pid-<root>" key.
+    private var activitySeen: [String: Date] = [:]
+    func noteActivity(pid: pid_t, pidv: UInt32) {
+        var sid = sessionFor(pid: pid, pidv: pidv).sid
+        if sid.isEmpty {
+            lock.lock(); let pol = policy; lock.unlock()
+            var name = [CChar](repeating: 0, count: 64)
+            var apid: Int32 = 0
+            guard kai_process_agent(pol, pid, &name, name.count, &apid) == 1 else { return }
+            let root = kai_agent_root_pid(pol, apid, name)
+            sid = "pid-\(root > 0 ? root : apid)"
+        }
+        lock.lock()
+        if let t = activitySeen[sid], Date().timeIntervalSince(t) < 30 { lock.unlock(); return }
+        if activitySeen.count > 4096 { activitySeen.removeAll() }
+        activitySeen[sid] = Date()
+        let o = owner
+        lock.unlock()
+        DispatchQueue.global(qos: .utility).async {
+            _ = kai_session_activity_touch(sid, nil, Int64(Date().timeIntervalSince1970))
+            guard let o else { return }
+            let dir = String(cString: kai_session_activity_dir())
+            chown(dir, o.uid, o.gid)
+            chown(dir + "/" + sid + ".json", o.uid, o.gid)
+        }
     }
 
     /// The session (and project) the storage extension recorded for this process

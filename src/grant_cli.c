@@ -292,6 +292,19 @@ static int root_is_nested(const kai_session *reg, int nr, int i) {
 
 static int is_delegated(const kai_session *s) { return strstr(s->agent, " (delegated)") != NULL; }
 
+/* A session's last activity, credited by SESSION: its Kai id, or - for agent
+ * events the wall saw before it could name a session (it restarted under a
+ * running agent) - the agent root's pid key. */
+static long long session_last(const kai_session *s) {
+    long long t = s->source == KAI_SESS_SCAN ? 0 : kai_session_last_active(s->id, NULL);
+    if (s->root_pid > 0) {
+        char k[32]; snprintf(k, sizeof k, "pid-%d", s->root_pid);
+        long long u = kai_session_last_active(k, NULL);
+        if (u > t) t = u;
+    }
+    return t;
+}
+
 static void row_add_ws(sess_row *r, const char *path) {
     if (!path || !*path || !strcmp(path, "/") || path[0] == '(') return;
     for (int i = 0; i < r->nws; i++) if (!strcmp(r->ws[i], path)) return;
@@ -336,7 +349,7 @@ static int session_rows(sess_row **out, int *n) {
             int live = kai_session_live(&reg[i]);
             if (!live) {
                 if (reg[i].ended_utc && now - reg[i].ended_utc < 86400 && reg[i].ended_utc >= cutoff) {
-                    rows[c].s = reg[i]; rows[c].last = kai_session_last_active(reg[i].id, NULL); c++;
+                    rows[c].s = reg[i]; rows[c].last = session_last(&reg[i]); c++;
                 }
                 continue;
             }
@@ -350,7 +363,7 @@ static int session_rows(sess_row **out, int *n) {
                     newer = 1;
             if (newer) continue;
             rows[c].s = reg[i];
-            rows[c].last = kai_session_last_active(reg[i].id, NULL);
+            rows[c].last = session_last(&reg[i]);
             c++;
         }
         int nlive = c;
@@ -366,7 +379,7 @@ static int session_rows(sess_row **out, int *n) {
                     if (kai_agent_product_kind(scan[i].agent) == KAI_AGENT_IDE) row_add_ws(&rows[j], scan[i].project);
                     dup = 1; break;
                 }
-            if (!dup) { rows[c].s = scan[i]; rows[c].last = 0; c++; }   /* scan-only: no activity seen */
+            if (!dup) { rows[c].s = scan[i]; rows[c].last = session_last(&scan[i]); c++; }   /* root-pid key only */
         }
 
         /* One row per IDE app: its live rows' workspaces, each working or idle
@@ -377,8 +390,10 @@ static int session_rows(sess_row **out, int *n) {
             row_add_ws(h, h->s.project);
             char sids[32][KAI_SESSION_ID_MAX]; int nsid = 0;
             if (h->s.source != KAI_SESS_SCAN) kai_strlcpy(sids[nsid++], h->s.id, sizeof sids[0]);
+            long long app_last = h->last;
             for (int j = i + 1; j < c; j++) {
                 if (rows[j].s.ended_utc || strcmp(rows[j].s.agent, h->s.agent)) continue;
+                if (rows[j].last > app_last) app_last = rows[j].last;
                 row_add_ws(h, rows[j].s.project);
                 for (int w = 0; w < rows[j].nws; w++) row_add_ws(h, rows[j].ws[w]);
                 if (rows[j].s.source != KAI_SESS_SCAN && nsid < 32) kai_strlcpy(sids[nsid++], rows[j].s.id, sizeof sids[0]);
@@ -391,14 +406,16 @@ static int session_rows(sess_row **out, int *n) {
                     h->s.started_utc = rows[j].s.started_utc;
                 rows[j] = rows[--c]; j--;               /* folded into h */
             }
-            h->last = 0;
+            /* The row is working if any of its sessions had an agent event
+             * (prompt, tool call, file or network) - credited by session, not
+             * by folder. Per-workspace times are a best-effort detail. */
+            h->last = app_last;
             for (int w = 0; w < h->nws; w++) {
                 h->wslast[w] = 0;
                 for (int k = 0; k < nsid; k++) {
                     long long t = kai_session_last_active(sids[k], h->ws[w]);
                     if (t > h->wslast[w]) h->wslast[w] = t;
                 }
-                if (h->wslast[w] > h->last) h->last = h->wslast[w];
             }
             h->s.project[0] = '\0';
         }

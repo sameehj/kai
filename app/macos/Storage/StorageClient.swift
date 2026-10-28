@@ -430,21 +430,41 @@ final class StorageClient {
     /// an exec of `kai hook`, so it counts too) in the folder it ran in. At
     /// most once per 30 s per session+folder, written off the ES handler.
     private var activitySeen: [String: Date] = [:]
-    private func noteActivity(_ proc: UnsafeMutablePointer<es_process_t>) {
+    /// Any agent event counts (a command, a hook = prompt or tool call, a file
+    /// event), credited by SESSION. With no Kai session for the process (the
+    /// wall restarted under a running agent, e.g. a Cursor hook forked from a
+    /// helper the wall never saw), credit the agent root's "pid-<root>" key
+    /// instead of creating a session. `withFolder` also records the working
+    /// folder (exec only; file events are hot).
+    private func noteActivity(_ proc: UnsafeMutablePointer<es_process_t>, withFolder: Bool = true) {
         let p = pid(proc)
-        let sid = sessionFor(p, UInt32(proc.pointee.audit_token.val.7)).sid
-        guard !sid.isEmpty else { return }
-        let cwd = cwdOf(p)
+        var sid = sessionFor(p, UInt32(proc.pointee.audit_token.val.7)).sid
+        let quick = sid + "|q"                     // cheap throttle before any proc lookups
+        lock.lock()
+        if !sid.isEmpty, let t = activitySeen[quick], Date().timeIntervalSince(t) < 30 { lock.unlock(); return }
+        let pol = policy
+        lock.unlock()
+        if sid.isEmpty {
+            var name = [CChar](repeating: 0, count: 64)
+            var apid: Int32 = 0
+            guard kai_process_agent(pol, p, &name, name.count, &apid) == 1 else { return }
+            let root = kai_agent_root_pid(pol, apid, name)
+            let r = root > 0 ? root : apid
+            lock.lock(); let rs = sessions[pid_t(r)]?.sid; lock.unlock()
+            sid = rs ?? "pid-\(r)"
+        }
+        let cwd = withFolder ? cwdOf(p) : ""
         let key = sid + "|" + cwd
         lock.lock()
         if let t = activitySeen[key], Date().timeIntervalSince(t) < 30 { lock.unlock(); return }
         if activitySeen.count > 4096 { activitySeen.removeAll() }
         activitySeen[key] = Date()
+        activitySeen[sid + "|q"] = Date()
         lock.unlock()
         let uid = userUID, gid = userGID
         DispatchQueue.global(qos: .utility).async {
             let now = Int64(Date().timeIntervalSince1970)
-            _ = kai_session_activity_touch(sid, cwd, now)
+            _ = kai_session_activity_touch(sid, cwd.isEmpty ? nil : cwd, now)
             guard uid >= 501 else { return }
             let dir = String(cString: kai_session_activity_dir())
             chown(dir, uid, gid)
@@ -815,6 +835,7 @@ final class StorageClient {
         guard let agent = agentName, !agent.isEmpty else { return true }
         #if KAI_STORAGE_ENFORCE
         ensureSession(proc, agent: agent)
+        noteActivity(proc, withFolder: false)   // a file event is agent activity too
         #endif
         lock.lock(); let pol = policy; lock.unlock()
         var why = [CChar](repeating: 0, count: 256)

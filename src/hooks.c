@@ -665,6 +665,16 @@ static int find_es_session(char *out, size_t n) {
     return out[0] != '\0';
 }
 
+/* One session identity: is this hook's KAI session paused (or Kai as a
+ * whole)? The Kai session comes from the per-pid map the storage wall writes
+ * (find_es_session) - the same id the app writes the pause under and the wall
+ * reads. The agent's own conversation id is only a label, never the key. */
+static int kai_session_paused_here(long long now) {
+    char es[KAI_SESSION_ID_MAX];
+    if (find_es_session(es, sizeof es) && kai_session_paused(es, now)) return 1;
+    return kai_wall_paused("storage", now);
+}
+
 static int hook_claude(const char *json, const char *cwd_arg, const char *source) {
     cJSON *root = cJSON_Parse(json);
     if (!root) {
@@ -968,9 +978,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
      * Never-tier (Kai's own control store) and asks are unaffected. */
     int would_block = 0;
     if (decision >= KAI_ACT_BLOCK && !ask && kai_rule_is_builtin(rule) == 0) {
-        long long pnow = (long long)time(NULL);
-        if ((session && *session && kai_session_paused(session, pnow)) ||
-            kai_wall_paused("storage", pnow)) {
+        if (kai_session_paused_here((long long)time(NULL))) {
             would_block = 1;
             decision = KAI_ACT_WARN;   /* not a block: let the action proceed */
         }
@@ -1182,6 +1190,13 @@ static int hook_cursor(const char *json) {
         kai_audit_entry e = {"cursor", ev ? ev : "unknown", "ask", why, reason,
                              tool, ctx, mctx, session, cwd};
         kai_audit_write(&e);
+    } else if (deny && kai_rule_is_builtin(why) == 0 && kai_session_paused_here((long long)time(NULL))) {
+        /* paused: soft blocks go through, logged; Kai's own files still hold */
+        kai_audit_entry e = {"cursor", ev ? ev : "unknown", "would-block", why, reason,
+                             tool, ctx, mctx, session, cwd};
+        kai_audit_write(&e);
+        printf("{\"permission\":\"allow\"}\n");
+        deny = 0;
     } else if (deny) {
         cursor_deny(reason);
         kai_audit_entry e = {"cursor", ev ? ev : "unknown", "block", why, reason,
