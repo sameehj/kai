@@ -1694,6 +1694,19 @@ static void test_session_model(void) {
                             "sys.exit(0 if a.get(\"/w/wolf\")==\"working\" and r[\"activity\"]==\"working\" else 1)") == 0,
           "an IDE workspace with a command in the last 15 min is working, and so is its row");
     CHECK(kai_sessions_working_count() >= 2, "working count includes the working terminal + IDE rows");
+    /* fix 4: one call for Agent Control - sessions and agents together */
+    {
+        char out[900], cmd[1600];
+        snprintf(out, sizeof out, "%s/snap.json", getenv("KAI_HOME"));
+        snprintf(cmd, sizeof cmd,
+                 "KAI_HOME='%s' ./kai snapshot --json > '%s' 2>/dev/null && /usr/bin/python3 -I -c "
+                 "'import json,sys; d=json.load(open(sys.argv[1])); "
+                 "sys.exit(0 if isinstance(d[\"sessions\"],list) and isinstance(d[\"agents\"],list) "
+                 "and any(x[\"id\"]==\"sm-work\" for x in d[\"sessions\"]) else 1)' '%s'",
+                 getenv("KAI_HOME"), out, out);
+        CHECK(system(cmd) == 0, "kai snapshot --json: sessions + agents in one valid document");
+        unlink(out);
+    }
     CHECK(kai_sessions_prune_delegated() >= 1, "delegated records are removed from the registry");
     kai_session g;
     CHECK(kai_session_get("sm-dele", &g) == 0, "the delegated record is gone");

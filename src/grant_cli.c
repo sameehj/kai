@@ -551,6 +551,23 @@ int kai_cmd_sessions(int argc, char **argv) {
     return sessions_list(argc > 0 && !strcmp(argv[0], "--json"));
 }
 
+/* `kai snapshot --json`: what Agent Control shows - sessions and agents - in
+ * ONE call, so the window doesn't wait on two CLI runs back to back. */
+int kai_cmd_agents(int argc, char **argv);
+int kai_cmd_snapshot(int argc, char **argv) {
+    (void)argc; (void)argv;
+    printf("{\"sessions\":");
+    fflush(stdout);
+    sessions_list(1);
+    printf(",\"agents\":");
+    fflush(stdout);
+    char *a[] = {"--json", NULL};
+    kai_cmd_agents(1, a);
+    fflush(stdout);
+    printf("}\n");
+    return 0;
+}
+
 /* `kai session show <id>` (or `kai session <id>`) */
 int kai_cmd_session(int argc, char **argv) {
     if (argc >= 2 && !strcmp(argv[0], "show")) return session_show(argv[1]);

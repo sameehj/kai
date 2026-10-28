@@ -114,8 +114,15 @@ struct SessionRow: Decodable, Identifiable, Equatable {
 
 @MainActor
 final class AgentsModel: ObservableObject {
+    /// ONE session store for the popover and the Agent Control window: the
+    /// window renders what the popover already has, then refreshes quietly.
+    static let shared = AgentsModel()
     @Published private(set) var agents: [AgentRow] = []
     @Published private(set) var sessions: [SessionRow] = []
+    /// False until the first refresh lands: show placeholders, never a false
+    /// "No agent sessions".
+    @Published private(set) var loaded = false
+    private var refreshing = false
     enum Filter: String, CaseIterable, Identifiable { case running, ended, all; var id: String { rawValue } }
     @Published var filter: Filter = .running
     @Published var agentFilter: String? = nil
@@ -146,9 +153,17 @@ final class AgentsModel: ObservableObject {
     }
     deinit { timer?.invalidate() }
 
+    /// One CLI call for both (kai snapshot --json); overlapping refreshes skip.
+    private struct Snapshot: Decodable { let sessions: [SessionRow]; let agents: [AgentRow] }
     func refresh() async {
-        if let a = await KaiCLI.decode([AgentRow].self, ["agents", "--json"]) { agents = a }
-        if let s = await KaiCLI.decode([SessionRow].self, ["sessions", "--json"]) { sessions = s }
+        guard !refreshing else { return }
+        refreshing = true
+        defer { refreshing = false }
+        if let s = await KaiCLI.decode(Snapshot.self, ["snapshot", "--json"]) {
+            if s.sessions != sessions { sessions = s.sessions }
+            agents = s.agents
+            loaded = true
+        }
     }
 
     /// Sessions after the current filters, needs-attention first (active before
@@ -169,7 +184,7 @@ final class AgentsModel: ObservableObject {
 // MARK: - Window
 
 struct AgentsWindow: View {
-    @StateObject private var model = AgentsModel()
+    @ObservedObject private var model = AgentsModel.shared
     @StateObject private var grants = GrantManager()
     @State private var selected: String?
 

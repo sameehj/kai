@@ -11,7 +11,7 @@ struct MenuView: View {
     @AppStorage("settingsPage") private var settingsPage = SettingsPage.agentControl.rawValue
     @State private var dismissedBlock: String?
     @StateObject private var grantManager = GrantManager()
-    @StateObject private var agents = AgentsModel()
+    @ObservedObject private var agents = AgentsModel.shared
 
     private var alert: AuditEvent? {
         guard let b = model.freshBlock, b.id != dismissedBlock else { return nil }

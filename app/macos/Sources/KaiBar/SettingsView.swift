@@ -694,7 +694,7 @@ private struct AdvancedPage: View {
 // pause), as the first Settings page. Reuses the session views from the Agents
 // window; data from `kai sessions`/`kai agents` (works with the storage wall off).
 private struct AgentControlPage: View {
-    @StateObject private var model = AgentsModel()
+    @ObservedObject private var model = AgentsModel.shared   // cached: renders at once
     @StateObject private var grants = GrantManager()
     @State private var selected: String?
     @State private var showEnded = false
@@ -711,7 +711,17 @@ private struct AgentControlPage: View {
             // filling the height.
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 0) {
-                    if sorted.isEmpty {
+                    if !model.loaded {
+                        // cold start: placeholders until the first refresh lands
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(0..<3, id: \.self) { _ in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Claude Code · project").font(.system(size: 13))
+                                    Text("ttys000 · active 1m ago").font(.caption)
+                                }.redacted(reason: .placeholder)
+                            }
+                        }.padding(10)
+                    } else if sorted.isEmpty && model.endedToday.isEmpty {
                         Text("No agent sessions right now.").font(.system(size: 13))
                             .foregroundStyle(Theme.muted).padding(10)
                     }
