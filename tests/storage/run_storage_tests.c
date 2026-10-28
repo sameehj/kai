@@ -2110,6 +2110,35 @@ static void write_rule(const char *dir, const char *name, const char *json) {
     if (f) { fputs(json ? json : "", f); fclose(f); }
 }
 
+/* Batch 2 item 4: "Turn off in Claude Code" writes env.DISABLE_TELEMETRY into
+ * Claude Code's settings, keeping hooks and everything else, with a backup. */
+static void test_claude_env(void) {
+    printf("Claude Code env switch (telemetry off)\n");
+    char dir[] = "/tmp/kai-envXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    const char *oldhome = getenv("HOME");
+    char saved[1024]; snprintf(saved, sizeof saved, "%s", oldhome ? oldhome : "");
+    setenv("HOME", dir, 1);
+    char cdir[700], sp[760], bak[800], cmd[1200];
+    snprintf(cdir, sizeof cdir, "%s/.claude", dir); mkdir(cdir, 0700);
+    snprintf(sp, sizeof sp, "%s/settings.json", cdir);
+    snprintf(bak, sizeof bak, "%s.kai-bak", sp);
+    FILE *f = fopen(sp, "w");
+    if (f) { fputs("{\"hooks\":{\"Stop\":[]},\"env\":{\"FOO\":\"1\"},\"model\":\"x\"}", f); fclose(f); }
+    CHECK(!kai_claude_env_is("DISABLE_TELEMETRY", "1"), "not set before");
+    CHECK(kai_claude_set_env("DISABLE_TELEMETRY", "1") == 0, "set it");
+    CHECK(kai_claude_env_is("DISABLE_TELEMETRY", "1"), "...and it reads back");
+    CHECK(file_contains(sp, "\"FOO\"") && file_contains(sp, "\"hooks\"") && file_contains(sp, "\"model\""),
+          "the rest of the settings is kept");
+    CHECK(access(bak, F_OK) == 0 && !file_contains(bak, "DISABLE_TELEMETRY"), "the original is kept as .kai-bak");
+    f = fopen(sp, "w");
+    if (f) { fputs("{ not json", f); fclose(f); }
+    CHECK(kai_claude_set_env("DISABLE_TELEMETRY", "1") == 3 && file_contains(sp, "{ not json"),
+          "invalid settings: refused, unchanged");
+    setenv("HOME", saved, 1);
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
 static void test_decision_rules(void) {
     printf("persistent decisions: identity + destination (B2)\n");
     char dir[] = "/tmp/kai-rulesXXXXXX";
@@ -2186,6 +2215,10 @@ static void test_decision_rules(void) {
               && !strcmp(kai_wall_state_word(KAI_WALL_OS_NOT_INSTALLED, -1), "not installed")
               && !strcmp(kai_wall_state_word(KAI_WALL_OS_FAILED, 2), "unhealthy"),
           "wall states: never \"protecting\" without a verified heartbeat (B3)");
+    CHECK(kai_agent_profile_allows("cursor", "auth.grok.com") && kai_agent_profile_allows("cursor", "x.workoscdn.com")
+              && !kai_agent_profile_allows("claude", "auth.grok.com") && !kai_agent_profile_allows("cursor", "grok.com")
+              && !kai_agent_profile_allows("cursor", "evilauth.grok.com"),
+          "agent profiles: Cursor's sign-in hosts for Cursor only, not the chat site");
     CHECK(kai_host_is_telemetry("sentry.io") && kai_host_is_telemetry("o4507.ingest.us.sentry.io")
               && kai_host_is_telemetry("http-intake.logs.us5.datadoghq.com"),
           "telemetry hosts are recognized");
@@ -2573,6 +2606,7 @@ int main(void) {
     test_endpoint_grants();
     test_audit_rotation_chain();
     test_decision_rules();
+    test_claude_env();
     test_revocation_reaches_ro_store();
     test_audit_no_prompts();
     test_version_cmp();

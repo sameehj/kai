@@ -61,6 +61,14 @@ struct SessionRow: Decodable, Identifiable, Equatable {
     var isSession: Bool { kind == "session" }
     var isIDE: Bool { workspaces != nil }
     var window: String { !tty.isEmpty ? tty : (hostApp.isEmpty ? "—" : hostApp) }
+    /// The project (or app) without the suffix that tells duplicates apart.
+    var projectBase: String {
+        if let w = workspaces {
+            return w.isEmpty ? (hostApp.isEmpty ? displayAgent : hostApp)
+                             : "\(w.count) workspace\(w.count == 1 ? "" : "s")"
+        }
+        return project.isEmpty ? "—" : (project as NSString).lastPathComponent
+    }
     var projectName: String {
         if let w = workspaces {
             // B1: count only what is known; "0 workspaces" on an active app misleads.
@@ -347,9 +355,16 @@ struct SessionDetail: View {
                             // The wall keys sessions to the agent root (Phase A item
                             // 5), so this shows only until the wall first sees the
                             // session act; the global pause always works meanwhile.
-                            Button("Pause Kai for all agents (15 min)") { grants.pauseAll(minutes: 15) }
-                                .help("Pause isn't available for this session yet, so this pauses Kai "
-                                      + "for every agent for 15 minutes, then resumes by itself.")
+                            PauseControl(state: grants.pauseState(nil), until: grants.pauseEnds(nil),
+                                         pauseLabel: "Pause Kai · 15 min",
+                                         title: grants.pauseState(nil) == Int32(KAI_PAUSE_ACTIVE)
+                                             ? "Kai is paused until \(grants.pauseEnds(nil).map { $0.formatted(date: .omitted, time: .shortened) } ?? "soon")" : nil,
+                                         note: PauseText.global,
+                                         pause: { grants.pauseAll(minutes: 15) },
+                                         resume: { grants.pauseAll(minutes: 0) },
+                                         extend: { grants.extendPause(nil) })
+                                .frame(maxWidth: 360)
+                                .help("Pauses Kai for every agent for 15 minutes, then it resumes by itself.")
                         }
                     }
                 }

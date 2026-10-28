@@ -91,6 +91,7 @@ static void mkparents(const char *path) {
 
 static cJSON *without_kai(cJSON *node);
 static void strip_legacy_handlers(cJSON *root);
+static cJSON *load_json_object(const char *path);
 
 /* Parse an agent settings file, dropping any Kai entries already in it so
  * installing twice never duplicates hooks. */
@@ -179,6 +180,43 @@ static int install_claude(const char *exe) {
     else fprintf(stderr, "Failed to write %s\n", path);
     free(path);
     return rc;
+}
+
+/* Claude Code's own switches (e.g. DISABLE_TELEMETRY), set from Kai's
+ * Settings: env.<key> = <value> in ~/.claude/settings.json. Same care as the
+ * hooks: refuse invalid JSON, keep the original as .kai-bak, write atomically,
+ * keep everything else. 0 ok, 3 invalid settings, -1 write failed. */
+int kai_claude_set_env(const char *key, const char *value) {
+    if (!key || !*key || !value) return -1;
+    char *path = kai_expand_home("~/.claude/settings.json");
+    if (!settings_ok(path)) { free(path); return 3; }
+    mkparents(path);
+    backup(path);
+    cJSON *root = load_json_object(path);
+    cJSON *env = cJSON_GetObjectItemCaseSensitive(root, "env");
+    if (!cJSON_IsObject(env)) {
+        cJSON_DeleteItemFromObjectCaseSensitive(root, "env");
+        env = cJSON_AddObjectToObject(root, "env");
+    }
+    cJSON_DeleteItemFromObjectCaseSensitive(env, key);
+    cJSON_AddStringToObject(env, key, value);
+    char *out = cJSON_Print(root);
+    int rc = out ? write_file(path, out) : -1;
+    free(out); cJSON_Delete(root); free(path);
+    return rc;
+}
+
+/* 1 if ~/.claude/settings.json sets env.<key> to <value>. */
+int kai_claude_env_is(const char *key, const char *value) {
+    char *path = kai_expand_home("~/.claude/settings.json");
+    char *cur = read_or_empty(path);
+    free(path);
+    cJSON *root = *cur ? cJSON_Parse(cur) : NULL;
+    free(cur);
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root, "env"), key);
+    int is = cJSON_IsString(v) && value && !strcmp(v->valuestring, value);
+    cJSON_Delete(root);
+    return is;
 }
 
 /* ----- Cursor: ~/.cursor/hooks.json -----

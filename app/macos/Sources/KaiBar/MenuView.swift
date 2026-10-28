@@ -28,13 +28,13 @@ struct MenuView: View {
                             dismiss: { withAnimation { dismissedBlock = b.id } },
                             details: { open(.activity) })
             }
+            hero
             pausedBanner
             if DevFlags.perSessionPause { pauseBanner }
             needsYou
             activeNow
             protectionsLine
             permissions
-            telemetryHints
             recent
             footer
         }
@@ -47,6 +47,31 @@ struct MenuView: View {
         .foregroundStyle(Color.white)
         .preferredColorScheme(.dark)
         .task { await model.refresh(); wall.refresh(); await agents.refresh() }
+    }
+
+    // Batch 2: one large number and one value line, from meaningful events.
+    private var hero: some View {
+        let n = agents.workingNow.count
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(n)").font(Theme.display(34)).foregroundStyle(glow)
+                Text("agent\(n == 1 ? "" : "s") working").font(.system(size: 13)).foregroundStyle(Theme.soft)
+            }
+            Text(model.valueLine).font(.system(size: 12)).foregroundStyle(Theme.muted)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// What a session row would say if every session were covered like the
+    /// headline; a row shows its coverage only when it differs.
+    private var expectedCoverage: String {
+        let l = model.levels(storageOn: storage.isOn, networkOn: wall.isOn)
+        switch (l.files > 0, l.internet > 0) {
+        case (true, true): return "Files + Internet"
+        case (true, false): return "Files only"
+        case (false, true): return "Internet only"
+        default: return "seen only"
+        }
     }
 
     private var needsYou: some View {
@@ -86,7 +111,9 @@ struct MenuView: View {
                         .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.muted)
                     ForEach(rows.prefix(4)) { s in
                         let gc = grantManager.grants.filter { $0.session_id == s.id }.count
-                        Button { openAgentControl() } label: { PopoverSessionRow(session: s, grants: gc) }
+                        Button { openAgentControl() } label: {
+                            PopoverSessionRow(session: s, grants: gc, expectedCoverage: expectedCoverage)
+                        }
                             .buttonStyle(.plain)
                         if DevFlags.perSessionPause && grantManager.pauseState(s.id) == Int32(KAI_PAUSE_NONE) {
                             PauseControl(state: Int32(KAI_PAUSE_NONE), until: nil,
@@ -162,7 +189,11 @@ struct MenuView: View {
         let chats = chrome.installed && chrome.extensionLoaded != false
         return Button { open(.files) } label: {
             HStack(spacing: 6) {
-                Text(ProtectionText.mark("Files", level: storage.isOn ? (l.files > 0 ? l.files : -1) : 0))
+                if StorageWall.included {
+                    Text(ProtectionText.mark("Files", level: storage.isOn ? (l.files > 0 ? l.files : -1) : 0))
+                } else {
+                    Text("Files: later release").foregroundStyle(Theme.muted)
+                }
                 Text("·").foregroundStyle(Theme.muted)
                 Text(ProtectionText.mark("Internet", level: l.internet))
                 Text("·").foregroundStyle(Theme.muted)
@@ -174,20 +205,6 @@ struct MenuView: View {
         }
         .buttonStyle(.plain)
         .help("Open Settings to change Files, Internet or Chats.")
-    }
-
-    // B2: telemetry is denied silently; one passive hint per agent.
-    @ViewBuilder private var telemetryHints: some View {
-        ForEach(grantManager.telemetryHints, id: \.self) { a in
-            HStack(alignment: .top, spacing: 6) {
-                Text(RuleText.telemetry(a)).font(.system(size: 11)).foregroundStyle(Theme.muted)
-                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                Spacer()
-                Button { grantManager.dismissTelemetryHint(a) } label: { Image(systemName: "xmark") }
-                    .buttonStyle(.plain).font(.system(size: 10)).foregroundStyle(Theme.muted)
-                    .accessibilityLabel("Dismiss")
-            }
-        }
     }
 
     // Item 1: a persistent banner while any session is paused, with Resume.
@@ -278,7 +295,7 @@ struct MenuView: View {
                 Button("See all") { open(.activity) }
                     .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
             }
-            ForEach(recentItems) { EventLine(event: $0.event, count: $0.count) }
+            ForEach(recentItems) { EventLine(event: $0.event, count: $0.count, plain: true) }
         }
     }
 
@@ -292,7 +309,7 @@ struct MenuView: View {
         HStack(spacing: 14) {
             if grantManager.pauseState(nil) == Int32(KAI_PAUSE_NONE) {
                 Button { grantManager.pauseAll(minutes: 15) } label: {
-                    Label("Pause Kai", systemImage: "pause.circle")
+                    Label("Pause Kai · 15 min", systemImage: "pause.circle")
                 }
                 .help("Pauses Kai for 15 minutes, then it resumes by itself. Kai's own settings stay protected.")
             }
@@ -600,6 +617,12 @@ struct StorageCard: View {
 struct PopoverSessionRow: View {
     let session: SessionRow
     var grants: Int = 0
+    var expectedCoverage = "Files + Internet"
+    private var title: String { session.topic.isEmpty ? session.projectBase : session.topic }
+    private var secondLine: String {
+        ([session.topic.isEmpty ? "" : session.projectBase, session.window, session.activeLabel])
+            .filter { !$0.isEmpty && $0 != "—" }.joined(separator: " · ")
+    }
     private var badge: Color {
         session.enforcementShort == "Files + Internet" ? Theme.lime
         : session.enforcementShort == "seen only" ? Theme.muted : Theme.amber
@@ -609,20 +632,16 @@ struct PopoverSessionRow: View {
             Circle().fill(badge).frame(width: 7, height: 7)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
-                    Text(session.projectName).font(.system(size: 13, weight: .medium))
-                    Text(session.enforcementShort).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                    if session.enforcementShort != expectedCoverage {
+                        Text(session.enforcementShort).font(.system(size: 11)).foregroundStyle(Theme.amber)
+                    }
                     if grants > 0 {
                         Text("\(grants) permission\(grants == 1 ? "" : "s")")
                             .font(.system(size: 11)).foregroundStyle(Theme.lime)
                     }
                 }
-                if !session.topic.isEmpty {   // hook topic, or hidden — never the project twice
-                    Text(session.topic).font(.system(size: 11)).foregroundStyle(Theme.soft).lineLimit(1)
-                }
-                HStack(spacing: 6) {
-                    Text(session.window)
-                    if !session.activeLabel.isEmpty { Text("· \(session.activeLabel)") }
-                }.font(.system(size: 10)).foregroundStyle(Theme.muted).lineLimit(1)
+                Text(secondLine).font(.system(size: 10)).foregroundStyle(Theme.muted).lineLimit(1)
             }
             Spacer()
             Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(Theme.muted)
@@ -635,10 +654,11 @@ struct PopoverSessionRow: View {
 struct EventLine: View {
     let event: AuditEvent
     var count: Int = 1
+    var plain = false
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Circle().fill(event.isBlock ? Theme.coral : Theme.amber).frame(width: 8, height: 8)
-            Text(event.summary + (count > 1 ? "  ×\(count)" : ""))
+            Text((plain ? event.plainSentence : event.summary) + (count > 1 ? "  ×\(count)" : ""))
                 .font(.system(size: 13)).foregroundStyle(Theme.soft)
                 .lineLimit(2).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)

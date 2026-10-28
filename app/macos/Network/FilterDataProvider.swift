@@ -124,10 +124,10 @@ final class FilterDataProvider: NEFilterDataProvider {
             hint = host
         }
         if proto == IPPROTO_UDP && port == "443" {
-            // QUIC hides the name in an encrypted Initial. Dropping it makes the
-            // client fall back to TCP, where the SNI is readable.
-            return engine.decide(host: nil, agent: agent, ip: ip, port: port, what: "QUIC",
-                                 pid: pid, pidv: pidv) ? .allow() : .drop()
+            // QUIC hides the site name in an encrypted Initial. Drop it for
+            // agents (Watch and Protect) without a card: the client falls back
+            // to HTTPS over TCP, where Kai reads the name and decides there.
+            return engine.dropQUIC(agent: agent, ip: ip) ? .drop() : .allow()
         }
         if proto == IPPROTO_TCP && (port == "443" || port == "80") {
             engine.remember(flow, agent: agent, ip: ip, port: port, hint: hint, pid: pid, pidv: pidv)
@@ -161,7 +161,8 @@ final class FilterDataProvider: NEFilterDataProvider {
             return NEFilterDataVerdict(passBytes: 0, peekBytes: offset + readBytes.count + 4096)
         default:
             engine.forget(flow)
-            let what = ctx.port == "443" ? "TLS without server name" : "HTTP without Host"
+            let what = ctx.port == "443" ? "an encrypted connection without a site name"
+                                         : "a web connection without a site name"
             if let h = ctx.hint { // fall back to the flow's own name
                 return engine.decide(host: h, agent: ctx.agent, ip: ctx.ip, port: ctx.port,
                                      pid: ctx.pid, pidv: ctx.pidv) ? .allow() : .drop()
@@ -347,6 +348,7 @@ final class Engine {
         if paused { return true }   // wall paused (time-boxed, auto-resume): allow
         var why = [CChar](repeating: 0, count: 256)
         if kai_egress_endpoint_allowed(p, host, ip, Int32(port) ?? 0, &why, why.count) == 1 { return true }
+        if let h = host, kai_agent_profile_allows(agent, h) == 1 { return true }   // e.g. Cursor's sign-in
         let target = host ?? "\(ip):\(port)"
         let block = mode == KAI_EGRESS_BLOCK
         // B2: telemetry and crash reports are an optional channel: denied
@@ -386,7 +388,8 @@ final class Engine {
         let detail = host == nil
             ? "\(what ?? "connection") to \(ip):\(port), host unknown"
             : "connection to \(host!) (\(ip):\(port)) is not on the allowlist"
-        auditLocked(agent: agent, decision: block ? "block" : "log", target: target, detail: detail)
+        auditLocked(agent: agent, decision: block ? "block" : "log", target: target, detail: detail,
+                    session: sessionFor(pid: pid, pidv: pidv).sid, identity: ident)
         if block { requestEgressApproval(pid: pid, pidv: pidv, agent: agent, dest: target,
                                          identity: ident, hostKnown: host != nil) }
         return !block
@@ -423,6 +426,17 @@ final class Engine {
         FileManager.default.createFile(atPath: fp, contents: Data("\(host)\n".utf8),
                                        attributes: [.posixPermissions: 0o600])
         if let o = owner { chown(dir, o.uid, o.gid); chown(fp, o.uid, o.gid) }
+    }
+
+    /// QUIC from an agent: dropped (so it falls back to HTTPS) unless Internet
+    /// is off or Kai is paused. Noted in the log once per agent every 10
+    /// minutes, as "log": it is a fallback, not a decision about a site.
+    func dropQUIC(agent: String, ip: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let p = policy, kai_policy_egress_mode(p) != KAI_EGRESS_OFF, !paused else { return false }
+        auditLocked(agent: agent, decision: "log", target: "QUIC",
+                    detail: "QUIC (UDP 443) dropped so the agent uses HTTPS, where Kai can see the site")
+        return true
     }
 
     /// Does a valid endpoint grant authorize this agent process to reach `dest`?
@@ -524,7 +538,8 @@ final class Engine {
 
     /// One audit record per agent+target+decision every 10 minutes, so a
     /// chatty tool can't flood the log.
-    private func auditLocked(agent: String, decision: String, target: String, detail: String) {
+    private func auditLocked(agent: String, decision: String, target: String, detail: String,
+                             session: String = "", identity: String = "") {
         let key = "\(agent)|\(decision)|\(target)"
         if let last = recentLogs[key], Date().timeIntervalSince(last) < 600 { return }
         if recentLogs.count > 4096 { recentLogs.removeAll() }
@@ -532,8 +547,9 @@ final class Engine {
         // Structured denial: reason code "not_on_allowlist" goes in `rule`, the
         // destination in `target`. Fixes the record that read "rule: <host>" as
         // if a rule matched -- no rule matched; the host was absent from the list.
-        kai_denial_audit("network", agent, decision, target, "connect",
-                         KAI_REASON_NOT_ALLOWLISTED, nil, detail)
+        kai_denial_audit_ex("network", agent, decision, target, "connect",
+                            KAI_REASON_NOT_ALLOWLISTED, nil, detail,
+                            session.isEmpty ? nil : session, identity.isEmpty ? nil : identity)
         // We run as root: keep the user's audit log owned by the user.
         if let o = owner, !auditPath.isEmpty {
             chown(auditPath, o.uid, o.gid)

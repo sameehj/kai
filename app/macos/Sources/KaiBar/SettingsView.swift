@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
 import AppKit
 import SwiftUI
+import KaiCore
 
 /// Phase B item 10: Agent Control (the main page) and Activity, then four
 /// settings pages named for what they protect - Files, Internet, Chats - and
@@ -425,6 +426,53 @@ private struct FilesPage: View {
 private struct NetworkPage: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var wall: NetworkWall
+    @StateObject private var grants = GrantManager()
+    @State private var telemetryNote: String?
+
+    // Batch 2: telemetry is blocked silently; per agent, the state and (for
+    // Claude Code) a button that turns it off in the agent itself.
+    @ViewBuilder private var telemetry: some View {
+        if !grants.telemetryHints.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Agent telemetry").font(Theme.display(16, .semibold))
+                ForEach(grants.telemetryHints, id: \.self) { a in
+                    Card(padding: 12) {
+                        HStack {
+                            Text(a == "claude" ? "Claude Code" : a.prefix(1).uppercased() + a.dropFirst())
+                                .font(.system(size: 13, weight: .semibold))
+                            Text("Telemetry: blocked by Kai").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                            Spacer()
+                            if a == "claude" {
+                                if kai_claude_env_is("DISABLE_TELEMETRY", "1") == 1 {
+                                    Text("Turned off in Claude Code").font(.system(size: 12)).foregroundStyle(Theme.lime)
+                                } else {
+                                    Button("Turn off in Claude Code") { turnOffClaudeTelemetry() }
+                                        .buttonStyle(GhostButtonStyle())
+                                }
+                            }
+                        }
+                    }
+                }
+                if let n = telemetryNote {
+                    Text(n).font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func turnOffClaudeTelemetry() {
+        Task {
+            guard await OwnerAuth.shared.confirm("change Claude Code's settings to turn off its telemetry") else { return }
+            let rc = kai_claude_set_env("DISABLE_TELEMETRY", "1")
+            await MainActor.run {
+                telemetryNote = rc == 0
+                    ? "Done. Restart your Claude Code sessions for it to apply. (Your previous settings are kept in ~/.claude/settings.json.kai-bak.)"
+                    : rc == 3 ? "Claude Code's settings file isn't valid JSON, so Kai changed nothing."
+                              : "Kai couldn't write Claude Code's settings."
+                grants.refresh()
+            }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -457,6 +505,7 @@ private struct NetworkPage: View {
                              + "db.yourcompany.com:5432, 10.0.0.0/8, 203.0.113.5:22. This Mac, model APIs, GitHub "
                              + "and package registries are built in.",
                          items: model.policy?.egressAllow ?? [], placeholder: "artifacts.yourcompany.com or 10.0.0.0/8")
+            telemetry
             // B2 agent profiles: what the built-in model hosts allow, and the limit.
             Text("Built in for every agent: the model and sign-in hosts (anthropic.com, openai.com, cursor.sh and "
                + "others). Kai can't tell the model connection from other data sent to the same host.")
@@ -523,7 +572,33 @@ private struct StoragePage: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var storage: StorageWall
 
+    // Batch 2: an edition without the Files extension shows a greyed page,
+    // never a toggle that seems to work.
     var body: some View {
+        if StorageWall.included { content } else { unavailable }
+    }
+
+    private var unavailable: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            PageHeader(icon: "folder", title: "Files",
+                       subtitle: "Stops agents opening your keys and passwords, even from a script they wrote.")
+            Card(padding: 14) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Files protection").font(.system(size: 14, weight: .semibold))
+                        Text("Coming in a later release.").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    }
+                    Spacer()
+                }
+            }
+            .opacity(0.5)
+            Text("Until then, Kai's checks inside each agent still stop agents reading protected files "
+               + "with their own tools; a program an agent writes and runs can get around them.")
+                .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 18) {
             PageHeader(icon: "folder", title: "Files",
                        subtitle: "Agents can't open your keys, passwords and Kai's settings — even from a script. Every agent on this Mac; their own working files stay usable.",
@@ -908,6 +983,7 @@ private struct PermissionsPage: View {
 
 private struct ActivityPage: View {
     @EnvironmentObject var model: AppModel
+    @StateObject private var grants = GrantManager()
     @State private var verifyResult: String?
     @AppStorage("activityFilter") private var filter = "all"
     @State private var expanded: Set<String> = []
@@ -915,6 +991,7 @@ private struct ActivityPage: View {
     private var shown: [AuditEvent] {
         model.events.filter { e in
             guard !e.isNote else { return false } // shown under their block
+            if e.isGrant && e.event == "requested" { return false } // one row per block, not two
             switch filter {
             case "agents": return !e.isNetwork
             case "network": return e.isNetwork
@@ -980,7 +1057,7 @@ private struct ActivityPage: View {
             ForEach(grouped.prefix(150), id: \.event.id) { g in
                 let e = g.event
                 ActivityRow(event: e, followUp: model.followUp(for: e), expanded: expanded.contains(e.id),
-                            count: g.count) {
+                            count: g.count, grants: grants) {
                     if expanded.contains(e.id) { expanded.remove(e.id) } else { expanded.insert(e.id) }
                 }
             }
@@ -996,6 +1073,7 @@ private struct ActivityRow: View {
     let followUp: AuditEvent?
     let expanded: Bool
     var count: Int = 1
+    @ObservedObject var grants: GrantManager
     let toggle: () -> Void
     @State private var report: ReportInfo?
 
@@ -1017,11 +1095,17 @@ private struct ActivityRow: View {
         VStack(alignment: .leading, spacing: 8) {
             Button(action: toggle) { header }.buttonStyle(.plain)
                 .accessibilityHint(expanded ? "Hide details" : "Show details")
-            if let t = event.excerpt { ExcerptView(text: t, match: event.match, expanded: expanded) }
-            if !event.detail.isEmpty {
+            if let t = event.excerpt, !event.isNetwork, !event.isGrant {
+                ExcerptView(text: t, match: event.match, expanded: expanded)
+            }
+            if event.isNetwork || event.isGrant || event.isStorage {
+                Text(event.plainSentence).font(.system(size: 12)).foregroundStyle(Theme.soft)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !event.detail.isEmpty {
                 Text(event.detail).font(.system(size: 12)).foregroundStyle(Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            RowActions(event: event, grants: grants)
             if let n = followUp {
                 Label(n.detail, systemImage: "arrow.turn.down.right")
                     .font(.system(size: 12)).foregroundStyle(Theme.soft)
@@ -1075,7 +1159,7 @@ private struct ActivityRow: View {
                     .font(.system(size: 11)).foregroundStyle(Theme.muted)
             }
             HStack(spacing: 8) {
-                if event.isBlock || event.decision == "warn" { notAThreat }
+                if (event.isBlock || event.decision == "warn") && !event.isNetwork && !event.isGrant { notAThreat }
                 Button("Copy details") { model.copyDetails(event) }.buttonStyle(GhostButtonStyle())
             }
         }
@@ -1168,5 +1252,70 @@ struct WallPill: View {
         .padding(.horizontal, 12).padding(.vertical, 6)
         .background(color.opacity(0.10), in: Capsule())
         .overlay(Capsule().stroke(color.opacity(0.4)))
+    }
+}
+
+/// Batch 2: what can still be decided on an Activity row, by kind.
+///   blocked site, session running   Allow for this session · Create a rule…
+///   blocked site, session ended     Create a rule… (owner authentication)
+///   blocked file with a live card   the card's own options
+///   unknown hostname                an explanation only
+///   Kai's own files                 Always protected
+///   remembered Keep blocked         Unblock…
+///   telemetry                       Telemetry settings
+///   secret removed from a prompt    Not a secret
+private struct RowActions: View {
+    @EnvironmentObject var model: AppModel
+    let event: AuditEvent
+    @ObservedObject var grants: GrantManager
+    @ObservedObject private var agents = AgentsModel.shared
+    @AppStorage("settingsPage") private var settingsPage = SettingsPage.agentControl.rawValue
+    @State private var confirmRule = false
+
+    private var sessionLive: Bool {
+        guard let s = event.session, !s.isEmpty else { return false }
+        return agents.sessions.contains { $0.id == s && $0.isActive }
+    }
+
+    var body: some View {
+        if event.isBuiltinRule && event.isBlock {
+            note("Always protected: Kai's own files and the agents' Kai settings.")
+        } else if event.isTelemetry {
+            Button("Telemetry settings") { settingsPage = SettingsPage.internet.rawValue }
+                .buttonStyle(GhostButtonStyle())
+        } else if event.isKeptBlocked, let r = grants.keptBlockedRule(event) {
+            Button("Unblock…") { grants.removeRule(r) }.buttonStyle(GhostButtonStyle())
+                .help("Kai asks about \(r.dest) again next time instead of blocking it silently.")
+        } else if event.isNetwork && event.isBlock && event.isUnknownHost {
+            note("Nothing to allow afterwards: Kai never learned which site this was. "
+                 + "If the agent needed it, its next try usually names the site.")
+        } else if event.isNetwork && event.isBlock && !event.isSilent {
+            HStack(spacing: 8) {
+                if sessionLive {
+                    Button("Allow for this session") { grants.allowForSession(event) }.buttonStyle(GhostButtonStyle())
+                }
+                Button("Create a rule…") { confirmRule = true }.buttonStyle(GhostButtonStyle())
+                    .disabled(event.identity == nil)
+                    .help(event.identity == nil ? "Kai didn't record which signed agent this was (an older record)." : "")
+            }
+            .confirmationDialog("Allow \(event.agentName) to connect to \(event.target ?? "")?", isPresented: $confirmRule) {
+                Button("Create rule") { grants.createRule(grants.request(from: event)) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(RuleText.covers(agent: event.agentName, identity: event.identity ?? "", host: event.target ?? ""))
+            }
+        } else if event.isStorage && event.isBlock, let req = grants.pendingFor(event) {
+            ApprovalCard(req: req, manager: grants)
+        } else if event.decision == "redact" || event.decision == "replace" {
+            Menu("Not a secret") {
+                if event.canExemptCommand { Button("Allow this exact command") { model.exempt(event) } }
+                Button("Report a false positive…") { Task { _ = await model.report(event) } }
+            }
+            .menuStyle(.borderlessButton).fixedSize()
+        }
+    }
+
+    private func note(_ t: String) -> some View {
+        Text(t).font(.system(size: 11)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
     }
 }

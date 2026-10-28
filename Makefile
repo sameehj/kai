@@ -9,6 +9,11 @@ HARDEN   = -D_FORTIFY_SOURCE=2 -fstack-protector-strong
 OPT     ?= -O2
 CFLAGS  ?= $(CSTD) $(WARN) $(OPT) $(HARDEN)
 CFLAGS  += -Iinclude -Ithird_party/cjson -D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE
+# The Chrome Web Store copy's extension ID, so its native host accepts it.
+KAI_STORE_ID ?=
+ifneq ($(KAI_STORE_ID),)
+CFLAGS  += -DKAI_STORE_EXTENSION_ID='"$(KAI_STORE_ID)"'
+endif
 # libcurl (gateway) and pthreads. On macOS link Apple's libcurl from the SDK
 # explicitly, so a Homebrew/static libcurl in /usr/local can't shadow it.
 ifeq ($(shell uname -s),Darwin)

@@ -50,7 +50,7 @@ extension AppModel {
     /// Prompt-injection suspicions and noticed hosts are signals, not
     /// incidents; they stay on the Activity page.
     var importantEvents: [AuditEvent] {
-        events.filter { $0.isBlock || $0.decision == "redact" || $0.decision == "replace" }
+        events.filter { ($0.isBlock || $0.decision == "redact" || $0.decision == "replace") && !$0.isSilent && !$0.isGrant }
     }
 
     /// Identical incidents collapsed with a count, for the menu's Recent list.
@@ -73,6 +73,18 @@ extension AppModel {
     /// A hook block that is still "fresh" (last 30 s), shown as a notice card.
     /// Wall blocks (storage, network) are left out: each stages its own
     /// decision card in Needs you, so showing them here would double up.
+    /// Batch 2: the popover's value line, from meaningful events today only
+    /// (telemetry, remembered blocks and the QUIC fallback never count).
+    var valueLine: String {
+        let today = events.filter { e in e.date.map { Calendar.current.isDateInToday($0) } ?? false }
+        let secrets = today.filter(\.isSecretKept).count
+        let other = today.filter { $0.isBlock && !$0.isSilent && !$0.isGrant && !$0.isSecretKept }.count
+        var parts: [String] = []
+        if secrets > 0 { parts.append("kept \(secrets) secret\(secrets == 1 ? "" : "s") private") }
+        if other > 0 { parts.append("stopped \(other) risky action\(other == 1 ? "" : "s")") }
+        return parts.isEmpty ? "Nothing risky today" : "Kai " + parts.joined(separator: " and ") + " today"
+    }
+
     var freshBlock: AuditEvent? {
         guard let t = lastBlockAt, Date().timeIntervalSince(t) < 30 else { return nil }
         return events.first {

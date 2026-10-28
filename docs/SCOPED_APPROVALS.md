@@ -704,7 +704,7 @@ Each card's *Why?* shows the first three; each permission row in Settings shows 
 
 **Rules** (More… → *Create a rule…*) allow one exact host for one verified agent in every future session. The confirm sheet says what the rule covers and that Kai can't see what is sent over the encrypted connection. Making a rule needs owner authentication, which is signed into the rule. A rule is never made for a connection whose hostname Kai doesn't know: that card offers *Allow this connection* (one-shot, this process) and *Keep blocked*. When both an Allow rule and Keep blocked match, Keep blocked wins.
 
-**Telemetry** to known telemetry and crash-report hosts is denied silently and audited, with one passive hint per agent. For Claude Code the hint is: "set `DISABLE_TELEMETRY=1`".
+**Telemetry** to known telemetry and crash-report hosts is denied silently and audited, and kept out of Recent, notifications and the counts (Activity shows it). Settings → Internet lists it per agent; for Claude Code, **Turn off in Claude Code** sets `env.DISABLE_TELEMETRY` in its settings (owner authentication, backup, atomic write; restart sessions).
 
 **Owner authentication.** Allow for this session, Keep blocked, Revoke and Pause 15 min take one click. Turning Files or Internet to Watch or Off, switching an extension off, and creating a rule need owner authentication. One authentication covers 30 minutes; sleeping or locking the Mac resets it. Break-glass access to secrets asks every time. Pause and approvals exist only in Kai's app: `kai pause` no longer pauses. Every pause and approval posts a notification.
 

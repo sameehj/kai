@@ -8,6 +8,7 @@
 #   KAI_DEVID_APP="Developer ID Application: Name (TEAMID)" \
 #   KAI_DEVID_INSTALLER="Developer ID Installer: Name (TEAMID)" \
 #   KAI_NOTARY_PROFILE=kai-notary \
+#   KAI_STORE_EXTENSION_ID=<the Chrome Web Store ID, 32 letters a-p> \
 #   sh scripts/release/build-preview-pkg.sh 0.2.0-preview.1
 #
 # Without the Developer ID identities and a notarytool keychain profile
@@ -31,6 +32,15 @@ if [ "$MODE" != "--test" ]; then
         echo "HEAD must be tagged $tag"; exit 2; }
 fi
 
+# The store copy of the browser extension talks to kai only if kai's native
+# host lists its ID. A release must have it; a test package may leave it out.
+STORE_ID="${KAI_STORE_EXTENSION_ID:-}"
+if [ -n "$STORE_ID" ]; then
+    printf '%s' "$STORE_ID" | grep -Eq '^[a-p]{32}$' || { echo "KAI_STORE_EXTENSION_ID isn't a Chrome extension ID"; exit 2; }
+elif [ "$MODE" != "--test" ]; then
+    echo "release needs KAI_STORE_EXTENSION_ID (upload the extension unlisted first: docs/CHROME_STORE.md)"; exit 2
+fi
+
 grep -q "#define KAI_VERSION \"$VERSION\"" include/kai.h || {
     echo "include/kai.h KAI_VERSION isn't \"$VERSION\""; [ "$MODE" = "--test" ] || exit 2; }
 
@@ -38,7 +48,8 @@ rm -rf "$OUT" && mkdir -p "$STAGE/usr/local/bin" "$STAGE/usr/local/share/kai" "$
 
 # Universal, macOS 13+ (remove only the objects: `make clean` would also wipe build/)
 rm -f src/*.o third_party/cjson/*.o kai libkai.a
-make CC="cc -arch arm64 -arch x86_64 -mmacosx-version-min=13.0" kai >/dev/null
+make CC="cc -arch arm64 -arch x86_64 -mmacosx-version-min=13.0" KAI_STORE_ID="$STORE_ID" kai >/dev/null
+[ -z "$STORE_ID" ] || strings kai | grep -q "$STORE_ID" || { echo "the store ID didn't make it into kai"; exit 1; }
 lipo -info kai | grep -q "x86_64 arm64\|arm64 x86_64" || { echo "kai isn't universal"; exit 1; }
 cp kai "$STAGE/usr/local/bin/kai"
 cp policy/default.policy "$STAGE/usr/local/share/kai/default.policy"
@@ -62,6 +73,18 @@ fi
 exit 0
 EOF
 chmod +x "$OUT/scripts/preinstall"
+
+# postinstall: register kai's native host with the signed-in user's browsers,
+# so the store extension can reach kai right away (no Terminal step).
+cat > "$OUT/scripts/postinstall" <<'EOF'
+#!/bin/sh
+user=$(stat -f %Su /dev/console)
+[ -n "$user" ] && [ "$user" != root ] || exit 0
+uid=$(id -u "$user")
+launchctl asuser "$uid" sudo -u "$user" /usr/local/bin/kai install chrome >/dev/null 2>&1 || true
+exit 0
+EOF
+chmod +x "$OUT/scripts/postinstall"
 
 ID=io.github.sameehj.kai.preview
 if [ "$MODE" = "--test" ]; then

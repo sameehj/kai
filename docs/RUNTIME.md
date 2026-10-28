@@ -38,3 +38,9 @@ CPU and latency with both extensions on under a large build: **not measured yet*
 
 - A process Kai can't attribute to a session (for example, one detached by launchd) gets no session permissions. Doctor counts these as unattributed.
 - Anything an agent does without a hook event and while an extension is down: see [ESCAPES.md](ESCAPES.md) and [COVERAGE.md](COVERAGE.md).
+
+## QUIC (UDP 443)
+
+QUIC carries the site name inside an encrypted packet, so Kai can't see it. For agent processes, the Internet extension drops QUIC in both Watch and Protect, with no card. The agent falls back to HTTPS over TCP, where Kai reads the site name (TLS SNI) and decides as usual. Each agent's QUIC drop is noted in the log as `log` at most every 10 minutes. It counts as a fallback, not a block. QUIC isn't dropped when Internet is Off or Kai is paused, or for an address on your allowed list. Non-agent apps are never touched.
+
+Why this matters: before this, every QUIC connection (Cursor uses it a lot) became a "host unknown" card that couldn't be approved usefully. Evidence: code; **not yet measured live**.

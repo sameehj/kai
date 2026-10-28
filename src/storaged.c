@@ -104,7 +104,7 @@ int kai_cmd_storaged(int argc, char **argv) {
                     if (do_log) {
                         kai_audit_entry e = {"storage", "open", "would-block", why,
                                              "agent would be denied this file", "open",
-                                             (char *)path, NULL, NULL, NULL};
+                                             (char *)path, NULL, NULL, NULL, NULL};
                         kai_audit_write(&e);
                     }
                 }

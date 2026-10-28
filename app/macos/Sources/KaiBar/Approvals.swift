@@ -519,6 +519,32 @@ final class GrantManager: ObservableObject {
         refresh()
     }
 
+    // ---- Batch 2: acting on an Activity row ----
+
+    /// A request built from an audit record, so an Activity row can use the
+    /// same approve / rule paths as a card. Only network records with a host.
+    func request(from e: AuditEvent) -> PendingRequest {
+        PendingRequest(id: "act-" + String(e.id.prefix(12)), agent: e.agentKey, pid: 0, pidversion: 0,
+                       strength: 1, resource: e.target ?? "", op: "connect",
+                       ts: Int(e.date?.timeIntervalSince1970 ?? 0), session: e.session,
+                       identity: e.identity, hostKnown: !e.isUnknownHost)
+    }
+    /// A live card for the same thing, if one is still waiting.
+    func pendingFor(_ e: AuditEvent) -> PendingRequest? {
+        pending.last { $0.resource == (e.target ?? "") && $0.agent == e.agentKey }
+    }
+    /// "Allow for this session" from a row: a session-bound grant (it covers
+    /// any process in that session, so the original pid isn't needed).
+    func allowForSession(_ e: AuditEvent) {
+        guard let s = e.session, !s.isEmpty else { return }
+        approve(request(from: e), duration: .session)
+    }
+    /// The remembered "Keep blocked" behind a row, if any.
+    func keptBlockedRule(_ e: AuditEvent) -> DecisionRule? {
+        rules.first { !$0.isAllow && $0.dest.caseInsensitiveCompare(e.target ?? "") == .orderedSame
+                      && (e.identity == nil || $0.identity == e.identity) }
+    }
+
     func dismissTelemetryHint(_ agent: String) {
         try? FileManager.default.removeItem(atPath: hintsDir + "/telemetry-" + agent)
         refresh()

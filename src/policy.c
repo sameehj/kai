@@ -6,6 +6,7 @@
 #include <fnmatch.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 
 /* Upload patterns from earlier default policies, matched against raw command
@@ -232,6 +233,30 @@ static const char *const BUILTIN_EGRESS[] = {
     "repo.maven.apache.org", "repo1.maven.org", "docker.io", "ghcr.io",
     "brew.sh",
 };
+
+/* Hosts one agent needs that others shouldn't get (each also covers its
+ * subdomains). Cursor's sign-in: https://cursor.com/help/troubleshooting/sign-in-domains
+ * ("minimum hosts", not the wildcards: grok.com itself is an AI chat site).
+ * workoscdn.com: seen live in Cursor's sign-in, not in Cursor's docs. */
+static const struct { const char *agent, *host; } AGENT_PROFILE_EGRESS[] = {
+    {"cursor", "cursorvm.com"},
+    {"cursor", "workoscdn.com"},
+    {"cursor", "accounts.x.ai"}, {"cursor", "accounts.spacex.ai"}, {"cursor", "auth.x.ai"},
+    {"cursor", "auth.grok.com"}, {"cursor", "auth.grokusercontent.com"}, {"cursor", "auth.grokipedia.com"},
+};
+
+int kai_agent_profile_allows(const char *agent, const char *host) {
+    if (!agent || !host || !*host) return 0;
+    size_t hl = strlen(host);
+    for (size_t i = 0; i < sizeof AGENT_PROFILE_EGRESS / sizeof AGENT_PROFILE_EGRESS[0]; i++) {
+        if (strcmp(agent, AGENT_PROFILE_EGRESS[i].agent) != 0) continue;
+        const char *h = AGENT_PROFILE_EGRESS[i].host;
+        size_t l = strlen(h);
+        if (hl == l ? !strcasecmp(host, h) : hl > l && host[hl - l - 1] == '.' && !strcasecmp(host + hl - l, h))
+            return 1;
+    }
+    return 0;
+}
 
 static char *trimdup(const char *s) {
     while (*s == ' ' || *s == '\t') s++;

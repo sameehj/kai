@@ -601,6 +601,13 @@ int kai_rule_lookup(const char *dir, const char *identity, const char *dest, int
 /* Known telemetry/crash-report hosts (B2): denied silently, audited, one
  * passive hint per agent instead of a card. */
 int kai_host_is_telemetry(const char *host);
+/* Hosts in one agent's own profile (e.g. Cursor's sign-in), allowed for that
+ * agent only. Each covers its subdomains. */
+int kai_agent_profile_allows(const char *agent, const char *host);
+/* Set env.<key>=<value> in Claude Code's settings (backup, atomic; refuses
+ * invalid JSON with 3). The app calls it after owner authentication. */
+int kai_claude_set_env(const char *key, const char *value);
+int kai_claude_env_is(const char *key, const char *value);
 /* The verified code-signing identity of a running process: "<signing id>
  * (<team>)", or "<signing id> (Apple)" for Apple's own. 1 when the signature
  * is valid (anchored to Apple), else 0 and out = "". */
@@ -784,6 +791,7 @@ typedef struct {
     const char *match;    /* the part that matched (redacted)               */
     const char *session;  /* the agent's session / conversation id          */
     const char *cwd;
+    const char *identity; /* the agent's verified signing identity, if known */
 } kai_audit_entry;
 int kai_audit_write(const kai_audit_entry *e);
 
@@ -801,6 +809,13 @@ int kai_audit_write(const kai_audit_entry *e);
  * decision "block"|"would-block"|"log"; resource = host:port or path (-> target);
  * op -> tool; reason_code = one of KAI_REASON_*; matched_rule -> match (may be
  * NULL/"" when no rule matched); detail = the human sentence. Logs no secrets. */
+/* A denial that also names the Kai session and the agent's verified signing
+ * identity, so Activity can offer "Allow for this session" or "Create a rule"
+ * on the row later. Either may be NULL. */
+void kai_denial_audit_ex(const char *source, const char *agent, const char *decision,
+                         const char *resource, const char *op, const char *reason_code,
+                         const char *matched_rule, const char *detail,
+                         const char *session, const char *identity);
 void kai_denial_audit(const char *source, const char *agent, const char *decision,
                       const char *resource, const char *op, const char *reason_code,
                       const char *matched_rule, const char *detail);

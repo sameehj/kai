@@ -120,6 +120,7 @@ static int append_record(int fd, const kai_audit_entry *e) {
     opt_field(&body, "match", e->match, 160);
     opt_field(&body, "session", e->session, 128);
     opt_field(&body, "cwd", e->cwd, 512);
+    opt_field(&body, "identity", e->identity, 160);
     sb_adds(&body, ",\"prev\":"); esc(&body, prev);
     char *bodystr = sb_take(&body);
 
@@ -161,13 +162,21 @@ static int open_locked(const char *path) {
 
 int kai_audit(const char *source, const char *event, const char *decision,
               const char *rule, const char *detail) {
-    kai_audit_entry e = {source, event, decision, rule, detail, NULL, NULL, NULL, NULL, NULL};
+    kai_audit_entry e = {source, event, decision, rule, detail, NULL, NULL, NULL, NULL, NULL, NULL};
     return kai_audit_write(&e);
 }
 
 void kai_denial_audit(const char *source, const char *agent, const char *decision,
                       const char *resource, const char *op, const char *reason_code,
                       const char *matched_rule, const char *detail) {
+    kai_denial_audit_ex(source, agent, decision, resource, op, reason_code, matched_rule, detail,
+                        NULL, NULL);
+}
+
+void kai_denial_audit_ex(const char *source, const char *agent, const char *decision,
+                         const char *resource, const char *op, const char *reason_code,
+                         const char *matched_rule, const char *detail,
+                         const char *session, const char *identity) {
     kai_audit_entry e;
     memset(&e, 0, sizeof e);
     e.source = source;
@@ -178,6 +187,8 @@ void kai_denial_audit(const char *source, const char *agent, const char *decisio
     e.tool = op;
     e.target = resource;                  /* host:port or path */
     e.match = (matched_rule && *matched_rule) ? matched_rule : NULL; /* only when a rule matched */
+    e.session = (session && *session) ? session : NULL;
+    e.identity = (identity && *identity) ? identity : NULL;
     kai_audit_write(&e);
 }
 
@@ -233,7 +244,7 @@ int kai_audit_write(const kai_audit_entry *e) {
             char note[200];
             snprintf(note, sizeof note, "previous log %s.1 ended with %s", "audit.log", ended);
             /* "allow": bookkeeping, not an event */
-            kai_audit_entry r = {"kai", "rotate", "allow", "audit.log.1", note, NULL, NULL, NULL, NULL, NULL};
+            kai_audit_entry r = {"kai", "rotate", "allow", "audit.log.1", note, NULL, NULL, NULL, NULL, NULL, NULL};
             append_record(fd, &r);
         }
     }

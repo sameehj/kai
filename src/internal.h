@@ -39,7 +39,9 @@ const char *kai_policy_file(void); /* $KAI_POLICY or <kai home>/policy */
 /* The Chrome Web Store gives the published extension its own ID (shown in the
  * developer dashboard after the first upload). Put it here so Kai's helper
  * also answers the store-installed extension. Empty = not published yet. */
+#ifndef KAI_STORE_EXTENSION_ID /* set at build time: make KAI_STORE_ID=<32 letters a-p> */
 #define KAI_STORE_EXTENSION_ID ""
+#endif
 int kai_browser_install(const char *exe);
 int kai_browser_uninstall(void);
 int kai_browser_installed(int *detected);

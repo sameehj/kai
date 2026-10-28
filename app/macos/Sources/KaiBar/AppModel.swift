@@ -255,7 +255,7 @@ final class AppModel: ObservableObject {
         guard let tail else { return }
         let fresh = tail.poll()
         if tail.recent != events { events = tail.recent }
-        let blocks = fresh.filter(\.isBlock)
+        let blocks = fresh.filter { $0.isBlock && !$0.isSilent }
         if !blocks.isEmpty {
             lastBlockAt = Date()
             if notifyOnBlock { notify(blocks) }

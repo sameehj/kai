@@ -35,6 +35,12 @@ final class StorageWall: NSObject, ObservableObject {
     }
 
     static let extensionID = "io.github.sameehj.kai.storage"
+    /// Batch 2: editions without Files don't carry its extension; they show a
+    /// greyed row ("Coming in a later release"), never a toggle.
+    static var included: Bool {
+        FileManager.default.fileExists(atPath: Bundle.main.bundlePath
+            + "/Contents/Library/SystemExtensions/\(extensionID).systemextension")
+    }
     @Published private(set) var state: State = .off
     private var turningOff = false
 

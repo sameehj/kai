@@ -9,12 +9,14 @@ const STATS_KEY = "kaiStats";
 const SITE_STATS_KEY = "kaiSiteStats";
 
 // The AI-chat sites Kai knows about (mirrors manifest content_scripts matches).
-// Used to group open tabs by site for the "AI chats" status report.
+// Used to group open chat pages by site for the "AI chats" status report.
 const CHAT_HOSTS = [
   "chatgpt.com", "chat.openai.com", "claude.ai", "gemini.google.com",
   "chat.deepseek.com", "perplexity.ai", "copilot.microsoft.com",
   "chat.mistral.ai", "grok.com", "poe.com",
 ];
+
+const OPEN_KEY = "kaiOpenPages";   // tab id -> site, in session storage
 
 function chatSiteOf(url) {
   let host;
@@ -69,19 +71,30 @@ async function bumpSite(site, field) {
   await chrome.storage.local.set({ [SITE_STATS_KEY]: ss });
 }
 
+// Which chat pages are open: each chat page's script says hello when it loads
+// and goodbye when it goes away, so Kai needs no "tabs" permission (which
+// would show users "Read your browsing history"). Kept in session storage so a
+// restarted service worker still knows. A closed tab is dropped on onRemoved,
+// which fires without that permission.
+async function openPages() {
+  try { return (await chrome.storage.session.get(OPEN_KEY))[OPEN_KEY] || {}; } catch { return {}; }
+}
+async function setPage(tabId, site) {
+  const pages = await openPages();
+  if (site) pages[tabId] = site; else delete pages[tabId];
+  try { await chrome.storage.session.set({ [OPEN_KEY]: pages }); } catch { /* best effort */ }
+  scheduleReport();
+}
+
 // Tell Kai which AI-chat sites are open and their per-site redaction/override
 // counts. Site only — never a full URL and never any chat text. This is the one
 // source for the "AI chats" section; the network wall never watches browsers.
 let reportTimer = null;
 async function reportStatus() {
-  let tabs;
-  try { tabs = await chrome.tabs.query({}); } catch { return; }
+  const pages = await openPages();
   const { [SITE_STATS_KEY]: ss = {} } = await chrome.storage.local.get(SITE_STATS_KEY);
   const openBySite = {};
-  for (const t of tabs) {
-    const site = t.url ? chatSiteOf(t.url) : null;
-    if (site) openBySite[site] = (openBySite[site] || 0) + 1;
-  }
+  for (const site of Object.values(pages)) openBySite[site] = (openBySite[site] || 0) + 1;
   // Union of sites that are open and sites we have counts for, so a closed site
   // reports open_tabs:0 instead of lingering at its last value.
   const seen = new Set([...Object.keys(openBySite), ...Object.keys(ss)]);
@@ -99,16 +112,19 @@ function scheduleReport() {
   reportTimer = setTimeout(() => { reportTimer = null; reportStatus(); }, 1000);
 }
 
-// Opening, closing or navigating a tab can change which chat sites are open.
-chrome.tabs.onCreated.addListener(scheduleReport);
-chrome.tabs.onRemoved.addListener(scheduleReport);
-chrome.tabs.onUpdated.addListener((_id, info) => { if (info.url || info.status === "complete") scheduleReport(); });
+// A closed tab takes its chat page with it.
+chrome.tabs.onRemoved.addListener((tabId) => { setPage(tabId, null); });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Only our own content scripts and popup talk to us.
   if (sender.id !== chrome.runtime.id) return false;
   (async () => {
-    if (msg?.type === "scan") {
+    if (msg?.type === "page") {           // a chat page loaded (open) or went away
+      const tabId = sender.tab?.id;
+      const site = chatSiteOf("https://" + String(msg.site || ""));
+      if (tabId !== undefined) await setPage(tabId, msg.open && site ? site : null);
+      sendResponse({ ok: true });
+    } else if (msg?.type === "scan") {
       const reply = await ask({ type: "scan", text: String(msg.text || ""), site: String(msg.site || "") });
       if (reply.ok) await bump("checked");
       sendResponse(reply);

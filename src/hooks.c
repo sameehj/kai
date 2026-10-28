@@ -602,7 +602,7 @@ static void follow_up(const kai_policy *p, const char *source, const char *sessi
             else log_context(p, raw, NULL, ctx, sizeof ctx, NULL, 0);
             describe_next(kind, cjstr(o, "tool"), cjstr(o, "target"), tool, ctx, detail, sizeof detail);
             kai_audit_entry e = {source, "AfterBlock", "note", cjstr(o, "rule"), detail,
-                                 tool, ctx, NULL, session, cwd};
+                                 tool, ctx, NULL, session, cwd, NULL};
             kai_audit_write(&e);
         }
         cJSON_Delete(o);
@@ -960,7 +960,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             log_context(p, from ? from : cmd, NULL, ctx, sizeof ctx, NULL, 0);
             free(cmd);
             kai_audit_entry e = {source, "PostToolUse", "warn", f.rule, detail,
-                                 cjstr(root, "tool_name"), ctx, NULL, session, cwd};
+                                 cjstr(root, "tool_name"), ctx, NULL, session, cwd, NULL};
             kai_audit_write(&e);
             kai_policy_free(p);
             cJSON_Delete(root);
@@ -1060,7 +1060,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
     if (decision != KAI_ACT_NONE || exempted[0]) {
         if (ev && !strcmp(ev, "UserPromptSubmit")) prompt_context(subject, ctx, sizeof ctx);
         else log_context(p, subject, match, ctx, sizeof ctx, mctx, sizeof mctx);
-        kai_audit_entry e = {source, event_label, dec_str, rule, reason, tool, ctx, mctx, session, cwd};
+        kai_audit_entry e = {source, event_label, dec_str, rule, reason, tool, ctx, mctx, session, cwd, NULL};
         if (decision == KAI_ACT_NONE) {
             e.decision = "exempt";
             e.rule = exempted;
@@ -1193,7 +1193,7 @@ static int hook_cursor(const char *json) {
             printf("%s\n", s); free(s); cJSON_Delete(o);
             char ctx[KAI_AUDIT_TARGET_MAX];
             prompt_context(prompt, ctx, sizeof ctx);
-            kai_audit_entry e = {"cursor", ev, "block", "prompt", sm, NULL, ctx, NULL, session, cwd};
+            kai_audit_entry e = {"cursor", ev, "block", "prompt", sm, NULL, ctx, NULL, session, cwd, NULL};
             kai_audit_write(&e);
             follow_up(p, "cursor", session, NEXT_PROMPT, NULL, prompt, cwd, "prompt", ctx);
             kai_policy_free(p); cJSON_Delete(root); return 0;
@@ -1213,24 +1213,24 @@ static int hook_cursor(const char *json) {
         printf("%s\n", s);
         free(s); cJSON_Delete(o);
         kai_audit_entry e = {"cursor", ev ? ev : "unknown", "ask", why, reason,
-                             tool, ctx, mctx, session, cwd};
+                             tool, ctx, mctx, session, cwd, NULL};
         kai_audit_write(&e);
     } else if (deny && kai_rule_is_builtin(why) == 0 && kai_session_paused_here((long long)time(NULL))) {
         /* paused: soft blocks go through, logged; Kai's own files still hold */
         kai_audit_entry e = {"cursor", ev ? ev : "unknown", "would-block", why, reason,
-                             tool, ctx, mctx, session, cwd};
+                             tool, ctx, mctx, session, cwd, NULL};
         kai_audit_write(&e);
         printf("{\"permission\":\"allow\"}\n");
         deny = 0;
     } else if (deny) {
         cursor_deny(reason);
         kai_audit_entry e = {"cursor", ev ? ev : "unknown", "block", why, reason,
-                             tool, ctx, mctx, session, cwd};
+                             tool, ctx, mctx, session, cwd, NULL};
         kai_audit_write(&e);
     } else {
         if (ex.exempted[0]) {
             kai_audit_entry e = {"cursor", ev ? ev : "unknown", "exempt", ex.exempted,
-                                 "allowed by your exception", tool, ctx, mctx, session, cwd};
+                                 "allowed by your exception", tool, ctx, mctx, session, cwd, NULL};
             kai_audit_write(&e);
         }
         /* explicit allow keeps Cursor's own flow */
