@@ -141,13 +141,18 @@ struct MenuView: View {
 
     private var permissions: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if !grantManager.grantGroups.isEmpty {
+            // B1: active only here (history lives in Agent Control); every row
+            // names agent, resource, scope and time left.
+            let active = grantManager.grantGroups.filter { !$0.isExpired }
+            if !active.isEmpty {
                 CapsLabel("Permissions")
-                ForEach(grantManager.grantGroups) { g in
+                ForEach(active) { g in
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 1) {
-                            Text("\(g.agent) · \(g.opLabel) · \(g.scopeLabel)"
+                            Text("\(g.agent) · \(g.opLabel) \(g.resourceLabel) · \(g.scopeLabel)"
                                  + (g.count > 1 ? " ×\(g.count)" : "")).font(.system(size: 12))
+                                .lineLimit(1).truncationMode(.middle)
+                                .help(g.resource)
                             Text(g.status).font(.system(size: 11))
                                 .foregroundStyle(g.status == "expired" ? Theme.muted : Theme.lime)
                         }

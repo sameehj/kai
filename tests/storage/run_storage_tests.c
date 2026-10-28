@@ -1941,6 +1941,61 @@ static void test_hook_seen(void) {
     snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
 }
 
+/* B1: Kai's own components get named exceptions for their own state only.
+ * Live: the network extension tried to unlink an expired grant (the store's
+ * cleanup) and the wall blocked it - cleanup is the app's job. */
+static void test_component_exceptions(void) {
+    printf("Kai components: own state only (B1)\n");
+    /* rule = what kai_path_protected matched */
+    CHECK(kai_component_may_touch("io.github.sameehj.kai.network", 0, "~/.ssh") == 0,
+          "network extension reading ~/.ssh: denied");
+    CHECK(kai_component_may_touch("io.github.sameehj.kai.network", 0, "*.key") == 0,
+          "network extension opening a key file: denied");
+    CHECK(kai_component_may_touch("io.github.sameehj.kai.network", 0, "~/.kai") == 1,
+          "network extension in Kai's own home: allowed (its own state)");
+    CHECK(kai_component_may_touch("io.github.sameehj.kai", 0, ".env") == 0,
+          "the app opening a .env: denied (it has no reason to)");
+    CHECK(kai_component_may_touch("io.github.sameehj.kai", 0, ".claude/settings.json") == 1,
+          "the app writing an agent's hook settings: allowed (installing hooks)");
+    CHECK(kai_component_may_touch("kai", 0, ".env") == 1,
+          "the kai CLI you run in a Terminal: your own tool, allowed");
+    CHECK(kai_component_may_touch("kai", 1, ".env") == 0,
+          "the kai CLI run by an agent: denied");
+    CHECK(kai_component_may_touch("io.github.sameehj.kai.network", 0, "persistence") == 0,
+          "a component writing a login item: denied");
+
+    /* read-only store (extensions): no unlink, no expiry audit, one-shots stay spent */
+    char dir[] = "/tmp/kai-rostoreXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char gdir[600], polp[600];
+    snprintf(gdir, sizeof gdir, "%s/grants", dir); mkdir(gdir, 0700);
+    snprintf(polp, sizeof polp, "%s/policy", dir);
+    FILE *f = fopen(polp, "w"); if (f) { fputs("protect /secrets\n", f); fclose(f); }
+    kai_grant old = mkgrant("/secrets/old", KAI_OP_READ, KAI_GRANT_PROCESS, KAI_ID_STRONG, 100, 5, 1000);
+    write_grant_file(gdir, &old);
+    char oldp[700]; snprintf(oldp, sizeof oldp, "%s/%s.json", gdir, old.id);
+    kai_approval_store *ro = kai_approval_store_open_ro(polp, gdir, GKEY, GKEYLEN, 0);
+    CHECK(access(oldp, F_OK) == 0, "read-only store: an expired grant's file is NOT deleted");
+    kai_approval_store_close(ro);
+    kai_approval_store *rw = kai_approval_store_open(polp, gdir, GKEY, GKEYLEN, 0);
+    CHECK(access(oldp, F_OK) != 0, "the app's (read-write) store does the cleanup");
+    kai_approval_store_close(rw);
+
+    const long long FUTURE = (long long)time(NULL) + 3600;
+    kai_grant one = mkgrant("/secrets/one", KAI_OP_READ, KAI_GRANT_ONESHOT, KAI_ID_STRONG, 100, 5, FUTURE);
+    write_grant_file(gdir, &one);
+    kai_grant_subject sub = { .pid = 100, .pidversion = 5, .agent = "claude", .strength = KAI_ID_STRONG };
+    char why[256];
+    ro = kai_approval_store_open_ro(polp, gdir, GKEY, GKEYLEN, 0);
+    CHECK(kai_approval_store_decide(ro, "/secrets/one", NULL, KAI_OP_READ, &sub, 1000, why, sizeof why) == 1,
+          "read-only store: a one-shot grant allows once");
+    kai_approval_store_reload(ro, 1);
+    CHECK(kai_approval_store_decide(ro, "/secrets/one", NULL, KAI_OP_READ, &sub, 1000, why, sizeof why) == 0,
+          "...and stays spent after a reload (no marker file needed)");
+    kai_approval_store_close(ro);
+    char cmd[700]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
 static void test_endpoint_grants(void) {
     printf("endpoint grants: no grant = no connection (security fix)\n");
     char dir[] = "/tmp/kai-egrantXXXXXX";
@@ -2311,6 +2366,7 @@ int main(void) {
     test_pause_state();
     test_one_kai();
     test_endpoint_grants();
+    test_component_exceptions();
     test_hook_seen();
     test_codex_argv_upload();
     test_persistence_paths();

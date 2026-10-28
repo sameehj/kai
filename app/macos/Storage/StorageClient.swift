@@ -201,12 +201,12 @@ final class StorageClient {
         let gdir = home + "/.kai/grants"
         let key = FileManager.default.contents(atPath: home + "/.kai/approval.key") ?? Data()
         if key.count != 32 {
-            grantStore = kai_approval_store_open(nil, gdir, nil, 0, 2)
+            grantStore = kai_approval_store_open_ro(nil, gdir, nil, 0, 2)   // the app alone writes grants
             dlog("grants: store opened policy-only (no approval key; grants not honored)")
         } else {
             key.withUnsafeBytes { raw in
                 if let base = raw.bindMemory(to: UInt8.self).baseAddress {
-                    grantStore = kai_approval_store_open(nil, gdir, base, key.count, 2)
+                    grantStore = kai_approval_store_open_ro(nil, gdir, base, key.count, 2)
                 }
             }
             approvalKeyInstalled = grantStore != nil
@@ -863,6 +863,22 @@ final class StorageClient {
                     dlog("BLOCK \(op) approval-key \(signer) pid \(pid(proc)) \(p)")
                     auditKaiComponent(signer: signer, exe: exe, pid: pid(proc), op: op, path: p,
                                       why: "approval-key-app-only")
+                    return false
+                }
+            }
+            // B1: a Kai component gets its own state only. A path protected by
+            // the user's rules (~/.ssh, .env, *.key, login items, ...) is denied
+            // to the app, the extensions and a kai CLI an agent runs; only the
+            // kai CLI the user runs keeps access (kai_component_may_touch).
+            let underAgent = !(classify(proc) ?? "").isEmpty
+            lock.lock(); let cpol = policy; lock.unlock()
+            for p in paths where !p.isEmpty {
+                var cwhy = [CChar](repeating: 0, count: 256)
+                if kai_path_protected(cpol, p, nil, &cwhy, cwhy.count) == 1,
+                   kai_component_may_touch(signer, underAgent ? 1 : 0, cwhy) == 0 {
+                    dlog("BLOCK \(op) component \(signer) pid \(pid(proc)) \(p)")
+                    auditKaiComponent(signer: signer, exe: exe, pid: pid(proc), op: op, path: p,
+                                      why: "kai-component-own-state-only: " + String(cString: cwhy))
                     return false
                 }
             }

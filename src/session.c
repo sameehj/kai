@@ -543,6 +543,12 @@ int kai_approval_key_access(const char *signing_id, const char *team, const char
     return 0;
 }
 
+int kai_component_may_touch(const char *signing_id, int under_agent, const char *rule) {
+    if (!rule || !*rule) return 1;                       /* not protected */
+    if (kai_rule_is_builtin(rule)) return 1;             /* Kai's home, agent hook configs */
+    return signing_id && !strcmp(signing_id, "kai") && !under_agent;   /* the user's own CLI */
+}
+
 int kai_pause_state(const char *sid, long long now) {
     return kai_pause_state_at("/tmp/kai-storage-health.json", 0, sid, now);
 }

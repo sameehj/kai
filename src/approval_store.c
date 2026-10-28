@@ -53,6 +53,9 @@ struct kai_approval_store {
     int ngrants;
     unsigned long generation;
 
+    int read_only;                 /* B1: an extension's store - the app alone cleans up */
+    char (*spent)[64];             /* read-only: one-shot ids spent, kept across reloads */
+    int nspent, capspent;
     long long last_check;          /* epoch of last reload re-stat */
     long long policy_mtime;
     long long grants_mtime;
@@ -109,6 +112,7 @@ static void load_snapshot(kai_approval_store *s, int first) {
         /* S4: a session-bound grant stops once its session ends (root exit).
          * Checked here, off the hot path, so decide() needs no file I/O. */
         int session_over = (!bad && !expired && kai_grant_session_ended(&ng[i]));
+        if ((bad || expired || session_over) && s->read_only) continue;  /* drop; the app cleans up */
         if (bad || expired || session_over) {
             const char *act = bad ? "rejected" : session_over ? "expired" : "expired";
             const char *reason = bad ? "invalid signature"
@@ -129,17 +133,40 @@ static void load_snapshot(kai_approval_store *s, int first) {
     s->grants = ng;
     s->ngrants = nn;
     s->consumed = nn ? calloc((size_t)nn, 1) : NULL; /* fresh one-shot flags */
+    for (int i = 0; s->consumed && i < nn; i++)        /* read-only: spent ones stay spent */
+        for (int k = 0; k < s->nspent; k++)
+            if (!strcmp(s->spent[k], ng[i].id)) s->consumed[i] = 1;
 
     s->policy_mtime = file_mtime(s->policy_path[0] ? s->policy_path : kai_policy_file());
     s->grants_mtime = grants_dir_mtime(s->grants_dir);
     s->generation++;
 }
 
+static kai_approval_store *store_open(const char *policy_path, const char *grants_dir,
+                                      const unsigned char *key, size_t keylen,
+                                      long long debounce_sec, int read_only);
+
 kai_approval_store *kai_approval_store_open(const char *policy_path, const char *grants_dir,
                                             const unsigned char *key, size_t keylen,
                                             long long debounce_sec) {
+    return store_open(policy_path, grants_dir, key, keylen, debounce_sec, 0);
+}
+
+/* B1: the extensions' stores. They read grants but never write the grants
+ * folder (only the app may): no cleanup unlinks, no duplicate expiry audits,
+ * and one-shot spends are remembered in memory across reloads. */
+kai_approval_store *kai_approval_store_open_ro(const char *policy_path, const char *grants_dir,
+                                               const unsigned char *key, size_t keylen,
+                                               long long debounce_sec) {
+    return store_open(policy_path, grants_dir, key, keylen, debounce_sec, 1);
+}
+
+static kai_approval_store *store_open(const char *policy_path, const char *grants_dir,
+                                      const unsigned char *key, size_t keylen,
+                                      long long debounce_sec, int read_only) {
     kai_approval_store *s = calloc(1, sizeof *s);
     if (!s) return NULL;
+    s->read_only = read_only;
     if (policy_path) kai_strlcpy(s->policy_path, policy_path, sizeof s->policy_path);
     if (grants_dir) kai_strlcpy(s->grants_dir, grants_dir, sizeof s->grants_dir);
     if (key && keylen) { if (keylen > sizeof s->key) keylen = sizeof s->key;
@@ -158,6 +185,7 @@ void kai_approval_store_close(kai_approval_store *s) {
     if (s->policy) kai_policy_free(s->policy);
     free(s->grants);
     free(s->consumed);
+    free(s->spent);
     pthread_rwlock_destroy(&s->lock);
     free(s);
 }
@@ -212,6 +240,20 @@ int kai_approval_store_count(kai_approval_store *s) {
 static int consume_oneshot(kai_approval_store *s, int idx) {
     unsigned char prev = atomic_exchange_explicit(&s->consumed[idx], 1, memory_order_acq_rel);
     if (prev != 0) return 0;                 /* already spent in-process by another decider */
+    if (s->read_only) {
+        /* An extension can't write the grants folder (app-only): remember the
+         * spend in memory, by id, so a reload doesn't revive it. */
+        static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+        pthread_mutex_lock(&mu);
+        if (s->nspent == s->capspent) {
+            int nc = s->capspent ? s->capspent * 2 : 16;
+            char (*np)[64] = realloc(s->spent, (size_t)nc * sizeof *np);
+            if (np) { s->spent = np; s->capspent = nc; }
+        }
+        if (s->nspent < s->capspent) kai_strlcpy(s->spent[s->nspent++], s->grants[idx].id, 64);
+        pthread_mutex_unlock(&mu);
+        return 1;
+    }
     /* Persist the spend BEFORE allowing, so it is durable across reload/restart
      * (kai_grants_load skips a grant whose ".used" marker exists). The in-memory
      * atomic above only serializes concurrent deciders within this process; this

@@ -290,6 +290,9 @@ private struct GeneralPage: View {
         Card(padding: 14) {
             VStack(spacing: 12) {
                 row("Notify me when Kai blocks something", isOn: $model.notifyOnBlock)
+                soundRow("Sound when Kai needs you", key: "soundApprovalNeeded", default: true)
+                soundRow("Sound when a permission is granted", key: "soundPermissionGranted", default: true)
+                soundRow("Sound when Kai blocks something", key: "soundBlocked", default: false)
                 row("Open Kai at login", isOn: Binding(get: { model.launchAtLogin },
                                                        set: { model.launchAtLogin = $0 }))
             }
@@ -309,6 +312,11 @@ private struct GeneralPage: View {
                 Button("Edit Policy File…") { model.openPolicyFile() }.buttonStyle(GhostButtonStyle())
             }
         }
+    }
+
+    private func soundRow(_ title: String, key: String, default on: Bool) -> some View {
+        row(title, isOn: Binding(get: { UserDefaults.standard.object(forKey: key) as? Bool ?? on },
+                                 set: { UserDefaults.standard.set($0, forKey: key) }))
     }
 
     private func row(_ title: String, isOn: Binding<Bool>) -> some View {

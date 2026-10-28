@@ -259,6 +259,7 @@ final class AppModel: ObservableObject {
         if !blocks.isEmpty {
             lastBlockAt = Date()
             if notifyOnBlock { notify(blocks) }
+            if !blocks.isEmpty { KaiSounds.blocked() }   // off unless switched on in Advanced -> App
         }
     }
 

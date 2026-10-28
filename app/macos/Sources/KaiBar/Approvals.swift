@@ -14,6 +14,7 @@ import Foundation
 import LocalAuthentication
 import Security
 import SwiftUI
+import AppKit
 import KaiCore
 
 /// The approval key: 32 random bytes at ~/.kai/approval.key (0600), created on
@@ -165,7 +166,11 @@ struct ActiveGrant: Decodable, Identifiable {
     let hmac: String
     var session_id: String? = nil
     var opLabel: String { op == 1 ? "write" : op == 2 ? "connect" : "read" }
-    var scopeLabel: String { scope == 1 ? "once" : "this process" }
+    /// B1: scope and duration always agree. A grant bound to a session lasts
+    /// until that session ends (its expiry is only a cap), so it never shows
+    /// "this process · 7 days".
+    var isSession: Bool { !(session_id ?? "").isEmpty }
+    var scopeLabel: String { scope == 1 ? "once" : isSession ? "this session" : "this process" }
     var signed: Bool { !hmac.isEmpty }
     var expiresEpoch: Int { Int(expires_utc) ?? 0 }
 }
@@ -202,14 +207,24 @@ struct GrantGroup: Identifiable {
     let resource: String
     let opLabel: String
     let scopeLabel: String
+    var isSession = false
     let count: Int
     let signed: Bool
     let expiresEpoch: Int               // soonest expiry in the group
     let members: [ActiveGrant]
-    /// granted → (received by walls / used: S6) → expiring. Interim status.
+    var isExpired: Bool { expiresEpoch - Int(Date().timeIntervalSince1970) <= 0 }
+    /// What the row says: the resource in plain words (a host, or a file's
+    /// name), so no permission row is without its resource.
+    var resourceLabel: String {
+        if resource.hasPrefix("mcp:") { return "MCP " + resource.dropFirst(4) }
+        if resource.contains("/") { return (resource as NSString).lastPathComponent }
+        return resource
+    }
+    /// Time left, in the same terms as the scope.
     var status: String {
         let secs = expiresEpoch - Int(Date().timeIntervalSince1970)
         if secs <= 0 { return "expired" }
+        if isSession { return "until the session ends" }
         if secs < 60 { return "\(secs)s left" }
         if secs < 3600 { return "\(secs / 60)m left" }
         return "\(secs / 3600)h \((secs % 3600) / 60)m left"
@@ -255,7 +270,24 @@ final class GrantManager: ObservableObject {
     }
     deinit { timer?.invalidate() }
 
+    /// B1: the app is the only writer of the grants folder, so it alone drops
+    /// expired / session-ended / invalid grants and audits each once (the
+    /// extensions' stores are read-only).
+    private var cleanupStore: OpaquePointer?
+    private var seenPending = Set<String>()   // a NEW card plays the "needs you" sound once
+    private var primed = false                // ...not the ones already there at launch
+    private func cleanupGrants() {
+        if cleanupStore == nil, let key = KaiApprovalKey.ensure() {
+            cleanupStore = key.withUnsafeBytes { raw -> OpaquePointer? in
+                guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return nil }
+                return kai_approval_store_open(nil, grantsDir, base, key.count, 0)
+            }
+        }
+        if let s = cleanupStore { _ = kai_approval_store_reload(s, 1) }
+    }
+
     func refresh() {
+        cleanupGrants()
         pausedUntil = wallPausedUntil()
         pending = loadJSON(dir: pendingDir).compactMap { try? JSONDecoder().decode(PendingRequest.self, from: $0) }
             .sorted { $0.ts < $1.ts }
@@ -275,6 +307,9 @@ final class GrantManager: ObservableObject {
         for r in pending where !live.contains(where: { $0.id == r.id }) {
             try? FileManager.default.removeItem(atPath: pendingDir + "/" + r.id + ".json")
         }
+        let fresh = live.filter { r in !seenPending.contains(r.id) }
+        if primed && !fresh.isEmpty { KaiSounds.approvalNeeded() }
+        seenPending.formUnion(live.map(\.id)); primed = true
         pending = live
         grants = loadJSON(dir: grantsDir).compactMap { try? JSONDecoder().decode(ActiveGrant.self, from: $0) }
             .sorted { $0.id < $1.id }
@@ -336,6 +371,7 @@ final class GrantManager: ObservableObject {
                               expires: expires, sessionId: sessionId, confirmed: confirmed,
                               authenticated: authenticated, key: key)
         guard wrote else { return }
+        KaiSounds.permissionGranted()
         kai_grant_audit("approved", gid, req.agent, req.resource, opCode, "sign",
                         breakglass ? "break-glass approved with authentication" : "approved by console user")
 
@@ -395,7 +431,7 @@ final class GrantManager: ObservableObject {
         return map.map { key, gs in
             let f = gs[0]
             return GrantGroup(id: key, agent: f.agent, resource: f.resource, opLabel: f.opLabel,
-                              scopeLabel: f.scopeLabel, count: gs.count,
+                              scopeLabel: f.scopeLabel, isSession: f.isSession, count: gs.count,
                               signed: gs.allSatisfy { $0.signed },
                               expiresEpoch: gs.map(\.expiresEpoch).min() ?? 0, members: gs)
         }.sorted { $0.id < $1.id }
@@ -711,4 +747,18 @@ struct ApprovalsSection: View {
             }
         }
     }
+}
+
+/// B1: quiet system sounds, no assets. Approval needed and permission granted
+/// on by default, blocked off; each can be switched in Advanced -> App.
+enum KaiSounds {
+    static func play(_ name: String, key: String, default on: Bool) {
+        let enabled = UserDefaults.standard.object(forKey: key) as? Bool ?? on
+        guard enabled, let s = NSSound(named: NSSound.Name(name)) else { return }
+        s.volume = 0.3
+        s.play()
+    }
+    static func approvalNeeded() { play("Ping", key: "soundApprovalNeeded", default: true) }
+    static func permissionGranted() { play("Glass", key: "soundPermissionGranted", default: true) }
+    static func blocked() { play("Basso", key: "soundBlocked", default: false) }
 }

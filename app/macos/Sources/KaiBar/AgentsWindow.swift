@@ -62,8 +62,20 @@ struct SessionRow: Decodable, Identifiable, Equatable {
     var isIDE: Bool { workspaces != nil }
     var window: String { !tty.isEmpty ? tty : (hostApp.isEmpty ? "—" : hostApp) }
     var projectName: String {
-        if let w = workspaces { return "\(w.count) workspace\(w.count == 1 ? "" : "s")" }
-        return project.isEmpty ? "—" : (project as NSString).lastPathComponent
+        if let w = workspaces {
+            // B1: count only what is known; "0 workspaces" on an active app misleads.
+            return w.isEmpty ? (hostApp.isEmpty ? displayAgent : hostApp)
+                             : "\(w.count) workspace\(w.count == 1 ? "" : "s")"
+        }
+        let base = project.isEmpty ? "—" : (project as NSString).lastPathComponent
+        return nameSuffix.isEmpty ? base : "\(base) · \(nameSuffix)"
+    }
+    /// B1: set by AgentsModel when two live sessions would read the same: the
+    /// topic, else the terminal, else the start time.
+    var nameSuffix: String = ""
+    enum CodingKeys: String, CodingKey {
+        case id, agent, topic, topicReportedByAgent, project, hostApp, startedUtc, endedUtc, childCount,
+             source, kind, tty, enforcement, state, activity, lastActiveUtc, workspaces
     }
     /// Proper product names, not the lowercase classifier.
     var displayAgent: String {
@@ -160,7 +172,17 @@ final class AgentsModel: ObservableObject {
         refreshing = true
         defer { refreshing = false }
         if let s = await KaiCLI.decode(Snapshot.self, ["snapshot", "--json"]) {
-            if s.sessions != sessions { sessions = s.sessions }
+            var rows = s.sessions
+            // Two live sessions with the same agent + project: tell them apart.
+            let keyOf = { (r: SessionRow) in r.displayAgent + "|" + r.project }
+            let dup = Dictionary(grouping: rows.filter { $0.isActive && $0.workspaces == nil }, by: keyOf)
+                .filter { $0.value.count > 1 }
+            for i in rows.indices where rows[i].isActive && dup[keyOf(rows[i])] != nil {
+                let r = rows[i]
+                rows[i].nameSuffix = !r.topic.isEmpty ? String(r.topic.prefix(30))
+                                   : !r.tty.isEmpty ? r.tty : "started \(r.startedClock)"
+            }
+            if rows != sessions { sessions = rows }
             agents = s.agents
             loaded = true
         }

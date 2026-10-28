@@ -224,11 +224,11 @@ final class Engine {
         let gdir = home + "/.kai/grants"
         let key = FileManager.default.contents(atPath: home + "/.kai/approval.key") ?? Data()
         if key.count != 32 {
-            grantStore = kai_approval_store_open(nil, gdir, nil, 0, 2)
+            grantStore = kai_approval_store_open_ro(nil, gdir, nil, 0, 2)   // the app alone writes grants
         } else {
             key.withUnsafeBytes { raw in
                 if let base = raw.bindMemory(to: UInt8.self).baseAddress {
-                    grantStore = kai_approval_store_open(nil, gdir, base, key.count, 2)
+                    grantStore = kai_approval_store_open_ro(nil, gdir, base, key.count, 2)
                 }
             }
             approvalKeyInstalled = grantStore != nil

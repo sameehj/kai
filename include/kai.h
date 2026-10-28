@@ -616,6 +616,15 @@ typedef struct kai_approval_store kai_approval_store;
 /* policy_path NULL = default location. key is the approval key (may be NULL/0
  * in tests with only unsigned grants, which then never match). debounce_sec
  * bounds how often reload actually re-stats the files. */
+/* An extension's store: reads grants, never writes the grants folder. */
+kai_approval_store *kai_approval_store_open_ro(const char *policy_path, const char *grants_dir,
+                                               const unsigned char *key, size_t keylen,
+                                               long long debounce_sec);
+/* B1: may a Kai component (exact signing id; under_agent = runs in an agent's
+ * tree) touch a path protected by `rule`? Kai's own state and agent hook
+ * configs: yes. A path protected by the user's rules: only the kai CLI the
+ * user runs (not under an agent). */
+int kai_component_may_touch(const char *signing_id, int under_agent, const char *rule);
 kai_approval_store *kai_approval_store_open(const char *policy_path, const char *grants_dir,
                                             const unsigned char *key, size_t keylen,
                                             long long debounce_sec);
