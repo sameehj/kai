@@ -272,3 +272,24 @@ tool result / prompt ─▶ fast rules (MVP) ─▶ small local classifier ─�
 3. **Shell commands that look like uploads** (`curl -d @file`): ask every time, or deny unless the host is on an allowlist?
 4. **Name:** keep "Kai" pending a trademark search?
 5. **GitHub org:** where the repo lives (your account or a new org), so the CLA bot and CI can be set up.
+
+
+## Control path — v1 decision (2026-10-28): CLI writes removed, no control service
+
+The XPC control service, its LaunchAgent and the SMAppService registration
+are **removed in v1**. The Kai app is the only writer of policy and
+permissions, in-process (libkai's `kai_policy_dispatch`; grants are signed in
+the app as before); the storage wall lets only `/Applications/Kai.app` write
+the policy store. The `kai` CLI shows policy and permissions (`policy show`,
+`status`, `sessions`, `agents`, `why`, `denials`) and, for a change
+(`policy set/add/remove`, `grant create/revoke`), prints "Change this in Kai"
+and opens the matching Settings page (`kai://settings/<page>`, only for a
+person at a terminal). MCP approvals are decided in the hook: session from the
+wall's pid map, grant trusted by location (the grants folder is app-write-only).
+
+Why: live, the service's launchd registration pointed at a deleted
+`build/Kai.app` copy (macOS's background-task database kept the app's old
+location, and every agent the app registered inherited it), so every CLI write
+hung, and an old copy had been able to claim the service at all. CLI writes may
+return later, with signature checks in both directions (the CLI verifying the
+service, the service verifying the CLI).

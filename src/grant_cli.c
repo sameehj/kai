@@ -233,14 +233,9 @@ int kai_cmd_grant(int argc, char **argv) {
     const char *sub = argc > 0 ? argv[0] : "list";
     if (!strcmp(sub, "list")) return grant_list(argc > 1 && !strcmp(argv[1], "--json"), NULL);
 #ifndef KAI_TEST_DIRECT_POLICY
-    /* Writes go to the one control path (the signed app's service); the CLI
-     * never writes grants itself. */
-    if (!strcmp(sub, "create") || !strcmp(sub, "revoke")) {
-        char msg[600] = "";
-        int rc = kai_control_request("grant", argc, argv, msg, sizeof msg);
-        if (msg[0]) fprintf(rc == 0 ? stdout : stderr, "%s\n", msg);
-        return rc;
-    }
+    /* v1: permissions are given and revoked only in Kai (the app is the one
+     * writer); the CLI lists them. */
+    if (!strcmp(sub, "create") || !strcmp(sub, "revoke")) return kai_cli_change_in_kai(argc, argv);
 #endif
     if (!strcmp(sub, "revoke")) return grant_revoke(argc > 1 ? argv[1] : NULL);
     if (!strcmp(sub, "create")) return grant_create(argc - 1, argv + 1);

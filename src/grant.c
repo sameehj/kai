@@ -418,6 +418,11 @@ int kai_grant_match(const kai_grant *grants, int n, const kai_grant_subject *s,
  * has no such grant and is asked again. The hook runs as the signed `kai`
  * (wall-exempt for reads), so it can read the grant store and the approval key
  * and verify the HMAC - an agent cannot forge one. */
+/* key NULL: trust by LOCATION instead of signature - used by the hook, which
+ * runs in the agent's tree and (rightly) can't read the approval key. The
+ * grants folder is in the policy store, which only the installed Kai app may
+ * write (the storage wall enforces it); with the wall off an agent could read
+ * the key anyway, so the signature adds nothing then. */
 int kai_mcp_grant_allows(const kai_grant *grants, int n, const char *session_id,
                          const char *server, const char *tool, long long now,
                          const unsigned char *key, size_t keylen) {
@@ -427,7 +432,7 @@ int kai_mcp_grant_allows(const kai_grant *grants, int n, const char *session_id,
     snprintf(wild, sizeof wild, "mcp:%s/*", server);
     for (int i = 0; i < n; i++) {
         const kai_grant *g = &grants[i];
-        if (!kai_grant_hmac_ok(g, key, keylen)) continue;          /* forged/tampered */
+        if (key && !kai_grant_hmac_ok(g, key, keylen)) continue;   /* forged/tampered */
         if (g->expires_utc != 0 && now >= g->expires_utc) continue; /* expired */
         if (!g->session_id[0] || strcmp(g->session_id, session_id) != 0) continue; /* session only */
         if (strcmp(g->resource, exact) == 0 || strcmp(g->resource, wild) == 0) return 1;
@@ -492,8 +497,12 @@ static void mcp_request_write(const char *session, const char *server, const cha
  * CALLER's pid (audit-token identity), never a payload-supplied id. If a valid
  * session grant already covers the tool -> allow (rc 0). Otherwise stage a
  * pending card for the user and tell the agent to wait (rc 10). */
-int kai_mcp_service_request(int caller_pid, const char *server, const char *tool,
-                            const char *host, char *msg, size_t msglen) {
+/* An MCP call, decided where the hook runs (v1: no control service). The
+ * session comes from the caller's pid via the wall's map - never a parameter
+ * a caller could spoof. A session grant allows it (0); otherwise a Kai card is
+ * staged (10); no Kai session: denied (72). verify_signature 0 = the hook. */
+int kai_mcp_request(int caller_pid, const char *server, const char *tool,
+                    const char *host, int verify_signature, char *msg, size_t msglen) {
     if (msg && msglen) msg[0] = '\0';
     if (!server || !*server) { if (msg) kai_strlcpy(msg, "bad MCP request", msglen); return 1; }
     char session[KAI_SESSION_ID_MAX] = "";
@@ -507,9 +516,10 @@ int kai_mcp_service_request(int caller_pid, const char *server, const char *tool
     char gdir[1200]; snprintf(gdir, sizeof gdir, "%s/grants", kai_home());
     kai_grant *gs = NULL; int ng = 0;
     kai_grants_load(gdir, &gs, &ng);
-    unsigned char key[64]; size_t klen = kai_approval_key_read(key, sizeof key);
-    int allowed = (gs && klen) &&
-                  kai_mcp_grant_allows(gs, ng, session, server, tool, (long long)time(NULL), key, klen);
+    unsigned char key[64]; size_t klen = verify_signature ? kai_approval_key_read(key, sizeof key) : 0;
+    int allowed = gs && (!verify_signature || klen) &&
+                  kai_mcp_grant_allows(gs, ng, session, server, tool, (long long)time(NULL),
+                                       verify_signature ? key : NULL, klen);
     free(gs);
     if (allowed) { if (msg) kai_strlcpy(msg, "granted for this session", msglen); return 0; }
 

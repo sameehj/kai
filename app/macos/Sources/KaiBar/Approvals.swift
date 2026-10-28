@@ -264,6 +264,11 @@ final class GrantManager: ObservableObject {
         let now = Int(Date().timeIntervalSince1970)
         let live = pending.filter { r in
             if now - r.ts > 600 { return false }
+            // A request bound to a session stays while that session lives: a
+            // short-lived process (curl, git) exits before you can click, and
+            // "Allow for this session" covers its next attempt. Live: the
+            // example.com card vanished the moment curl exited.
+            if let s = r.session, !s.isEmpty { return true }
             if r.pid > 0 && kill(pid_t(r.pid), 0) != 0 && errno == ESRCH { return false }
             return true
         }

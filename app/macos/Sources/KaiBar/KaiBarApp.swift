@@ -12,16 +12,13 @@ struct KaiBarApp: App {
     @StateObject private var storage = StorageWall()
 
     var body: some Scene {
-        // The launchd-started control-service instance runs with no icon: one
-        // visible Kai, plus the background service.
-        MenuBarExtra(isInserted: .constant(!KaiInstance.isControlAgent)) {
+        MenuBarExtra {
             MenuView()
                 .environmentObject(model)
                 .environmentObject(wall)
                 .environmentObject(storage)
         } label: {
-            Image(systemName: model.menuBarSymbol)
-                .accessibilityLabel("Kai: \(model.health == .problem ? model.headline : model.statusSentence(storageOn: storage.isOn, networkOn: wall.isOn))")
+            MenuBarLabel(model: model, wall: wall, storage: storage)
         }
         .menuBarExtraStyle(.window)
 
@@ -40,15 +37,9 @@ struct KaiBarApp: App {
 /// and permissions) with old rules, and an agent can launch one.
 enum KaiInstance {
     /// The release instance: /Applications/Kai.app with the release signature.
-    /// Only it hosts the control service; any other copy is a DEV copy.
+    /// Any other copy is a DEV copy (badge; the storage wall lets only the
+    /// installed app write policy and permissions).
     static let isRelease: Bool = kai_app_is_release(Bundle.main.bundlePath, ownTeamID()) == 1
-
-    /// launchd starts a separate instance of the app to host the control
-    /// service (its LaunchAgent; launchd sets XPC_SERVICE_NAME to the label).
-    /// That one must NOT hand over to the menu-bar instance - it's the only one
-    /// that can check the service in - and shows no menu-bar icon.
-    static let isControlAgent: Bool =
-        ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] == KAI_CONTROL_MACH_NAME
 
     static func ownTeamID() -> String {
         var code: SecCode?
@@ -66,11 +57,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lockFD: Int32 = -1
 
     func applicationWillFinishLaunching(_ notification: Notification) {
-        if KaiInstance.isControlAgent { return }   // the background service, not a second UI
         // One menu-bar Kai: an exclusive lock in Kai's home, held for the app's
-        // life, taken only by menu-bar instances (never the launchd-started
-        // control service, which is also this app). A second copy that can't
-        // take it activates the running one and quits.
+        // life. A second copy that can't take it activates the running one and
+        // quits.
         let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
         lockFD = kai_app_lock_acquire(home + "/.kai/run/app.lock")
         if lockFD < 0 {
@@ -87,14 +76,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu-bar only: no Dock icon even when run outside a bundle.
         NSApp.setActivationPolicy(.accessory)
-        // The one authenticated control path (Step 3): the app is the sole
-        // writer of the policy store. Start its XPC service so the `kai` CLI can
-        // ask it to make changes. The Mach name must be advertised by the app's
-        // launchd agent for CLI lookups to reach it (see ControlServiceAgent).
-        // Only the release instance: a DEV copy never hosts it or registers
-        // its LaunchAgent.
-        guard KaiInstance.isRelease else { return }
-        ControlServiceAgent.registerIfNeeded()
-        _ = kai_control_service_start()
+        // v1 has no control service: this app writes policy and permissions
+        // in-process; the CLI only reads them.
+    }
+
+    /// kai://settings/<page> - the CLI's "Change this in Kai" opens the page.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for u in urls where u.scheme == "kai" && u.host == "settings" {
+            let page = u.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            UserDefaults.standard.set(SettingsPage(stored: page).rawValue, forKey: "settingsPage")
+            NotificationCenter.default.post(name: .kaiOpenSettings, object: nil)
+        }
+    }
+}
+
+extension Notification.Name { static let kaiOpenSettings = Notification.Name("kaiOpenSettings") }
+
+/// The menu-bar icon. It is always on screen, so it is also where a
+/// kai://settings link opens the Settings window.
+struct MenuBarLabel: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var wall: NetworkWall
+    @ObservedObject var storage: StorageWall
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Image(systemName: model.menuBarSymbol)
+            .accessibilityLabel("Kai: \(model.health == .problem ? model.headline : model.statusSentence(storageOn: storage.isOn, networkOn: wall.isOn))")
+            .onReceive(NotificationCenter.default.publisher(for: .kaiOpenSettings)) { _ in
+                openWindow(id: "settings")
+                NSApp.activate(ignoringOtherApps: true)
+            }
     }
 }

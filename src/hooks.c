@@ -813,7 +813,8 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 char host[256] = ""; kai_mcp_declared_host(mcp_server, cwd, host, sizeof host);
                 char *rv[3] = { mcp_server, mcp_tool, host };
                 char svc[256] = "";
-                int rc = kai_control_request("mcp", 3, rv, svc, sizeof svc);
+                (void)rv;
+                int rc = kai_mcp_request((int)getpid(), mcp_server, mcp_tool, host, 0, svc, sizeof svc);
                 if (rc == 0) {
                     decision = KAI_ACT_NONE;                   /* a session grant covers it */
                 } else {

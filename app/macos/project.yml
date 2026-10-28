@@ -111,7 +111,6 @@ targets:
       # Step 3: the app hosts the one control service, so it compiles the policy
       # and grant WRITE logic (and their deps) and calls it in-process. The
       # extensions keep the slim libkai; these CLI modules live only in the app.
-      - path: ../../src/control.c
       - path: ../../src/manage.c
       - path: ../../src/grant_cli.c
       - path: ../../src/install.c
@@ -135,6 +134,10 @@ targets:
         LSUIElement: true
         LSMinimumSystemVersion: "13.0"
         NSHumanReadableCopyright: GPL-3.0 · The Kai Authors
+        # kai://settings/<page>: the CLI's "Change this in Kai" opens the page.
+        CFBundleURLTypes:
+          - CFBundleURLName: io.github.sameehj.kai
+            CFBundleURLSchemes: [kai]
     entitlements:
       path: Sources/Kai.entitlements
       properties:
@@ -149,8 +152,8 @@ targets:
         SWIFT_INCLUDE_PATHS: $(SRCROOT)/KaiCore   # expose libkai's C API as `import KaiCore`
         GCC_C_LANGUAGE_STANDARD: c11
         HEADER_SEARCH_PATHS: ["$(SRCROOT)/../../include", "$(SRCROOT)/../../third_party/cjson"]
-        # KAI_PRODUCT_BUILD trips the build guard in control.c if the policy
-        # test seam is ever set in a shipped build (see control.c / Makefile).
+        # KAI_PRODUCT_BUILD trips the build guard in manage.c if the policy
+        # test seam is ever set in a shipped build (see manage.c / Makefile).
         GCC_PREPROCESSOR_DEFINITIONS: ["_POSIX_C_SOURCE=200809L", "_DARWIN_C_SOURCE", "KAI_PRODUCT_BUILD=1"]
     postBuildScripts:
       # Ship the kai CLI inside the app; the app uses it when none is installed.
@@ -167,11 +170,9 @@ targets:
           rm -rf "$ext" && mkdir -p "$ext/icons"
           cp "$SRCROOT/../../integrations/browser/"*.js "$SRCROOT/../../integrations/browser/"*.json \
              "$SRCROOT/../../integrations/browser/popup.html" "$ext/"
-          # Step 3: the control-service launch agent, where SMAppService.agent
-          # looks for it (Contents/Library/LaunchAgents).
-          la="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchAgents"
-          mkdir -p "$la"
-          cp "$SRCROOT/Sources/LaunchAgents/io.github.sameehj.kai.controlservice.plist" "$la/"
+          # v1 has no control service: remove a LaunchAgents folder an older
+          # build left in the product.
+          rm -rf "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchAgents"
           cp "$SRCROOT/../../integrations/browser/icons/"*.png "$ext/icons/"
           if [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
             codesign --force --options runtime --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$dest"

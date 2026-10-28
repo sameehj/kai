@@ -301,6 +301,30 @@ int kai_rule_is_trust_store(const char *rule) {
     return rule && !strcmp(rule, "trust-store");
 }
 
+/* Login persistence: launchd agent/daemon folders. A plist written there runs a
+ * program automatically at login, outliving the agent's session. Agents may
+ * READ them; a WRITE is Ask-level (a decision card). */
+static int persistence_path(const char *np, char *why, size_t whylen) {
+    static const char *const SYS[] = {"/Library/LaunchAgents", "/Library/LaunchDaemons"};
+    int hit = 0;
+    for (size_t i = 0; !hit && i < sizeof SYS / sizeof SYS[0]; i++) {
+        size_t l = strlen(SYS[i]);
+        hit = !strncmp(np, SYS[i], l) && (np[l] == '\0' || np[l] == '/');
+    }
+    if (!hit) {
+        char *u = kai_normalize_path("~/Library/LaunchAgents", NULL);
+        size_t l = u ? strlen(u) : 0;
+        hit = u && !strncmp(np, u, l) && (np[l] == '\0' || np[l] == '/');
+        free(u);
+    }
+    if (hit && why) kai_strlcpy(why, "persistence", whylen);
+    return hit;
+}
+
+int kai_rule_is_persistence(const char *rule) {
+    return rule && !strcmp(rule, "persistence");
+}
+
 /* Is `name` an agent product the walls recognize? True when the policy (which
  * always carries the built-in agent rules) has an agent rule for it, so both
  * walls, which classify via these same rules, would attribute its processes. */
@@ -344,6 +368,9 @@ int kai_rule_is_name_pattern(const char *rule) {
     if (!rule || !*rule) return 0;
     if (strchr(rule, '/')) return 0;            /* a path/folder rule */
     if (kai_rule_is_builtin(rule) || kai_rule_is_kai_home(rule)) return 0;
+    /* location classes (no slash in their name, but not name rules): a NEW file
+     * there is still a protected write - a new CA bundle, a new login item. */
+    if (kai_rule_is_trust_store(rule) || kai_rule_is_persistence(rule)) return 0;
     return 1;
 }
 
@@ -452,6 +479,7 @@ kai_override_tier_t kai_override_tier(const char *rule) {
 
 const char *kai_rule_explanation(const char *rule) {
     if (kai_rule_is_trust_store(rule)) return "changes which websites this Mac trusts";
+    if (kai_rule_is_persistence(rule)) return "makes a program start automatically when you log in";
     /* never tier: the "Always protected" card's one-line reason */
     if (kai_rule_is_kai_home(rule)) return "holds Kai's own settings and keys, so no agent may touch it";
     if (kai_rule_is_builtin(rule)) return "switches Kai's checks for this agent on and off, so agents may not change it";
@@ -466,6 +494,7 @@ const char *kai_rule_explanation(const char *rule) {
  * the caller (anti-tamper). Kai's own home is excluded (reads stay blocked). */
 int kai_control_read_allowed(const char *rule) {
     if (kai_rule_is_trust_store(rule)) return 1;   /* CA bundles: reads needed for TLS */
+    if (kai_rule_is_persistence(rule)) return 1;    /* login items: reading is harmless */
     return kai_rule_is_builtin(rule) && !kai_rule_is_kai_home(rule);
 }
 
@@ -493,6 +522,7 @@ int kai_path_protected(const kai_policy *p, const char *path, const char *cwd,
     /* The trust store is classified before `allow`/`protect` so CA bundles get
      * read-allow + override-tier writes, not a blunt allow or a secret block. */
     if (trust_store_path(np, why, whylen)) { free(np); return 1; }
+    if (persistence_path(np, why, whylen)) { free(np); return 1; }
     /* allow entries are matched the same way as protect entries (absolute
      * prefix, glob, or basename-of-any-segment). We deliberately do NOT
      * re-normalize each entry against the cwd per call: that made a relative

@@ -144,6 +144,9 @@ int kai_control_read_allowed(const char *rule);
  * carry the OVERRIDE tier (grant-overridable), since they change which websites
  * the Mac trusts. */
 int kai_rule_is_trust_store(const char *rule);
+/* Login persistence (~/Library/LaunchAgents, /Library/LaunchAgents,
+ * /Library/LaunchDaemons): reads allowed, a write is Ask-level. */
+int kai_rule_is_persistence(const char *rule);
 /* A public, non-secret file inside a .ssh dir (known_hosts[.old], config, *.pub):
  * agents may READ these; private keys stay protected. 1 if it is one. */
 int kai_ssh_public_file(const char *path);
@@ -206,8 +209,8 @@ int kai_session_for_pid(int pid, unsigned long long live_pidv, char *out, size_t
 /* Service side of an MCP call: derive the session from caller_pid, allow (rc 0)
  * if a session grant covers it, else stage a pending card (rc 10). Runs in the
  * app (the only reader of the approval key). */
-int kai_mcp_service_request(int caller_pid, const char *server, const char *tool,
-                            const char *host, char *msg, size_t msglen);
+int kai_mcp_request(int caller_pid, const char *server, const char *tool,
+                    const char *host, int verify_signature, char *msg, size_t msglen);
 
 /* How far the user may override Kai's protection of a matched resource. S4 acts
  * on these; the storage/network walls already make non-builtin protections
@@ -235,30 +238,13 @@ int kai_path_is_policy_store(const char *path);
 /* The approval key: only the app may read it (never agent-tree kai). */
 int kai_path_is_approval_key(const char *path);
 
-/* ---- the one authenticated control path (v1 Step 3) ----
- * The signed Kai app hosts an XPC Mach service; it is the only writer of the
- * policy store. The `kai` CLI is a client. The name is also the LaunchAgent
- * label. (Renamed from ".control" on 2026-10-28: macOS kept that registration
- * pointing at a deleted build/Kai.app copy and wouldn't let it go; a new name
- * gets a fresh registration for /Applications/Kai.app.) */
-#define KAI_CONTROL_MACH_NAME "io.github.sameehj.kai.controlservice"
-/* CLI side: send a write command ("policy"/"grant" + argv) to the app's service
- * and relay its message. Returns the service's exit code, or non-zero with a
- * clear message if the app isn't running. Never writes the store itself. */
-int kai_control_request(const char *op, int argc, char **argv, char *msg, size_t msglen);
-/* Start the Mach-service listener; the signed app calls this once at launch. */
-int kai_control_service_start(void);
-/* Service side (run in the app, in C): apply an already-verified request. The
- * app has checked the caller by audit token + code signature + agent tree and
- * passes caller_pid (for the audit chain) and caller_is_agent. */
-int kai_control_service_apply(const char *op, int argc, char **argv,
-                              int caller_pid, int caller_is_agent,
-                              char *msg, size_t msglen);
-/* The app sets the real caller's pid around an apply so the audit records the
- * client's process tree, not the app's; the grant/policy dispatchers below do
- * the agent-aware write. */
-void kai_caller_pid_set(int pid);
-int  kai_policy_last_was_pending(void);
+/* ---- policy and permission changes (v1) ----
+ * The Kai app is the only writer, in-process (kai_policy_dispatch). The CLI
+ * shows policy and permissions; for a change it prints "Change this in Kai"
+ * and opens the matching Settings page (kai://settings/<page>). */
+int kai_policy_dispatch(int argc, char **argv, int caller_is_agent);
+const char *kai_settings_page_for(int argc, char **argv);
+int kai_cli_change_in_kai(int argc, char **argv);
 /* ---- Kai -> agent hints (Item 7): fixed catalog text, never generated ---- */
 /* Hint text for a catalog key (git/ssh/scp/gh/aws/gcloud/npm/gpg/docker), or a
  * fallback. Always non-NULL. Phrased as "ask the user to run it", never the agent. */

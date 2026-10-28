@@ -603,29 +603,37 @@ static void test_pause(void) {
 }
 
 static void test_policy_agent_refusal(void) {
-    printf("policy change: the CLI routes to the control service (Step 3)\n");
+    printf("v1: the CLI never changes policy or permissions; it says where to (Kai)\n");
     char dir[] = "/tmp/kai-polguardXXXXXX";
     if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
     char polp[600]; snprintf(polp, sizeof polp, "%s/policy", dir);
     FILE *f = fopen(polp, "w");
     if (f) { fputs("storage off\n", f); fclose(f); }
-    // In v1 the production `kai policy set` never writes the policy itself: it
-    // asks the signed app's control service. With no app running, it must fail
-    // with a clear message and leave the policy untouched. (The agent-refusal
-    // itself now lives in the service; see test_control_service.)
     char outp[650]; snprintf(outp, sizeof outp, "%s/out", dir);
     char cmd[1400];
     snprintf(cmd, sizeof cmd,
              "KAI_HOME='%s' KAI_POLICY='%s' ./kai policy set storage block > '%s' 2>&1",
              dir, polp, outp);
-    (void)system(cmd);
-    /* The robust Step-3 invariant: the CLI never writes the policy itself. It
-     * routes to the app's control service (which operates on the LIVE store, not
-     * this sandbox KAI_POLICY), so the sandbox file is untouched whether the
-     * service is absent ("isn't running"), refuses an agent, or applies to the
-     * live store. */
+    int rc = system(cmd);
+    CHECK(rc != 0, "kai policy set fails (exit non-zero)");
+    CHECK(file_contains(outp, "Change this in Kai: Settings") && file_contains(outp, "Files"),
+          "...and says: change this in Kai, Settings -> Files");
     CHECK(file_contains(polp, "storage off") && !file_contains(polp, "storage block"),
-          "the CLI did NOT write the sandbox policy directly (routed to the service)");
+          "the CLI wrote nothing (the app is the only writer)");
+    snprintf(cmd, sizeof cmd, "KAI_HOME='%s' ./kai grant create --resource /x --op read > '%s' 2>&1", dir, outp);
+    (void)system(cmd);
+    CHECK(file_contains(outp, "Change this in Kai") && file_contains(outp, "Agent Control"),
+          "kai grant create: change this in Kai, Agent Control");
+    char gd[700]; snprintf(gd, sizeof gd, "%s/grants", dir);
+    CHECK(access(gd, F_OK) != 0, "...and no grant was written");
+    snprintf(cmd, sizeof cmd, "KAI_HOME='%s' KAI_POLICY='%s' ./kai policy show --json > '%s' 2>&1", dir, polp, outp);
+    CHECK(system(cmd) == 0 && file_contains(outp, "\"storage\""), "kai policy show (read-only) still works");
+
+    char *a1[] = {"set", "egress", "block"}, *a2[] = {"add", "protect", "~/x"}, *a3[] = {"add", "term", "block", "x"},
+         *a4[] = {"revoke", "id"}, *a5[] = {"add", "egress_allow", "h"};
+    CHECK(!strcmp(kai_settings_page_for(3, a1), "internet") && !strcmp(kai_settings_page_for(3, a2), "files") &&
+          !strcmp(kai_settings_page_for(4, a3), "advanced") && !strcmp(kai_settings_page_for(2, a4), "agentControl") &&
+          !strcmp(kai_settings_page_for(3, a5), "internet"), "each change maps to its Settings page");
     unlink(polp); unlink(outp); rmdir(dir);
 }
 
@@ -1851,6 +1859,31 @@ static void test_one_kai(void) {
  * and a hostname never is. So every non-allowlisted destination was "allowed by
  * grant" with no grant at all, since Oct 23. An endpoint is allowed only by a
  * real, signed CONNECT grant for that exact destination. */
+/* Login persistence (writes Ask-level, reads fine) and the location classes:
+ * creating a NEW file there is still a protected write. */
+static void test_persistence_paths(void) {
+    printf("login persistence folders: reads allowed, writes Ask (v1)\n");
+    kai_policy *p = mk("storage block\n");
+    char why[256], la[700];
+    snprintf(la, sizeof la, "%s/Library/LaunchAgents/com.evil.plist", getenv("HOME"));
+    CHECK(p && kai_path_protected(p, la, NULL, why, sizeof why) == 1 && kai_rule_is_persistence(why),
+          "~/Library/LaunchAgents/* is login persistence");
+    CHECK(kai_path_protected(p, "/Library/LaunchDaemons/x.plist", NULL, why, sizeof why) == 1 &&
+          kai_rule_is_persistence(why), "/Library/LaunchDaemons/* too");
+    CHECK(kai_path_protected(p, "/Library/LaunchAgents/x.plist", NULL, why, sizeof why) == 1 &&
+          kai_rule_is_persistence(why), "/Library/LaunchAgents/* too");
+    kai_path_protected(p, la, NULL, why, sizeof why);
+    CHECK(kai_control_read_allowed(why) == 1, "reading a login item is allowed");
+    CHECK(kai_override_tier(why) == KAI_TIER_CONFIRM, "a write is Ask-level (a decision card)");
+    CHECK(kai_rule_is_builtin(why) == 0, "...and approvable (not always-protected)");
+    CHECK(kai_rule_is_name_pattern(why) == 0, "not a name rule: creating a new plist there is still protected");
+    CHECK(kai_rule_explanation(why) && strstr(kai_rule_explanation(why), "log in"), "the card says why");
+    char other[700]; snprintf(other, sizeof other, "%s/Library/LaunchAgentsX/y", getenv("HOME"));
+    CHECK(kai_path_protected(p, other, NULL, why, sizeof why) == 0, "a look-alike folder isn't");
+    CHECK(kai_rule_is_name_pattern("trust-store") == 0, "trust store: creating a new CA file is still protected");
+    kai_policy_free(p);
+}
+
 static void test_endpoint_grants(void) {
     printf("endpoint grants: no grant = no connection (security fix)\n");
     char dir[] = "/tmp/kai-egrantXXXXXX";
@@ -1934,50 +1967,6 @@ static void test_approval_key_access(void) {
           "the storage extension doesn't need it: denied");
     CHECK(kai_approval_key_access(NULL, T, NETX, 0) == 0 && kai_approval_key_access("io.github.sameehj.kai.network", NULL, NETX, 0) == 0 &&
           kai_approval_key_access("io.github.sameehj.kai.network", T, NULL, 0) == 0, "missing fields: denied");
-}
-
-static void test_control_service(void) {
-    printf("one control path: service apply (Step 3)\n");
-    char err[256], msg[600];
-
-    /* policy store is narrower than control store: registry excluded */
-    char rp[1300];
-    CHECK(kai_path_is_policy_store(kai_policy_file()) == 1, "policy file is in the policy store");
-    snprintf(rp, sizeof rp, "%s/grants/x.json", getenv("KAI_HOME"));
-    CHECK(kai_path_is_policy_store(rp) == 1, "grants are in the policy store");
-    snprintf(rp, sizeof rp, "%s/registry/s.json", getenv("KAI_HOME"));
-    CHECK(kai_path_is_policy_store(rp) == 0, "registry is NOT in the policy store");
-    CHECK(kai_path_is_control_store(rp) == 1, "registry IS in the control store");
-
-    FILE *f = fopen(kai_policy_file(), "wb"); if (f) { fputs("storage block\n", f); fclose(f); }
-    char *set_off[] = {"set", "storage", "off"};
-
-    /* an agent-tree caller is refused, whatever it asks */
-    int rc = kai_control_service_apply("policy", 3, set_off, 4321, 1, msg, sizeof msg);
-    CHECK(rc == 3, "agent-tree caller is refused");
-    CHECK(strstr(msg, "Refused") != NULL, "refusal says so");
-
-    /* a human caller loosening protection is HELD pending, not applied */
-    rc = kai_control_service_apply("policy", 3, set_off, 4321, 0, msg, sizeof msg);
-    CHECK(rc == 0 && kai_policy_last_was_pending(), "loosening is held pending");
-    CHECK(strstr(msg, "Held") != NULL, "pending message");
-    kai_policy *p = kai_policy_load(NULL, err, sizeof err);
-    CHECK(p && kai_policy_storage_mode(p) == KAI_STORAGE_BLOCK, "loosening is NOT live yet");
-    kai_policy_free(p);
-
-    /* a human caller tightening protection is applied immediately */
-    FILE *g = fopen(kai_policy_file(), "wb"); if (g) { fputs("storage off\n", g); fclose(g); }
-    char *set_block[] = {"set", "storage", "block"};
-    rc = kai_control_service_apply("policy", 3, set_block, 4321, 0, msg, sizeof msg);
-    CHECK(rc == 0 && !kai_policy_last_was_pending(), "tightening applies at once");
-    kai_policy *q = kai_policy_load(NULL, err, sizeof err);
-    CHECK(q && kai_policy_storage_mode(q) == KAI_STORAGE_BLOCK, "tightening took effect");
-    kai_policy_free(q);
-
-    /* grants are never created by an agent through the service */
-    char *gc[] = {"create", "--resource", "/x", "--op", "write"};
-    rc = kai_control_service_apply("grant", 5, gc, 4321, 1, msg, sizeof msg);
-    CHECK(rc == 3, "agent cannot create a grant via the service");
 }
 
 static void test_mcp_policy(void) {
@@ -2067,13 +2056,13 @@ static void test_mcp_grants(void) {
 }
 
 static void test_mcp_service(void) {
-    printf("MCP via the control service: session from the token (Change 2)\n");
+    printf("MCP in the hook: session from the pid map, grant trusted by location (v1)\n");
     const char *home = getenv("KAI_HOME");
     unsigned char key[32];
     for (int i = 0; i < 32; i++) key[i] = (unsigned char)(i * 3 + 2);
     char kp[700]; snprintf(kp, sizeof kp, "%s/approval.key", home);
     FILE *kf = fopen(kp, "wb"); if (kf) { fwrite(key, 1, 32, kf); fclose(kf); }
-    CHECK(kai_path_is_approval_key(kp) == 1, "approval.key is recognized (app-only)");
+    CHECK(kai_path_is_approval_key(kp) == 1, "approval.key is recognized (app + network extension only)");
     /* A live storage wall blocks an agent (this test) from any *.key file, so the
      * key fixture can't be created here; the grant-allow check is then skipped
      * (it passes wall-off / in CI). */
@@ -2091,7 +2080,7 @@ static void test_mcp_service(void) {
      * session comes from the caller's pid (999001 -> sessB), the only source -
      * the API has no session parameter a caller could spoof. */
     char msg[256];
-    int rc = kai_mcp_service_request(999001, "github", "create_issue", "api.gh.test", msg, sizeof msg);
+    int rc = kai_mcp_request(999001, "github", "create_issue", "api.gh.test", 0, msg, sizeof msg);
     CHECK(rc == 10, "no grant -> waiting (card staged)");
     char pdir[700]; snprintf(pdir, sizeof pdir, "%s/pending", home);
     DIR *d = opendir(pdir); int sawB = 0; struct dirent *e;
@@ -2116,11 +2105,19 @@ static void test_mcp_service(void) {
         FILE *gf = fopen(gp, "wb"); if (gf) { fputs(gj, gf); fclose(gf); }
         free(gj);
     }
-    rc = kai_mcp_service_request(999001, "github", "create_issue", "", msg, sizeof msg);
-    if (key_usable) CHECK(rc == 0, "a session grant -> allow");
-    else printf("  skip a session grant -> allow (live wall blocks *.key here; passes wall-off)\n");
+    /* The hook can't read the key (agent tree): it trusts the grant by where it
+     * is - the policy store, which only the installed app may write. */
+    rc = kai_mcp_request(999001, "github", "create_issue", "", 0, msg, sizeof msg);
+    CHECK(rc == 0, "a session grant in the grants folder -> allow (hook, no key needed)");
+    (void)key_usable;
+    /* ...for its own session only */
+    char sp2[780]; snprintf(sp2, sizeof sp2, "%s/999002.json", sd);
+    FILE *sf2 = fopen(sp2, "wb"); if (sf2) { fputs("{\"session\":\"sessC\"}", sf2); fclose(sf2); }
+    rc = kai_mcp_request(999002, "github", "create_issue", "", 0, msg, sizeof msg);
+    CHECK(rc == 10, "another session has no grant -> waiting (card)");
+    unlink(sp2);
     /* An unknown caller (no session) is denied, not defaulted to some session. */
-    rc = kai_mcp_service_request(424242, "github", "create_issue", "", msg, sizeof msg);
+    rc = kai_mcp_request(424242, "github", "create_issue", "", 0, msg, sizeof msg);
     CHECK(rc == 72, "a caller with no Kai session is denied");
 }
 
@@ -2257,6 +2254,7 @@ int main(void) {
     test_pause_state();
     test_one_kai();
     test_endpoint_grants();
+    test_persistence_paths();
     test_approval_key_access();
     test_grant_tiers();
     test_session_pause();
@@ -2272,7 +2270,6 @@ int main(void) {
     test_new_secret_file();
     test_agent_own_state();
     test_agent_root_pid();
-    test_control_service();
     test_mcp_policy();
     test_mcp_grants();
     test_mcp_service();

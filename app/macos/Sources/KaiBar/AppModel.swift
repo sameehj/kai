@@ -353,9 +353,23 @@ final class AppModel: ObservableObject {
     private func perform(_ args: [String]) async {
         busy = true
         defer { busy = false }
-        let r = await KaiCLI.run(args)
-        if !r.ok { errorMessage = r.message }
+        if args.first == "policy" {
+            // v1: this app is the ONLY writer of policy, in-process (libkai's
+            // dispatcher - the storage wall lets only the installed app write
+            // the policy store). Loosening changes are still held for Touch ID.
+            let rc = Self.applyPolicy(Array(args.dropFirst()))
+            if rc != 0 { errorMessage = "Kai couldn't apply that change (code \(rc))." }
+        } else {
+            let r = await KaiCLI.run(args)
+            if !r.ok { errorMessage = r.message }
+        }
         await refresh()
+    }
+
+    static func applyPolicy(_ args: [String]) -> Int32 {
+        var cargs: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0) }
+        defer { cargs.forEach { free($0) } }
+        return cargs.withUnsafeMutableBufferPointer { kai_policy_dispatch(Int32(args.count), $0.baseAddress, 0) }
     }
 
     func setAgent(_ a: Agent, enabled: Bool) {

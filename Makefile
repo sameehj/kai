@@ -21,7 +21,7 @@ endif
 
 CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
        src/net.c src/storage.c src/storage_prof.c src/grant.c src/approval_store.c src/proc.c src/shell.c src/gateway.c src/session.c third_party/cjson/cJSON.c
-APP  = src/main.c src/hooks.c src/install.c src/manage.c src/browser.c src/native.c src/report.c src/health.c src/storaged.c src/grant_cli.c src/control.c
+APP  = src/main.c src/hooks.c src/install.c src/manage.c src/browser.c src/native.c src/report.c src/health.c src/storaged.c src/grant_cli.c
 
 OBJ      = $(CORE:.c=.o) $(APP:.c=.o)
 COREOBJ  = $(CORE:.c=.o)
@@ -30,7 +30,7 @@ all: check-no-test-seam kai libkai.a
 
 # Step 3 build guard: the policy test seam (KAI_TEST_DIRECT_POLICY, which skips
 # agent-refusal and the pending-hold) must never appear in a shipped build. It
-# belongs only to the throwaway tests/cli/kai-test binary built below. control.c
+# belongs only to the throwaway tests/cli/kai-test binary built below. manage.c
 # also #errors if KAI_PRODUCT_BUILD and the seam are set together.
 check-no-test-seam:
 	@if grep -rn "KAI_TEST_DIRECT_POLICY" app/macos/*.yml | grep -vE '^\s*[^:]*:[0-9]+:\s*#' >/dev/null 2>&1; then \
