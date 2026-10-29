@@ -328,6 +328,9 @@ final class GrantManager: ObservableObject {
             // "Allow for this session" covers its next attempt. Live: the
             // example.com card vanished the moment curl exited.
             if let s = r.session, !s.isEmpty { return true }
+            // A card from a signed agent can be allowed by identity (1 hour)
+            // after the process has gone (gh, curl exit at once): keep it.
+            if r.rememberable { return true }
             if r.pid > 0 && kill(pid_t(r.pid), 0) != 0 && errno == ESRCH { return false }
             return true
         }
