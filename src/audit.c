@@ -233,6 +233,8 @@ static char daily_kind(const kai_audit_entry *e) {
     if (!strcmp(src, "grant") || !strncmp(det, "telemetry to ", 13) || !strncmp(det, "kept blocked", 12) ||
         (!strcmp(src, "network") && e->target && !strcmp(e->target, "QUIC")))
         return 0;
+    if (!strcmp(src, "pause") && !strcmp(d, "paused")) return 'p';   /* you had to stop Kai */
+    if (!strcmp(src, "browser") && (!strcmp(d, "redact") || !strcmp(d, "block"))) return 'c';  /* kept out of a chat */
     if (!strcmp(d, "redact") || !strcmp(d, "replace")) return 's';
     if (strcmp(d, "block") != 0) return 0;
     if (!strcmp(src, "storage") || !strcmp(src, "browser") || !strncmp(rule, "secret", 6) ||
@@ -278,11 +280,22 @@ int kai_daily_counts(const char *date, int *secrets, int *other) {
     char *t = kai_read_file(fp, 64u << 20, &n);
     if (!t) return 0;
     for (size_t i = 0; i < n; i++) {
-        if (t[i] == 's' && secrets) (*secrets)++;
+        if ((t[i] == 's' || t[i] == 'c') && secrets) (*secrets)++;
         else if (t[i] == 'b' && other) (*other)++;
     }
     free(t);
     return 1;
+}
+
+int kai_daily_count(const char *date, char kind) {
+    char fp[1200];
+    daily_path(date, fp, sizeof fp);
+    size_t n = 0;
+    char *t = kai_read_file(fp, 64u << 20, &n);
+    int c = 0;
+    for (size_t i = 0; t && i < n; i++) c += t[i] == kind;
+    free(t);
+    return c;
 }
 
 int kai_audit_write(const kai_audit_entry *e) {

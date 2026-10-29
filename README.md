@@ -256,7 +256,7 @@ OPENAI_BASE_URL=http://127.0.0.1:8787/openai/v1 codex
 
 `Kai.app` is a menu-bar interface for local status, agent switches, notifications, recent events, and policy changes. A development build is running; distribution to other Macs requires the appropriate signing and notarization steps.
 
-The **Network wall** is a signed Network Extension that checks connections made by agent processes (Claude Code, Cursor, Codex and anything they start) against an egress allowlist. Other apps are left alone.
+The **Network wall** is a signed Network Extension that checks connections made by agent processes (Claude Code, Cursor, Codex and anything they start) against an egress allowlist. Other apps are left alone. Built in: this Mac and the model and sign-in hosts. **GitHub (and other code hosting), package registries and Apple developer services are optional channels, off by default**, because they're broad routes for sending data out or pulling code in. Turn one on per agent in Agent Control (Touch ID), or with a `channel <agent>/<name>` policy line (`code-hosting`, `packages`, `apple-developer`).
 
 **Verified so far (macOS 14, Log mode):** a request from Claude Code to `example.com` was recorded in the audit log; a request to allow-listed `github.com` was not; requests from non-agent apps were not inspected. It also surfaced Claude Code's own telemetry connection, which is the kind of visibility Log mode is for.
 

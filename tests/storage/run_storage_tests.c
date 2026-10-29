@@ -2234,6 +2234,32 @@ static void test_agent_rules(void) {
     unlink(rp);
 }
 
+/* Spec §4: GitHub and package registries are optional channels, off by default,
+ * turned on per agent with a "channel <agent>/<channel>" policy line. */
+static void test_channels(void) {
+    printf("optional channels: code hosting, packages, Apple developer (spec 4)\n");
+    char err[256], why[256];
+    kai_policy *d = kai_policy_from_string("egress block\n", err, sizeof err);
+    CHECK(d && kai_egress_endpoint_allowed(d, "github.com", "1.2.3.4", 443, why, sizeof why) != 1,
+          "github.com isn't built in any more");
+    CHECK(d && kai_egress_endpoint_allowed(d, "api.anthropic.com", "1.2.3.4", 443, why, sizeof why) == 1,
+          "model APIs still are");
+    CHECK(d && !kai_agent_channel_allows(d, "claude", "github.com"), "no channel: off");
+    kai_policy_free(d);
+    kai_policy *p = kai_policy_from_string("egress block\nchannel claude/code-hosting\nchannel */packages\n", err, sizeof err);
+    CHECK(p && kai_agent_channel_allows(p, "claude", "github.com") && kai_agent_channel_allows(p, "claude", "raw.githubusercontent.com"),
+          "code hosting on for Claude Code: GitHub and its content hosts");
+    CHECK(p && !kai_agent_channel_allows(p, "codex", "github.com"), "...not for Codex");
+    CHECK(p && kai_agent_channel_allows(p, "codex", "registry.npmjs.org") && kai_agent_channel_allows(p, "cursor", "pypi.org"),
+          "packages on for every agent");
+    CHECK(p && !kai_agent_channel_allows(p, "claude", "developerservices2.apple.com"), "Apple developer stays off");
+    CHECK(p && !kai_agent_channel_allows(p, "claude", "evilgithub.com"), "suffix match is on a dot");
+    kai_policy_free(p);
+    const char *name, *label; int i;
+    for (i = 0; kai_channel_info(i, &name, &label); i++) {}
+    CHECK(i == 3, "three channels are listed for Settings");
+}
+
 static void test_claude_env(void) {
     printf("Claude Code env switch (telemetry off)\n");
     char dir[] = "/tmp/kai-envXXXXXX";
@@ -2738,6 +2764,7 @@ int main(void) {
     test_audit_rotation_chain();
     test_decision_rules();
     test_claude_env();
+    test_channels();
     test_agent_rules();
     test_temporary_rule();
     test_daily_counter();

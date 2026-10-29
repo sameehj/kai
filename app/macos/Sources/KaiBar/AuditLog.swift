@@ -153,6 +153,20 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
         if decision == "redact" || decision == "replace" {
             return "Kai removed a secret from \(who)'s \(isPrompt ? "prompt" : "request")."
         }
+        // Spec §4/§8: an agent check, in words; the rule stays behind Why?.
+        if isBlock && isBuiltinRule {
+            let changes = rule == "kai_self_protect" || ["Write", "Edit", "MultiEdit"].contains(tool ?? "")
+            return "\(who) tried to \(changes ? "change" : "read") Kai's settings. Always protected."
+        }
+        if isBlock && detail.hasPrefix("Kai blocked ") {
+            let rest = detail.dropFirst("Kai blocked ".count)
+            let what = (rest.split(separator: ":", maxSplits: 1).first.map(String.init) ?? String(rest))
+                .replacingOccurrences(of: "`", with: "")
+            return "\(who) tried \(what). Blocked."
+        }
+        if isBlock && detail.contains("protected path") {
+            return "\(who) tried to open \(rule.isEmpty ? "a protected file" : rule). Blocked."
+        }
         return summary
     }
 

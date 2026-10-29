@@ -529,7 +529,6 @@ private struct NetworkPage: View {
                    + "Agents fall back to normal HTTPS; in Watch nothing else is blocked.")
                     .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             }
-            hosts
             EditableList(kind: "egress_allow", title: "Your allowed destinations",
                          help: "A host (also covers its subdomains), an IP address or range, optionally with :port: "
                              + "db.yourcompany.com:5432, 10.0.0.0/8, 203.0.113.5:22. This Mac, model APIs, GitHub "
@@ -538,8 +537,10 @@ private struct NetworkPage: View {
             telemetry
             profileHosts
             // B2 agent profiles: what the built-in model hosts allow, and the limit.
-            Text("Built in for every agent: the model and sign-in hosts (anthropic.com, openai.com, cursor.sh and "
-               + "others). Kai can't tell the model connection from other data sent to the same host.")
+            Text("Built in for every agent: this Mac and the model and sign-in hosts (anthropic.com, openai.com, "
+               + "cursor.sh and others). Kai can't tell the model connection from other data sent to the same host. "
+               + "GitHub, package registries and Apple developer services are optional channels, off by default: "
+               + "turn them on per agent in Agent Control.")
                 .font(.system(size: 12)).foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -548,52 +549,6 @@ private struct NetworkPage: View {
 
     private var statusPill: some View { WallPill(word: wall.stateWord) }
 
-    private var hosts: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Hosts your agents reached").font(Theme.display(16, .semibold))
-                Spacer()
-                Text("Allow the ones you trust before switching to Protect")
-                    .font(.system(size: 11)).foregroundStyle(Theme.muted)
-            }
-            let hosts = model.reachedHosts
-            VStack(spacing: 0) {
-                HStack {
-                    Text("HOST").frame(maxWidth: .infinity, alignment: .leading)
-                    Text("AGENT").frame(width: 150, alignment: .leading)
-                    Text("SEEN").frame(width: 80, alignment: .leading)
-                    Spacer().frame(width: 90)
-                }
-                .font(Theme.label).tracking(1).foregroundStyle(Theme.muted)
-                .padding(.horizontal, 14).padding(.vertical, 9)
-                if hosts.isEmpty {
-                    Text(wall.isOn ? "Nothing yet: every site your agents used is allowed."
-                                   : "Turn Internet protection on to see where your agents connect.")
-                        .font(.system(size: 13)).foregroundStyle(Theme.muted)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(14)
-                }
-                ForEach(hosts) { h in
-                    Divider().overlay(Color(hex: 0x1E2024))
-                    HStack {
-                        Text(h.host).font(Theme.mono).lineLimit(1).truncationMode(.middle)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Text(h.agentList).font(.system(size: 13)).lineLimit(1).frame(width: 150, alignment: .leading)
-                        Text("\(h.count) time\(h.count == 1 ? "" : "s")").font(.system(size: 13))
-                            .foregroundStyle(h.blocked ? Theme.coral : Theme.muted)
-                            .frame(width: 80, alignment: .leading)
-                        Button("Allow") { model.allowHost(h.host) }
-                            .buttonStyle(LimeButtonStyle(subtle: true))
-                            .frame(width: 90)
-                            .disabled(model.busy)
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                }
-            }
-            .background(Theme.sidebar, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color(hex: 0x23252B)))
-        }
-    }
 }
 
 /// The storage wall is implemented (its decision engine is tested) but needs
@@ -839,6 +794,12 @@ private struct AgentControlPage: View {
                             .foregroundStyle(Theme.muted).padding(10)
                     }
                     List(selection: $selected) {
+                        Section("What each agent can reach") {
+                            ForEach([("claude", "Claude Code"), ("codex", "Codex"), ("cursor", "Cursor")], id: \.0) { a in
+                                Text(a.1).font(.system(size: 13)).tag("agent:" + a.0)
+                            }
+                            Text("Chats").font(.system(size: 13)).tag("chats")
+                        }
                         if !model.workingNow.isEmpty {
                             Section("Working now") {
                                 ForEach(model.workingNow) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
@@ -868,10 +829,14 @@ private struct AgentControlPage: View {
                 .frame(width: 300)
                 Divider()
                 Group {
-                    if let id = selected, let s = model.sessions.first(where: { $0.id == id }) {
+                    if let id = selected, id.hasPrefix("agent:") {
+                        AgentReachView(agent: String(id.dropFirst(6)), grants: grants)
+                    } else if selected == "chats" {
+                        ChatsDetail()
+                    } else if let id = selected, let s = model.sessions.first(where: { $0.id == id }) {
                         SessionDetail(session: s, grants: grants)
                     } else {
-                        VStack { Spacer(); Text("Select a session").foregroundStyle(Theme.muted); Spacer() }
+                        VStack { Spacer(); Text("Select a session or an agent").foregroundStyle(Theme.muted); Spacer() }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1054,7 +1019,10 @@ private struct ActivityPage: View {
                     if let a = model.status?.audit {
                         Image(systemName: a.intact ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                             .foregroundStyle(a.intact ? Theme.lime : Theme.coral)
-                        Text(a.intact ? "Audit log intact · \(a.records) records" : a.error)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(a.intact ? "Audit log intact · \(a.records) records" : a.error)
+                            Text(model.weeklyLine).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        }
                             .font(.system(size: 13))
                     }
                     Spacer()
@@ -1136,7 +1104,7 @@ private struct ActivityRow: View {
                 Text(event.detail).font(.system(size: 12)).foregroundStyle(Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            RowActions(event: event, grants: grants)
+            DecisionSheet(event: event, count: count, showHeader: false, grants: grants)
             if let n = followUp {
                 Label(n.detail, systemImage: "arrow.turn.down.right")
                     .font(.system(size: 12)).foregroundStyle(Theme.soft)
@@ -1286,71 +1254,3 @@ struct WallPill: View {
     }
 }
 
-/// Batch 2: what can still be decided on an Activity row, by kind.
-///   blocked site, session running   Allow for this session · Create a rule…
-///   blocked site, session ended     Create a rule… (owner authentication)
-///   blocked file with a live card   the card's own options
-///   unknown hostname                an explanation only
-///   Kai's own files                 Always protected
-///   remembered Keep blocked         Unblock…
-///   telemetry                       Telemetry settings
-///   secret removed from a prompt    Not a secret
-private struct RowActions: View {
-    @EnvironmentObject var model: AppModel
-    let event: AuditEvent
-    @ObservedObject var grants: GrantManager
-    @ObservedObject private var agents = AgentsModel.shared
-    @AppStorage("settingsPage") private var settingsPage = SettingsPage.agentControl.rawValue
-    @State private var confirmRule = false
-
-    private var sessionLive: Bool {
-        guard let s = event.session, !s.isEmpty else { return false }
-        return agents.sessions.contains { $0.id == s && $0.isActive }
-    }
-
-    var body: some View {
-        if event.isBuiltinRule && event.isBlock {
-            note("Always protected: Kai's own files and the agents' Kai settings.")
-        } else if event.isTelemetry {
-            Button("Telemetry settings") { settingsPage = SettingsPage.internet.rawValue }
-                .buttonStyle(GhostButtonStyle())
-        } else if event.isKeptBlocked, let r = grants.keptBlockedRule(event) {
-            Button("Unblock…") { grants.removeRule(r) }.buttonStyle(GhostButtonStyle())
-                .help("Kai asks about \(r.dest) again next time instead of blocking it silently.")
-        } else if event.isNetwork && event.isBlock && event.isUnknownHost {
-            note("Nothing to allow afterwards: Kai never learned which site this was. "
-                 + "If the agent needed it, its next try usually names the site.")
-        } else if event.isNetwork && event.isBlock && !event.isSilent {
-            HStack(spacing: 8) {
-                if sessionLive {
-                    Button("Allow for this session") { grants.allowForSession(event) }.buttonStyle(GhostButtonStyle())
-                } else if event.identity != nil {
-                    Button("Allow \(event.agentName) to reach \(event.target ?? "") for 1 hour") {
-                        grants.allowForHour(grants.request(from: event))
-                    }.buttonStyle(GhostButtonStyle())
-                }
-                Button("Create a rule…") { confirmRule = true }.buttonStyle(GhostButtonStyle())
-                    .disabled(event.identity == nil)
-                    .help(event.identity == nil ? "Kai didn't record which signed agent this was (an older record)." : "")
-            }
-            .confirmationDialog("Allow \(event.agentName) to connect to \(event.target ?? "")?", isPresented: $confirmRule) {
-                Button("Create rule") { grants.createRule(grants.request(from: event)) }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text(RuleText.covers(agent: event.agentName, identity: event.identity ?? "", host: event.target ?? ""))
-            }
-        } else if event.isStorage && event.isBlock, let req = grants.pendingFor(event) {
-            ApprovalCard(req: req, manager: grants)
-        } else if event.decision == "redact" || event.decision == "replace" {
-            Menu("Not a secret") {
-                if event.canExemptCommand { Button("Allow this exact command") { model.exempt(event) } }
-                Button("Report a false positive…") { Task { _ = await model.report(event) } }
-            }
-            .menuStyle(.borderlessButton).fixedSize()
-        }
-    }
-
-    private func note(_ t: String) -> some View {
-        Text(t).font(.system(size: 11)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
-    }
-}

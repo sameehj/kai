@@ -87,6 +87,7 @@ struct PolicyInfo: Decodable, Equatable {
     let protect: [String]
     let allow: [String]
     let egressAllow: [String]?
+    var channels: [String]? = nil   // spec §4: "<agent>/<channel>" lines
     let terms: [Term]
     let rules: [Rule]
     let exempt: [Exempt]? // older kai CLIs don't report exceptions

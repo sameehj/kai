@@ -611,6 +611,11 @@ int kai_host_is_telemetry(const char *host);
 /* Hosts in one agent's own profile (e.g. Cursor's sign-in), allowed for that
  * agent only. Each covers its subdomains. */
 int kai_agent_profile_allows(const char *agent, const char *host);
+/* Spec §4 optional channels (code hosting, package registries, Apple developer
+ * services): off unless the policy has "channel <agent>/<name>" (agent "*" =
+ * every agent). kai_channel_info lists them for Settings (1 while i is valid). */
+int kai_agent_channel_allows(const kai_policy *p, const char *agent, const char *host);
+int kai_channel_info(int i, const char **name, const char **label);
 /* The i-th profile host (0-based), for Settings: 1 while i is in range.
  * documented 0 = added from observed traffic, not the vendor's docs. */
 int kai_agent_profile_host(int i, const char **agent, const char **host, int *documented);
@@ -822,6 +827,9 @@ int kai_audit_write(const kai_audit_entry *e);
  * record, so it survives rotation and isn't limited to the app's buffer.
  * Returns 1 if the day has a counter file, else 0 (both counts 0). */
 int kai_daily_counts(const char *date, int *secrets, int *other);
+/* One kind on a day: 's' secret kept (agents), 'c' kept out of an AI chat,
+ * 'b' other block, 'p' you paused Kai. Secrets in kai_daily_counts = s + c. */
+int kai_daily_count(const char *date, char kind);
 
 /* ---- Denial records (M0: make failure visible) ----
  * A denial's `rule` field carries a REASON CODE from this controlled

@@ -147,6 +147,8 @@ struct kai_policy {
     kai_egress_mode egress_mode;
     char *egress_allow[KAI_MAX_LIST];
     int negress;
+    char *channels[KAI_MAX_LIST];   /* "<agent>/<channel>", agent may be "*" */
+    int nchannels;
     /* storage wall */
     kai_storage_mode storage_mode;
     /* agent identities: "exe", "arg" or "team" patterns */

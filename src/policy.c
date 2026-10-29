@@ -225,14 +225,50 @@ static const char *const BUILTIN_EGRESS[] = {
     "anthropic.com", "claude.ai", "claude.com", "openai.com", "chatgpt.com",
     "openrouter.ai", "googleapis.com", "cursor.sh", "cursor.com",
     "cursorapi.com", "cursor-cdn.com",
-    /* source hosting */
-    "github.com", "githubusercontent.com", "gitlab.com", "bitbucket.org",
-    /* package registries */
-    "npmjs.org", "npmjs.com", "yarnpkg.com", "pypi.org", "pythonhosted.org",
-    "crates.io", "proxy.golang.org", "sum.golang.org", "rubygems.org",
-    "repo.maven.apache.org", "repo1.maven.org", "docker.io", "ghcr.io",
-    "brew.sh",
+    /* Code hosting and package registries are optional channels now (spec §4):
+     * broad exfiltration and supply-chain routes, so off until you turn them on
+     * for an agent (channel <agent>/<name>). */
 };
+
+/* Optional channels: a named set of hosts an agent can be given in one step. */
+static const struct { const char *name, *label; const char *hosts[16]; } CHANNELS[] = {
+    {"code-hosting", "Code hosting (GitHub, GitLab, Bitbucket)",
+     {"github.com", "githubusercontent.com", "ghcr.io", "gitlab.com", "bitbucket.org", NULL}},
+    {"packages", "Package registries (npm, PyPI, crates.io, Go, RubyGems, Maven, Docker Hub, Homebrew)",
+     {"npmjs.org", "npmjs.com", "yarnpkg.com", "pypi.org", "pythonhosted.org", "crates.io",
+      "proxy.golang.org", "sum.golang.org", "rubygems.org", "repo.maven.apache.org", "repo1.maven.org",
+      "docker.io", "brew.sh", NULL}},
+    {"apple-developer", "Apple developer services (Xcode signing, App Store Connect)",
+     {"developerservices2.apple.com", "developer.apple.com", "appstoreconnect.apple.com", NULL}},
+};
+
+int kai_channel_info(int i, const char **name, const char **label) {
+    if (i < 0 || (size_t)i >= sizeof CHANNELS / sizeof CHANNELS[0]) return 0;
+    if (name) *name = CHANNELS[i].name;
+    if (label) *label = CHANNELS[i].label;
+    return 1;
+}
+
+static int host_in(const char *host, const char *dom) {
+    size_t hl = strlen(host), l = strlen(dom);
+    return hl == l ? !strcasecmp(host, dom) : hl > l && host[hl - l - 1] == '.' && !strcasecmp(host + hl - l, dom);
+}
+
+int kai_agent_channel_allows(const kai_policy *p, const char *agent, const char *host) {
+    if (!p || !agent || !host || !*host) return 0;
+    for (int c = 0; c < p->nchannels; c++) {
+        const char *e = p->channels[c], *slash = strchr(e, '/');
+        if (!slash) continue;
+        size_t al = (size_t)(slash - e);
+        if (!(al == 1 && e[0] == '*') && !(strlen(agent) == al && !strncmp(e, agent, al))) continue;
+        for (size_t i = 0; i < sizeof CHANNELS / sizeof CHANNELS[0]; i++) {
+            if (strcmp(slash + 1, CHANNELS[i].name)) continue;
+            for (int h = 0; CHANNELS[i].hosts[h]; h++)
+                if (host_in(host, CHANNELS[i].hosts[h])) return 1;
+        }
+    }
+    return 0;
+}
 
 /* Hosts one agent needs that others shouldn't get (each also covers its
  * subdomains). Cursor's sign-in: https://cursor.com/help/troubleshooting/sign-in-domains
@@ -466,6 +502,10 @@ static kai_policy *parse(const char *text, const char *source, char *err,
             if (strcmp(v, "block") == 0) p->storage_mode = KAI_STORAGE_BLOCK;
             else if (strcmp(v, "log") == 0) p->storage_mode = KAI_STORAGE_LOG;
             else p->storage_mode = KAI_STORAGE_OFF;
+        } else if (strcmp(d, "channel") == 0) {
+            char *v;
+            if (next_tok(&cur, &v) && v[0] != '#' && strchr(v, '/') && p->nchannels < KAI_MAX_LIST)
+                p->channels[p->nchannels++] = strdup(v);
         } else if (strcmp(d, "egress_allow") == 0) {
             char *v;
             while (next_tok(&cur, &v) && v[0] != '#') {
@@ -717,6 +757,7 @@ void kai_policy_free(kai_policy *p) {
     for (int i = 0; i < p->nprotect; i++) free(p->protect[i]);
     for (int i = 0; i < p->nallow; i++) free(p->allow[i]);
     for (int i = 0; i < p->negress; i++) free(p->egress_allow[i]);
+    for (int i = 0; i < p->nchannels; i++) free(p->channels[i]);
     for (int i = 0; i < p->nagents; i++) free(p->agents[i].pattern);
     for (int i = 0; i < p->nexempt; i++) free(p->exempt[i].pattern);
     free(p);

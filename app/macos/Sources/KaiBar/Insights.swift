@@ -5,17 +5,6 @@
 import Foundation
 import KaiCore
 
-/// One destination an agent connected to that is not on the allowlist.
-struct ReachedHost: Identifiable, Equatable {
-    let host: String
-    var agents: Set<String>
-    var count: Int
-    var blocked: Bool
-    var last: Date?
-    var id: String { host }
-    var agentList: String { agents.sorted().joined(separator: ", ") }
-}
-
 extension AppModel {
     private var weekEvents: [AuditEvent] {
         let cutoff = Date().addingTimeInterval(-7 * 24 * 3600)
@@ -32,19 +21,21 @@ extension AppModel {
 
     /// Hosts the network wall recorded, most recent first.
     var reachedHosts: [ReachedHost] {
-        var byHost: [String: ReachedHost] = [:]
-        for e in events where e.source == "network" && !e.rule.isEmpty {
-            var h = byHost[e.rule] ?? ReachedHost(host: e.rule, agents: [], count: 0, blocked: false, last: nil)
-            h.agents.insert(e.agentName)
-            h.count += 1
-            h.blocked = h.blocked || e.isBlock
-            if let d = e.date, d > (h.last ?? .distantPast) { h.last = d }
-            byHost[e.rule] = h
+        ReachedHost.group(events, allowed: Set(policy?.egressAllow ?? []))
+    }
+
+    /// Spec §2: Activity's weekly line, from the per-day counters (last 7 days).
+    var weeklyLine: String {
+        var secrets = 0, blocked = 0, paused = 0
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
+        for d in 0..<7 {
+            let day = f.string(from: Date().addingTimeInterval(-Double(d) * 86400))
+            secrets += Int(kai_daily_count(day, CChar(UInt8(ascii: "s")))) + Int(kai_daily_count(day, CChar(UInt8(ascii: "c"))))
+            blocked += Int(kai_daily_count(day, CChar(UInt8(ascii: "b"))))
+            paused += Int(kai_daily_count(day, CChar(UInt8(ascii: "p"))))
         }
-        let allowed = Set(policy?.egressAllow ?? [])
-        return byHost.values
-            .filter { !allowed.contains($0.host) }
-            .sorted { ($0.last ?? .distantPast) > ($1.last ?? .distantPast) }
+        return "This week: \(secrets) secret\(secrets == 1 ? "" : "s") kept private, \(blocked) risky action"
+            + "\(blocked == 1 ? "" : "s") stopped, \(paused) time\(paused == 1 ? "" : "s") you had to pause Kai."
     }
 
     /// What deserves a line in the menu: things Kai stopped or cleaned.

@@ -11,6 +11,7 @@ struct MenuView: View {
     @AppStorage("settingsPage") private var settingsPage = SettingsPage.agentControl.rawValue
     @State private var dismissedBlock: String?
     @State private var showPermissions = false
+    @State private var openDecision: String?
     @StateObject private var grantManager = GrantManager()
     @ObservedObject private var agents = AgentsModel.shared
 
@@ -33,6 +34,7 @@ struct MenuView: View {
             if DevFlags.perSessionPause { pauseBanner }
             needsYou
             activeNow
+            chatsRow
             protectionsLine
             permissions
             recent
@@ -125,7 +127,7 @@ struct MenuView: View {
                 }
                 if idleCount > 0 {
                     Button { openAgentControl() } label: {
-                        Text("\(idleCount) idle").font(.system(size: 11)).foregroundStyle(Theme.muted)
+                        Text("\(idleCount) idle session\(idleCount == 1 ? "" : "s") ›").font(.system(size: 11)).foregroundStyle(Theme.muted)
                     }.buttonStyle(.plain)
                 }
             }
@@ -225,13 +227,42 @@ struct MenuView: View {
 
     private func openAgentControl() { open(.agentControl) }
 
+    /// Spec §4: orange is for problems. A protection you switched off is a
+    /// state, not a problem: neutral, and "Files: off" in the protections line.
     private var glow: Color {
-        if alert != nil { return Theme.coral }
-        if model.health == .problem { return Theme.coral }
-        switch model.observedProtection(storageOn: storage.isOn, networkOn: wall.isOn) {
-        case .protected: return Theme.lime
-        case .partial: return Theme.amber
-        case .notProtected: return Theme.coral
+        if alert != nil || model.health == .problem { return Theme.coral }
+        if grantManager.pauseState(nil) != Int32(KAI_PAUSE_NONE) { return Theme.amber }
+        if storage.stateWord == "unhealthy" || wall.stateWord == "unhealthy" { return Theme.amber }
+        if storage.stateWord == "protecting" || wall.stateWord == "protecting" { return Theme.lime }
+        return Theme.soft
+    }
+
+    // Spec §6: chats are a protection surface like agents.
+    @ViewBuilder private var chatsRow: some View {
+        let chrome = model.agentInfo(.chrome)
+        if chrome.installed {
+            if model.chromeNeedsExtension {
+                Button { model.openExtensionSetup() } label: {
+                    Text("Chats: not connected · Reload the Kai extension in Chrome ›")
+                        .font(.system(size: 12)).foregroundStyle(Theme.amber)
+                }.buttonStyle(.plain)
+            } else {
+                let openSites = ChatSite.load().filter { $0.openTabs > 0 }
+                let kept = ChatSite.keptOutToday
+                if !openSites.isEmpty || kept > 0 {
+                    Button { open(.agentControl) } label: {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Chats · \(openSites.count) open").font(.system(size: 13, weight: .medium))
+                            Text((openSites.prefix(3).map(\.site).joined(separator: ", "))
+                                 + (kept > 0 ? "\(openSites.isEmpty ? "" : " · ")\(kept) secret\(kept == 1 ? "" : "s") kept out today" : ""))
+                                .font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(Theme.sidebar, in: RoundedRectangle(cornerRadius: 8))
+                    }.buttonStyle(.plain)
+                }
+            }
         }
     }
 
@@ -295,7 +326,19 @@ struct MenuView: View {
                 Button("See all") { open(.activity) }
                     .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
             }
-            ForEach(recentItems) { EventLine(event: $0.event, count: $0.count, plain: true) }
+            // Spec §5.1: every row opens its decision sheet.
+            ForEach(recentItems) { g in
+                Button { openDecision = openDecision == g.event.id ? nil : g.event.id } label: {
+                    EventLine(event: g.event, count: g.count, plain: true).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: Binding(get: { openDecision == g.event.id },
+                                              set: { if !$0 { openDecision = nil } }), arrowEdge: .leading) {
+                    DecisionSheet(event: g.event, count: g.count, grants: grantManager)
+                        .environmentObject(model)
+                        .padding(14).frame(width: 340)
+                }
+            }
         }
     }
 
@@ -618,10 +661,21 @@ struct PopoverSessionRow: View {
     let session: SessionRow
     var grants: Int = 0
     var expectedCoverage = "Files + Internet"
-    private var title: String { session.topic.isEmpty ? session.projectBase : session.topic }
+    /// Spec §4: never empty, never the agent's name twice. Topic, else the
+    /// workspace or project; for an app (Cursor), the workspace name.
+    private var topic: String { session.topic.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var title: String {
+        if !topic.isEmpty { return topic }
+        if let w = session.workspaces, let first = w.first {
+            return w.count > 1 ? "\(first.name) +\(w.count - 1)" : first.name
+        }
+        let p = session.projectBase
+        return (p.isEmpty || p == "—" || p == session.hostApp) ? session.displayAgent : p
+    }
     private var secondLine: String {
-        ([session.topic.isEmpty ? "" : session.projectBase, session.window, session.activeLabel])
-            .filter { !$0.isEmpty && $0 != "—" }.joined(separator: " · ")
+        if session.workspaces != nil { return session.activeLabel }   // an app: just its activity
+        return [topic.isEmpty ? "" : session.projectBase, session.window, session.activeLabel]
+            .filter { !$0.isEmpty && $0 != "—" && $0 != title }.joined(separator: " · ")
     }
     private var badge: Color {
         session.enforcementShort == "Files + Internet" ? Theme.lime
@@ -659,6 +713,7 @@ struct EventLine: View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Circle().fill(event.isBlock ? Theme.coral : Theme.amber).frame(width: 8, height: 8)
             Text((plain ? event.plainSentence : event.summary) + (count > 1 ? "  ×\(count)" : ""))
+                .lineLimit(nil)
                 .font(.system(size: 13)).foregroundStyle(Theme.soft)
                 .lineLimit(2).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)

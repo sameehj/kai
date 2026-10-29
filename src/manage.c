@@ -592,6 +592,7 @@ static int policy_show(int json) {
     cJSON *protect = cJSON_CreateArray(), *allow = cJSON_CreateArray();
     cJSON *terms = cJSON_CreateArray(), *rules = cJSON_CreateArray();
     cJSON *egress = cJSON_CreateArray();
+    cJSON *channels = cJSON_CreateArray();
     cJSON *agents = cJSON_CreateArray();
     cJSON *exempt = cJSON_CreateArray();
     for (int i = 0; i < L.n; i++) {
@@ -605,6 +606,12 @@ static int policy_show(int json) {
             memcpy(valbuf[si], arg, n);
             valbuf[si][n] = '\0';
             vals[si] = valbuf[si];
+        } else if (strcmp(dir, "channel") == 0) {
+            char *v = malloc(al + 1);
+            if (!v) continue;
+            memcpy(v, arg, al); v[al] = '\0';
+            cJSON_AddItemToArray(channels, cJSON_CreateString(v));
+            free(v);
         } else if (strcmp(dir, "protect") == 0 || strcmp(dir, "allow") == 0 ||
                    strcmp(dir, "egress_allow") == 0) {
             char *v = malloc(al + 1);
@@ -681,6 +688,7 @@ static int policy_show(int json) {
     cJSON_AddItemToObject(o, "protect", protect);
     cJSON_AddItemToObject(o, "allow", allow);
     cJSON_AddItemToObject(o, "egress_allow", egress);
+    cJSON_AddItemToObject(o, "channels", channels);
     cJSON_AddItemToObject(o, "terms", terms);
     cJSON_AddItemToObject(o, "rules", rules);
     cJSON_AddItemToObject(o, "agents", agents);
@@ -965,12 +973,24 @@ static int policy_add(int argc, char **argv) {
     sb_t b;
     sb_init(&b);
     if (strcmp(kind, "protect") == 0 || strcmp(kind, "allow") == 0 ||
-        strcmp(kind, "egress_allow") == 0) {
+        strcmp(kind, "egress_allow") == 0 || strcmp(kind, "channel") == 0) {
         const char *path = argv[1];
         if (argc != 2 || strpbrk(path, " \t#") || has_newline(path)) {
             fprintf(stderr, "kai policy add %s: one path, no spaces or '#'\n", kind);
             lines_free(&L);
             return 1;
+        }
+        if (strcmp(kind, "channel") == 0) {
+            const char *sl = strchr(path, '/');
+            int ok = 0;
+            const char *nm;
+            for (int i = 0; sl && kai_channel_info(i, &nm, NULL); i++) if (!strcmp(sl + 1, nm)) ok = 1;
+            if (!ok) {
+                fprintf(stderr, "kai policy add channel: expected <agent>/<channel>, e.g. claude/code-hosting "
+                                "(channels: code-hosting, packages, apple-developer; agent * = every agent)\n");
+                lines_free(&L);
+                return 1;
+            }
         }
         if (strcmp(kind, "egress_allow") == 0 &&
             !kai_egress_entry_valid(strncmp(path, "*.", 2) == 0 ? path + 2 : path)) {
@@ -1081,7 +1101,7 @@ static int policy_add(int argc, char **argv) {
     }
     /* allow / egress_allow / exempt grant access or lift a block => loosening. */
     int loosens = !strcmp(kind, "allow") || !strcmp(kind, "egress_allow") ||
-                  !strcmp(kind, "exempt");
+                  !strcmp(kind, "exempt") || !strcmp(kind, "channel");
     char summary[160];
     snprintf(summary, sizeof summary, "add %s %s", kind, argc > 1 ? argv[1] : "");
     int rc = policy_commit_or_queue(&L, loosens, summary);
@@ -1114,7 +1134,7 @@ static int policy_remove(int argc, char **argv) {
     const char *kind = argv[0];
     if (strcmp(kind, "protect") && strcmp(kind, "allow") && strcmp(kind, "term") &&
         strcmp(kind, "rule") && strcmp(kind, "egress_allow") && strcmp(kind, "agent") &&
-        strcmp(kind, "exempt"))
+        strcmp(kind, "exempt") && strcmp(kind, "channel"))
         goto usage;
     lines_t L;
     if (lines_load(&L) != 0) { fprintf(stderr, "kai policy: cannot read policy\n"); return 1; }
@@ -1259,7 +1279,7 @@ const char *kai_settings_page_for(int argc, char **argv) {
         return !strcmp(what, "storage") ? "files" : !strcmp(what, "egress") ? "internet" : "advanced";
     if (!strcmp(sub, "add") || !strcmp(sub, "remove"))
         return (!strcmp(what, "protect") || !strcmp(what, "allow")) ? "files"
-             : !strcmp(what, "egress_allow") ? "internet" : "advanced";
+             : (!strcmp(what, "egress_allow") || !strcmp(what, "channel")) ? "internet" : "advanced";
     return "advanced";
 }
 
