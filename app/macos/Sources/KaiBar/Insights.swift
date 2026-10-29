@@ -73,10 +73,19 @@ extension AppModel {
         var s: Int32 = 0, b: Int32 = 0
         kai_daily_counts(nil, &s, &b)
         let secrets = Int(s), other = Int(b)
+        // "Kai kept N secrets private and stopped M actions" (no "risky").
         var parts: [String] = []
         if secrets > 0 { parts.append("kept \(secrets) secret\(secrets == 1 ? "" : "s") private") }
-        if other > 0 { parts.append("stopped \(other) risky action\(other == 1 ? "" : "s")") }
-        return parts.isEmpty ? "Nothing risky today" : "Kai " + parts.joined(separator: " and ") + " today"
+        if other > 0 { parts.append("stopped \(other) action\(other == 1 ? "" : "s")") }
+        return parts.isEmpty ? "Nothing stopped today" : "Kai " + parts.joined(separator: " and ") + " today"
+    }
+
+    /// Today's most repeated stopped item, when it repeated (exact, from the log).
+    var topToday: (item: String, count: Int)? {
+        var buf = [CChar](repeating: 0, count: 256)
+        var n: Int32 = 0
+        guard kai_daily_top(&buf, buf.count, &n) == 1, n >= 2 else { return nil }
+        return (String(cString: buf), Int(n))
     }
 
     var freshBlock: AuditEvent? {

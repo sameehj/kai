@@ -781,6 +781,31 @@ static int skip_exempt(const char *rule, void *ud) {
  * <home>/sessions. Walks up to the agent root. Returns 1 and fills `out` when
  * found; 0 when this process is in no Kai session (e.g. the wall is off, or the
  * process is detached) — in which case no topic is bound (the binding rule). */
+static int find_es_session(char *out, size_t n);
+int kai_audit_suppressed(void);   /* audit.c */
+
+/* "Working" (Agent Control): every real hook call is activity for the agent's
+ * session (its Kai session, and its root pid key); an allowed PreToolUse marks
+ * a call in progress (inflight 1) until its PostToolUse (inflight 0). A stopped
+ * call never runs, so it doesn't set it. Health probes don't count. */
+static void note_activity(const kai_policy *p, int inflight) {
+    if (kai_audit_suppressed()) return;
+    long long now = (long long)time(NULL);
+    char keys[2][64];
+    int nk = 0;
+    if (find_es_session(keys[nk], sizeof keys[nk])) nk++;
+    char name[64]; int apid = 0;
+    if (p && kai_process_agent(p, (int)getpid(), name, sizeof name, &apid) == 1 && apid > 0) {
+        int root = kai_agent_root_pid(p, apid, name);
+        snprintf(keys[nk++], sizeof keys[0], "pid-%d", root > 0 ? root : apid);
+    }
+    for (int i = 0; i < nk; i++) {
+        kai_session_activity_touch(keys[i], NULL, now);
+        if (inflight == 1) kai_session_inflight_set(keys[i], now);
+        else if (inflight == 0) kai_session_inflight_set(keys[i], 0);
+    }
+}
+
 static int find_es_session(char *out, size_t n) {
     if (n) out[0] = '\0';
     int pid = (int)getpid();
@@ -1098,6 +1123,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
         free(cmd);
         free(alltext);
     } else if (ev && strcmp(ev, "PostToolUse") == 0) {
+        note_activity(p, 0);   /* the call finished */
         const cJSON *out = cJSON_GetObjectItemCaseSensitive(root, "tool_response");
         sb_t b; sb_init(&b); gather_strings(out, &b, 0);
         char *txt = sb_take(&b);
@@ -1245,6 +1271,8 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
     if (ev && (!strcmp(ev, "PreToolUse") || !strcmp(ev, "UserPromptSubmit")))
         follow_up(p, source, session, kind, tool, subject, cwd,
                   decision >= KAI_ACT_BLOCK && !ask ? rule : NULL, ctx);
+    /* allowed outright: the call runs now (an "ask" may still be declined) */
+    note_activity(p, ev && !strcmp(ev, "PreToolUse") && decision < KAI_ACT_BLOCK ? 1 : -1);
     free(subject);
     kai_policy_free(p);
     cJSON_Delete(root);
@@ -1426,6 +1454,7 @@ static int hook_cursor(const char *json) {
     }
     if (tool || kind == NEXT_PROMPT)
         follow_up(p, "cursor", session, kind, tool, subject, cwd, deny && !cursor_ask ? why : NULL, ctx);
+    note_activity(p, -1);   /* Cursor reports no end of a call: activity only */
     kai_policy_free(p);
     cJSON_Delete(root);
     return 0;

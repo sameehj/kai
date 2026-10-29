@@ -61,6 +61,24 @@ struct MenuView: View {
                 Text("agent\(n == 1 ? "" : "s") working").font(.system(size: 13)).foregroundStyle(Theme.soft)
             }
             Text(model.valueLine).font(.system(size: 12)).foregroundStyle(Theme.muted)
+            // The most repeated stop today (exact, from the log), with Review.
+            if let m = model.topToday {
+                HStack(spacing: 4) {
+                    Text("Most: \(m.item), \(m.count) times ·").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    Button("Review") { openDecision = openDecision == "top" ? nil : "top" }
+                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
+                        .popover(isPresented: Binding(get: { openDecision == "top" },
+                                                      set: { if !$0 { openDecision = nil } }), arrowEdge: .leading) {
+                            if let e = model.events.first(where: { $0.target == m.item && $0.isBlock }) {
+                                DecisionSheet(event: e, count: m.count, grants: grantManager)
+                                    .environmentObject(model).padding(14).frame(width: 340)
+                            } else {
+                                Text("\(m.item): stopped \(m.count) times today. Details are in Activity.")
+                                    .font(.system(size: 12)).padding(14).frame(width: 300)
+                            }
+                        }
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -695,7 +713,7 @@ struct PopoverSessionRow: View {
     var expectedCoverage = "Files + Internet"
     /// Spec §4: never empty, never the agent's name twice. Topic, else the
     /// workspace or project; for an app (Cursor), the workspace name.
-    private var topic: String { session.topic.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var topic: String { session.topicLine }
     private var title: String {
         if !topic.isEmpty { return topic }
         if let w = session.workspaces, let first = w.first {

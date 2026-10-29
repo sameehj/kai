@@ -33,6 +33,9 @@ struct SessionRow: Decodable, Identifiable, Equatable {
     let agent: String
     var topic: String = ""
     var topicReportedByAgent: Bool = true
+    /// The topic without stray whitespace or line breaks (an empty-looking
+    /// topic drew an empty first line).
+    var topicLine: String { topic.trimmingCharacters(in: .whitespacesAndNewlines) }
     var project: String = ""
     var hostApp: String = ""
     var startedUtc: Int = 0
@@ -315,8 +318,8 @@ struct SessionRowView: View {
                                          : session.enforcementShort == "seen only" ? .secondary : .orange)
                     if !session.isActive { Text("ended").font(.caption2).foregroundStyle(.secondary) }
                 }
-                if !session.topic.isEmpty {   // hook-reported topic, or hidden
-                    Text(session.topic).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                if !session.topicLine.isEmpty {   // hook-reported topic, or hidden
+                    Text(session.topicLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 HStack(spacing: 6) {          // project once, window/tab, time
                     Text(session.projectName)
@@ -351,26 +354,12 @@ struct SessionDetail: View {
                                          resume: { grants.pauseSession(session.id, minutes: 0) },
                                          extend: { grants.extendPause(session.id) })
                                 .frame(maxWidth: 360)
-                        } else {
-                            // The wall keys sessions to the agent root (Phase A item
-                            // 5), so this shows only until the wall first sees the
-                            // session act; the global pause always works meanwhile.
-                            PauseControl(state: grants.pauseState(nil), until: grants.pauseEnds(nil),
-                                         pauseLabel: "Pause Kai · 15 min",
-                                         title: grants.pauseState(nil) == Int32(KAI_PAUSE_ACTIVE)
-                                             ? "Kai is paused until \(grants.pauseEnds(nil).map { $0.formatted(date: .omitted, time: .shortened) } ?? "soon")" : nil,
-                                         note: PauseText.global,
-                                         pause: { grants.pauseAll(minutes: 15) },
-                                         resume: { grants.pauseAll(minutes: 0) },
-                                         extend: { grants.extendPause(nil) })
-                                .frame(maxWidth: 360)
-                                .help("Pauses Kai for every agent for 15 minutes, then it resumes by itself.")
-                        }
+                        }   // no global pause here: it lives in the popover (Pause Kai · 15 min)
                     }
                 }
-                if !session.topic.isEmpty {
+                if !session.topicLine.isEmpty {
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(session.topic)
+                        Text(session.topicLine)
                         Text("topic reported by agent").font(.caption2).foregroundStyle(.secondary)
                     }
                 }

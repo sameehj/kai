@@ -48,10 +48,12 @@ rm -rf "$OUT" && mkdir -p "$STAGE/usr/local/bin" "$STAGE/usr/local/share/kai" "$
 
 # Universal, macOS 13+ (remove only the objects: `make clean` would also wipe build/)
 rm -f src/*.o third_party/cjson/*.o kai libkai.a
-make CC="cc -arch arm64 -arch x86_64 -mmacosx-version-min=13.0" KAI_STORE_ID="$STORE_ID" kai >/dev/null
-[ -z "$STORE_ID" ] || strings kai | grep -q "$STORE_ID" || { echo "the store ID didn't make it into kai"; exit 1; }
-lipo -info kai | grep -q "x86_64 arm64\|arm64 x86_64" || { echo "kai isn't universal"; exit 1; }
-cp kai "$STAGE/usr/local/bin/kai"
+make CC="cc -arch arm64 -arch x86_64 -mmacosx-version-min=13.0" KAI_STORE_ID="$STORE_ID" kai-release >/dev/null
+K=build/kai-release   # a release build: ignores KAI_HOME / KAI_POLICY
+[ -z "$STORE_ID" ] || strings "$K" | grep -q "$STORE_ID" || { echo "the store ID didn't make it into kai"; exit 1; }
+lipo -info "$K" | grep -q "x86_64 arm64\|arm64 x86_64" || { echo "kai isn't universal"; exit 1; }
+"$K" version | grep -q "(release build)" || { echo "kai isn't a release build"; exit 1; }
+cp "$K" "$STAGE/usr/local/bin/kai"
 cp policy/default.policy "$STAGE/usr/local/share/kai/default.policy"
 mkdir -p "$STAGE/usr/local/share/kai/browser/icons"
 cp integrations/browser/*.js integrations/browser/*.json integrations/browser/popup.html \

@@ -373,6 +373,10 @@ const char *kai_enforcement_from_levels(int files, int internet);
 /* Session activity: "working" = a command or hook in the last 15 minutes. */
 #define KAI_WORKING_WINDOW 900
 int kai_session_working(long long last_active, long long now);
+/* A tool call in progress (allowed PreToolUse seen, PostToolUse not yet).
+ * since 0 clears. kai_session_busy: in progress for under 6 hours. */
+int kai_session_inflight_set(const char *sid, long long since);
+int kai_session_busy(const char *sid, long long now);
 const char *kai_session_activity_dir(void);
 /* Record activity for a session (and the working folder it ran in). */
 int kai_session_activity_touch(const char *sid, const char *workspace, long long now);
@@ -871,6 +875,10 @@ int kai_daily_counts(const char *date, int *secrets, int *other);
 /* One kind on a day: 's' secret kept (agents), 'c' kept out of an AI chat,
  * 'b' other block, 'p' you paused Kai. Secrets in kai_daily_counts = s + c. */
 int kai_daily_count(const char *date, char kind);
+/* Today's most repeated stopped item (exact, from the log). 1 and fills top
+ * and count, or 0 when nothing meaningful was stopped today. */
+int kai_daily_top(char *top, size_t tn, int *count);
+int kai_daily_top_in(const char *log, char *top, size_t tn, int *count);
 
 /* ---- Denial records (M0: make failure visible) ----
  * A denial's `rule` field carries a REASON CODE from this controlled

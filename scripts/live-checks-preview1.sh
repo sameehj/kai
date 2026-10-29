@@ -15,6 +15,20 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GRANT="${KAI_GRANT:-kai}"
 case "$GRANT" in /*) ;; */*) GRANT="$ROOT/$GRANT" ;; esac
 CLAUDE="$(command -v claude || echo "$HOME/.claude/local/claude")"
+# The checks give Claude Code's hook a throwaway Kai home through KAI_HOME. A
+# release-build hook ignores KAI_HOME (by design), so it would use your real
+# ~/.kai: refuse instead of touching it.
+HOOKBIN=$(python3 -I -c 'import json,os
+o=json.load(open(os.path.expanduser("~/.claude/settings.json")))
+for g in o.get("hooks",{}).get("PreToolUse",[]):
+    for h in g.get("hooks",[]):
+        c=h.get("command","")
+        if " hook claude" in c: print(c.split(" hook claude")[0].split()[-1].strip("\x27\"")); raise SystemExit' 2>/dev/null)
+if [ -n "$HOOKBIN" ] && "$HOOKBIN" version 2>/dev/null | grep -q "(release build)"; then
+    echo "Claude Code's Kai hook ($HOOKBIN) is a release build: it ignores KAI_HOME, so these checks would use"
+    echo "your real Kai home. Run them with a dev build's hook (make kai; kai install claude from the checkout)."
+    exit 2
+fi
 W="$(mktemp -d /tmp/kai-live-p1.XXXXXX)"
 export KAI_HOME="$W/kaihome" KAI_NO_APP=1
 mkdir -p "$KAI_HOME" "$W/proj"

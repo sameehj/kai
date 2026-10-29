@@ -42,6 +42,15 @@ const char *kai_policy_file(void); /* $KAI_POLICY or <kai home>/policy */
 #ifndef KAI_STORE_EXTENSION_ID /* set at build time: make KAI_STORE_ID=<32 letters a-p> */
 #define KAI_STORE_EXTENSION_ID ""
 #endif
+
+/* Release builds (make kai-release, the Preview package, the app's Release
+ * configuration) ignore KAI_HOME and KAI_POLICY from the environment; dev and
+ * test builds honour them. */
+#ifdef KAI_RELEASE
+#define KAI_ENV_OVERRIDES 0
+#else
+#define KAI_ENV_OVERRIDES 1
+#endif
 int kai_cmd_demo(int argc, char **argv);
 int kai_cmd_allow(int argc, char **argv);
 int kai_cmd_allow_file(int argc, char **argv);

@@ -144,6 +144,23 @@ hasnt "...and claims no protection" "$o" "Protected"
 cov="$(cd "$(dirname "$KAI")/../.." && pwd)/docs/COVERAGE.md"
 has "COVERAGE.md lists detached processes as not checked" "$(cat "$cov")" "| Detached or background processes | No hook event | Not checked |"
 
+echo "== working: a long-running command keeps the session working =="
+WK="$TMP/working"; mkdir -p "$WK/.kai"
+pre='{"hook_event_name":"PreToolUse","tool_name":"Bash","session_id":"w","tool_input":{"command":"sleep 1200"},"cwd":"/tmp"}'
+post='{"hook_event_name":"PostToolUse","tool_name":"Bash","session_id":"w","tool_input":{"command":"sleep 1200"},"tool_response":{"stdout":""},"cwd":"/tmp"}'
+printf '%s' "$pre" | KAI_HOME="$WK/.kai" KAI_NO_APP=1 "$KAI" hook claude >/dev/null
+act=$(cat "$WK"/.kai/registry/activity/*.json 2>/dev/null)
+if [ -z "$act" ]; then
+    pass "skipped: no agent above this shell to attribute a session to (CI)"
+else
+    has "an allowed PreToolUse marks a call in progress" "$act" '"inflight":'
+    printf '%s' "$post" | KAI_HOME="$WK/.kai" KAI_NO_APP=1 "$KAI" hook claude >/dev/null
+    hasnt "its PostToolUse clears it" "$(cat "$WK"/.kai/registry/activity/*.json)" '"inflight":'
+    printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Read","session_id":"w","tool_input":{"file_path":"'"$HOME"'/.ssh/id_rsa"},"cwd":"/tmp"}' \
+        | KAI_HOME="$WK/.kai" KAI_NO_APP=1 "$KAI" hook claude >/dev/null
+    hasnt "a stopped call never counts as in progress" "$(cat "$WK"/.kai/registry/activity/*.json)" '"inflight":'
+fi
+
 echo "== policy set =="
 "$KAI" policy set on_upload ask >/dev/null
 has "set creates the policy file" "$(ls "$KAI_HOME")" "policy"

@@ -773,7 +773,7 @@ private struct AgentControlPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             PageHeader(icon: "person.2.gobackward", title: "Agent Control",
-                       subtitle: "Every agent session Kai sees, with its permissions. Revoke or pause one session without touching the others.")
+                       subtitle: "Every agent session Kai sees, with its permissions. Revoke one without touching the others.")
             // A plain HStack (not a nested split view, which collapsed inside the
             // Settings window's own split): a fixed-width list + a detail, both
             // filling the height.

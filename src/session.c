@@ -373,6 +373,42 @@ int kai_session_activity_touch(const char *sid, const char *workspace, long long
     return 0;
 }
 
+/* A tool call in progress: set on an allowed PreToolUse (since = when),
+ * cleared (0) on PostToolUse. Stored in the session's activity record. */
+int kai_session_inflight_set(const char *sid, long long since) {
+    if (!id_ok(sid)) return -1;
+    cJSON *o = activity_load(sid);
+    if (!o) o = cJSON_CreateObject();
+    if (!o) return -1;
+    cJSON_DeleteItemFromObject(o, "inflight");
+    if (since > 0) cJSON_AddNumberToObject(o, "inflight", (double)since);
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (!js) return -1;
+    char path[1300], tmp[1400];
+    mkdir(kai_home(), 0700);
+    mkdir(kai_session_dir(), 0700);
+    mkdir(kai_session_activity_dir(), 0700);
+    snprintf(path, sizeof path, "%s/%s.json", kai_session_activity_dir(), sid);
+    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
+    FILE *f = fopen(tmp, "wb");
+    if (!f) { free(js); return -1; }
+    int ok = fputs(js, f) >= 0;
+    ok = (fclose(f) == 0) && ok;
+    free(js);
+    if (!ok || rename(tmp, path) != 0) { unlink(tmp); return -1; }
+    return 0;
+}
+
+int kai_session_busy(const char *sid, long long now) {
+    if (!id_ok(sid)) return 0;
+    cJSON *o = activity_load(sid);
+    cJSON *i = o ? cJSON_GetObjectItem(o, "inflight") : NULL;
+    long long since = cJSON_IsNumber(i) ? (long long)i->valuedouble : 0;
+    cJSON_Delete(o);
+    return since > 0 && now - since < 6 * 3600;   /* a crashed agent's call doesn't count forever */
+}
+
 long long kai_session_last_active(const char *sid, const char *workspace) {
     if (!id_ok(sid)) return 0;
     cJSON *o = activity_load(sid);

@@ -2423,6 +2423,57 @@ static void test_switch_migration(void) {
     setenv("KAI_HOME", saved, 1);
 }
 
+/* "Working": a tool call in progress (PreToolUse seen, PostToolUse not yet),
+ * or an event in the last 15 minutes. */
+static void test_working_inflight(void) {
+    printf("working = a call in progress or an event in 15 min\n");
+    long long now = (long long)time(NULL);
+    const char *sid = "test-inflight-1";
+    kai_session_activity_touch(sid, NULL, now - 25 * 60);   /* last event 25 min ago */
+    kai_session_inflight_set(sid, now - 25 * 60);            /* a long command started then */
+    CHECK(kai_session_busy(sid, now) == 1, "a long-running command keeps the session working past 15 minutes");
+    CHECK(kai_session_last_active(sid, NULL) == now - 25 * 60 && !kai_session_working(now - 25 * 60, now),
+          "...although its last event alone would say idle");
+    kai_session_inflight_set(sid, 0);                        /* PostToolUse */
+    CHECK(kai_session_busy(sid, now) == 0, "after PostToolUse, no longer in progress");
+    kai_session_inflight_set(sid, now - 7 * 3600);
+    CHECK(kai_session_busy(sid, now) == 0, "a call left in progress for over 6 hours (agent crashed) doesn't count");
+    kai_session_activity_touch(sid, NULL, now - 60);
+    CHECK(kai_session_working(kai_session_last_active(sid, NULL), now), "an event a minute ago: working");
+}
+
+/* The value line's "Most: <item>, N times": today's most repeated stopped
+ * item, from the log (exact, not the app's buffer); telemetry, kept-blocked,
+ * QUIC and grant records never count. */
+static void test_daily_top(void) {
+    printf("value line: today's most repeated item\n");
+    char dir[] = "/tmp/kai-topXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char log[700]; snprintf(log, sizeof log, "%s/audit.log", dir);
+    char ts[32]; time_t now = time(NULL); struct tm tmv; gmtime_r(&now, &tmv);
+    strftime(ts, sizeof ts, "%Y-%m-%dT%H:%M:%SZ", &tmv);
+    char top[256]; int n = -1;
+    FILE *f = fopen(log, "w"); if (f) fclose(f);
+    CHECK(kai_daily_top_in(log, top, sizeof top, &n) == 0 && n == 0, "nothing stopped: no top item");
+    f = fopen(log, "w");
+    for (int i = 0; f && i < 16; i++)
+        fprintf(f, "{\"ts\":\"%s\",\"source\":\"network\",\"event\":\"claude\",\"decision\":\"block\",\"rule\":\"not_on_allowlist\","
+                   "\"detail\":\"connection to registry.npmjs.org is not on the allowlist\",\"target\":\"registry.npmjs.org\"}\n", ts);
+    for (int i = 0; f && i < 3; i++)
+        fprintf(f, "{\"ts\":\"%s\",\"source\":\"network\",\"event\":\"cursor\",\"decision\":\"block\",\"rule\":\"not_on_allowlist\","
+                   "\"detail\":\"connection to example.org\",\"target\":\"example.org\"}\n", ts);
+    for (int i = 0; f && i < 40; i++)
+        fprintf(f, "{\"ts\":\"%s\",\"source\":\"network\",\"event\":\"claude\",\"decision\":\"block\",\"rule\":\"not_on_allowlist\","
+                   "\"detail\":\"telemetry to sentry.io (1.1.1.1:443); not asked about\",\"target\":\"sentry.io\"}\n", ts);
+    for (int i = 0; f && i < 30; i++)
+        fprintf(f, "{\"ts\":\"2001-01-01T00:00:00Z\",\"source\":\"network\",\"event\":\"claude\",\"decision\":\"block\","
+                   "\"rule\":\"x\",\"detail\":\"old\",\"target\":\"old.example\"}\n");
+    if (f) fclose(f);
+    CHECK(kai_daily_top_in(log, top, sizeof top, &n) == 1 && !strcmp(top, "registry.npmjs.org") && n == 16,
+          "registry.npmjs.org, 16 times (telemetry and other days never count)");
+    char cmd[800]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
 static void test_claude_env(void) {
     printf("Claude Code env switch (telemetry off)\n");
     char dir[] = "/tmp/kai-envXXXXXX";
@@ -2927,6 +2978,8 @@ int main(void) {
     test_audit_rotation_chain();
     test_decision_rules();
     test_claude_env();
+    test_daily_top();
+    test_working_inflight();
     test_switch_migration();
     test_policy_integrity();
     test_channels();

@@ -48,7 +48,11 @@ int kai_cmd_denials(int argc, char **argv);
 int kai_cmd_pause(int argc, char **argv);
 int kai_cmd_resume(int argc, char **argv);
 
-static int cmd_version(void) { printf("kai %s\n", KAI_VERSION); return 0; }
+static int cmd_version(void) {
+    printf("kai %s %s\n", KAI_VERSION, KAI_ENV_OVERRIDES ? "(dev build: honours KAI_HOME and KAI_POLICY)"
+                                                          : "(release build)");
+    return 0;
+}
 
 static int cmd_init(void) {
     mkdir(kai_home(), 0700);

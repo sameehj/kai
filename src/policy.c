@@ -696,7 +696,7 @@ const char *kai_default_policy(void) { return DEFAULT_POLICY; }
 const char *kai_policy_file(void) {
     static char buf[1200];
     if (buf[0]) return buf;
-    const char *env = getenv("KAI_POLICY");
+    const char *env = KAI_ENV_OVERRIDES ? getenv("KAI_POLICY") : NULL;   /* dev/test only */
     if (env && *env) kai_strlcpy(buf, env, sizeof buf);
     else snprintf(buf, sizeof buf, "%s/policy", kai_home());
     return buf;

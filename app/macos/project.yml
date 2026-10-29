@@ -32,7 +32,7 @@ settings:
     # The network extension's own build number. Bump ONLY when the extension's
     # code (app/macos/Network) changes: macOS replaces an activated extension
     # when this differs, which tears down the content filter.
-    KAI_EXT_VERSION: "26"
+    KAI_EXT_VERSION: "27"
     SWIFT_VERSION: "5.9"
 
 targets:
@@ -63,6 +63,9 @@ targets:
         HEADER_SEARCH_PATHS: ["$(SRCROOT)/../../include", "$(SRCROOT)/../../third_party/cjson"]
         GCC_PREPROCESSOR_DEFINITIONS: ["_POSIX_C_SOURCE=200809L", "_DARWIN_C_SOURCE"]
         SKIP_INSTALL: YES
+      configs:
+        Release:
+          GCC_PREPROCESSOR_DEFINITIONS: ["_POSIX_C_SOURCE=200809L", "_DARWIN_C_SOURCE", "KAI_RELEASE=1"]
 
   KaiNetwork:
     type: system-extension
@@ -155,16 +158,25 @@ targets:
         # KAI_PRODUCT_BUILD trips the build guard in manage.c if the policy
         # test seam is ever set in a shipped build (see manage.c / Makefile).
         GCC_PREPROCESSOR_DEFINITIONS: ["_POSIX_C_SOURCE=200809L", "_DARWIN_C_SOURCE", "KAI_PRODUCT_BUILD=1"]
+      configs:
+        Release:
+          # Release builds ignore KAI_HOME / KAI_POLICY (src/internal.h).
+          GCC_PREPROCESSOR_DEFINITIONS: ["_POSIX_C_SOURCE=200809L", "_DARWIN_C_SOURCE", "KAI_PRODUCT_BUILD=1", "KAI_RELEASE=1"]
     postBuildScripts:
       # Ship the kai CLI inside the app; the app uses it when none is installed.
       - name: Bundle kai CLI
         basedOnDependencyAnalysis: false
         script: |
           set -e
-          make -C "$SRCROOT/../.." kai >/dev/null
           dest="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/kai"
           mkdir -p "$(dirname "$dest")"
-          cp "$SRCROOT/../../kai" "$dest"
+          if [ "$CONFIGURATION" = Release ]; then   # ignores KAI_HOME / KAI_POLICY
+            make -C "$SRCROOT/../.." kai-release >/dev/null
+            cp "$SRCROOT/../../build/kai-release" "$dest"
+          else
+            make -C "$SRCROOT/../.." kai >/dev/null
+            cp "$SRCROOT/../../kai" "$dest"
+          fi
           # The browser extension, so `kai install chrome` can point at it.
           ext="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/browser"
           rm -rf "$ext" && mkdir -p "$ext/icons"

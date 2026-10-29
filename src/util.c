@@ -175,7 +175,7 @@ const char *kai_exe_path(void) {
 /* 1 if the active Kai home is (or would default to) the user's real ~/.kai:
  * either KAI_HOME is unset/empty, or it resolves to the real home. */
 int kai_home_is_real(void) {
-    const char *env = getenv("KAI_HOME");
+    const char *env = KAI_ENV_OVERRIDES ? getenv("KAI_HOME") : NULL;
     if (!env || !*env) return 1;
     char *real = kai_expand_home("~/.kai");
     int same = real && strcmp(kai_home(), real) == 0;

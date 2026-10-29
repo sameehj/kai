@@ -249,9 +249,23 @@ typedef struct {
     long long wslast[ROW_MAX_WS];
 } sess_row;
 
+/* Working: a tool call in progress, or an event in the last 15 minutes. */
+static int session_busy(const kai_session *s, long long now) {
+    if (s->source != KAI_SESS_SCAN && kai_session_busy(s->id, now)) return 1;
+    if (s->root_pid > 0) {
+        char k[32]; snprintf(k, sizeof k, "pid-%d", s->root_pid);
+        if (kai_session_busy(k, now)) return 1;
+    }
+    return 0;
+}
+
+static int row_working(const sess_row *r, long long now) {
+    return kai_session_working(r->last, now) || session_busy(&r->s, now);
+}
+
 static const char *row_activity(const sess_row *r, long long now) {
     if (r->s.ended_utc) return "ended";
-    return kai_session_working(r->last, now) ? "working" : "idle";
+    return row_working(r, now) ? "working" : "idle";
 }
 
 /* A live record whose root runs under another live record's root of the same
@@ -416,7 +430,7 @@ int kai_sessions_working_count(void) {
     long long now = (long long)time(NULL);
     int w = 0;
     for (int i = 0; i < n; i++)
-        if (!r[i].s.ended_utc && r[i].s.kind == KAI_KIND_SESSION && kai_session_working(r[i].last, now)) w++;
+        if (!r[i].s.ended_utc && r[i].s.kind == KAI_KIND_SESSION && row_working(&r[i], now)) w++;
     free(r);
     return w;
 }

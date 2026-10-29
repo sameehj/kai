@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial */
 #include "internal.h"
+#include "cJSON.h"
 #include <ctype.h>
 #include <sys/time.h>
 
@@ -16,7 +17,8 @@ void kai_sha256_hex(const void *data, size_t n, char out[65]);
 const char *kai_home(void) {
     static char buf[1024];
     if (buf[0]) return buf;
-    const char *env = getenv("KAI_HOME");
+    /* Release builds ignore KAI_HOME (only dev and test builds honour it). */
+    const char *env = KAI_ENV_OVERRIDES ? getenv("KAI_HOME") : NULL;
     if (env && *env) { kai_strlcpy(buf, env, sizeof buf); return buf; }
     char *h = kai_expand_home("~/.kai");
     kai_strlcpy(buf, h, sizeof buf);
@@ -286,6 +288,49 @@ int kai_daily_counts(const char *date, int *secrets, int *other) {
     free(t);
     return 1;
 }
+
+/* Spec: "Most: registry.npmjs.org, 16 times". Today's (UTC date of the
+ * records) most repeated item among meaningful stops, read from the log, so
+ * the count is exact. Same exclusions as the daily counter. */
+int kai_daily_top_in(const char *log, char *top, size_t tn, int *count) {
+    if (top && tn) top[0] = '\0';
+    if (count) *count = 0;
+    char today[16]; time_t now = time(NULL); struct tm tmv; gmtime_r(&now, &tmv);
+    strftime(today, sizeof today, "%Y-%m-%d", &tmv);
+    size_t n = 0;
+    char *t = kai_read_file(log, 64u << 20, &n);
+    if (!t) return 0;
+    struct { char k[256]; int c; } tally[512];
+    int nt = 0;
+    for (char *line = strtok(t, "\n"); line; line = strtok(NULL, "\n")) {
+        if (strncmp(line, "{\"ts\":\"", 7) || strncmp(line + 7, today, 10)) continue;
+        cJSON *o = cJSON_Parse(line);
+        if (!o) continue;
+        kai_audit_entry e;
+        memset(&e, 0, sizeof e);
+        e.source = cJSON_GetStringValue(cJSON_GetObjectItem(o, "source"));
+        e.decision = cJSON_GetStringValue(cJSON_GetObjectItem(o, "decision"));
+        e.rule = cJSON_GetStringValue(cJSON_GetObjectItem(o, "rule"));
+        e.detail = cJSON_GetStringValue(cJSON_GetObjectItem(o, "detail"));
+        e.target = cJSON_GetStringValue(cJSON_GetObjectItem(o, "target"));
+        char k = daily_kind(&e);
+        if (k && e.decision && !strcmp(e.decision, "block") && e.target && *e.target) {
+            int i;
+            for (i = 0; i < nt; i++) if (!strcmp(tally[i].k, e.target)) { tally[i].c++; break; }
+            if (i == nt && nt < 512) { kai_strlcpy(tally[nt].k, e.target, sizeof tally[nt].k); tally[nt++].c = 1; }
+        }
+        cJSON_Delete(o);
+    }
+    free(t);
+    int best = -1;
+    for (int i = 0; i < nt; i++) if (best < 0 || tally[i].c > tally[best].c) best = i;
+    if (best < 0) return 0;
+    if (top) kai_strlcpy(top, tally[best].k, tn);
+    if (count) *count = tally[best].c;
+    return 1;
+}
+
+int kai_daily_top(char *top, size_t tn, int *count) { return kai_daily_top_in(kai_audit_path(), top, tn, count); }
 
 int kai_daily_count(const char *date, char kind) {
     char fp[1200];

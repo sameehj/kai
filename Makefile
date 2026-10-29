@@ -72,6 +72,7 @@ test: kai
 	sh tests/hooks/run_hook_tests.sh ./kai
 	sh tests/release/run_postinstall_tests.sh
 	sh tests/app/run_app_tests.sh
+	sh tests/release/run_release_env_tests.sh
 	# Suites that SET UP policy via `kai policy ...` use a throwaway binary built
 	# with the test seam (KAI_TEST_DIRECT_POLICY): the suites run inside the
 	# dev's agent tree and set loosening switches, both of which the production
@@ -179,4 +180,10 @@ clean:
 	rm -f $(OBJ) kai libkai.a tests/run_tests tests/storage/run_storage_tests tests/cli/kai-test
 	rm -rf build app/macos/Kai.xcodeproj
 
-.PHONY: all asan fuzz test escape validation chrome-zip app app-dev app-storage try-app-storage try-app install-app install uninstall clean
+# A release kai: ignores KAI_HOME / KAI_POLICY. Built from the sources into its
+# own file, so dev objects (built without the flag) are never mixed in.
+kai-release:
+	@mkdir -p build
+	$(CC) $(CFLAGS) -DKAI_RELEASE -o build/kai-release $(CORE) $(APP) $(LDLIBS)
+
+.PHONY: kai-release all asan fuzz test escape validation chrome-zip app app-dev app-storage try-app-storage try-app install-app install uninstall clean
