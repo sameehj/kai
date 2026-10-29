@@ -183,15 +183,33 @@ int kai_cmd_status_text(void) {
     const char *head = installed && checking == installed ? "Checking"
                      : any_on ? "Partly checking" : "Not checking";
     printf("Kai%s %s · %s\n", app ? "" : " Preview", KAI_VERSION, head);
-    if (!app) printf("%s\n", CONTRACT);
+    if (!app) printf("%s\nKai Preview checks inside your agents. OS-level protection for files and internet comes "
+                     "with the Kai app in an upcoming release.\n", CONTRACT);
     printf("Agents\n%s", buf ? buf : "");
     free(buf);
 
     int cdet = 0, con = kai_browser_installed(&cdet);
     const char *chats;
-    char chatbuf[300];
+    char chatbuf[300], want[32] = "", have[32] = "";
+    {   /* the version Kai ships vs the one Chrome last reported */
+        char mf[1300];
+        snprintf(mf, sizeof mf, "%s/manifest.json", kai_browser_ext_dir());
+        size_t ml = 0;
+        char *mt = kai_read_file(mf, 1 << 16, &ml);
+        cJSON *mo = mt ? cJSON_Parse(mt) : NULL;
+        free(mt);
+        const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(mo, "version"));
+        if (v) kai_strlcpy(want, v, sizeof want);
+        cJSON_Delete(mo);
+        kai_chat_extension_version(have, sizeof have, NULL);
+    }
     if (!con) chats = cdet ? "Not checking: Kai isn't set up for Chrome (kai install chrome)" : "Not detected";
     else if (!kai_browser_extension_loaded()) chats = "Not checking: the Kai extension isn't loaded in Chrome";
+    else if (want[0] && strcmp(have, want) != 0) {
+        snprintf(chatbuf, sizeof chatbuf, "Not checking reliably: reload the Kai extension in Chrome (Kai has %s; "
+                 "Chrome runs %s)", want, have[0] ? have : "an older copy that doesn't report its version");
+        chats = chatbuf;
+    }
     else {
         char *exe = kai_browser_host_exe();
         kai_health h; kai_health_chrome(exe, &h); free(exe);

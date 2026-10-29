@@ -192,9 +192,41 @@ int kai_chat_record(const char *site, int open_tabs, int redactions, int overrid
     return 0;
 }
 
+int kai_chat_record_extension(const char *version) {
+    for (const char *c = version; c && *c; c++)
+        if (!(isdigit((unsigned char)*c) || *c == '.')) return -1;
+    mkdir(kai_home(), 0700);
+    mkdir(chat_dir(), 0700);
+    char path[1300], tmp[1400], js[160];
+    snprintf(path, sizeof path, "%s/_extension.json", chat_dir());
+    snprintf(js, sizeof js, "{\"version\":\"%s\",\"last_utc\":%lld}", version, (long long)time(NULL));
+    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
+    FILE *f = fopen(tmp, "wb");
+    if (!f) return -1;
+    int ok = fputs(js, f) >= 0;
+    ok = (fclose(f) == 0) && ok;
+    if (!ok || rename(tmp, path) != 0) { unlink(tmp); return -1; }
+    return 0;
+}
+
+int kai_chat_extension_version(char *out, size_t n, long long *last) {
+    if (n) out[0] = '\0';
+    char path[1300];
+    snprintf(path, sizeof path, "%s/_extension.json", chat_dir());
+    size_t len = 0;
+    char *t = kai_read_file(path, 4096, &len);
+    cJSON *o = t ? cJSON_Parse(t) : NULL;
+    free(t);
+    const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(o, "version"));
+    if (v) kai_strlcpy(out, v, n);
+    if (last) *last = (long long)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "last_utc"));
+    cJSON_Delete(o);
+    return v != NULL;
+}
+
 int kai_chat_load(kai_chat **out, int *n) {
     *out = NULL; *n = 0;
-    DIR *d = opendir(chat_dir());
+    DIR *d = opendir(chat_dir());   /* (the _extension.json record isn't a site) */
     if (!d) return 0;
     kai_chat *arr = NULL; int c = 0, cap = 0;
     struct dirent *e;
@@ -904,6 +936,51 @@ static int agent_session_bound_elsewhere(const char *agent_session, const char *
     return clash;
 }
 
+/* A session's topic is the first real sentence of the user's first prompt:
+ * pasted-content placeholders and their bodies, tags such as <system-reminder>
+ * or <command-name>, "[Pasted text #1 +40 lines]" / "[Image #1]" lines, code
+ * fences and markdown emphasis are skipped. Empty when nothing is left (the
+ * app then shows the project name). */
+void kai_topic_clean(const char *raw, char *out, size_t n) {
+    if (n) out[0] = '\0';
+    if (!raw || !n) return;
+    char *copy = strdup(raw);
+    if (!copy) return;
+    int skip_block = 0;
+    char *save = NULL;
+    for (char *line = strtok_r(copy, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+        while (*line == ' ' || *line == '\t' || *line == '\r') line++;
+        size_t L = strlen(line);
+        while (L && (line[L - 1] == ' ' || line[L - 1] == '\r' || line[L - 1] == '\t')) line[--L] = '\0';
+        if (skip_block) {                                  /* inside <pasted_content> ... </...> */
+            if (strstr(line, "pasted_content>") || strstr(line, "/pasted")) skip_block = 0;
+            continue;
+        }
+        if (!L) continue;
+        if (line[0] == '<') {
+            int opens_paste = strstr(line, "pasted_content") && !strstr(line, "/pasted_content") &&
+                              !strstr(line + 1, "</");
+            if (opens_paste && !strstr(line, "/>")) skip_block = 1;
+            continue;                                      /* markup, never a topic */
+        }
+        if (line[0] == '[' && (strstr(line, "Pasted") || strstr(line, "Image #") || strstr(line, "pasted"))) continue;
+        if (!strncmp(line, "```", 3)) continue;
+        /* the first real line: strip emphasis, keep the first sentence */
+        size_t o = 0;
+        for (size_t i = 0; line[i] && o + 1 < n; i++) {
+            if (line[i] == '*' || line[i] == '`' || (line[i] == '_' && line[i + 1] == '_')) {
+                if (line[i] == '_') i++;
+                continue;
+            }
+            out[o++] = line[i];
+            if ((line[i] == '.' || line[i] == '?' || line[i] == '!') && line[i + 1] == ' ') break;
+        }
+        out[o] = '\0';
+        break;
+    }
+    free(copy);
+}
+
 int kai_session_report_topic(const kai_policy *p, const char *es_session,
                              const char *agent_session, const char *raw_topic) {
     if (!id_ok(es_session)) return -1;   /* must be a Kai-observed ES session id */
@@ -914,7 +991,9 @@ int kai_session_report_topic(const kai_policy *p, const char *es_session,
     }
     /* Redact the topic through libkai so a secret in the first prompt never
      * reaches storage; if scanning is off we store a placeholder, never raw. */
-    char topic[128] = "";
+    char topic[128] = "", first[512];
+    kai_topic_clean(raw_topic, first, sizeof first);
+    raw_topic = first;
     if (raw_topic && *raw_topic && p) {
         kai_report rep;
         char *clean = kai_scan_text(p, raw_topic, &rep);

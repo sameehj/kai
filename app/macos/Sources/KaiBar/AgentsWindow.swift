@@ -35,7 +35,11 @@ struct SessionRow: Decodable, Identifiable, Equatable {
     var topicReportedByAgent: Bool = true
     /// The topic without stray whitespace or line breaks (an empty-looking
     /// topic drew an empty first line).
-    var topicLine: String { topic.trimmingCharacters(in: .whitespacesAndNewlines) }
+    var topicLine: String {
+        var buf = [CChar](repeating: 0, count: 512)
+        kai_topic_clean(topic, &buf, buf.count)
+        return String(cString: buf).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
     var project: String = ""
     var hostApp: String = ""
     var startedUtc: Int = 0
@@ -316,6 +320,7 @@ struct SessionRowView: View {
                     Text(session.enforcementShort).font(.caption2)
                         .foregroundStyle(session.enforcementShort == "Files + Internet" ? .green
                                          : session.enforcementShort == "seen only" ? .secondary : .orange)
+                    if let i = InfoText.coverage(session.enforcementShort) { InfoButton(text: i) }
                     if !session.isActive { Text("ended").font(.caption2).foregroundStyle(.secondary) }
                 }
                 if !session.topicLine.isEmpty {   // hook-reported topic, or hidden

@@ -60,7 +60,11 @@ struct MenuView: View {
                 Text("\(n)").font(Theme.display(34)).foregroundStyle(glow)
                 Text("agent\(n == 1 ? "" : "s") working").font(.system(size: 13)).foregroundStyle(Theme.soft)
             }
-            Text(model.valueLine).font(.system(size: 12)).foregroundStyle(Theme.muted)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(model.valueLine).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
+                InfoButton(text: InfoText.secretsKept + " " + InfoText.actionsStopped)
+            }
             // The most repeated stop today (exact, from the log), with Review.
             if let m = model.topToday {
                 HStack(spacing: 4) {
@@ -95,34 +99,23 @@ struct MenuView: View {
         }
     }
 
-    // Migration: show the rules carried over from an old switch once, for
-    // confirmation. Unconfirmed ones end after 7 days.
-    @AppStorage("migrationCardSeen") private var migrationCardSeen = false
+    // Migration: one line; the details (Keep with Touch ID, Remove) are on the
+    // agent's page behind Review.
+    @AppStorage("agentControlOpen") private var agentControlOpen = ""
     @ViewBuilder private var migratedConfirm: some View {
         let ms = grantManager.migratedRules
-        if !ms.isEmpty && !migrationCardSeen {
-            VStack(alignment: .leading, spacing: 8) {
-                CapsLabel("Confirm carried-over rules")
-                Text("These came from an old category switch. Each was reached by the agent before. Keep one with "
-                     + "Touch ID, or let it end.").font(.system(size: 11)).foregroundStyle(Theme.muted)
+        if let first = ms.first {
+            let name = ms.count == 1 ? HostCatalog.shortName(first.dest) : "\(ms.count) sites"
+            let days = max(1, Int((Double(first.expires) - Date().timeIntervalSince1970) / 86400.0 + 0.5))
+            Button {
+                agentControlOpen = "agent:" + first.agent
+                open(.agentControl)
+            } label: {
+                Text("Kai tidied up an old setting: \(name) \(ms.count == 1 ? "is" : "are") allowed for \(first.agentTitle) "
+                     + "for \(days) day\(days == 1 ? "" : "s"). Review ›")
+                    .font(.system(size: 12)).foregroundStyle(Theme.soft)
                     .fixedSize(horizontal: false, vertical: true)
-                ForEach(ms) { r in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("\(r.agentTitle) → \(r.dest)").font(.system(size: 12, weight: .medium))
-                            Text(r.untilLabel).font(.system(size: 11)).foregroundStyle(Theme.muted)
-                        }
-                        Spacer()
-                        Button("Keep") { grantManager.confirmMigrated(r) }.buttonStyle(GhostButtonStyle())
-                        Button("Remove") { grantManager.removeRule(r) }.buttonStyle(.plain)
-                            .font(.system(size: 12)).foregroundStyle(Theme.coral)
-                    }
-                }
-                Button("Decide later (they'll stay in Agent Control)") { migrationCardSeen = true }
-                    .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Theme.muted)
-            }
-            .padding(10)
-            .background(Theme.amber.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            }.buttonStyle(.plain)
         }
     }
 
@@ -152,7 +145,7 @@ struct MenuView: View {
         return VStack(alignment: .leading, spacing: 6) {
             if !running.isEmpty || idleCount > 0 {
                 HStack {
-                    CapsLabel("Working now")
+                    InfoHeading(title: "Working now", info: InfoText.workingNow)
                     Spacer()
                     Button("Open Agent Control") { openAgentControl() }
                         .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
@@ -249,7 +242,7 @@ struct MenuView: View {
                 Text("·").foregroundStyle(Theme.muted)
                 Text(ProtectionText.mark("Internet", level: l.internet))
                 Text("·").foregroundStyle(Theme.muted)
-                Text(chats ? "Chats ✓" : "Chats: off")
+                Text(!chats ? "Chats: off" : ChatSite.extensionOutdated ? "Chats: reload" : "Chats ✓")
                 Spacer()
                 Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(Theme.muted)
             }
@@ -291,21 +284,24 @@ struct MenuView: View {
     @ViewBuilder private var chatsRow: some View {
         let chrome = model.agentInfo(.chrome)
         if chrome.installed {
-            if model.chromeNeedsExtension {
+            if ChatSite.extensionOutdated || model.chromeNeedsExtension {
                 Button { model.openExtensionSetup() } label: {
-                    Text("Chats: not connected · Reload the Kai extension in Chrome ›")
-                        .font(.system(size: 12)).foregroundStyle(Theme.amber)
+                    Text("Chats: reload the Kai extension in Chrome").font(.system(size: 12)).foregroundStyle(Theme.amber)
                 }.buttonStyle(.plain)
             } else {
                 let openSites = ChatSite.load().filter { $0.openTabs > 0 }
-                let kept = ChatSite.keptOutToday
-                if !openSites.isEmpty || kept > 0 {
-                    Button { open(.agentControl) } label: {
+                let red = openSites.reduce(0) { $0 + $1.redactedToday }
+                if !openSites.isEmpty {
+                    Button { agentControlOpen = "chats"; open(.agentControl) } label: {
                         VStack(alignment: .leading, spacing: 1) {
-                            Text("Chats · \(openSites.count) open").font(.system(size: 13, weight: .medium))
-                            Text((openSites.prefix(3).map(\.site).joined(separator: ", "))
-                                 + (kept > 0 ? "\(openSites.isEmpty ? "" : " · ")\(kept) secret\(kept == 1 ? "" : "s") kept out today" : ""))
-                                .font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(1)
+                            HStack(spacing: 4) {
+                                Text("Chats · \(openSites.count) open: " + openSites.prefix(2).map(\.site).joined(separator: ", ")
+                                     + (openSites.count > 2 ? "…" : ""))
+                                    .font(.system(size: 13, weight: .medium)).lineLimit(1)
+                                InfoButton(text: InfoText.chats)
+                            }
+                            Text(red == 0 ? "Nothing redacted today" : "\(red) redacted before sending today")
+                                .font(.system(size: 11)).foregroundStyle(Theme.muted)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 10).padding(.vertical, 6)
@@ -339,6 +335,7 @@ struct MenuView: View {
                     Text(note).font(.system(size: 11)).foregroundStyle(Theme.amber)
                 }
             }
+            PreviewBadge()
             if !KaiInstance.isRelease { DevBadge() }
             Spacer()
             if model.busy { ProgressView().controlSize(.small) }

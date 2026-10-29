@@ -150,6 +150,8 @@ int kai_host_is_telemetry(const char *host) {
         "featuregates.org", "segment.io", "segment.com", "mixpanel.com", "amplitude.com",
         "posthog.com", "honeycomb.io", "bugsnag.com", "newrelic.com", "launchdarkly.com",
         "events.launchdarkly.com", "app-measurement.com",
+        /* Cursor's crash/usage counters (Cursor staff, forum.cursor.com, 2026) */
+        "metrics.cursor.sh",
     };
     if (!host || !*host) return 0;
     size_t hl = strlen(host);

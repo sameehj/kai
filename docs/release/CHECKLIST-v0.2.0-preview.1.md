@@ -37,3 +37,24 @@ Everything here waits on Sameeh. The code side is on `fix/ux-review-phase-a`; `m
 | 8 | Upgrade from 0.1.0 | Install 0.1.0, then the RC: hooks refreshed, backups present, no older-over-newer refusal | |
 | 9 | Escape case `mcp-send-data` | Decide: fix, or record as a known gap in ESCAPES.md | |
 | 10 | Copy review | `kai status`, `kai doctor`, the stop messages, the release notes | |
+| 11 | Chrome extension version | chrome://extensions → Kai → Reload, then reload open chat tabs. The `kai status` Chats line must not say "reload"; the popover row reads "Chats · N open: …" | |
+| 12 | Screenshots | `/Applications/Kai.app/Contents/MacOS/Kai --snapshot ~/Desktop/kai-shots` renders popover, Agent Control, Activity and Internet with live data | |
+
+## C. Release batch items (2026-10-29): check each in the installed build
+
+| # | Item | Expected | Result |
+|---|---|---|---|
+| A1 | Activity log check | Activity has no audit box or Verify. Settings → Advanced → "Check activity log for edits" → "No edits found in N records. (A program with your permissions could still rewrite the whole log.)" | |
+| A2 | Wording | No "risky" and no "times you had to pause Kai" anywhere (popover, Settings, installer, README, release notes) | |
+| A3 | Value line | "N secrets kept private · M actions stopped today"; wraps, never truncated; third line "Most: <host>, N times · Review" only when one item dominates (≥5 and at least half of today's stops) | |
+| A4 | Migration notice | One line; Review opens Agent Control | |
+| A5 | Working vs idle | Run `sleep 600` from Claude Code: it stays under Working now for the whole call; goes idle 15 min after the last event | |
+| A6 | Release builds | `kai version` says "(release build)"; setting the home or policy environment variables doesn't move a release build off ~/.kai | |
+| A7 | Agent Control | No global pause; subtitle without "pause"; Working now / Idle / Ended are headings; no row starts with an empty line | |
+| A8 | Topics | A session started with pasted text or markup shows its first real sentence | |
+| A9 | Repeated stops | 3rd identical blocked attempt in one session: the message ends once with "This is waiting for the user's decision in Kai. Don't retry until they allow it." | |
+| A10 | Chats | Popover "Chats · N open: …" with today's redactions; Agent Control → Chats lists sites, tabs and today's redactions, no titles; "Chats: reload the Kai extension in Chrome" when missing or outdated | |
+| A11 | Telemetry | Settings → Internet → Agent telemetry: Claude Code and Codex "Turn off in <agent>"; Cursor "No setting from Cursor; Kai keeps blocking it." | |
+| B12 | ⓘ buttons | Each opens its copy (value line, Working now, Idle, Watch, Protect, 1 hour, this session, always, coverage) | |
+| B13 | Preview labels | "Preview" badge in popover and Settings; Preview sentence in README, installer welcome, `kai status` | |
+| B14 | Docs | README order; Design references say "designed with reference to"; DESIGN.md and IMPLEMENTATION_STATUS.md current-state notes | |

@@ -681,6 +681,18 @@ long long kai_selftest_last(const char *agent);
 void kai_agent_version(const char *agent, char *out, size_t n);
 void kai_agent_config_sha(const char *config, char out[65]);   /* the Kai app (with its OS walls) is installed */
 int kai_claude_env_is(const char *key, const char *value);
+/* Codex: analytics.enabled = false in its config.toml (documented switch).
+ * set 0 = only report. 1 off, 0 not off, -1 write failed, -2 left alone. */
+int kai_codex_analytics_off(int set);
+int kai_codex_analytics_off_at(const char *path, int set);
+/* Session topic from the first prompt: the first real sentence, without
+ * pasted-content placeholders or markup; "" if none. */
+void kai_topic_clean(const char *raw, char *out, size_t n);
+/* Chats: today's redactions/holds for a site; the extension's reported version. */
+int kai_daily_site(const char *site);
+int kai_daily_site_in(const char *log, const char *site);
+int kai_chat_record_extension(const char *version);
+int kai_chat_extension_version(char *out, size_t n, long long *last);
 /* The verified code-signing identity of a running process: "<signing id>
  * (<team>)", or "<signing id> (Apple)" for Apple's own. 1 when the signature
  * is valid (anchored to Apple), else 0 and out = "". */

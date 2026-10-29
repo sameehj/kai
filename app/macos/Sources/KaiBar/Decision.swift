@@ -89,9 +89,11 @@ struct DecisionSheet: View {
                 if signed {
                     Button("Allow for 1 hour") { grants.allowForHour(grants.request(from: event)); done = .hour(Date().addingTimeInterval(3600)) }
                         .buttonStyle(GhostButtonStyle())
+                    InfoButton(text: InfoText.oneHour)
                 }
                 if sessionLive {
                     Button("Allow this session") { grants.allowForSession(event); done = .session }.buttonStyle(GhostButtonStyle())
+                    InfoButton(text: InfoText.thisSession)
                 }
                 if signed {
                     Button("Keep blocked") { grants.keepBlocked(grants.request(from: event)); done = .kept }
@@ -104,6 +106,7 @@ struct DecisionSheet: View {
                     .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(signed ? Theme.lime : Theme.muted)
                     .disabled(!signed)
                     .help(signed ? "" : "Kai didn't record which signed agent this was (an older record).")
+                InfoButton(text: InfoText.always)
                 Button(showWhy ? "Hide" : "Why?") { showWhy.toggle() }
                     .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Theme.muted)
             }
@@ -218,7 +221,7 @@ struct AgentReachView: View {
                     }
                 }
 
-                section("Asked recently") {
+                section("Asked recently", info: InfoText.askedRecently) {
                     let mig = grants.migratedAsks.filter { $0.agent == agent }
                     if asked.isEmpty && mig.isEmpty { empty("Nothing in the last 24 hours.") }
                     ForEach(mig, id: \.self) { m in
@@ -246,8 +249,11 @@ struct AgentReachView: View {
         }
     }
 
-    private func section<C: View>(_ t: String, @ViewBuilder _ c: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 6) { CapsLabel(t); c() }
+    private func section<C: View>(_ t: String, info: String? = nil, @ViewBuilder _ c: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let info { InfoHeading(title: t, info: info) } else { CapsLabel(t) }
+            c()
+        }
     }
     private func empty(_ t: String) -> some View { Text(t).font(.system(size: 12)).foregroundStyle(Theme.muted) }
     private func row<T: View>(_ main: String, _ sub: String, @ViewBuilder trailing: () -> T) -> some View {
@@ -273,6 +279,18 @@ struct ChatSite: Identifiable {
     let overrides: Int
     let last: Date
     var id: String { site }
+    var redactedToday: Int { Int(kai_daily_site(site)) }
+
+    /// The extension Kai ships vs the version Chrome last reported.
+    static var extensionOutdated: Bool {
+        guard let url = Bundle.main.url(forResource: "manifest", withExtension: "json", subdirectory: "browser"),
+              let d = try? Data(contentsOf: url),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+              let want = o["version"] as? String else { return false }
+        var buf = [CChar](repeating: 0, count: 32)
+        let have = kai_chat_extension_version(&buf, buf.count, nil) == 1 ? String(cString: buf) : ""
+        return have != want
+    }
 
     static func load() -> [ChatSite] {
         var ptr: UnsafeMutablePointer<kai_chat>? = nil
@@ -300,20 +318,22 @@ struct ChatsDetail: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Chats").font(.title3).fontWeight(.semibold)
-                if model.chromeNeedsExtension || !model.agentInfo(.chrome).installed {
-                    Button("Chats: not connected · Reload the Kai extension in Chrome ›") { model.openExtensionSetup() }
+                HStack(spacing: 4) { Text("Chats").font(.title3).fontWeight(.semibold); InfoButton(text: InfoText.chats) }
+                if model.chromeNeedsExtension || !model.agentInfo(.chrome).installed || ChatSite.extensionOutdated {
+                    Button("Chats: reload the Kai extension in Chrome") { model.openExtensionSetup() }
                         .buttonStyle(.plain).foregroundStyle(Theme.amber)
                 }
-                let k = ChatSite.keptOutToday
-                Text(k == 0 ? "Nothing kept out today." : "\(k) secret\(k == 1 ? "" : "s") kept out today.")
-                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                HStack(spacing: 4) {
+                    Text("AI chat sites the Kai extension reports. No conversation titles are kept.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                }
                 if sites.isEmpty { Text("No chat sites seen yet.").font(.system(size: 12)).foregroundStyle(Theme.muted) }
                 ForEach(sites) { s in
                     HStack {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(s.site).font(.system(size: 13))
-                            Text("\(s.openTabs > 0 ? "\(s.openTabs) open" : "closed") · \(s.redactions) kept out · \(s.overrides) sent anyway (so far)")
+                            Text("\(s.openTabs > 0 ? "\(s.openTabs) tab\(s.openTabs == 1 ? "" : "s") open" : "closed") · "
+                                 + "\(s.redactedToday) redacted before sending today")
                                 .font(.system(size: 11)).foregroundStyle(Theme.muted)
                         }
                         Spacer()
@@ -330,6 +350,12 @@ struct ChatsDetail: View {
 /// Spec v2.1 B.3: explanation only. Describes the service, never the agent's
 /// intent, and never allows anything.
 enum HostCatalog {
+    /// "GitHub" from "GitHub, where code is hosted…"; the host if unknown.
+    static func shortName(_ host: String) -> String {
+        var g: UnsafePointer<CChar>? = nil
+        guard let d = kai_host_describe(host, &g) else { return host }
+        return String(String(cString: d).split(separator: ",").first ?? Substring(host))
+    }
     static func line(_ host: String) -> String {
         var g: UnsafePointer<CChar>? = nil
         if let d = kai_host_describe(host, &g) { return String(cString: d) + "." }

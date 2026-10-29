@@ -68,6 +68,14 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
     }
 
     var verb: String {
+        if source == "grant" {
+            switch event {
+            case "approved", "used": return "Allowed"
+            case "revoked", "expired": return "Ended"
+            case "denied": return "Kept blocked"
+            default: break
+            }
+        }
         switch decision {
         case "block": return "Blocked"
         case "log": return "Noticed"

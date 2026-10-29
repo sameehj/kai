@@ -80,6 +80,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 6) {
                         Text("Kai").font(Theme.display(16))
+                        PreviewBadge()
                         if !KaiInstance.isRelease { DevBadge() }
                     }
                     // Item 4: observed enforcement only, never a blanket "All
@@ -275,7 +276,35 @@ private struct GeneralPage: View {
     var showAgents = true
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if showAgents { agents } else { app }
+            if showAgents { agents } else { app; logCheckCard }
+        }
+    }
+
+    // Release batch 1: the log check lives here, with a one-sentence result.
+    @State private var logCheck: String?
+    private var logCheckCard: some View {
+        Card(padding: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Activity log").font(.system(size: 14, weight: .semibold))
+                    Spacer()
+                    Button("Check activity log for edits") {
+                        Task {
+                            let r = await KaiCLI.run(["log", "verify"])
+                            let out = r.out.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if out.hasPrefix("OK:"), let n = out.split(separator: " ").dropFirst().first {
+                                logCheck = "No edits found in \(n) records. (A program with your permissions could still rewrite the whole log.)"
+                            } else {
+                                logCheck = "Kai found an edit: " + (out.isEmpty ? r.message : String(out.dropFirst(out.hasPrefix("FAIL: ") ? 6 : 0)))
+                            }
+                        }
+                    }.buttonStyle(GhostButtonStyle())
+                    Button("Show in Finder") { model.revealAuditLog() }.buttonStyle(GhostButtonStyle())
+                }
+                if let c = logCheck {
+                    Text(c).font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 
@@ -429,33 +458,77 @@ private struct NetworkPage: View {
     @StateObject private var grants = GrantManager()
     @State private var telemetryNote: String?
 
-    // Batch 2: telemetry is blocked silently; per agent, the state and (for
-    // Claude Code) a button that turns it off in the agent itself.
-    @ViewBuilder private var telemetry: some View {
-        if !grants.telemetryHints.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Agent telemetry").font(Theme.display(16, .semibold))
-                ForEach(grants.telemetryHints, id: \.self) { a in
-                    Card(padding: 12) {
-                        HStack {
-                            Text(a == "claude" ? "Claude Code" : a.prefix(1).uppercased() + a.dropFirst())
-                                .font(.system(size: 13, weight: .semibold))
-                            Text("Telemetry: blocked by Kai").font(.system(size: 12)).foregroundStyle(Theme.muted)
-                            Spacer()
-                            if a == "claude" {
-                                if kai_claude_env_is("DISABLE_TELEMETRY", "1") == 1 {
-                                    Text("Turned off in Claude Code").font(.system(size: 12)).foregroundStyle(Theme.lime)
-                                } else {
-                                    Button("Turn off in Claude Code") { turnOffClaudeTelemetry() }
-                                        .buttonStyle(GhostButtonStyle())
-                                }
-                            }
-                        }
-                    }
+    // Release batch 11: one row per agent. Kai blocks known telemetry hosts
+    // silently; the documented switch, where the vendor has one.
+    //   Claude Code: DISABLE_TELEMETRY / DISABLE_ERROR_REPORTING (code.claude.com/docs/en/data-usage)
+    //   Codex: analytics.enabled = false (learn.chatgpt.com/docs/config-file/config-reference)
+    //   Cursor: no documented off switch; Privacy Mode reduces it (docs.cursor.com/account/privacy)
+    private var telemetry: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Agent telemetry").font(Theme.display(16, .semibold))
+            telemetryRow("Claude Code", blocks: "usage metrics and error reports (Statsig, Datadog, Sentry)") {
+                if kai_claude_env_is("DISABLE_TELEMETRY", "1") == 1 {
+                    Text("Turned off in Claude Code").font(.system(size: 12)).foregroundStyle(Theme.lime)
+                } else {
+                    Button("Turn off in Claude Code") { turnOffClaudeTelemetry() }.buttonStyle(GhostButtonStyle())
+                        .help("Sets DISABLE_TELEMETRY and DISABLE_ERROR_REPORTING in Claude Code's settings. Claude Code also turns off its feature flags then, which can make Remote Control unavailable.")
                 }
-                if let n = telemetryNote {
-                    Text(n).font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            }
+            telemetryRow("Codex", blocks: "usage metrics (Statsig)") {
+                if kai_codex_analytics_off(0) == 1 {
+                    Text("Turned off in Codex").font(.system(size: 12)).foregroundStyle(Theme.lime)
+                } else {
+                    Button("Turn off in Codex") { turnOffCodexTelemetry() }.buttonStyle(GhostButtonStyle())
+                        .help("Sets analytics.enabled = false in Codex's config.toml (a backup is kept).")
                 }
+            }
+            telemetryRow("Cursor", blocks: "crash and usage counters (metrics.cursor.sh)") {
+                Text("No setting from Cursor; Kai keeps blocking it.").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    .help("Cursor's Privacy Mode (Cursor Settings → General) reduces it to crash counters.")
+            }
+            if let n = telemetryNote {
+                Text(n).font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func telemetryRow<T: View>(_ agent: String, blocks: String, @ViewBuilder trailing: () -> T) -> some View {
+        Card(padding: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(agent).font(.system(size: 13, weight: .semibold))
+                    Text("Kai blocks its \(blocks) silently.").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                }
+                Spacer()
+                trailing()
+            }
+        }
+    }
+
+    private func turnOffCodexTelemetry() {
+        Task {
+            guard await OwnerAuth.shared.confirm("change Codex's settings to turn off its analytics") else { return }
+            let rc = kai_codex_analytics_off(1)
+            await MainActor.run {
+                telemetryNote = rc == 1 ? "Done. Restart Codex for it to apply. (Kai kept a backup of config.toml.)"
+                    : rc == -2 ? "Codex's config.toml sets analytics in a form Kai doesn't edit; set analytics.enabled = false yourself."
+                    : "Kai couldn't write Codex's config.toml."
+                grants.refresh()
+            }
+        }
+    }
+
+    private func turnOffClaudeTelemetry() {
+        Task {
+            guard await OwnerAuth.shared.confirm("change Claude Code's settings to turn off its telemetry") else { return }
+            let rc = kai_claude_set_env("DISABLE_TELEMETRY", "1")
+            let rc2 = rc == 0 ? kai_claude_set_env("DISABLE_ERROR_REPORTING", "1") : rc
+            await MainActor.run {
+                telemetryNote = rc2 == 0
+                    ? "Done. Restart your Claude Code sessions for it to apply. (Your previous settings are kept in ~/.claude/settings.json.kai-bak.)"
+                    : rc2 == 3 ? "Claude Code's settings file isn't valid JSON, so Kai changed nothing."
+                               : "Kai couldn't write Claude Code's settings."
+                grants.refresh()
             }
         }
     }
@@ -487,20 +560,6 @@ private struct NetworkPage: View {
         }
     }
 
-    private func turnOffClaudeTelemetry() {
-        Task {
-            guard await OwnerAuth.shared.confirm("change Claude Code's settings to turn off its telemetry") else { return }
-            let rc = kai_claude_set_env("DISABLE_TELEMETRY", "1")
-            await MainActor.run {
-                telemetryNote = rc == 0
-                    ? "Done. Restart your Claude Code sessions for it to apply. (Your previous settings are kept in ~/.claude/settings.json.kai-bak.)"
-                    : rc == 3 ? "Claude Code's settings file isn't valid JSON, so Kai changed nothing."
-                              : "Kai couldn't write Claude Code's settings."
-                grants.refresh()
-            }
-        }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             PageHeader(icon: "globe", title: "Internet",
@@ -525,14 +584,18 @@ private struct NetworkPage: View {
                                       ("off", "Off", "Agents reach anything.")],
                             selected: model.policy?.switches["egress"] ?? "log") { model.setSwitch("egress", $0) }
                     .disabled(model.busy || model.policy == nil)
+                HStack(spacing: 10) {
+                    HStack(spacing: 3) { Text("Watch").font(.system(size: 11)).foregroundStyle(Theme.muted); InfoButton(text: InfoText.watch) }
+                    HStack(spacing: 3) { Text("Protect").font(.system(size: 11)).foregroundStyle(Theme.muted); InfoButton(text: InfoText.protect) }
+                }
                 Text("Watch and Protect both turn off QUIC for agents, so Kai can see which sites they reach. "
                    + "Agents fall back to normal HTTPS; in Watch nothing else is blocked.")
                     .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             }
             EditableList(kind: "egress_allow", title: "Your allowed destinations",
                          help: "A host (also covers its subdomains), an IP address or range, optionally with :port: "
-                             + "db.yourcompany.com:5432, 10.0.0.0/8, 203.0.113.5:22. This Mac, model APIs, GitHub "
-                             + "and package registries are built in.",
+                             + "db.yourcompany.com:5432, 10.0.0.0/8, 203.0.113.5:22. Built in: this Mac and each agent's model and sign-in hosts. GitHub "
+                             + "and package registries are asked about per host.",
                          items: model.policy?.egressAllow ?? [], placeholder: "artifacts.yourcompany.com or 10.0.0.0/8")
             telemetry
             profileHosts
@@ -766,6 +829,7 @@ private struct AgentControlPage: View {
     @StateObject private var grants = GrantManager()
     @State private var selected: String?
     @State private var showEnded = false
+    @AppStorage("agentControlOpen") private var openRequest = ""
 
     /// Working now, then idle; ended sessions live in their own collapsed group.
     private var sorted: [SessionRow] { model.workingNow + model.idle }
@@ -794,26 +858,28 @@ private struct AgentControlPage: View {
                             .foregroundStyle(Theme.muted).padding(10)
                     }
                     List(selection: $selected) {
-                        Section("What each agent can reach") {
+                        Section(header: CapsLabel("What each agent can reach")) {
                             ForEach([("claude", "Claude Code"), ("codex", "Codex"), ("cursor", "Cursor")], id: \.0) { a in
                                 Text(a.1).font(.system(size: 13)).tag("agent:" + a.0)
                             }
                             Text("Chats").font(.system(size: 13)).tag("chats")
                         }
                         if !model.workingNow.isEmpty {
-                            Section("Working now") {
+                            Section {
                                 ForEach(model.workingNow) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
-                            }
+                            } header: { InfoHeading(title: "Working now", info: InfoText.workingNow) }
                         }
                         if !model.idle.isEmpty {
-                            Section("Idle") {
+                            Section {
                                 ForEach(model.idle) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
-                            }
+                            } header: { InfoHeading(title: "Idle", info: InfoText.idle) }
                         }
                         if !model.endedToday.isEmpty {
-                            DisclosureGroup("Ended today (\(model.endedToday.count))", isExpanded: $showEnded) {
-                                ForEach(model.endedToday) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
-                            }
+                            Section {
+                                DisclosureGroup("\(model.endedToday.count) ended today", isExpanded: $showEnded) {
+                                    ForEach(model.endedToday) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
+                                }
+                            } header: { InfoHeading(title: "Ended", info: InfoText.ended) }
                         }
                         if !model.backgroundServices.isEmpty {
                             Section("Background services") {
@@ -847,6 +913,8 @@ private struct AgentControlPage: View {
             .frame(maxWidth: .infinity, minHeight: 470, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear { if !openRequest.isEmpty { selected = openRequest; openRequest = "" } }
+        .onChange(of: openRequest) { r in if !r.isEmpty { selected = r; openRequest = "" } }
         // The data is cached (shared store), so it may not CHANGE when the page
         // opens: pick a session on appear too, not only on a change.
         .onAppear { selectDefault() }
@@ -1014,24 +1082,8 @@ private struct ActivityPage: View {
         VStack(alignment: .leading, spacing: 14) {
             PageHeader(icon: "waveform.path.ecg", title: "Activity",
                        subtitle: "What Kai blocked, cleaned or noticed, what it was, and what the agent did next. Secrets are never stored.")
-            Card(padding: 14) {
-                HStack(spacing: 10) {
-                    if let a = model.status?.audit {
-                        Image(systemName: a.intact ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                            .foregroundStyle(a.intact ? Theme.lime : Theme.coral)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(a.intact ? "Audit log intact · \(a.records) records" : a.error)
-                            Text(model.weeklyLine).font(.system(size: 12)).foregroundStyle(Theme.muted)
-                        }
-                            .font(.system(size: 13))
-                    }
-                    Spacer()
-                    Button("Verify") { Task { verifyResult = await model.verifyAuditLog() } }
-                        .buttonStyle(GhostButtonStyle())
-                    Button("Show in Finder") { model.revealAuditLog() }.buttonStyle(GhostButtonStyle())
-                }
-            }
-            if let v = verifyResult { Text(v).font(.system(size: 12)).foregroundStyle(Theme.muted) }
+            Text(model.weeklyLine).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
             if let n = model.notice {
                 Card(padding: 12, stroke: Color(hex: 0x3A4420)) {
                     HStack {

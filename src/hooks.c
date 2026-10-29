@@ -783,6 +783,49 @@ static int skip_exempt(const char *rule, void *ud) {
  * process is detached) — in which case no topic is bound (the binding rule). */
 static int find_es_session(char *out, size_t n);
 int kai_audit_suppressed(void);   /* audit.c */
+void kai_sha256_hex(const void *data, size_t n, char out[65]);   /* sha256.c */
+
+/* Release batch 9: the Nth identical stop in a session (same rule and
+ * subject). Counted in <kai home>/hookseen/repeats/<session>, bounded. */
+static int repeat_count(const char *session, const char *rule, const char *subject) {
+    if (!session || !*session || kai_audit_suppressed()) return 0;
+    char key[65], dir[1100], path[1300];
+    char raw[2200];
+    snprintf(raw, sizeof raw, "%s|%s", rule ? rule : "", subject ? subject : "");
+    kai_sha256_hex(raw, strlen(raw), key);
+    char sk[65];
+    kai_sha256_hex(session, strlen(session), sk);
+    snprintf(dir, sizeof dir, "%s/hookseen/repeats", kai_home());
+    mkdir(kai_home(), 0700);
+    char hs[1100]; snprintf(hs, sizeof hs, "%s/hookseen", kai_home()); mkdir(hs, 0700);
+    mkdir(dir, 0700);
+    snprintf(path, sizeof path, "%s/%.16s.json", dir, sk);
+    size_t n = 0;
+    char *t = kai_read_file(path, 1 << 16, &n);
+    cJSON *o = t ? cJSON_Parse(t) : NULL;
+    free(t);
+    if (!cJSON_IsObject(o)) { cJSON_Delete(o); o = cJSON_CreateObject(); }
+    cJSON *c = cJSON_GetObjectItem(o, key);
+    int count = (cJSON_IsNumber(c) ? (int)c->valuedouble : 0) + 1;
+    cJSON_DeleteItemFromObject(o, key);
+    if (cJSON_GetArraySize(o) >= 64) cJSON_DeleteItemFromArray(o, 0);
+    cJSON_AddNumberToObject(o, key, count);
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    FILE *f = js ? fopen(path, "w") : NULL;
+    if (f) { fputs(js, f); fclose(f); chmod(path, 0600); }
+    free(js);
+    return count;
+}
+
+/* On the 3rd identical stop, once: tell the agent to wait for the user. */
+static void maybe_wait_note(char *reason, size_t n, const char *session, const char *rule, const char *subject) {
+    if (repeat_count(session, rule, subject) != 3) return;
+    size_t L = strlen(reason);
+    snprintf(reason + L, n - L, kai_app_present()
+             ? " This is waiting for the user's decision in Kai. Don't retry until they allow it."
+             : " This is waiting for the user's decision. Don't retry until they allow it.");
+}
 
 /* "Working" (Agent Control): every real hook call is activity for the agent's
  * session (its Kai session, and its root pid key); an allowed PreToolUse marks
@@ -1204,6 +1247,8 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             decision = KAI_ACT_WARN;   /* not a block: let the action proceed */
         }
     }
+    if (decision >= KAI_ACT_BLOCK && !ask && !would_block)
+        maybe_wait_note(reason, sizeof reason, session, rule, subject);
     const char *dec_str = would_block ? "would-block"
                           : ask ? "ask" : (decision >= KAI_ACT_BLOCK) ? "block" : "warn";
     if (decision >= KAI_ACT_BLOCK) {
@@ -1439,6 +1484,7 @@ static int hook_cursor(const char *json) {
         printf("{\"permission\":\"allow\"}\n");
         deny = 0;
     } else if (deny) {
+        maybe_wait_note(reason, sizeof reason, session, why, subject);
         cursor_deny(reason);
         kai_audit_entry e = {"cursor", ev ? ev : "unknown", "block", why, reason,
                              tool, ctx, mctx, session, cwd, NULL};

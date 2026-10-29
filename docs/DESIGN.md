@@ -1,5 +1,15 @@
 # Kai MVP — Design (for review before we build)
 
+This is the original MVP design, kept for its reasoning. Where it differs from today, the note below wins.
+
+> **Current state (v0.2.0-preview.1, 2026-10-29).**
+> - **Preview 1** is the `kai` command, the checks inside Claude Code, Codex and Cursor (hooks), and the Chrome extension. It has **no protected writer**: Kai's policy and terminal rules (`kai allow-…`) are files a program with your permissions can edit; Kai notices some outside policy changes (fingerprint), never all.
+> - **The control service is removed** (no XPC service, LaunchAgent or SMAppService). In the app release, **the Kai app is the only writer** of policy and signed rules; the `kai` command shows them and, when the app is installed, says "Change this in Kai".
+> - **The gateway is optional**: a manual opt-in local proxy, not part of the Preview 1 promise or the release checks.
+> - **OS-level Files and Internet protection** (Endpoint Security, network extension) ships with the Kai app in an upcoming release.
+> - What each agent reports and what Kai can stop: [COVERAGE.md](COVERAGE.md). The contract and its tests: [audit/preview1-contract.md](audit/preview1-contract.md).
+
+
 *Draft, October 15, 2026. Nothing below is built yet. Please review, then we build.*
 
 ## 1. What the MVP is
@@ -172,7 +182,7 @@ Every non-allow decision goes to the audit log.
 brew install kai            # later; for now: make && sudo make install
 kai install claude          # adds Kai hooks to ~/.claude/settings.json (backup kept)
 kai install cursor          # adds Kai hooks to ~/.cursor/hooks.json (backup kept)
-kai service install         # runs the gateway in the background (launchd / systemd)
+kai service install         # runs the gateway in the background (launchd / systemd)   (optional; not part of Preview 1)
 echo 'eval "$(kai env)"' >> ~/.zshrc   # points ANTHROPIC/OPENAI base URLs at the gateway
 ```
 

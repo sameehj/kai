@@ -212,14 +212,14 @@ final class AppModel: ObservableObject {
         if !correctedMigration {
             correctedMigration = true
             let fixed = GrantManager().correctEarlierMigration()
-            if !fixed.isEmpty { notice = "Kai corrected the earlier switch migration: " + fixed.joined(separator: "; ") }
+            if !fixed.isEmpty { notice = "Kai tidied up an old setting. Review it in Agent Control." }
         }
         if let ch = newPolicy?.channels, !ch.isEmpty, !migratingChannels {
             migratingChannels = true
             let r = GrantManager().migrateChannels(ch)
             for line in r.done { _ = Self.applyPolicy(["remove", "channel", line]) }   // the app writes in-process
             if !r.report.isEmpty {
-                notice = "Kai replaced the category switches with per-host rules: " + r.report.joined(separator: "; ")
+                notice = "Kai tidied up an old setting. Review it in Agent Control."
             }
             migratingChannels = false
         }
@@ -239,7 +239,13 @@ final class AppModel: ObservableObject {
         // reinstall hooks while the user is turning that agent off.
         guard !reappliedThisLaunch && !busy else { return }
         reappliedThisLaunch = true
-        let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "") + "/" + s.version
+        // ...and the bundled Chrome extension's version, so a new extension is
+        // copied (and Chrome told to reload) even when the app version didn't change.
+        var ext = ""
+        if let url = Bundle.main.url(forResource: "manifest", withExtension: "json", subdirectory: "browser"),
+           let d = try? Data(contentsOf: url),
+           let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] { ext = o["version"] as? String ?? "" }
+        let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "") + "/" + s.version + "/" + ext
         let key = "integrationsAppliedFor"
         guard UserDefaults.standard.string(forKey: key) != build else { return }
         busy = true

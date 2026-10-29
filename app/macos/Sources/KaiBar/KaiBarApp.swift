@@ -57,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lockFD: Int32 = -1
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        if Snapshot.requestedDir != nil { return }   // rendering only: no lock
         // One menu-bar Kai: an exclusive lock in Kai's home, held for the app's
         // life. A second copy that can't take it activates the running one and
         // quits.
@@ -76,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu-bar only: no Dock icon even when run outside a bundle.
         NSApp.setActivationPolicy(.accessory)
+        if let dir = Snapshot.requestedDir { Task { @MainActor in await Snapshot.run(to: dir) } }
         // v1 has no control service: this app writes policy and permissions
         // in-process; the CLI only reads them.
     }

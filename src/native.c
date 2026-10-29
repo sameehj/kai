@@ -174,6 +174,10 @@ static cJSON *handle_decision(const cJSON *req) {
  * chat text. Feeds the "AI chats" section (kai agents); it is visibility only
  * and changes no policy. */
 static cJSON *handle_status(const cJSON *req) {
+    /* Release batch 10: the extension's version, so Kai can tell an outdated
+     * copy ("reload the Kai extension in Chrome"). Version and time only. */
+    const cJSON *ver = cJSON_GetObjectItemCaseSensitive(req, "version");
+    if (cJSON_IsString(ver) && ver->valuestring && strlen(ver->valuestring) < 32) kai_chat_record_extension(ver->valuestring);
     const cJSON *sites = cJSON_GetObjectItemCaseSensitive(req, "sites");
     if (cJSON_IsArray(sites)) {
         const cJSON *s;

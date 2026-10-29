@@ -219,6 +219,62 @@ int kai_claude_env_is(const char *key, const char *value) {
     return is;
 }
 
+/* Codex's documented switch (config reference: analytics.enabled; false also
+ * turns off its Statsig metrics exporter). 1 = off (after setting it when set),
+ * 0 = not off, -1 = can't write, -2 = a form Kai won't edit safely (e.g. an
+ * inline table) - the user changes it by hand. Backup and atomic write. */
+int kai_codex_analytics_off_at(const char *path, int set) {
+    char *cur = read_or_empty(path);
+    /* find [analytics] and its enabled line */
+    int in = 0, has_table = 0, off = 0, on_line = -1, header_line = -1, line_no = 0, other_form = 0;
+    char *copy = strdup(cur);
+    for (char *ln = copy, *nx; ln && *ln; ln = nx, line_no++) {
+        nx = strchr(ln, '\n'); if (nx) *nx++ = '\0';
+        while (*ln == ' ' || *ln == '\t') ln++;
+        if (*ln == '[') { in = !strncmp(ln, "[analytics]", 11); if (in) { has_table = 1; header_line = line_no; } continue; }
+        if (!strncmp(ln, "analytics", 9) && (ln[9] == '.' || ln[9] == ' ' || ln[9] == '=')) other_form = 1;
+        if (in && !strncmp(ln, "enabled", 7)) {
+            char *eq = strchr(ln, '=');
+            while (eq && (*++eq == ' ')) {}
+            if (eq && !strncmp(eq, "false", 5)) off = 1; else on_line = line_no;
+        }
+    }
+    free(copy);
+    if (off || !set) { free(cur); return off; }
+    if (other_form) { free(cur); return -2; }
+    /* build the new text */
+    size_t L = strlen(cur);
+    char *out = malloc(L + 64);
+    if (!out) { free(cur); return -1; }
+    out[0] = '\0';
+    if (!has_table) {
+        strcpy(out, cur);
+        if (L && cur[L - 1] != '\n') strcat(out, "\n");
+        strcat(out, "\n[analytics]\nenabled = false\n");
+    } else {
+        line_no = 0;
+        for (char *ln = cur, *nx; ln && *ln; ln = nx, line_no++) {
+            nx = strchr(ln, '\n'); if (nx) *nx++ = '\0';
+            if (line_no == on_line) { strcat(out, "enabled = false\n"); continue; }
+            strcat(out, ln); strcat(out, "\n");
+            if (line_no == header_line && on_line < 0) strcat(out, "enabled = false\n");
+        }
+    }
+    mkparents(path);
+    backup(path);
+    int rc = write_file(path, out) == 0 ? 1 : -1;
+    free(out); free(cur);
+    return rc;
+}
+
+int kai_codex_analytics_off(int set) {
+    char *home = kai_codex_home();
+    char path[1300];
+    snprintf(path, sizeof path, "%s/config.toml", home ? home : "");
+    free(home);
+    return kai_codex_analytics_off_at(path, set);
+}
+
 /* ----- Cursor: ~/.cursor/hooks.json -----
  * { version:1, hooks:{ <event>:[ {command:"kai hook cursor", failClosed:true, _kai:true} ] } }
  */

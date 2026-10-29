@@ -120,7 +120,9 @@ async function reportStatus() {
     redactions: ss[site]?.redactions || 0,
     overrides: ss[site]?.overrides || 0,
   }));
-  ask({ type: "status", sites });
+  // The version lets Kai tell a copy Chrome hasn't reloaded ("reload the Kai
+  // extension in Chrome"). Version only.
+  ask({ type: "status", version: chrome.runtime.getManifest().version, sites });
 }
 
 function scheduleReport() {

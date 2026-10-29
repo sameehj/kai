@@ -7,6 +7,16 @@ missing. Produced from a read-only audit of the source (v `0.1.0`); every claim
 is tied to code. **A feature existing in code is not a security guarantee** —
 the status column says how far each one is actually established.
 
+## Update — v0.2.0-preview.1 (`fix/ux-review-phase-a`, 2026-10-29)
+
+> **Current state (v0.2.0-preview.1, 2026-10-29).**
+> - **Preview 1** is the `kai` command, the checks inside Claude Code, Codex and Cursor (hooks), and the Chrome extension. It has **no protected writer**: Kai's policy and terminal rules (`kai allow-…`) are files a program with your permissions can edit; Kai notices some outside policy changes (fingerprint), never all.
+> - **The control service is removed** (no XPC service, LaunchAgent or SMAppService). In the app release, **the Kai app is the only writer** of policy and signed rules; the `kai` command shows them and, when the app is installed, says "Change this in Kai".
+> - **The gateway is optional**: a manual opt-in local proxy, not part of the Preview 1 promise or the release checks.
+> - **OS-level Files and Internet protection** (Endpoint Security, network extension) ships with the Kai app in an upcoming release.
+> - What each agent reports and what Kai can stop: [COVERAGE.md](COVERAGE.md). The contract and its tests: [audit/preview1-contract.md](audit/preview1-contract.md).
+
+
 ## Update — PR #2 (`fix/ux-review-phase-a`, 2026-10-28)
 
 Sections below predate this branch where they say the storage wall or the

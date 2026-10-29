@@ -2474,6 +2474,67 @@ static void test_daily_top(void) {
     char cmd[800]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
 }
 
+/* Release batch: session topics skip placeholders and markup (8). */
+static void test_topic_clean(void) {
+    printf("session topics: the first real sentence\n");
+    char t[160];
+    kai_topic_clean("<pasted_content id=\"x\">\nsecret stuff\n</pasted_content>\nFix the login bug. Then deploy.", t, sizeof t);
+    CHECK(!strcmp(t, "Fix the login bug."), "placeholder block skipped; first real sentence");
+    kai_topic_clean("<\\pasted_content id=\"ad69\">\n", t, sizeof t);
+    CHECK(t[0] == '\0', "only a placeholder: empty (the UI uses the project name)");
+    kai_topic_clean("[Pasted text #1 +40 lines]\n\n   \nWhy does the build fail?", t, sizeof t);
+    CHECK(!strcmp(t, "Why does the build fail?"), "[Pasted text] lines skipped");
+    kai_topic_clean("<system-reminder>x</system-reminder>\n<command-name>/review</command-name>", t, sizeof t);
+    CHECK(t[0] == '\0', "markup only: empty");
+    kai_topic_clean("Rename the **user** table and update the tests", t, sizeof t);
+    CHECK(!strcmp(t, "Rename the user table and update the tests"), "markdown emphasis removed");
+}
+
+/* Release batch: Codex's documented analytics switch (11). */
+static void test_codex_analytics(void) {
+    printf("Codex: analytics.enabled = false\n");
+    char d[] = "/tmp/kai-cxXXXXXX";
+    if (!mkdtemp(d)) { CHECK(0, "mkdtemp"); return; }
+    char cfg[700], bak[760];
+    snprintf(cfg, sizeof cfg, "%s/config.toml", d);
+    snprintf(bak, sizeof bak, "%s.kai-bak", cfg);
+    FILE *f = fopen(cfg, "w"); if (f) { fputs("model = \"gpt-5\"\n[hooks]\nx = 1\n", f); fclose(f); }
+    CHECK(kai_codex_analytics_off_at(cfg, 0) == 0, "analytics not off yet");
+    CHECK(kai_codex_analytics_off_at(cfg, 1) == 1 && kai_codex_analytics_off_at(cfg, 0) == 1, "turned off");
+    CHECK(file_contains(cfg, "[analytics]") && file_contains(cfg, "enabled = false") && file_contains(cfg, "model = \"gpt-5\"")
+          && access(bak, F_OK) == 0, "...as an [analytics] table, the rest kept, original backed up");
+    CHECK(kai_codex_analytics_off_at(cfg, 1) == 1, "running it again changes nothing");
+    f = fopen(cfg, "w"); if (f) { fputs("[analytics]\nenabled = true\n", f); fclose(f); }
+    CHECK(kai_codex_analytics_off_at(cfg, 1) == 1 && file_contains(cfg, "enabled = false") && !file_contains(cfg, "enabled = true"),
+          "enabled = true becomes false");
+    f = fopen(cfg, "w"); if (f) { fputs("analytics = { enabled = true }\n", f); fclose(f); }
+    CHECK(kai_codex_analytics_off_at(cfg, 1) == -2 && file_contains(cfg, "{ enabled = true }"),
+          "a form Kai doesn't edit safely: refused, unchanged");
+    char cmd[800]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", d); (void)system(cmd);
+    CHECK(kai_host_is_telemetry("metrics.cursor.sh"), "Cursor's metrics host is telemetry");
+}
+
+/* Release batch: today's redactions per chat site (10). */
+static void test_chat_site_today(void) {
+    printf("chats: today's redactions per site\n");
+    char d[] = "/tmp/kai-chXXXXXX";
+    if (!mkdtemp(d)) { CHECK(0, "mkdtemp"); return; }
+    char log[700]; snprintf(log, sizeof log, "%s/audit.log", d);
+    char ts[32]; time_t now = time(NULL); struct tm tmv; gmtime_r(&now, &tmv);
+    strftime(ts, sizeof ts, "%Y-%m-%dT%H:%M:%SZ", &tmv);
+    FILE *f = fopen(log, "w");
+    for (int i = 0; f && i < 3; i++)
+        fprintf(f, "{\"ts\":\"%s\",\"source\":\"browser\",\"event\":\"claude.ai\",\"decision\":\"redact\",\"rule\":\"prompt\",\"detail\":\"x\"}\n", ts);
+    if (f) fprintf(f, "{\"ts\":\"%s\",\"source\":\"browser\",\"event\":\"chatgpt.com\",\"decision\":\"block\",\"rule\":\"prompt\",\"detail\":\"x\"}\n", ts);
+    if (f) fprintf(f, "{\"ts\":\"%s\",\"source\":\"browser\",\"event\":\"claude.ai\",\"decision\":\"warn\",\"rule\":\"prompt\",\"detail\":\"sent anyway\"}\n", ts);
+    if (f) fprintf(f, "{\"ts\":\"2001-01-01T00:00:00Z\",\"source\":\"browser\",\"event\":\"claude.ai\",\"decision\":\"redact\",\"rule\":\"prompt\",\"detail\":\"x\"}\n");
+    if (f) fclose(f);
+    CHECK(kai_daily_site_in(log, "claude.ai") == 3, "claude.ai: 3 redacted before sending today (not the old one, not sent-anyway)");
+    CHECK(kai_daily_site_in(log, "chatgpt.com") == 1, "chatgpt.com: 1 held");
+    CHECK(kai_daily_site_in(log, "gemini.google.com") == 0, "a site with none: 0");
+    char cmd[800]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", d); (void)system(cmd);
+}
+
 static void test_claude_env(void) {
     printf("Claude Code env switch (telemetry off)\n");
     char dir[] = "/tmp/kai-envXXXXXX";
@@ -2978,6 +3039,9 @@ int main(void) {
     test_audit_rotation_chain();
     test_decision_rules();
     test_claude_env();
+    test_topic_clean();
+    test_codex_analytics();
+    test_chat_site_today();
     test_daily_top();
     test_working_inflight();
     test_switch_migration();

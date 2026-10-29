@@ -330,6 +330,33 @@ int kai_daily_top_in(const char *log, char *top, size_t tn, int *count) {
     return 1;
 }
 
+/* Today's chat redactions and holds before sending for one site (the browser
+ * extension's records, event = site). Sent-anyway isn't counted. */
+int kai_daily_site_in(const char *log, const char *site) {
+    if (!site || !*site) return 0;
+    char today[16]; time_t now = time(NULL); struct tm tmv; gmtime_r(&now, &tmv);
+    strftime(today, sizeof today, "%Y-%m-%d", &tmv);
+    size_t n = 0;
+    char *t = kai_read_file(log, 64u << 20, &n);
+    if (!t) return 0;
+    int c = 0;
+    for (char *line = strtok(t, "\n"); line; line = strtok(NULL, "\n")) {
+        if (strncmp(line, "{\"ts\":\"", 7) || strncmp(line + 7, today, 10) || !strstr(line, site)) continue;
+        cJSON *o = cJSON_Parse(line);
+        if (!o) continue;
+        const char *src = cJSON_GetStringValue(cJSON_GetObjectItem(o, "source"));
+        const char *ev = cJSON_GetStringValue(cJSON_GetObjectItem(o, "event"));
+        const char *d = cJSON_GetStringValue(cJSON_GetObjectItem(o, "decision"));
+        if (src && ev && d && !strcmp(src, "browser") && !strcmp(ev, site) && (!strcmp(d, "redact") || !strcmp(d, "block")))
+            c++;
+        cJSON_Delete(o);
+    }
+    free(t);
+    return c;
+}
+
+int kai_daily_site(const char *site) { return kai_daily_site_in(kai_audit_path(), site); }
+
 int kai_daily_top(char *top, size_t tn, int *count) { return kai_daily_top_in(kai_audit_path(), top, tn, count); }
 
 int kai_daily_count(const char *date, char kind) {
