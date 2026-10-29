@@ -86,10 +86,7 @@ static const char *wall_word(int lvl, int app) {
     }
 }
 
-static int app_installed(void) {
-    struct stat st;
-    return stat("/Applications/Kai.app/Contents/Library/SystemExtensions", &st) == 0;
-}
+static int app_installed(void) { return kai_app_present(); }
 
 int kai_cmd_status_text(void) {
     int app = app_installed();
@@ -147,6 +144,17 @@ int kai_cmd_status_text(void) {
     if (!exists) printf("%-16s %s\n", "Audit log", "Empty (nothing recorded yet)");
     else if (intact) printf("%-16s Healthy (%d records, chain intact)\n", "Audit log", nl);
     else printf("%-16s BROKEN: %s\n", "Audit log", verr);
+
+    int ks = 0, kb = 0;
+    kai_daily_counts(NULL, &ks, &kb);
+    if (ks || kb) printf("%-16s %d secret%s kept private, %d risky action%s stopped\n", "Today",
+                         ks, ks == 1 ? "" : "s", kb, kb == 1 ? "" : "s");
+    else printf("%-16s %s\n", "Today", "Nothing risky yet");
+    if (!app) {
+        printf("%-16s %s\n", "Your rules", "kai rules (allow or block a site: kai allow / kai block)");
+        printf("%-16s %s\n", "Limits", "Kai's checks run inside each agent. A program an agent writes and runs "
+                                        "can get around them, and could edit Kai's settings or rules.");
+    }
 
     printf("Run `kai doctor` for details.\n");
     return 0;

@@ -42,6 +42,10 @@ const char *kai_policy_file(void); /* $KAI_POLICY or <kai home>/policy */
 #ifndef KAI_STORE_EXTENSION_ID /* set at build time: make KAI_STORE_ID=<32 letters a-p> */
 #define KAI_STORE_EXTENSION_ID ""
 #endif
+int kai_cmd_allow(int argc, char **argv);
+int kai_cmd_block(int argc, char **argv);
+int kai_cmd_rules(int argc, char **argv);
+int kai_cmd_undo(int argc, char **argv);
 int kai_browser_install(const char *exe);
 int kai_browser_uninstall(void);
 int kai_browser_installed(int *detected);

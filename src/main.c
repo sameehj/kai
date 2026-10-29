@@ -204,6 +204,10 @@ static void usage(void) {
         "  kai doctor                        check policy and installs\n"
         "  kai status [--json]               same as doctor; --json for scripts/app\n"
         "  kai policy [show|set|add|remove]  view or change the policy safely\n"
+        "  kai allow <host> --agent A [--for 1h]  let one agent reach a host (your own terminal)\n"
+        "  kai block <host> [--agent A]      keep agents from reaching a host\n"
+        "  kai rules                         what each agent can reach, and why\n"
+        "  kai undo                          reverse the last allow/block\n"
         "  kai gateway [--port N]            run the local AI gateway\n"
         "  kai agent-of <pid>                is this process an agent, or under one?\n"
         "  kai storaged                      preview storage-wall decisions (sudo eslogger open | kai storaged)\n"
@@ -244,6 +248,10 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "agents") == 0) return kai_cmd_agents(rest, restv);
     if (strcmp(cmd, "why") == 0) return kai_cmd_why(rest, restv);
     if (strcmp(cmd, "denials") == 0) return kai_cmd_denials(rest, restv);
+    if (strcmp(cmd, "allow") == 0) return kai_cmd_allow(rest, restv);
+    if (strcmp(cmd, "block") == 0) return kai_cmd_block(rest, restv);
+    if (strcmp(cmd, "rules") == 0) return kai_cmd_rules(rest, restv);
+    if (strcmp(cmd, "undo") == 0) return kai_cmd_undo(rest, restv);
     if (strcmp(cmd, "pause") == 0) return kai_cmd_pause(rest, restv);
     if (strcmp(cmd, "resume") == 0) return kai_cmd_resume(rest, restv);
     if (strcmp(cmd, "version") == 0 || strcmp(cmd, "--version") == 0) return cmd_version();

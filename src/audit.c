@@ -235,7 +235,8 @@ static char daily_kind(const kai_audit_entry *e) {
         return 0;
     if (!strcmp(d, "redact") || !strcmp(d, "replace")) return 's';
     if (strcmp(d, "block") != 0) return 0;
-    if (!strcmp(src, "storage") || !strncmp(rule, "secret", 6) || strstr(det, "protected")) return 's';
+    if (!strcmp(src, "storage") || !strcmp(src, "browser") || !strncmp(rule, "secret", 6) ||
+        strstr(det, "protected")) return 's';
     return 'b';
 }
 

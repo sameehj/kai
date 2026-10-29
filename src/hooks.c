@@ -136,6 +136,75 @@ static void gather_strings(const cJSON *node, sb_t *b, int depth) {
  * Looking at the executed command, not the text, means a commit message or
  * an echo that merely mentions these words is fine, while k=kai; $k ...
  * and sh -c '...' are still caught. */
+/* ---- Spec §7: what Kai tells the agent (and you) when it stops something ----
+ * what · why it matters · what you can do. The agent reads these too, so they
+ * say how to ask you properly instead of guessing. */
+static void path_matters(const char *path, const char **why, const char **tip) {
+    const char *r = path ? path : "";
+    *tip = "";
+    if (strstr(r, ".ssh")) { *why = "private keys can unlock your servers";
+                             *tip = " If you need this, use ssh-agent (`ssh-add --apple-use-keychain`)."; }
+    else if (strstr(r, ".aws")) { *why = "it can reach your cloud account";
+                                  *tip = " If you need this, sign in with `aws sso login` in your own terminal."; }
+    else if (strstr(r, "gcloud") || strstr(r, ".kube") || strstr(r, ".azure")) *why = "it can reach your cloud account";
+    else if (strstr(r, ".env")) *why = "it usually holds passwords and API keys";
+    else if (strstr(r, ".gnupg")) *why = "it holds your signing keys";
+    else if (strstr(r, ".netrc") || strstr(r, ".npmrc") || strstr(r, ".pypirc") || strstr(r, ".docker"))
+        *why = "it holds saved logins";
+    else *why = "you asked Kai to protect it";
+}
+
+static void say_protected(char *out, size_t n, const char *action, const char *path, const char *rule) {
+    char shown[600];                         /* ~/... rather than /Users/<you>/... */
+    const char *home = getenv("HOME");
+    size_t hl = home ? strlen(home) : 0;
+    if (hl && path && !strncmp(path, home, hl) && path[hl] == '/') snprintf(shown, sizeof shown, "~%s", path + hl);
+    else kai_strlcpy(shown, path ? path : "", sizeof shown);
+    path = shown;
+    int own = kai_rule_is_builtin(rule) || strstr(shown, "~/.kai/") || !strcmp(shown, "~/.kai");
+    if (own) {
+        snprintf(out, n, "Kai blocked %s `%s`: Kai's own settings are always protected; this can't be allowed.",
+                 action, path);
+        return;
+    }
+    const char *why, *tip;
+    path_matters(path, &why, &tip);
+    snprintf(out, n, "Kai blocked %s `%s`: %s.%s", action, path, why, tip);
+}
+
+/* An upload: name where it was going and the exact command that allows it. */
+static void say_upload(char *out, size_t n, const char *cmd, const char *agent, const char *pattern) {
+    char hosts[4][256];
+    int nh = kai_command_hosts(cmd, hosts, 4);
+    if (pattern && !strcmp(pattern, "pipe_to_shell")) {
+        snprintf(out, n, "Kai blocked running code downloaded from %s without reading it first. Download it, "
+                         "show it to the user, and let them run it if it's safe.", nh ? hosts[0] : "the internet");
+    } else if (nh == 0) {
+        snprintf(out, n, "Kai blocked a command that looks like it sends data out. If this was intended, the "
+                         "user can run it in their own terminal.");
+    } else if (kai_app_present()) {
+        snprintf(out, n, "Kai blocked sending to %s: it isn't on your list. If this was intended, allow this "
+                         "exact command in Kai (Activity).", hosts[0]);
+    } else {
+        snprintf(out, n, "Kai blocked sending to %s: it isn't on your list. If this was intended, run in your "
+                         "own terminal: `kai allow %s --agent %s --for 1h`.", hosts[0], hosts[0], agent);
+    }
+}
+
+/* Spec §5.3: your terminal rules. 2 = a host you blocked (fills it), 1 = every
+ * host is one you allowed, 0 = neither. */
+static int rules_decide(const char *cmd, const char *agent, char *host, size_t hn) {
+    char hosts[8][256];
+    int nh = kai_command_hosts(cmd, hosts, 8), allowed = 0;
+    long long now = (long long)time(NULL);
+    for (int i = 0; i < nh; i++) {
+        int r = kai_agent_rule_for(agent, hosts[i], now);
+        if (r == KAI_AGENT_RULE_BLOCK) { kai_strlcpy(host, hosts[i], hn); return 2; }
+        if (r == KAI_AGENT_RULE_ALLOW) allowed++;
+    }
+    return nh > 0 && allowed == nh;
+}
+
 static void check_kai_control(char **argv, int argc, void *ud) {
     int i = kai_shell_command_start(argv, argc);
     if (i >= argc) return;
@@ -148,7 +217,8 @@ static void check_kai_control(char **argv, int argc, void *ud) {
     while (k < argc && argv[k][0] == '-') k++;
     if (k >= argc) return;
     const char *sub = argv[k];
-    int control = !strcmp(sub, "install") || !strcmp(sub, "uninstall") || !strcmp(sub, "init");
+    int control = !strcmp(sub, "install") || !strcmp(sub, "uninstall") || !strcmp(sub, "init") ||
+                  !strcmp(sub, "allow") || !strcmp(sub, "block") || !strcmp(sub, "undo");
     if (!strcmp(sub, "policy") && k + 1 < argc)
         control = !strcmp(argv[k + 1], "set") || !strcmp(argv[k + 1], "add") ||
                   !strcmp(argv[k + 1], "remove");
@@ -716,7 +786,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
 
     kai_action decision = KAI_ACT_NONE;
     int ask = 0; /* a block the user decides in the agent's own approval prompt */
-    char reason[512] = "";
+    char reason[512] = "", rhost[256] = "";
     char rule[KAI_NAME_MAX] = "";
     char exempted[KAI_NAME_MAX] = "";
     const char *event_label = ev ? ev : "unknown";
@@ -851,8 +921,10 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
         } else if (hit_path) {
             decision = KAI_ACT_BLOCK;
             kai_strlcpy(rule, why, sizeof rule);
-            snprintf(reason, sizeof reason, "%s touches protected path (%s)",
-                     tool ? tool : "tool", why);
+            say_protected(reason, sizeof reason,
+                          tool && !strcmp(tool, "Read") ? "reading" : tool && !strcmp(tool, "Write") ? "writing"
+                          : tool && (!strcmp(tool, "Edit") || !strcmp(tool, "MultiEdit")) ? "editing" : "opening",
+                          hit_path, why);
             subject = strdup(hit_path);
         } else if (patch_touches_protected(p, source, alltext, cwd, why, sizeof why)) {
             decision = KAI_ACT_BLOCK;
@@ -866,15 +938,21 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                            ? KAI_ACT_BLOCK : KAI_ACT_WARN;
             ask = strength == 1 && can_ask && kai_policy_file_secret_ask(p);
             kai_strlcpy(rule, "file_contents", sizeof rule);
-            snprintf(reason, sizeof reason, "%s would send this file's contents to the model, and it holds %s",
-                     tool, why);
+            snprintf(reason, sizeof reason, "Kai blocked sending `%s` to the model: it holds %s. "
+                     "Ask the user to share only the part you need.", first_path, why);
             subject = strdup(first_path);
         } else if (cmd && !is_patch) {
             if (command_controls_kai(cmd)) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, "kai_self_protect", sizeof rule);
                 snprintf(reason, sizeof reason,
-                         "agents may not change Kai's settings; the user can do this themselves");
+                         "Kai blocked this: agents can't change Kai's settings or rules. The user can, in "
+                         "their own terminal.");
+            } else if (rules_decide(cmd, source, rhost, sizeof rhost) == 2) {
+                decision = KAI_ACT_BLOCK;
+                kai_strlcpy(rule, "terminal_rule", sizeof rule);
+                snprintf(reason, sizeof reason, "Kai blocked reaching %s: the user chose to block it (kai rules).",
+                         rhost);
             } else if ((app = command_drives_terminal(cmd, cwd)) &&
                        !skip_exempt("terminal_control", &ex)) {
                 decision = KAI_ACT_BLOCK;
@@ -886,7 +964,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                                                         skip_exempt, &ex)) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, why, sizeof rule);
-                snprintf(reason, sizeof reason, "command touches protected path (%s)", why);
+                say_protected(reason, sizeof reason, "a command that touches", why, why);
             } else if ((strength = command_reads_sensitive(p, cmd, cwd, match, sizeof match, why, sizeof why)) &&
                        !skip_exempt("file_contents", &ex)) {
                 decision = strength == 2 || kai_policy_file_secret_action(p) >= KAI_ACT_BLOCK
@@ -894,14 +972,17 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 ask = strength == 1 && can_ask && kai_policy_file_secret_ask(p);
                 kai_strlcpy(rule, "file_contents", sizeof rule);
                 snprintf(reason, sizeof reason,
-                         "command would send %s to the model, and it holds %s", match, why);
+                         "Kai blocked sending `%s` to the model: it holds %s. Ask the user to share only the "
+                         "part you need.", match, why);
             } else if (kai_upload_match(p, cmd, why, sizeof why, match, sizeof match,
-                                        skip_exempt, &ex)) {
+                                        skip_exempt, &ex) &&
+                       (!strcmp(why, "pipe_to_shell") ||
+                        rules_decide(cmd, source, rhost, sizeof rhost) != 1)) {   /* not to hosts you allowed */
                 decision = kai_policy_upload_action(p) >= KAI_ACT_BLOCK
                                ? KAI_ACT_BLOCK : KAI_ACT_WARN;
                 ask = can_ask && kai_policy_upload_ask(p);
                 kai_strlcpy(rule, why, sizeof rule);
-                snprintf(reason, sizeof reason, "command looks like data exfiltration (%s)", why);
+                say_upload(reason, sizeof reason, cmd, source, why);
             }
         }
         /* MCP tool arguments: scan for secrets / blocked terms */
@@ -1018,7 +1099,9 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             cJSON_AddStringToObject(h, "permissionDecision", ask ? "ask" : "deny");
             char msg[600];
             if (ask)
-                snprintf(msg, sizeof msg, "Kai: %s. Allow it this time?", reason);
+                snprintf(msg, sizeof msg, "Kai: %s Allow it this time?", reason);
+            else if (!strncmp(reason, "Kai ", 4))
+                snprintf(msg, sizeof msg, "%s", reason);
             else
                 snprintf(msg, sizeof msg, "Blocked by Kai: %s", reason);
             cJSON_AddStringToObject(h, "permissionDecisionReason", msg);
@@ -1030,7 +1113,8 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             cJSON *o = cJSON_CreateObject();
             cJSON_AddStringToObject(o, "decision", "block");
             char msg[600];
-            snprintf(msg, sizeof msg, "Blocked by Kai: %s", reason);
+            if (!strncmp(reason, "Kai ", 4)) snprintf(msg, sizeof msg, "%s", reason);
+            else snprintf(msg, sizeof msg, "Blocked by Kai: %s", reason);
             cJSON_AddStringToObject(o, "reason", msg);
             char *s = cJSON_PrintUnformatted(o);
             printf("%s\n", s);
@@ -1083,7 +1167,8 @@ static void cursor_deny(const char *user_msg) {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "permission", "deny");
     char msg[600];
-    snprintf(msg, sizeof msg, "Blocked by Kai: %s", user_msg);
+    if (!strncmp(user_msg, "Kai ", 4)) snprintf(msg, sizeof msg, "%s", user_msg);
+    else snprintf(msg, sizeof msg, "Blocked by Kai: %s", user_msg);
     cJSON_AddStringToObject(o, "user_message", msg);
     cJSON_AddStringToObject(o, "agent_message", msg);
     char *s = cJSON_PrintUnformatted(o);
@@ -1108,7 +1193,7 @@ static int hook_cursor(const char *json) {
     kai_policy *p = kai_policy_load(NULL, err, sizeof err);
     if (!p) { cursor_deny("policy error, failing closed"); cJSON_Delete(root); return 0; }
 
-    char why[256] = "", reason[512] = "", match[160] = "";
+    char why[256] = "", reason[512] = "", match[160] = "", rhost[256] = "";
     int deny = 0, cursor_ask = 0; /* ask: Cursor shows its own approval prompt (shell only) */
     int strength = 0;             /* what a read file holds (file_holds_sensitive) */
     char held[256] = "";
@@ -1121,14 +1206,15 @@ static int hook_cursor(const char *json) {
         const char *fp = cjstr(root, "file_path");
         subject = fp;
         if (fp && kai_path_protected_as(p, "cursor", fp, cwd, why, sizeof why)) {
-            deny = 1; snprintf(reason, sizeof reason, "protected path (%s)", why);
+            deny = 1; say_protected(reason, sizeof reason, "reading", fp, why);
         } else if (fp && (strength = file_holds_sensitive(p, fp, cwd, held, sizeof held)) &&
                    (strength == 2 || kai_policy_file_secret_action(p) >= KAI_ACT_BLOCK) &&
                    !skip_exempt("file_contents", &(exempt_ctx){p, fp, ""})) {
             /* Cursor's file reads can only be allowed or denied: "ask" blocks */
             deny = 1;
             kai_strlcpy(why, "file_contents", sizeof why);
-            snprintf(reason, sizeof reason, "this file would go to the model, and it holds %s", held);
+            snprintf(reason, sizeof reason, "Kai blocked sending `%s` to the model: it holds %s. "
+                     "Ask the user to share only the part you need.", fp, held);
         }
     } else if (ev && strcmp(ev, "beforeShellExecution") == 0) {
         tool = "Shell";
@@ -1139,7 +1225,12 @@ static int hook_cursor(const char *json) {
             deny = 1;
             kai_strlcpy(why, "kai_self_protect", sizeof why);
             snprintf(reason, sizeof reason,
-                     "agents may not change Kai's settings; the user can do this themselves");
+                     "Kai blocked this: agents can't change Kai's settings or rules. The user can, in "
+                     "their own terminal.");
+        } else if (cmd && rules_decide(cmd, "cursor", rhost, sizeof rhost) == 2) {
+            deny = 1;
+            kai_strlcpy(why, "terminal_rule", sizeof why);
+            snprintf(reason, sizeof reason, "Kai blocked reaching %s: the user chose to block it (kai rules).", rhost);
         } else if (cmd && (app = command_drives_terminal(cmd, cwd)) &&
                    !skip_exempt("terminal_control", &ex)) {
             deny = 1;
@@ -1149,7 +1240,7 @@ static int hook_cursor(const char *json) {
                      "command makes another app (%s) run commands, outside Kai's checks", app);
         } else if (cmd && kai_command_touches_protected_as(p, "cursor", cmd, cwd, why, sizeof why,
                                                            skip_exempt, &ex)) {
-            deny = 1; snprintf(reason, sizeof reason, "command touches protected path (%s)", why);
+            deny = 1; say_protected(reason, sizeof reason, "a command that touches", why, why);
         } else if (cmd && (strength = command_reads_sensitive(p, cmd, cwd, match, sizeof match,
                                                               held, sizeof held)) &&
                    (strength == 2 || kai_policy_file_secret_action(p) >= KAI_ACT_BLOCK) &&
@@ -1157,12 +1248,14 @@ static int hook_cursor(const char *json) {
             deny = 1;
             cursor_ask = strength == 1 && kai_policy_file_secret_ask(p);
             kai_strlcpy(why, "file_contents", sizeof why);
-            snprintf(reason, sizeof reason, "command would send %s to the model, and it holds %s", match, held);
+            snprintf(reason, sizeof reason, "Kai blocked sending `%s` to the model: it holds %s. "
+                     "Ask the user to share only the part you need.", match, held);
         } else if (cmd && kai_upload_match(p, cmd, why, sizeof why, match, sizeof match,
-                                           skip_exempt, &ex)) {
+                                           skip_exempt, &ex) &&
+                   (!strcmp(why, "pipe_to_shell") || rules_decide(cmd, "cursor", rhost, sizeof rhost) != 1)) {
             deny = kai_policy_upload_action(p) >= KAI_ACT_BLOCK;
             cursor_ask = deny && kai_policy_upload_ask(p);
-            snprintf(reason, sizeof reason, "looks like data exfiltration (%s)", why);
+            say_upload(reason, sizeof reason, cmd, "cursor", why);
         }
     } else if (ev && strcmp(ev, "beforeMCPExecution") == 0) {
         tool = "MCP";

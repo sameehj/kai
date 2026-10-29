@@ -56,6 +56,19 @@ function ask(message) {
 chrome.runtime.onStartup.addListener(() => { ask({ type: "ping" }); reportStatus(); });
 chrome.runtime.onInstalled.addListener(() => { ask({ type: "ping" }); reportStatus(); });
 
+// Spec §6: today's "secrets kept out" and the last event, for the popup.
+const TODAY_KEY = "kaiToday", LAST_KEY = "kaiLast";
+async function keptOut(site, action) {
+  const day = new Date().toDateString();
+  const { [TODAY_KEY]: t = { day, n: 0 } } = await chrome.storage.local.get(TODAY_KEY);
+  const today = t.day === day ? t : { day, n: 0 };
+  today.n += 1;
+  await chrome.storage.local.set({ [TODAY_KEY]: today });
+}
+async function rememberLast(site, action, summary) {
+  await chrome.storage.local.set({ [LAST_KEY]: { site, action, summary, ts: Date.now() } });
+}
+
 async function bump(field) {
   const { [STATS_KEY]: s = { checked: 0, cleaned: 0, held: 0 } } = await chrome.storage.local.get(STATS_KEY);
   s[field] = (s[field] || 0) + 1;
@@ -130,12 +143,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse(reply);
     } else if (msg?.type === "decision") {
       const site = String(msg.site || "");
+      if (msg.action === "redacted" || msg.action === "blocked") await keptOut(site, msg.action);
       if (msg.action === "redacted") { await bump("cleaned"); await bumpSite(site, "redactions"); }
       if (msg.action === "sent_anyway") await bumpSite(site, "overrides");
       if (msg.action === "blocked" || msg.action === "cancelled") await bump("held");
+      if (msg.action === "redacted" || msg.action === "blocked")
+        await rememberLast(site, msg.action, String(msg.summary || ""));
       const reply = await ask({ type: "decision", site, action: String(msg.action || ""),
                                 summary: String(msg.summary || "") });
       scheduleReport();
+      sendResponse(reply);
+    } else if (msg?.type === "not_secret") {   // from the popup's last event
+      const { [LAST_KEY]: last } = await chrome.storage.local.get(LAST_KEY);
+      if (!last) { sendResponse({ ok: false, error: "nothing to report" }); return; }
+      const reply = await ask({ type: "decision", site: last.site, action: "not_a_secret", summary: last.summary || "" });
+      if (reply.ok) await chrome.storage.local.set({ [LAST_KEY]: { ...last, reported: true } });
       sendResponse(reply);
     } else if (msg?.type === "ping") {
       sendResponse(await ask({ type: "ping" }));

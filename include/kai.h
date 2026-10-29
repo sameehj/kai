@@ -617,6 +617,19 @@ int kai_agent_profile_host(int i, const char **agent, const char **host, int *do
 /* Set env.<key>=<value> in Claude Code's settings (backup, atomic; refuses
  * invalid JSON with 3). The app calls it after owner authentication. */
 int kai_claude_set_env(const char *key, const char *value);
+
+/* ---- Preview 1 terminal rules (spec §5.3): kai allow / block / rules / undo ----
+ * Read by the in-agent checks only (<kai home>/agent-rules.json). agent "*" =
+ * every agent. An allow is exact and may expire (until 0 = no end); a block
+ * covers subdomains and wins. */
+enum { KAI_AGENT_RULE_ALLOW = 1, KAI_AGENT_RULE_BLOCK = 2 };
+int kai_agent_rule_add(int kind, const char *agent, const char *host, long long until);
+int kai_agent_rule_for(const char *agent, const char *host, long long now);
+int kai_agent_rule_undo(void);                 /* 0 ok, -1 nothing to undo */
+/* The hosts a shell command reaches (URLs, scp/rsync/ssh user@host:, nc host),
+ * lowercased, without ports. Returns how many (at most max). */
+int kai_command_hosts(const char *cmd, char hosts[][256], int max);
+int kai_app_present(void);   /* the Kai app (with its OS walls) is installed */
 int kai_claude_env_is(const char *key, const char *value);
 /* The verified code-signing identity of a running process: "<signing id>
  * (<team>)", or "<signing id> (Apple)" for Apple's own. 1 when the signature

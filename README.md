@@ -18,6 +18,22 @@
 
 ---
 
+## How it works, in three steps
+
+1. **Install Kai.** One package; it adds its checks to Claude Code, Codex and Cursor, and to Chrome for AI chats.
+2. **Kai watches your agents and stops the risky moves:** reading your keys, sending your code somewhere you never chose, pasting secrets into a chat. Each block says what happened, why it matters, and what you can do.
+3. **You decide what they can reach, once.** `kai allow example.org --agent claude --for 1h` in your own terminal (agents can't run it), `kai block`, `kai rules` to see everything, `kai undo` to take it back.
+
+Then hand your agents bigger jobs and stop babysitting them.
+
+```text
+$ kai install
+Kai is watching Claude Code, Codex and Cursor.
+Try it: ask your agent to read ~/.ssh/id_rsa. Kai blocks it and tells you why.
+```
+
+**Honest limits.** Kai's checks run *inside* each agent. A program an agent writes and runs can get around them, and without OS protection it could also edit Kai's settings and rules. `kai status` says this too. OS protection for Files and Internet is in private testing.
+
 ## 🛡️ Why Kai?
 
 AI coding agents can read files, run commands and connect to the internet using your permissions. Think of a contractor working in your house: you want them fixing the kitchen, not opening your safe. Kai helps you lock the safe without stopping the work.
