@@ -571,12 +571,67 @@ final class GrantManager: ObservableObject {
     }
 
     // ---- Spec v2.1 B.4: one-time migration of the old category switches ----
+    //
+    // One switch must not become permanent rules for services never used, and
+    // an old Touch ID must not approve new rules. So, per host of the switch:
+    //   the agent reached it (audit evidence)  -> a migrated Allow that ends in
+    //                                             7 days unless you confirm it
+    //                                             now with Touch ID
+    //   no evidence                            -> an "asked recently" entry with
+    //                                             no permission
+    // Exact hosts only: githubusercontent.com doesn't cover
+    // raw.githubusercontent.com, and neither is added automatically.
 
-    /// Turn each old "channel <agent>/<switch>" line into exact per-host Allow
-    /// rules for that agent (no subdomains), signed with the agent's verified
-    /// identity. The switch was turned on with owner authentication, so the
-    /// rules carry it. Writes <kai home>/migrations/channels.txt, audits each
-    /// rule, and returns the lines to remove from the policy.
+    private var migrationsDir: String { home + "/.kai/migrations" }
+    struct MigratedAsk: Codable, Hashable { let agent: String; let host: String; let from: String }
+
+    /// Hosts from an old switch with no evidence: listed, never allowed.
+    var migratedAsks: [MigratedAsk] {
+        guard let d = FileManager.default.contents(atPath: migrationsDir + "/asked.json"),
+              let a = try? JSONDecoder().decode([MigratedAsk].self, from: d) else { return [] }
+        return a
+    }
+    func forgetMigratedAsk(_ m: MigratedAsk) { saveAsks(migratedAsks.filter { $0 != m }); objectWillChange.send() }
+    private func saveAsks(_ a: [MigratedAsk]) {
+        try? FileManager.default.createDirectory(atPath: migrationsDir, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        if let d = try? JSONEncoder().encode(a) {
+            FileManager.default.createFile(atPath: migrationsDir + "/asked.json", contents: d,
+                                           attributes: [.posixPermissions: 0o600])
+        }
+    }
+
+    /// Plan one (agent, host) from switch `from`; returns the report line.
+    private func planHost(agent: String, host: String, from: String) -> String {
+        if kai_migration_evidence(agent, host) == 1, let idp = kai_agent_verified_identity(agent) {
+            if writeMigrated(agent: agent, identity: String(cString: idp), dest: host) {
+                kai_grant_audit("approved", "migration", agent, host, 2, "sign",
+                                "migrated from the \(from) switch: 7 days unless confirmed (agent reached it)")
+                return "\(agent): \(host) allowed for 7 days unless you confirm it (\(agent) reached it before)"
+            }
+            return "\(agent): \(host) couldn't be written; it will be asked about"
+        }
+        var asks = migratedAsks
+        if !asks.contains(where: { $0.agent == agent && $0.host == host }) {
+            asks.append(MigratedAsk(agent: agent, host: host, from: from)); saveAsks(asks)
+        }
+        return "\(agent): \(host) not allowed (never reached); listed under Asked recently, Kai asks the first time"
+    }
+
+    private func writeReport(_ lines: [String]) {
+        try? FileManager.default.createDirectory(atPath: migrationsDir, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        let text = "Kai replaced the old category switches (migration v2, "
+            + Date().formatted(date: .abbreviated, time: .shortened) + "):\n"
+            + lines.map { "  " + $0 }.joined(separator: "\n")
+            + "\nExact hosts only: githubusercontent.com doesn't cover raw.githubusercontent.com, and neither is added "
+            + "automatically. Subdomains such as api.github.com are asked about per host.\n"
+        FileManager.default.createFile(atPath: migrationsDir + "/channels.txt", contents: Data(text.utf8),
+                                       attributes: [.posixPermissions: 0o600])
+    }
+
+    /// Migrate "channel <agent>/<switch>" lines. Returns the report and the
+    /// lines to remove from the policy.
     @discardableResult
     func migrateChannels(_ lines: [String]) -> (report: [String], done: [String]) {
         var report: [String] = [], done: [String] = []
@@ -587,43 +642,52 @@ final class GrantManager: ObservableObject {
             var hosts: [String] = []
             var i: Int32 = 0
             while let h = kai_channel_legacy_host(parts[1], i) { hosts.append(String(cString: h)); i += 1 }
-            if hosts.isEmpty { report.append("\(entry): unknown switch, removed, nothing migrated"); done.append(entry); continue }
-            for a in agents {
-                guard let idp = kai_agent_verified_identity(a) else { continue }
-                let ident = String(cString: idp)
-                for h in hosts where !rules.contains(where: { $0.isAllow && $0.agent == a && $0.dest == h && !$0.isTemporary }) {
-                    if writeRuleRaw(agent: a, identity: ident, dest: h) {
-                        kai_grant_audit("approved", "migration", a, h, 2, "sign",
-                                        "rule migrated from the \(parts[1]) switch for \(ident)")
-                        report.append("\(a): allow \(h) (exact host, every session) from the \(parts[1]) switch")
-                    }
-                }
-            }
+            if hosts.isEmpty { report.append("\(entry): unknown switch, removed, nothing migrated") }
+            for a in agents { for h in hosts { report.append(planHost(agent: a, host: h, from: parts[1])) } }
             done.append(entry)
         }
-        if !report.isEmpty || !done.isEmpty {
-            let dir = home + "/.kai/migrations"
-            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true,
-                                                     attributes: [.posixPermissions: 0o700])
-            let text = "Kai migrated the old category switches to per-host rules ("
-                + Date().formatted(date: .abbreviated, time: .shortened) + "):\n"
-                + report.map { "  " + $0 }.joined(separator: "\n")
-                + "\nSubdomains (api.github.com, raw.githubusercontent.com, ...) are now asked about per host.\n"
-            FileManager.default.createFile(atPath: dir + "/channels.txt", contents: Data(text.utf8),
-                                           attributes: [.posixPermissions: 0o600])
-        }
+        if !report.isEmpty { writeReport(report) }
         refresh()
         return (report, done)
     }
 
-    private func writeRuleRaw(agent: String, identity: String, dest: String) -> Bool {
+    /// Correct the first migration (Oct 29), which made permanent, authenticated
+    /// rules for every host of a switch. Remove exactly those, then plan each
+    /// host again. Runs once: the v2 report marks it done.
+    func correctEarlierMigration() -> [String] {
+        guard let d = FileManager.default.contents(atPath: migrationsDir + "/channels.txt"),
+              let text = String(data: d, encoding: .utf8), !text.contains("migration v2") else { return [] }
+        var report: [String] = []
+        for line in text.split(separator: "\n") {
+            // "  claude: allow github.com (exact host, every session) from the code-hosting switch"
+            let t = line.trimmingCharacters(in: .whitespaces)
+            guard let colon = t.firstIndex(of: ":"), t.contains(": allow "), let fromR = t.range(of: " from the "),
+                  let swEnd = t.range(of: " switch", range: fromR.upperBound..<t.endIndex) else { continue }
+            let agent = String(t[..<colon])
+            let host = t[t.index(colon, offsetBy: 8)...].split(separator: " ").first.map(String.init) ?? ""
+            let from = String(t[fromR.upperBound..<swEnd.lowerBound])
+            for r in rules where r.isAllow && r.agent == agent && r.dest == host && !r.isTemporary
+                && (r.authenticated ?? 0) == 1 && (r.migrated ?? 0) == 0 {
+                kai_grant_audit("revoked", r.id, r.agent, r.dest, 2, "revoke",
+                                "first migration corrected: an old Touch ID doesn't approve new rules")
+                try? FileManager.default.removeItem(atPath: rulesDir + "/" + r.id + ".json")
+            }
+            refresh()
+            report.append(planHost(agent: agent, host: host, from: from))
+        }
+        writeReport(report)
+        refresh()
+        return report
+    }
+
+    private func writeMigrated(agent: String, identity: String, dest: String) -> Bool {
         guard let key = KaiApprovalKey.ensure() else { return false }
         let rid = UUID().uuidString
+        let now = Int64(Date().timeIntervalSince1970)
         let json: String? = key.withUnsafeBytes { raw -> String? in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress,
-                  let c = kai_rule_build_json_until(rid, Int32(KAI_RULE_ALLOW), identity, agent, dest, 2,
-                                                    Int64(Date().timeIntervalSince1970), 0, 1, base, key.count)
-            else { return nil }
+                  let c = kai_rule_build_json_migrated(rid, identity, agent, dest, 2, now, now + 7 * 86400,
+                                                       base, key.count) else { return nil }
             defer { free(c) }
             return String(cString: c)
         }
@@ -633,6 +697,37 @@ final class GrantManager: ObservableObject {
         return FileManager.default.createFile(atPath: rulesDir + "/" + rid + ".json", contents: Data(json.utf8),
                                               attributes: [.posixPermissions: 0o600])
     }
+
+    /// Keep a migrated rule: a fresh owner authentication (never the
+    /// 30-minute window), then a normal permanent rule replaces it.
+    func confirmMigrated(_ r: DecisionRule) {
+        Task {
+            guard await OwnerAuth.shared.confirm("keep allowing \(r.agentTitle) to reach \(r.dest) in every session",
+                                                 everyTime: true) else { return }
+            await MainActor.run {
+                guard let key = KaiApprovalKey.ensure() else { return }
+                let rid = UUID().uuidString
+                let json: String? = key.withUnsafeBytes { raw -> String? in
+                    guard let base = raw.bindMemory(to: UInt8.self).baseAddress,
+                          let c = kai_rule_build_json_until(rid, Int32(KAI_RULE_ALLOW), r.identity, r.agent, r.dest, 2,
+                                                            Int64(Date().timeIntervalSince1970), 0, 1, base, key.count)
+                    else { return nil }
+                    defer { free(c) }
+                    return String(cString: c)
+                }
+                if let json, FileManager.default.createFile(atPath: self.rulesDir + "/" + rid + ".json",
+                                                            contents: Data(json.utf8),
+                                                            attributes: [.posixPermissions: 0o600]) {
+                    kai_grant_audit("approved", rid, r.agent, r.dest, 2, "sign",
+                                    "migrated rule confirmed with owner authentication")
+                    try? FileManager.default.removeItem(atPath: self.rulesDir + "/" + r.id + ".json")
+                }
+                self.refresh()
+            }
+        }
+    }
+
+    var migratedRules: [DecisionRule] { rules.filter { ($0.migrated ?? 0) == 1 && !$0.hasEnded } }
 
     func dismissTelemetryHint(_ agent: String) {
         try? FileManager.default.removeItem(atPath: hintsDir + "/telemetry-" + agent)
@@ -1032,12 +1127,17 @@ struct DecisionRule: Decodable, Identifiable {
     let created_utc: String
     var expires_utc: String? = nil
     var authenticated: Int? = 0
+    var migrated: Int? = 0
     var created: Int { Int(created_utc) ?? 0 }
     var expires: Int { Int(expires_utc ?? "") ?? 0 }
     var isTemporary: Bool { expires > 0 }
     var hasEnded: Bool { isTemporary && expires <= Int(Date().timeIntervalSince1970) }
     var untilLabel: String {
-        isTemporary ? "until " + Date(timeIntervalSince1970: TimeInterval(expires)).formatted(date: .omitted, time: .shortened)
+        if (migrated ?? 0) == 1 {
+            return "until " + Date(timeIntervalSince1970: TimeInterval(expires)).formatted(date: .abbreviated, time: .omitted)
+                + " unless you confirm (from the old switch)"
+        }
+        return isTemporary ? "until " + Date(timeIntervalSince1970: TimeInterval(expires)).formatted(date: .omitted, time: .shortened)
                     : "in every session"
     }
     var isAllow: Bool { kind == "allow" }

@@ -24,6 +24,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var status: KaiStatus?
     @Published private(set) var policy: PolicyInfo?
     private var migratingChannels = false
+    private var correctedMigration = false
     @Published private(set) var events: [AuditEvent] = []
     @Published private(set) var busy = false
     @Published private(set) var lastBlockAt: Date?
@@ -208,6 +209,11 @@ final class AppModel: ObservableObject {
         let (newStatus, newPolicy) = await (s, p)
         if newStatus != status { status = newStatus }
         if newPolicy != policy { policy = newPolicy }
+        if !correctedMigration {
+            correctedMigration = true
+            let fixed = GrantManager().correctEarlierMigration()
+            if !fixed.isEmpty { notice = "Kai corrected the earlier switch migration: " + fixed.joined(separator: "; ") }
+        }
         if let ch = newPolicy?.channels, !ch.isEmpty, !migratingChannels {
             migratingChannels = true
             let r = GrantManager().migrateChannels(ch)

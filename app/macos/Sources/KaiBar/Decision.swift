@@ -199,7 +199,12 @@ struct AgentReachView: View {
                 section("Allowed") {
                     if allowedRules.isEmpty && sessionGrants.isEmpty { empty("Nothing beyond the built-ins.") }
                     ForEach(allowedRules) { r in
-                        row(r.dest, r.untilLabel) { Button("Remove") { grants.removeRule(r) }.buttonStyle(GhostButtonStyle()) }
+                        row(r.dest, r.untilLabel) {
+                            if (r.migrated ?? 0) == 1 {
+                                Button("Keep (Touch ID)") { grants.confirmMigrated(r) }.buttonStyle(GhostButtonStyle())
+                            }
+                            Button("Remove") { grants.removeRule(r) }.buttonStyle(GhostButtonStyle())
+                        }
                     }
                     ForEach(sessionGrants) { g in
                         row(g.resource, g.scopeLabel) { Button("Revoke") { grants.revoke(g) }.buttonStyle(GhostButtonStyle()) }
@@ -214,7 +219,14 @@ struct AgentReachView: View {
                 }
 
                 section("Asked recently") {
-                    if asked.isEmpty { empty("Nothing in the last 24 hours.") }
+                    let mig = grants.migratedAsks.filter { $0.agent == agent }
+                    if asked.isEmpty && mig.isEmpty { empty("Nothing in the last 24 hours.") }
+                    ForEach(mig, id: \.self) { m in
+                        row(m.host, "From the old \(m.from) switch. \(title) never reached it, so it has no permission; "
+                                    + "Kai asks the first time it tries.") {
+                            Button("Forget") { grants.forgetMigratedAsk(m) }.buttonStyle(GhostButtonStyle())
+                        }
+                    }
                     ForEach(asked) { h in
                         VStack(alignment: .leading, spacing: 6) {
                             Button { open = open == h.host ? nil : h.host } label: {

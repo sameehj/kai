@@ -595,6 +595,7 @@ typedef struct {
     int op;
     long long created_utc;
     long long expires_utc;      /* 0 = until removed; else a temporary allow */
+    int migrated;               /* from an old category switch: ends unless confirmed */
     int authenticated;
     char hmac[65];
 } kai_decision_rule;
@@ -628,6 +629,16 @@ const char *kai_host_describe(const char *host, const char **group);
 const char *kai_channel_legacy_host(const char *name, int i);
 /* An agent's verified signing identity from its profile, or NULL. */
 const char *kai_agent_verified_identity(const char *agent);
+/* Migration evidence: did `agent` itself reach exactly `host` (a network
+ * record for it, or a permission it requested or used), in audit.log or
+ * audit.log.1? Rule approvals don't count. 1 yes, 0 no. */
+int kai_migration_evidence(const char *agent, const char *host);
+/* A rule carried over from an old switch: an Allow that ends within 7 days
+ * unless the user confirms it with a fresh owner authentication (the app then
+ * writes a normal authenticated rule). Never permanent, never authenticated. */
+char *kai_rule_build_json_migrated(const char *id, const char *identity, const char *agent, const char *dest,
+                                   int op, long long created, long long expires,
+                                   const unsigned char *key, size_t keylen);
 /* The i-th profile host (0-based), for Settings: 1 while i is in range.
  * documented 0 = added from observed traffic, not the vendor's docs. */
 int kai_agent_profile_host(int i, const char **agent, const char **host, int *documented);

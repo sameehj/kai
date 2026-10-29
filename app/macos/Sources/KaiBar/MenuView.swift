@@ -32,6 +32,7 @@ struct MenuView: View {
             hero
             pausedBanner
             if DevFlags.perSessionPause { pauseBanner }
+            migratedConfirm
             needsYou
             activeNow
             chatsRow
@@ -73,6 +74,37 @@ struct MenuView: View {
         case (true, false): return "Files only"
         case (false, true): return "Internet only"
         default: return "seen only"
+        }
+    }
+
+    // Migration: show the rules carried over from an old switch once, for
+    // confirmation. Unconfirmed ones end after 7 days.
+    @AppStorage("migrationCardSeen") private var migrationCardSeen = false
+    @ViewBuilder private var migratedConfirm: some View {
+        let ms = grantManager.migratedRules
+        if !ms.isEmpty && !migrationCardSeen {
+            VStack(alignment: .leading, spacing: 8) {
+                CapsLabel("Confirm carried-over rules")
+                Text("These came from an old category switch. Each was reached by the agent before. Keep one with "
+                     + "Touch ID, or let it end.").font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(ms) { r in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("\(r.agentTitle) → \(r.dest)").font(.system(size: 12, weight: .medium))
+                            Text(r.untilLabel).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                        }
+                        Spacer()
+                        Button("Keep") { grantManager.confirmMigrated(r) }.buttonStyle(GhostButtonStyle())
+                        Button("Remove") { grantManager.removeRule(r) }.buttonStyle(.plain)
+                            .font(.system(size: 12)).foregroundStyle(Theme.coral)
+                    }
+                }
+                Button("Decide later (they'll stay in Agent Control)") { migrationCardSeen = true }
+                    .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Theme.muted)
+            }
+            .padding(10)
+            .background(Theme.amber.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
         }
     }
 

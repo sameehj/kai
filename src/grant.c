@@ -635,8 +635,12 @@ int kai_grant_resolve(const char *path, char *buf, size_t buflen) {
  * elsewhere won't verify under this Mac's approval key. */
 static int rule_canonical(const kai_decision_rule *r, char *buf, size_t n) {
     /* rule1 for rules that last until removed (their signatures stay valid);
-     * rule2 signs the expiry too. */
-    int w = r->expires_utc
+     * rule2 signs the expiry too; rule3 also signs "migrated". */
+    int w = r->migrated
+        ? snprintf(buf, n, "rule3\n%s\n%d\n%s\n%s\n%s\n%d\n%lld\n%lld\n%d\n%d",
+                   r->id, r->kind, r->identity, r->agent, r->dest, r->op,
+                   r->created_utc, r->expires_utc, r->authenticated, r->migrated)
+        : r->expires_utc
         ? snprintf(buf, n, "rule2\n%s\n%d\n%s\n%s\n%s\n%d\n%lld\n%lld\n%d",
                    r->id, r->kind, r->identity, r->agent, r->dest, r->op,
                    r->created_utc, r->expires_utc, r->authenticated)
@@ -648,6 +652,8 @@ static int rule_canonical(const kai_decision_rule *r, char *buf, size_t n) {
 
 /* An Allow either carries owner authentication or is temporary (a day at most). */
 static int allow_ok(const kai_decision_rule *r) {
+    if (r->migrated)   /* carried over from a switch: at most 7 days, never authenticated */
+        return !r->authenticated && r->expires_utc > r->created_utc && r->expires_utc - r->created_utc <= 7 * 86400;
     if (r->authenticated) return 1;
     return r->expires_utc > r->created_utc && r->expires_utc - r->created_utc <= 86400;
 }
@@ -686,9 +692,25 @@ char *kai_rule_build_json(const char *id, int kind, const char *identity, const 
                                      key, keylen);
 }
 
+static char *rule_build(const char *id, int kind, const char *identity, const char *agent,
+                        const char *dest, int op, long long created, long long expires,
+                        int authenticated, int migrated, const unsigned char *key, size_t keylen);
+
+char *kai_rule_build_json_migrated(const char *id, const char *identity, const char *agent, const char *dest,
+                                   int op, long long created, long long expires,
+                                   const unsigned char *key, size_t keylen) {
+    return rule_build(id, KAI_RULE_ALLOW, identity, agent, dest, op, created, expires, 0, 1, key, keylen);
+}
+
 char *kai_rule_build_json_until(const char *id, int kind, const char *identity, const char *agent,
                                 const char *dest, int op, long long created, long long expires,
                                 int authenticated, const unsigned char *key, size_t keylen) {
+    return rule_build(id, kind, identity, agent, dest, op, created, expires, authenticated, 0, key, keylen);
+}
+
+static char *rule_build(const char *id, int kind, const char *identity, const char *agent,
+                        const char *dest, int op, long long created, long long expires,
+                        int authenticated, int migrated, const unsigned char *key, size_t keylen) {
     if (!id || !*id || !identity || !*identity || !key || !keylen) return NULL;
     if (kind != KAI_RULE_ALLOW && kind != KAI_RULE_KEEP_BLOCKED) return NULL;
     if (!kai_rule_dest_ok(kind, dest)) return NULL;
@@ -703,6 +725,7 @@ char *kai_rule_build_json_until(const char *id, int kind, const char *identity, 
     r.created_utc = created;
     r.expires_utc = expires;
     r.authenticated = authenticated ? 1 : 0;
+    r.migrated = migrated ? 1 : 0;
     if (kind == KAI_RULE_ALLOW && !allow_ok(&r)) return NULL;
     char canon[3072];
     uint8_t mac[32];
@@ -725,6 +748,7 @@ char *kai_rule_build_json_until(const char *id, int kind, const char *identity, 
         snprintf(ex, sizeof ex, "%lld", r.expires_utc);
         cJSON_AddStringToObject(o, "expires_utc", ex);
     }
+    if (r.migrated) cJSON_AddNumberToObject(o, "migrated", 1);
     cJSON_AddNumberToObject(o, "authenticated", r.authenticated);
     cJSON_AddStringToObject(o, "hmac", r.hmac);
     char *out = cJSON_PrintUnformatted(o);
@@ -748,10 +772,43 @@ int kai_rule_from_json(const char *json, kai_decision_rule *out) {
     out->op = num_int(o, "op");
     out->created_utc = num_str(o, "created_utc");
     out->expires_utc = num_str(o, "expires_utc");
+    out->migrated = num_int(o, "migrated");
     out->authenticated = num_int(o, "authenticated");
     cpy(out->hmac, sizeof out->hmac, o, "hmac");
     cJSON_Delete(o);
     return out->id[0] && out->kind;
+}
+
+int kai_migration_evidence(const char *agent, const char *host) {
+    if (!agent || !host || !*host) return 0;
+    char paths[2][1200];
+    snprintf(paths[0], sizeof paths[0], "%s", kai_audit_path());
+    snprintf(paths[1], sizeof paths[1], "%s.1", kai_audit_path());
+    char agentkey[96];
+    snprintf(agentkey, sizeof agentkey, "agent=%s ", agent);
+    int found = 0;
+    for (int f = 0; f < 2 && !found; f++) {
+        size_t n = 0;
+        char *t = kai_read_file(paths[f], 64u << 20, &n);
+        if (!t) continue;
+        for (char *line = strtok(t, "\n"); line && !found; line = strtok(NULL, "\n")) {
+            if (!strstr(line, host)) continue;          /* cheap filter */
+            cJSON *o = cJSON_Parse(line);
+            if (!o) continue;
+            const char *src = cJSON_GetStringValue(cJSON_GetObjectItem(o, "source"));
+            const char *ev = cJSON_GetStringValue(cJSON_GetObjectItem(o, "event"));
+            const char *tg = cJSON_GetStringValue(cJSON_GetObjectItem(o, "target"));
+            const char *det = cJSON_GetStringValue(cJSON_GetObjectItem(o, "detail"));
+            if (src && ev && tg && !strcasecmp(tg, host)) {
+                if (!strcmp(src, "network") && !strcmp(ev, agent)) found = 1;
+                else if (!strcmp(src, "grant") && (!strcmp(ev, "requested") || !strcmp(ev, "used")) &&
+                         det && strstr(det, agentkey)) found = 1;
+            }
+            cJSON_Delete(o);
+        }
+        free(t);
+    }
+    return found;
 }
 
 const char *kai_rules_dir(void) {

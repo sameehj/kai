@@ -26,8 +26,11 @@ Release notes: docs/release/v0.2.0-preview.1.md.
   signed-in user (backups kept, changes logged).
 - App (pilot): GitHub, package registries and Apple developer services are no longer
   category switches. Each host is asked about, with a plain description from a host
-  catalog, and old switch settings migrate to exact per-host rules
-  (<kai home>/migrations/channels.txt).
+  catalog. Old switch settings migrate per host: a host the agent reached (audit
+  evidence) gets a 7-day rule that only a fresh Touch ID makes permanent; other hosts
+  get no permission and are listed under Asked recently
+  (<kai home>/migrations/channels.txt). The first migration, which made permanent
+  rules for every host of a switch, is corrected on launch.
 
 ## Unreleased
 - Storage wall can now be loaded and enforce on a dev machine: the ES

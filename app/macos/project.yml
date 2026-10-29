@@ -32,7 +32,7 @@ settings:
     # The network extension's own build number. Bump ONLY when the extension's
     # code (app/macos/Network) changes: macOS replaces an activated extension
     # when this differs, which tears down the content filter.
-    KAI_EXT_VERSION: "25"
+    KAI_EXT_VERSION: "26"
     SWIFT_VERSION: "5.9"
 
 targets:

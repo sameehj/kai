@@ -2367,6 +2367,62 @@ static void test_policy_integrity(void) {
     snprintf(cmd, sizeof cmd, "rm -rf '%s'", home); (void)system(cmd);
 }
 
+/* Migration of the old category switches (correction): a permanent rule only
+ * for a host the agent actually reached (audit evidence), and even then a
+ * 7-day rule until the user confirms with a fresh Touch ID. */
+static void test_switch_migration(void) {
+    printf("switch migration: evidence, 7-day rules, no old Touch ID (spec v2.1 B.4)\n");
+    char saved[1100]; snprintf(saved, sizeof saved, "%s", getenv("KAI_HOME") ? getenv("KAI_HOME") : "");
+    char home[] = "/tmp/kai-migXXXXXX";
+    if (!mkdtemp(home)) { CHECK(0, "mkdtemp"); return; }
+    setenv("KAI_HOME", home, 1);
+    /* what an agent really did: a network block for github.com, a request and a use */
+    audit_one("network", "claude", "block", "not_on_allowlist", "connection to github.com (1.2.3.4:443) is not on the allowlist", "github.com");
+    audit_one("grant", "requested", "request", "connect", "grant requested id=n1 agent=claude egress awaiting approval", "github.com");
+    /* what the earlier migration wrote: never evidence */
+    audit_one("grant", "approved", "sign", "connect", "grant approved id=migration agent=claude rule migrated from the code-hosting switch", "gitlab.com");
+    audit_one("network", "codex", "block", "not_on_allowlist", "connection to bitbucket.org is not on the allowlist", "bitbucket.org");
+    CHECK(kai_migration_evidence("claude", "github.com") == 1, "github.com: Claude Code reached it (audit evidence)");
+    CHECK(kai_migration_evidence("claude", "gitlab.com") == 0, "gitlab.com: only the migration's own record, not evidence");
+    CHECK(kai_migration_evidence("claude", "bitbucket.org") == 0, "bitbucket.org: another agent reached it, not this one");
+    CHECK(kai_migration_evidence("claude", "githubusercontent.com") == 0 &&
+          kai_migration_evidence("claude", "ghcr.io") == 0, "githubusercontent.com, ghcr.io: no evidence");
+    CHECK(kai_migration_evidence("claude", "api.github.com") == 0, "evidence is for the exact host");
+
+    char rdir[700]; snprintf(rdir, sizeof rdir, "%s/rules", home); mkdir(rdir, 0700);
+    const unsigned char key[] = "rules-test-key-0123456789abcdef";
+    const char *claude = "com.anthropic.claude-code (Q6L2SF6YDW)";
+    long long now = (long long)time(NULL);
+    char id[40];
+    char *m = kai_rule_build_json_migrated("m1", claude, "claude", "github.com", KAI_OP_CONNECT, now, now + 7 * 86400,
+                                           key, sizeof key - 1);
+    CHECK(m != NULL, "a migrated rule: 7 days, no owner authentication carried over");
+    write_rule(rdir, "m1", m);
+    kai_decision_rule r;
+    CHECK(m && kai_rule_from_json(m, &r) && r.migrated == 1 && r.authenticated == 0, "...marked migrated, not authenticated");
+    free(m);
+    CHECK(kai_rule_lookup(rdir, claude, "github.com", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == KAI_RULE_ALLOW,
+          "...allows until it ends");
+    CHECK(kai_rule_build_json_migrated("m2", claude, "claude", "github.com", KAI_OP_CONNECT, now, now + 8 * 86400,
+                                       key, sizeof key - 1) == NULL, "a migrated rule can't last longer than 7 days");
+    CHECK(kai_rule_build_json_migrated("m3", claude, "claude", "github.com", KAI_OP_CONNECT, now, 0,
+                                       key, sizeof key - 1) == NULL, "...or be permanent");
+    m = kai_rule_build_json_migrated("m4", claude, "claude", "gitlab.com", KAI_OP_CONNECT, now - 8 * 86400, now - 86400,
+                                     key, sizeof key - 1);
+    write_rule(rdir, "m4", m); free(m);
+    CHECK(kai_rule_lookup(rdir, claude, "gitlab.com", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "an unconfirmed migrated rule stops after 7 days");
+    /* tampering: flip "migrated" off to pass it as a normal rule */
+    m = kai_rule_build_json_migrated("m5", claude, "claude", "ghcr.io", KAI_OP_CONNECT, now, now + 7 * 86400, key, sizeof key - 1);
+    char *t = m ? strstr(m, "\"migrated\":1") : NULL;
+    if (t) t[11] = '0';
+    write_rule(rdir, "m5", m); free(m);
+    CHECK(kai_rule_lookup(rdir, claude, "ghcr.io", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "an edited migrated flag doesn't verify");
+    char cmd[800]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", home); (void)system(cmd);
+    setenv("KAI_HOME", saved, 1);
+}
+
 static void test_claude_env(void) {
     printf("Claude Code env switch (telemetry off)\n");
     char dir[] = "/tmp/kai-envXXXXXX";
@@ -2871,6 +2927,7 @@ int main(void) {
     test_audit_rotation_chain();
     test_decision_rules();
     test_claude_env();
+    test_switch_migration();
     test_policy_integrity();
     test_channels();
     test_agent_rules();
