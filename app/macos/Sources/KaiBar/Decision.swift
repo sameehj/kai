@@ -74,7 +74,9 @@ struct DecisionSheet: View {
 
     @ViewBuilder private var options: some View {
         if event.isBuiltinRule && event.isBlock {
-            note("Always protected: Kai's own files and the agents' Kai settings can't be allowed.")
+            note(AuditEvent.filesEnforcing
+                 ? "Always protected: Kai's own files and the agents' Kai settings can't be allowed."
+                 : "Kai's own files and the agents' Kai settings can't be allowed from here.")
         } else if event.isTelemetry {
             Button("Telemetry settings") { settingsPage = SettingsPage.internet.rawValue }.buttonStyle(GhostButtonStyle())
         } else if event.isKeptBlocked, let r = grants.keptBlockedRule(event) {

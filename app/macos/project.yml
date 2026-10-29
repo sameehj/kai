@@ -28,7 +28,7 @@ settings:
     # The app's build number. Bump freely for app changes (menu bar, signing);
     # this does NOT touch the network extension, so app updates never replace
     # it and never drop agents' live connections.
-    CURRENT_PROJECT_VERSION: "6"
+    CURRENT_PROJECT_VERSION: "7"
     # The network extension's own build number. Bump ONLY when the extension's
     # code (app/macos/Network) changes: macOS replaces an activated extension
     # when this differs, which tears down the content filter.
@@ -171,13 +171,16 @@ targets:
           set -e
           dest="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/kai"
           mkdir -p "$(dirname "$dest")"
-          if [ "$CONFIGURATION" = Release ]; then   # ignores KAI_HOME / KAI_POLICY
-            make -C "$SRCROOT/../.." kai-release >/dev/null
-            cp "$SRCROOT/../../build/kai-release" "$dest"
+          if [ "$CONFIGURATION" = Release ]; then   # Universal; ignores KAI_HOME / KAI_POLICY
+            make -C "$SRCROOT/../.." kai-universal >/dev/null
+            cp "$SRCROOT/../../build/kai-universal" "$dest"
           else
             make -C "$SRCROOT/../.." kai >/dev/null
             cp "$SRCROOT/../../kai" "$dest"
           fi
+          # Notification sounds must be top-level app resources; NSSound uses
+          # the same files for in-app approval feedback and previews.
+          cp "$SRCROOT/../../kai-sfx/"*.wav "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/"
           # The browser extension, so `kai install chrome` can point at it.
           ext="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/browser"
           rm -rf "$ext" && mkdir -p "$ext/icons"

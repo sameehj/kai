@@ -241,7 +241,7 @@ OPENAI_BASE_URL=http://127.0.0.1:8787/openai/v1 codex
 
 ## 🍎 macOS app and system protection
 
-`Kai.app` is a menu-bar interface for local status, agent switches, notifications, recent events, and policy changes. A development build is running; distribution to other Macs requires the appropriate signing and notarization steps.
+`Kai.app` is a menu-bar interface for local status, agent switches, notifications, recent events, and policy changes. A signed development build with both system extensions has run locally. The [registered-Mac beta plan](development-beta.md) tracks the separate package, second-Mac installation, and live enforcement milestones; it is not a notarized public release.
 
 The **Network wall** is a signed Network Extension that checks connections made by agent processes (Claude Code, Cursor, Codex and anything they start) against an egress allowlist. Other apps are left alone. Built in: this Mac and each agent's own model and sign-in hosts. Everything else, including GitHub and package registries, is asked about per host the first time an agent tries it: you choose for that exact host (this session, an hour, or always), and a host catalog explains what common hosts are without ever allowing them.
 
@@ -262,7 +262,7 @@ kai log tail                                 # network entries have "source":"ne
 
 Building the extension needs a paid Apple Developer account. A development build only runs on Macs registered to that account.
 
-The **Storage wall** stops agents from opening protected files at all, not just through their tools. Its decision engine is built and tested; enforcement needs Apple's Endpoint Security entitlement, so it ships off (`storage off`). Preview the decisions in development with `sudo eslogger open | kai storaged`. Details: [`docs/WALLS.md`](WALLS.md).
+The **Storage wall** uses an Endpoint Security system extension in the development build to authorize protected-file operations. A local signed extension has created an ES client, subscribed to file authorization events, and logged denials; clean-Mac enforcement remains to be tested. Public distribution still needs Apple's ES distribution approval. Details: [`docs/WALLS.md`](WALLS.md).
 
 ## 🔍 What Kai doesn't promise
 

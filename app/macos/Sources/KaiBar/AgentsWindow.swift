@@ -10,122 +10,15 @@ import KaiCore
 
 // MARK: - CLI-backed rows
 
-struct AgentRow: Decodable, Identifiable, Equatable {
-    let name: String
-    var hooks: String = "n/a"
-    var wallRecognized: Bool = false
-    var activeSessions: Int = 0
-    var detail: String? = nil
-    var id: String { name }
-    var hooksLabel: String {
-        switch hooks {
-        case "installed": return "hooks installed"
-        case "missing": return "hooks missing"
-        case "failing": return "hooks failing"
-        case "not found": return "not installed"
-        default: return "no Kai hooks"
-        }
-    }
-}
-
-struct SessionRow: Decodable, Identifiable, Equatable {
-    let id: String
-    let agent: String
-    var topic: String = ""
-    var topicReportedByAgent: Bool = true
+// AgentRow and SessionRow (and their tolerant decoding) live in Sessions.swift,
+// Foundation-only so the app tests decode the real `kai snapshot --json`.
+extension SessionRow {
     /// The topic without stray whitespace or line breaks (an empty-looking
     /// topic drew an empty first line).
     var topicLine: String {
         var buf = [CChar](repeating: 0, count: 512)
         kai_topic_clean(topic, &buf, buf.count)
         return String(cString: buf).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-    var project: String = ""
-    var hostApp: String = ""
-    var startedUtc: Int = 0
-    var endedUtc: Int = 0
-    var childCount: Int = 0
-    var source: String = "es"
-    var kind: String = "session"     // session | nested | background service | idle...
-    var tty: String = ""
-    var enforcement: String = ""
-    var state: String = "active"
-    /// One session definition (libkai): working = a command or hook in the
-    /// last 15 minutes; idle otherwise; ended is separate.
-    var activity: String = "idle"
-    var lastActiveUtc: Int = 0
-    /// An IDE app is one row holding its workspaces.
-    struct Workspace: Decodable, Equatable, Identifiable {
-        let path: String
-        var lastActiveUtc: Int = 0
-        var activity: String = "idle"
-        var id: String { path }
-        var name: String { (path as NSString).lastPathComponent }
-    }
-    var workspaces: [Workspace]? = nil
-    var isActive: Bool { state == "active" }
-    var isWorking: Bool { isActive && activity == "working" }
-    var isSession: Bool { kind == "session" }
-    var isIDE: Bool { workspaces != nil }
-    var window: String { !tty.isEmpty ? tty : (hostApp.isEmpty ? "—" : hostApp) }
-    /// The project (or app) without the suffix that tells duplicates apart.
-    var projectBase: String {
-        if let w = workspaces {
-            return w.isEmpty ? (hostApp.isEmpty ? displayAgent : hostApp)
-                             : "\(w.count) workspace\(w.count == 1 ? "" : "s")"
-        }
-        return project.isEmpty ? "—" : (project as NSString).lastPathComponent
-    }
-    var projectName: String {
-        if let w = workspaces {
-            // B1: count only what is known; "0 workspaces" on an active app misleads.
-            return w.isEmpty ? (hostApp.isEmpty ? displayAgent : hostApp)
-                             : "\(w.count) workspace\(w.count == 1 ? "" : "s")"
-        }
-        let base = project.isEmpty ? "—" : (project as NSString).lastPathComponent
-        return nameSuffix.isEmpty ? base : "\(base) · \(nameSuffix)"
-    }
-    /// B1: set by AgentsModel when two live sessions would read the same: the
-    /// topic, else the terminal, else the start time.
-    var nameSuffix: String = ""
-    enum CodingKeys: String, CodingKey {
-        case id, agent, topic, topicReportedByAgent, project, hostApp, startedUtc, endedUtc, childCount,
-             source, kind, tty, enforcement, state, activity, lastActiveUtc, workspaces
-    }
-    /// Proper product names, not the lowercase classifier.
-    var displayAgent: String {
-        switch agent {
-        case "claude": return "Claude Code"
-        case "codex": return "Codex"
-        case "cursor": return "Cursor"
-        case "gemini": return "Gemini CLI"
-        default: return agent.prefix(1).uppercased() + agent.dropFirst()
-        }
-    }
-    /// Start time: date when it wasn't today (e.g. "Oct 17"), else "HH:mm".
-    var startedClock: String {
-        guard startedUtc > 0 else { return "" }
-        let d = Date(timeIntervalSince1970: TimeInterval(startedUtc))
-        let f = DateFormatter()
-        f.dateFormat = Calendar.current.isDateInToday(d) ? "HH:mm" : "MMM d"
-        return f.string(from: d)
-    }
-    /// Duration = time since the agent was last active (not since the window
-    /// opened): "active 2m ago", "idle 3h 10m". "8d 2h" never "190h 8m".
-    var activeLabel: String {
-        guard isActive else { return "" }
-        guard lastActiveUtc > 0 else { return "no activity seen" }
-        let s = max(0, Int(Date().timeIntervalSince1970) - lastActiveUtc)
-        let d = s >= 86400 ? "\(s / 86400)d \((s % 86400) / 3600)h"
-              : s >= 3600 ? "\(s / 3600)h \((s % 3600) / 60)m" : s >= 60 ? "\(s / 60)m" : "\(s)s"
-        return isWorking ? "active \(d) ago" : "idle \(d)"
-    }
-    /// Never say "protected": the label comes straight from observed enforcement.
-    var enforcementShort: String {
-        if enforcement.hasPrefix("Enforced: Files and Internet") { return "Files + Internet" }
-        if enforcement.hasPrefix("Enforced: Internet") { return "Internet only" }
-        if enforcement.hasPrefix("Enforced: Files") { return "Files only" }
-        return "seen only"
     }
     /// When the session's pause expires (nil if not paused), for "Paused until HH:MM".
     var pausedUntil: Date? {
@@ -180,13 +73,38 @@ final class AgentsModel: ObservableObject {
     }
     deinit { timer?.invalidate() }
 
+    /// Why the session list couldn't be read (binary, exit code, duration,
+    /// decode error); nil when it was. Shown instead of a false "0 working".
+    @Published private(set) var sourceError: String?
+    /// Rows skipped because they didn't decode (the rest still show).
+    @Published private(set) var skippedRows: [String] = []
+    var countKnown: Bool { loaded && sourceError == nil }
+
     /// One CLI call for both (kai snapshot --json); overlapping refreshes skip.
-    private struct Snapshot: Decodable { let sessions: [SessionRow]; let agents: [AgentRow] }
+    /// Decoded row by row (SessionSnapshot): one bad row never empties the list.
     func refresh() async {
         guard !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
-        if let s = await KaiCLI.decode(Snapshot.self, ["snapshot", "--json"]) {
+        let exe = KaiCLI.executable?.path ?? "kai (not found)"
+        let t0 = Date()
+        let r = await KaiCLI.run(["snapshot", "--json"])
+        let took = String(format: "%.2fs", Date().timeIntervalSince(t0))
+        guard r.ok else {
+            fail("\(exe) snapshot --json exited \(r.code) after \(took): \(r.message)")
+            return
+        }
+        let snap: SessionSnapshot
+        do { snap = try SessionSnapshot.decode(Data(r.out.utf8)) }
+        catch {
+            fail("\(exe) snapshot --json (exit 0, \(took)) couldn't be read: \(error)")
+            return
+        }
+        if !snap.failures.isEmpty { NSLog("Kai: skipped %d session/agent rows: %@", snap.failures.count, snap.failures.joined(separator: "; ")) }
+        if skippedRows != snap.failures { skippedRows = snap.failures }
+        if sourceError != nil { sourceError = nil }
+        do {
+            let s = snap
             var rows = s.sessions
             // Two live sessions with the same agent + project: tell them apart.
             let keyOf = { (r: SessionRow) in r.displayAgent + "|" + r.project }
@@ -201,6 +119,13 @@ final class AgentsModel: ObservableObject {
             agents = s.agents
             loaded = true
         }
+    }
+
+    /// The source failed: say so (and log it); the count isn't known.
+    private func fail(_ why: String) {
+        NSLog("Kai: %@", why)
+        if sourceError != why { sourceError = why }
+        loaded = true
     }
 
     /// Sessions after the current filters, needs-attention first (active before

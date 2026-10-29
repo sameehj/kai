@@ -969,7 +969,8 @@ struct ApprovalCard: View {
             let why = (label: showWhy ? "Hide" : "Why?", toggle: { withAnimation { showWhy.toggle() } })
             switch tier {
             case 4:
-                Text("Always protected").font(.caption).foregroundStyle(.secondary)
+                Text(AuditEvent.filesEnforcing ? "Always protected" : "Can't be allowed")
+                    .font(.caption).foregroundStyle(.secondary)
                 CardActions(actions: [CardAction(title: "Dismiss") { manager.deny(req) }], why: why)
             case 3:
                 // The grant matches the label: the requested op, this session, 15 min.
@@ -1110,18 +1111,19 @@ struct ApprovalsSection: View {
     }
 }
 
-/// B1: quiet system sounds, no assets. Approval needed and permission granted
-/// on by default, blocked off; each can be switched in Advanced -> App.
+/// B1: Kai's own sounds (kai-sfx, KaiSound). "Play Kai sounds" turns them all
+/// off; under it, approval needed and permission granted are on by default,
+/// blocked off; each can be switched in Advanced -> App.
 enum KaiSounds {
-    static func play(_ name: String, key: String, default on: Bool) {
+    static func play(_ cue: KaiSound.Cue, key: String, default on: Bool) {
+        let all = UserDefaults.standard.object(forKey: "playSounds") as? Bool ?? true
         let enabled = UserDefaults.standard.object(forKey: key) as? Bool ?? on
-        guard enabled, let s = NSSound(named: NSSound.Name(name)) else { return }
-        s.volume = 0.3
-        s.play()
+        guard all && enabled else { return }
+        KaiSound.play(cue)
     }
-    static func approvalNeeded() { play("Ping", key: "soundApprovalNeeded", default: true) }
-    static func permissionGranted() { play("Glass", key: "soundPermissionGranted", default: true) }
-    static func blocked() { play("Basso", key: "soundBlocked", default: false) }
+    static func approvalNeeded() { play(.approvalNeeded, key: "soundApprovalNeeded", default: true) }
+    static func permissionGranted() { play(.allowed, key: "soundPermissionGranted", default: true) }
+    static func blocked() { play(.blocked, key: "soundBlocked", default: false) }
 }
 
 /// B2: a persistent decision the user made (Keep blocked, or an Allow rule).
