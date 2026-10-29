@@ -237,19 +237,53 @@ static void say_upload(char *out, size_t n, const char *cmd, const char *agent, 
                  tool, shown, host, agent);
 }
 
-/* Release batch 16: screen, microphone, camera or app control, unless the
- * user's kai allow-capture covers this agent. Fills out with the stop. */
-static int capture_stopped(const char *what, const char *agent, const char *cwd, char *out, size_t n) {
-    if (!what || !*what || kai_cli_grant_allows("capture", agent, "all", NULL, cwd, (long long)time(NULL))) return 0;
+/* Release batch 16, screen and app control: stopped unless the user allowed
+ * this agent this app. Fills out with the stop, naming the app. With the Kai
+ * app, the app is the one writer: the stop points at the agent's page. */
+static int capture_stopped(const char *what, const char *app, const char *note, const char *agent,
+                           const char *cwd, char *out, size_t n) {
+    if (!what || !*what || !app || !*app) return 0;
+    if (kai_cli_grant_allows("capture", agent, app, NULL, cwd, (long long)time(NULL))) return 0;
     const char *title = !strcmp(agent, "claude") ? "Claude Code" : !strcmp(agent, "codex") ? "Codex"
                       : !strcmp(agent, "cursor") ? "Cursor" : agent;
-    snprintf(out, n, "%s wants to %s. If this was intended: kai allow-capture --agent %s --for 15m.", title, what, agent);
+    char shown[80];
+    if (strchr(app, ' ')) snprintf(shown, sizeof shown, "'%s'", app);
+    else kai_strlcpy(shown, app, sizeof shown);
+    if (kai_app_present())
+        snprintf(out, n, "%s wants to %s%s. If this was intended, allow it in Kai: %s's page, Screen and app control.",
+                 title, what, note ? note : "", title);
+    else
+        snprintf(out, n, "%s wants to %s%s. If this was intended: kai allow-capture --app %s --agent %s --for 15m.",
+                 title, what, note ? note : "", shown, agent);
     return 1;
+}
+
+/* Driving a terminal app is screen and app control too, with what it means:
+ * the commands run there aren't checked. Names the app as the script does. */
+static int terminal_stopped(const char *cmd, const char *hit, const char *agent, const char *cwd,
+                            char *out, size_t n, char *app, size_t an) {
+    static const struct { const char *key, *name; } NAMES[] = {
+        {"terminal", "Terminal"}, {"com.apple.terminal", "Terminal"}, {"iterm", "iTerm"}, {"iterm2", "iTerm2"},
+        {"com.googlecode.iterm2", "iTerm2"}, {"system events", "System Events"},
+        {"com.apple.systemevents", "System Events"}, {"warp", "Warp"}, {"dev.warp.warp-stable", "Warp"},
+        {"ghostty", "Ghostty"}, {"com.mitchellh.ghostty", "Ghostty"}, {"kitty", "kitty"},
+        {"net.kovidgoyal.kitty", "kitty"}, {"alacritty", "Alacritty"}, {"wezterm", "WezTerm"},
+        {"hyper", "Hyper"}, {"tabby", "Tabby"},
+    };
+    const char *name = hit;
+    for (size_t i = 0; i < sizeof NAMES / sizeof NAMES[0]; i++) if (!strcasecmp(hit, NAMES[i].key)) name = NAMES[i].name;
+    char told[64];
+    if (kai_told_app(cmd, told, sizeof told) && !strcasecmp(told, hit)) name = told;
+    kai_strlcpy(app, name, an);
+    char what[96];
+    snprintf(what, sizeof what, "control %s", name);
+    return capture_stopped(what, name, " (commands it runs there aren't checked by Kai)", agent, cwd, out, n);
 }
 
 /* The stop already reads as a sentence to the user: no "Kai stopped this:". */
 static int own_words(const char *reason) {
-    return !strncmp(reason, "Kai ", 4) || strstr(reason, "kai allow-capture --agent") != NULL;
+    return !strncmp(reason, "Kai ", 4) || strstr(reason, "kai allow-capture --app") != NULL ||
+           strstr(reason, "page, Screen and app control.") != NULL;
 }
 
 /* A host the user blocked (kai block): 2 and fills host, else 0. */
@@ -1022,11 +1056,12 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
          * file/command rules. No rule = ask. We show "MCP · server · tool" and
          * the argument KEYS only (libkai redacts values); server descriptions
          * and annotations like readOnlyHint are never read and never decide. */
-        char mcp_server[64] = "", mcp_tool[64] = "", capwhat[96] = "";
-        int cap_tool = kai_capture_tool(tool, capwhat, sizeof capwhat);
-        if (cap_tool && capture_stopped(capwhat, source, cwd, reason, sizeof reason)) {
+        char mcp_server[64] = "", mcp_tool[64] = "", capwhat[96] = "", capapp[64] = "";
+        int cap_tool = kai_capture_tool(tool, capwhat, sizeof capwhat, capapp, sizeof capapp);
+        if (cap_tool && capture_stopped(capwhat, capapp, NULL, source, cwd, reason, sizeof reason)) {
             decision = KAI_ACT_BLOCK; ask = 0;   /* never the agent's own ask: auto mode could approve it */
-            kai_strlcpy(rule, "capture", sizeof rule);
+            kai_strlcpy(rule, "screen_app_control", sizeof rule);
+            kai_strlcpy(match, capapp, sizeof match);
             subject = strdup(tool);
         } else if (cap_tool) {
             decision = KAI_ACT_NONE;   /* the user's kai allow-capture */
@@ -1136,18 +1171,17 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 decision = KAI_ACT_NONE;   /* the user's kai allow-upload for exactly this */
                 kai_strlcpy(rule, "terminal_grant", sizeof rule);
             } else if ((app = command_drives_terminal(cmd, cwd)) &&
+                       terminal_stopped(cmd, app, source, cwd, reason, sizeof reason, capapp, sizeof capapp) &&
                        !skip_exempt("terminal_control", &ex)) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, "terminal_control", sizeof rule);
-                kai_strlcpy(match, app, sizeof match);
-                snprintf(reason, sizeof reason,
-                         "command makes another app (%s) run commands, outside Kai's checks", app);
-            } else if (kai_capture_match(cmd, capwhat, sizeof capwhat) &&
-                       capture_stopped(capwhat, source, cwd, reason, sizeof reason) &&
-                       !skip_exempt("capture", &ex)) {
+                kai_strlcpy(match, capapp, sizeof match);
+            } else if (kai_capture_match(cmd, capwhat, sizeof capwhat, capapp, sizeof capapp) &&
+                       capture_stopped(capwhat, capapp, NULL, source, cwd, reason, sizeof reason) &&
+                       !skip_exempt("screen_app_control", &ex)) {
                 decision = KAI_ACT_BLOCK;
-                kai_strlcpy(rule, "capture", sizeof rule);
-                kai_strlcpy(match, capwhat, sizeof match);
+                kai_strlcpy(rule, "screen_app_control", sizeof rule);
+                kai_strlcpy(match, capapp, sizeof match);
             } else if (kai_command_touches_protected_as(p, source, cmd, cwd, why, sizeof why,
                                                         skip_exempt, &ex)) {
                 decision = KAI_ACT_BLOCK;
@@ -1392,7 +1426,7 @@ static int hook_cursor(const char *json) {
     const char *tool = NULL, *subject = NULL, *app = NULL;
     next_kind kind = NEXT_TOOL;
     exempt_ctx ex = {p, NULL, ""};
-    char capwhat[96] = "";
+    char capwhat[96] = "", capapp[64] = "";
 
     if (ev && strcmp(ev, "beforeReadFile") == 0) {
         tool = "Read";
@@ -1430,18 +1464,17 @@ static int hook_cursor(const char *json) {
         } else if (cmd && upload_granted(cmd, "cursor", cwd)) {
             /* the user's kai allow-upload for exactly this command */
         } else if (cmd && (app = command_drives_terminal(cmd, cwd)) &&
+                   terminal_stopped(cmd, app, "cursor", cwd, reason, sizeof reason, capapp, sizeof capapp) &&
                    !skip_exempt("terminal_control", &ex)) {
             deny = 1;
             kai_strlcpy(why, "terminal_control", sizeof why);
-            kai_strlcpy(match, app, sizeof match);
-            snprintf(reason, sizeof reason,
-                     "command makes another app (%s) run commands, outside Kai's checks", app);
-        } else if (cmd && kai_capture_match(cmd, capwhat, sizeof capwhat) &&
-                   capture_stopped(capwhat, "cursor", cwd, reason, sizeof reason) &&
-                   !skip_exempt("capture", &ex)) {
+            kai_strlcpy(match, capapp, sizeof match);
+        } else if (cmd && kai_capture_match(cmd, capwhat, sizeof capwhat, capapp, sizeof capapp) &&
+                   capture_stopped(capwhat, capapp, NULL, "cursor", cwd, reason, sizeof reason) &&
+                   !skip_exempt("screen_app_control", &ex)) {
             deny = 1;
-            kai_strlcpy(why, "capture", sizeof why);
-            kai_strlcpy(match, capwhat, sizeof match);
+            kai_strlcpy(why, "screen_app_control", sizeof why);
+            kai_strlcpy(match, capapp, sizeof match);
         } else if (cmd && kai_command_touches_protected_as(p, "cursor", cmd, cwd, why, sizeof why,
                                                            skip_exempt, &ex)) {
             deny = 1; say_protected(reason, sizeof reason, NULL, why, why, "cursor", cwd);
@@ -1467,10 +1500,11 @@ static int hook_cursor(const char *json) {
         subject = ti;
         kai_report rep;
         char *c = kai_scan_text(p, ti ? ti : "", &rep); free(c);
-        if (kai_capture_tool(cjstr(root, "tool_name"), capwhat, sizeof capwhat) &&
-            capture_stopped(capwhat, "cursor", cwd, reason, sizeof reason)) {
+        if (kai_capture_tool(cjstr(root, "tool_name"), capwhat, sizeof capwhat, capapp, sizeof capapp) &&
+            capture_stopped(capwhat, capapp, NULL, "cursor", cwd, reason, sizeof reason)) {
             deny = 1;
-            kai_strlcpy(why, "capture", sizeof why);
+            kai_strlcpy(why, "screen_app_control", sizeof why);
+            kai_strlcpy(match, capapp, sizeof match);
         } else if (rep.worst >= KAI_ACT_REDACT) {
             deny = 1; kai_report_summary(&rep, reason, sizeof reason);
             kai_strlcpy(why, "mcp_arguments", sizeof why);

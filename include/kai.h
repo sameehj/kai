@@ -670,11 +670,17 @@ int kai_cli_grant_allows(const char *op, const char *agent, const char *target, 
                          const char *cwd, long long now);
 /* One simple curl/scp upload Kai can read in full: its file, host and form. */
 int kai_upload_parse(const char *cmd, char *file, size_t fn, char *host, size_t hn, char *form, size_t fmn);
-/* Release batch 16: a shell command or an agent tool that captures the screen,
- * microphone or camera, or scripts other apps. 1 and fills what with the
- * plain words ("take a screenshot of your screen"), else 0. */
-int kai_capture_match(const char *cmd, char *what, size_t n);
-int kai_capture_tool(const char *tool, char *what, size_t n);
+/* Release batch 16, screen and app control: a shell command or an agent tool
+ * that captures the screen, microphone or camera, or drives another app.
+ * 1 and fills what with the plain words ("control Safari", "take a screenshot
+ * of your screen") and app with the app a grant names (the app told, the
+ * capturing program, or the tool's MCP server); else 0. */
+int kai_capture_match(const char *cmd, char *what, size_t n, char *app, size_t an);
+int kai_capture_tool(const char *tool, char *what, size_t n, char *app, size_t an);
+/* The app a script tells (tell application "X", Application('X')). */
+int kai_told_app(const char *text, char *out, size_t n);
+/* Remove the allow for agent + op + target (the app's Revoke). 0 removed, -1 none. */
+int kai_cli_grant_remove(const char *op, const char *agent, const char *target);
 int kai_policy_fetch_block(const kai_policy *p);
 int kai_app_present(void);
 /* Run the agent's installed hook command with input (A.4 self-test). */

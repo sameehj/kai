@@ -202,6 +202,8 @@ struct AgentReachView: View {
                     }
                 }
 
+                ScreenAppControlSection(agent: agent, title: title)
+
                 section("Blocked (remembered)") {
                     if keptBlocked.isEmpty { empty("None.") }
                     ForEach(keptBlocked) { r in

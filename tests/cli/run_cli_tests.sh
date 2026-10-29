@@ -188,38 +188,62 @@ subprocess.run([kai, "chrome-extension://x/"], input=m, capture_output=True, env
 PY
 has "the extension's version is recorded from its status report" "$(cat "$EH/.kai/chats/_extension.json" 2>/dev/null)" '"version":"0.2.1"'
 
-echo "== screen, microphone, camera and app control (release batch 16) =="
+echo "== screen and app control (release batch 16) =="
 CH="$TMP/capture"; mkdir -p "$CH/.kai"
 cap() { printf '{"hook_event_name":"PreToolUse","tool_name":"%s","session_id":"cap","tool_input":{"command":"%s"},"cwd":"/tmp"}' "${3:-Bash}" "$2" \
         | KAI_HOME="$CH/.kai" KAI_NO_APP=1 "$KAI" hook "$1"; }
+ac() { KAI_HOME="$CH/.kai" KAI_NO_APP=1 "$KAI" allow-capture "$@" 2>&1; }
 o=$(cap claude "screencapture -x /tmp/s.png")
-has "screencapture: stopped in plain words" "$o" "Claude Code wants to take a screenshot of your screen. If this was intended: kai allow-capture --agent claude --for 15m."
+has "screencapture: stopped in plain words, naming the app" "$o" "Claude Code wants to take a screenshot of your screen. If this was intended: kai allow-capture --app screencapture --agent claude --for 15m."
 has "...as a deny" "$o" '"permissionDecision":"deny"'
 has "screencapture -v: screen recording" "$(cap claude "screencapture -v /tmp/s.mov")" "wants to record your screen"
-has "ffmpeg from avfoundation audio: microphone" "$(cap claude "ffmpeg -f avfoundation -i :0 /tmp/a.wav")" "wants to record from your microphone"
+has "ffmpeg from avfoundation audio: microphone" "$(cap claude "ffmpeg -f avfoundation -i :0 /tmp/a.wav")" "wants to record from your microphone. If this was intended: kai allow-capture --app ffmpeg"
 has "ffmpeg from avfoundation video: camera or screen" "$(cap claude "ffmpeg -f avfoundation -i 1:0 /tmp/v.mp4")" "wants to record your camera or screen"
-has "sox from the default input: microphone" "$(cap claude "sox -d /tmp/a.wav")" "wants to record from your microphone"
+has "sox from the default input: microphone" "$(cap claude "sox -d /tmp/a.wav")" "wants to record from your microphone. If this was intended: kai allow-capture --app sox"
 has "rec: microphone" "$(cap claude "rec /tmp/a.wav")" "wants to record from your microphone"
 has "imagesnap: camera" "$(cap claude "imagesnap /tmp/me.jpg")" "wants to take a photo with your camera"
-has "osascript tell application: app control" "$(cap claude "osascript -e 'tell application \\\"Safari\\\" to get URL of front document'")" "wants to control another app (Safari) with AppleScript"
-has "Codex gets its own command" "$(cap codex "screencapture -x /tmp/s.png")" "Codex wants to take a screenshot of your screen. If this was intended: kai allow-capture --agent codex --for 15m."
+o=$(cap claude "osascript -e 'tell application \\\"Safari\\\" to get URL of front document'")
+has "osascript names the app it controls" "$o" "Claude Code wants to control Safari. If this was intended: kai allow-capture --app Safari --agent claude --for 15m."
+o=$(cap claude "osascript -e 'tell application \\\"Terminal\\\" to do script \\\"ls\\\"'")
+has "Terminal: the same words, and what it means" "$o" "Claude Code wants to control Terminal (commands it runs there aren't checked by Kai). If this was intended: kai allow-capture --app Terminal --agent claude --for 15m."
+has "an app name with a space is quoted" "$(cap claude "osascript -e 'tell application \\\"Google Chrome\\\" to activate'")" "kai allow-capture --app 'Google Chrome' --agent claude"
+has "a piped script names its app too" "$(cap claude "echo 'tell application \\\"Music\\\" to pause' | osascript")" "Claude Code wants to control Music."
+has "Codex gets its own command" "$(cap codex "screencapture -x /tmp/s.png")" "Codex wants to take a screenshot of your screen. If this was intended: kai allow-capture --app screencapture --agent codex --for 15m."
 o=$(printf '{"hook_event_name":"beforeShellExecution","command":"screencapture -x /tmp/s.png","workspace_roots":["/tmp"]}' | KAI_HOME="$CH/.kai" KAI_NO_APP=1 "$KAI" hook cursor)
-has "Cursor: stopped too" "$o" "Cursor wants to take a screenshot of your screen. If this was intended: kai allow-capture --agent cursor --for 15m."
-has "an agent's computer-use tool" "$(cap claude "" mcp__computer-use__screenshot)" "Claude Code wants to take a screenshot of your screen."
+has "Cursor: stopped too" "$o" "Cursor wants to take a screenshot of your screen. If this was intended: kai allow-capture --app screencapture --agent cursor --for 15m."
+has "an agent's computer-use tool" "$(cap claude "" mcp__computer-use__screenshot)" "Claude Code wants to take a screenshot of your screen. If this was intended: kai allow-capture --app computer-use --agent claude"
 has "...and its control tool" "$(cap claude "" mcp__computer-use__left_click)" "Claude Code wants to see and control your screen."
 [ -z "$(cap claude "osascript -e 'display notification \\\"done\\\"'")" ] && pass "osascript without tell application goes through" || fail "notification stopped"
 [ -z "$(cap claude "grep -rn screencapture src")" ] && pass "naming screencapture in an argument goes through" || fail "grep stopped"
 [ -z "$(cap claude "ffmpeg -i in.mov out.mp4")" ] && pass "ffmpeg on files goes through" || fail "ffmpeg file conversion stopped"
 [ -z "$(cap claude "" mcp__playwright__browser_take_screenshot | grep -i 'wants to')" ] && pass "a browser page screenshot isn't a screen capture" || fail "browser screenshot treated as capture"
-o=$(KAI_HOME="$CH/.kai" KAI_NO_APP=1 "$KAI" allow-capture --agent claude --for 15m 2>&1)
-has "allow-capture says what it covers" "$o" "Allowed Claude Code to take screenshots, record the screen, microphone or camera, and control other apps"
-[ -z "$(cap claude "screencapture -x /tmp/s.png")" ] && pass "after allow-capture, Claude Code's screenshot goes through" || fail "still stopped after allow-capture"
-has "...Codex still needs its own" "$(cap codex "screencapture -x /tmp/s.png")" "deny"
-o=$(KAI_HOME="$CH/.kai" KAI_NO_APP=1 "$KAI" allow-capture --agent claude --for 2d 2>&1); [ $? = 2 ] && pass "allow-capture is capped at 1 day" || fail "allow-capture 2d: $o"
+
+o=$(ac --agent claude --for 15m); [ $? = 2 ] && has "allow-capture needs --app" "$o" "--app" || fail "allow-capture without --app: $o"
+o=$(ac --app Safari --agent claude --for 15m)
+has "allow-capture says what it covers" "$o" "Allowed Claude Code to use or control Safari"
+has "...with the lower-assurance note" "$o" "Preview 1 can't stop a program with your permissions from editing Kai's rules"
+[ -z "$(cap claude "osascript -e 'tell application \\\"safari\\\" to activate'")" ] && pass "a grant covers its app (any case)" || fail "Safari still stopped"
+has "a grant for one app doesn't cover another" "$(cap claude "osascript -e 'tell application \\\"Music\\\" to pause'")" "wants to control Music"
+has "...nor screencapture" "$(cap claude "screencapture -x /tmp/s.png")" "deny"
+has "...nor another agent" "$(cap codex "osascript -e 'tell application \\\"Safari\\\" to activate'")" "deny"
+ac --app screencapture --agent claude --for 15m >/dev/null
+[ -z "$(cap claude "screencapture -x /tmp/s.png")" ] && pass "allow-capture --app screencapture: the screenshot goes through" || fail "screencapture still stopped"
+ac --app Terminal --agent claude --for 15m >/dev/null
+[ -z "$(cap claude "osascript -e 'tell application \\\"Terminal\\\" to do script \\\"ls\\\"'")" ] && pass "allow-capture --app Terminal covers driving Terminal" || fail "Terminal still stopped"
+has "kai rules lists them as screen and app control" "$(KAI_HOME="$CH/.kai" KAI_NO_APP=1 "$KAI" rules)" "screen and app control: safari"
+o=$(ac --app Safari --agent claude --for 2d); [ $? = 2 ] && pass "allow-capture is capped at 1 day" || fail "allow-capture 2d: $o"
+if [ -d /Applications/Kai.app/Contents/Library/SystemExtensions ]; then
+    o=$(KAI_HOME="$CH/.kai" "$KAI" allow-capture --app Safari --agent claude 2>&1); rc=$?
+    [ "$rc" = 4 ] && has "with the Kai app: allow-capture says change it in Kai" "$o" "Change this in Kai" || fail "allow-capture with app: rc=$rc"
+    o=$(printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","session_id":"cap","tool_input":{"command":"imagesnap /tmp/x.jpg"},"cwd":"/tmp"}' | KAI_HOME="$CH/.kai" "$KAI" hook claude)
+    has "...and the stop points at the agent's page" "$o" "allow it in Kai: Claude Code's page, Screen and app control"
+else
+    pass "skipped: no Kai app here (one-writer check)"
+fi
 dr=$("$KAI" doctor 2>&1)
 has "doctor: privacy permissions section" "$dr" "Screen Recording, Microphone, Camera, Accessibility"
 has "...explains that macOS grants them per app" "$dr" "macOS grants these per app, so every agent run in that app inherits them"
-has "COVERAGE.md lists capture commands" "$(cat "$cov")" "| Screen, microphone, camera or app control (screencapture, ffmpeg/sox, osascript) |"
+has "COVERAGE.md lists screen and app control" "$(cat "$cov")" "| Screen and app control (screencapture, ffmpeg/sox, osascript) |"
 
 echo "== policy set =="
 "$KAI" policy set on_upload ask >/dev/null

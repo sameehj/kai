@@ -57,6 +57,8 @@ enum Snapshot {
                    }.padding(16).background(Theme.ink),
                    width: 360, height: nil, name: "popover-cards")
         }
+        render(AgentReachView(agent: "claude", grants: GrantManager()).background(Theme.ink),
+               width: 640, height: 900, name: "agent-claude-page")
         let saved = UserDefaults.standard.string(forKey: "settingsPage")
         UserDefaults.standard.set(SettingsPage.agentControl.rawValue, forKey: "settingsPage")
         render(SettingsView(), width: 1100, height: 760, name: "agent-control")

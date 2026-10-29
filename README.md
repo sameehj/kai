@@ -59,7 +59,7 @@ kai allow-file ./.env --read --agent claude --for 1h      # the file tool may re
 kai allow-fetch docs.example.org --agent claude --for 1h  # the agent's fetch tool may use this host
 kai allow-mcp notion search --agent claude --for 1h       # one MCP tool (or every tool of a server)
 kai allow-upload ./report.pdf --to files.example.com --agent claude --for 1h
-kai allow-capture --agent claude --for 15m                # screenshots, recording, app control
+kai allow-capture --app Safari --agent claude --for 15m   # screen and app control, one app
 kai block paste.example.org                               # stop commands and fetches that reach it
 kai rules                                                 # what each agent may do, and why
 kai undo                                                  # take back the last change
@@ -81,7 +81,7 @@ The Kai extension checks what you paste and send on AI chat sites (ChatGPT, Clau
 - Kai checks only what an agent reports to its hooks: not tool results, not the agent's other model traffic.
 - Kai's rules and policy are files a program with your permissions can edit. Kai notices some policy changes made outside Kai (`kai doctor`), never all, and prevents none.
 - No OS-level enforcement in this preview.
-- Screen, microphone, camera and app control: Kai stops the commands and tools it recognizes (`screencapture`, `ffmpeg`/`sox` recording, `osascript` telling an app, computer-use tools). A program the agent writes can call the capture APIs directly. Kai can't change macOS privacy prompts: macOS grants these permissions per app, so every agent run in Terminal, iTerm or Cursor inherits what that app holds (`kai doctor` lists them where it can read them).
+- Screen and app control: Kai stops the commands and tools it recognizes (`screencapture`, `ffmpeg`/`sox` recording, `osascript` telling any app, computer-use tools) and names the app; you allow them per app. With the Kai app, those allows are made in the app (each agent's page), not with `kai allow-capture`. A program the agent writes can call the capture APIs directly. Kai can't change macOS privacy prompts: macOS grants these permissions per app, so every agent run in Terminal, iTerm or Cursor inherits what that app holds (`kai doctor` lists them where it can read them).
 
 ## Design references
 

@@ -55,6 +55,7 @@ targets:
       - path: ../../src/proc.c
       - path: ../../src/shell.c
       - path: ../../src/session.c
+      - path: ../../src/agent_rules.c
       - path: ../../third_party/cjson/cJSON.c
     settings:
       base:

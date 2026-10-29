@@ -2514,6 +2514,34 @@ static void test_codex_analytics(void) {
     CHECK(kai_host_is_telemetry("metrics.cursor.sh"), "Cursor's metrics host is telemetry");
 }
 
+/* Release batch 16: screen and app control allows are per app, and the app's
+ * Remove takes one away. */
+static void test_capture_grants(void) {
+    printf("screen and app control: per-app allows\n");
+    char d[] = "/tmp/kai-capXXXXXX";
+    if (!mkdtemp(d)) { CHECK(0, "mkdtemp"); return; }
+    const char *old = getenv("KAI_HOME");
+    char saved[1024] = "";
+    if (old) snprintf(saved, sizeof saved, "%s", old);
+    setenv("KAI_HOME", d, 1);
+    long long now = (long long)time(NULL);
+    CHECK(kai_cli_grant_add(1, "capture", "claude", "Safari", NULL, now + 900, NULL, NULL, 0) == 0, "allow Safari");
+    CHECK(kai_cli_grant_allows("capture", "claude", "safari", NULL, NULL, now), "covers Safari, any case");
+    CHECK(!kai_cli_grant_allows("capture", "claude", "Music", NULL, NULL, now), "not another app");
+    CHECK(!kai_cli_grant_allows("capture", "codex", "Safari", NULL, NULL, now), "not another agent");
+    CHECK(!kai_cli_grant_allows("capture", "claude", "Safari", NULL, NULL, now + 901), "ends when it says");
+    CHECK(kai_cli_grant_remove("capture", "claude", "SAFARI") == 0, "Remove takes it away");
+    CHECK(!kai_cli_grant_allows("capture", "claude", "Safari", NULL, NULL, now), "...and it no longer applies");
+    CHECK(kai_cli_grant_remove("capture", "claude", "Safari") == -1, "removing it again: nothing to remove");
+    char app[64], what[96];
+    CHECK(kai_capture_match("osascript -e 'tell application \"Google Chrome\" to activate'", what, sizeof what, app, sizeof app)
+          && !strcmp(app, "Google Chrome") && !strcmp(what, "control Google Chrome"), "the told app is named as written");
+    CHECK(kai_capture_tool("mcp__computer-use__screenshot", what, sizeof what, app, sizeof app) && !strcmp(app, "computer-use"),
+          "a tool is named by its MCP server");
+    if (saved[0]) setenv("KAI_HOME", saved, 1); else unsetenv("KAI_HOME");
+    char cmd[800]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", d); (void)system(cmd);
+}
+
 /* Release batch: today's redactions per chat site (10). */
 static void test_chat_site_today(void) {
     printf("chats: today's redactions per site\n");
@@ -3041,6 +3069,7 @@ int main(void) {
     test_claude_env();
     test_topic_clean();
     test_codex_analytics();
+    test_capture_grants();
     test_chat_site_today();
     test_daily_top();
     test_working_inflight();

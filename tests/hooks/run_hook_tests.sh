@@ -118,9 +118,9 @@ rm -rf "$fdir"
 
 echo "== driving a terminal app =="
 expect "osascript tells Terminal to run a command" claude \
-  "$(bash_cmd "osascript -e 'tell application \"Terminal\" to do script \"ls\"'")" 'another app (terminal)'
+  "$(bash_cmd "osascript -e 'tell application \"Terminal\" to do script \"ls\"'")" 'wants to control Terminal (commands it runs there aren'\''t checked by Kai)'
 expect "osascript keystrokes via System Events" claude \
-  "$(bash_cmd "osascript -e 'tell application \"System Events\" to keystroke \"ls\"'")" 'another app'
+  "$(bash_cmd "osascript -e 'tell application \"System Events\" to keystroke \"ls\"'")" 'wants to control System Events'
 expect "JXA Application('iTerm2')" claude \
   "$(bash_cmd "osascript -l JavaScript -e \"Application('iTerm2').createWindowWithDefaultProfile()\"")" 'deny'
 expect "script piped into osascript" claude \
@@ -140,9 +140,9 @@ expect "cursor: osascript tells Terminal" cursor \
   "$(python3 -I -c 'import json,sys; print(json.dumps({"hook_event_name":"beforeShellExecution","command":sys.argv[1]}))' "osascript -e 'tell application \"Terminal\" to do script \"ls\"'")" '"deny"'
 refute "osascript notification is fine" claude "$(bash_cmd "osascript -e 'display notification \"Terminal tests done\" with title \"Build\"'")" 'deny'
 # release batch 16: telling any app is app control, stopped with kai allow-capture
-expect "osascript to another app: app control" claude "$(bash_cmd "osascript -e 'tell application \"Music\" to pause'")" 'kai allow-capture --agent claude'
+expect "osascript to another app: app control" claude "$(bash_cmd "osascript -e 'tell application \"Music\" to pause'")" 'Claude Code wants to control Music.'
 refute "a piped script without tell application is fine" claude "$(bash_cmd "echo 'display notification \"x\"' | osascript")" 'deny'
-expect "a piped script that tells an app is app control" claude "$(bash_cmd "echo 'tell application \"Music\" to pause' | osascript")" 'kai allow-capture'
+expect "a piped script that tells an app is app control" claude "$(bash_cmd "echo 'tell application \"Music\" to pause' | osascript")" 'wants to control Music.'
 refute "open -a Terminal alone is fine" claude "$(bash_cmd 'open -a Terminal')" 'deny'
 refute "open a file in its editor is fine" claude "$(bash_cmd 'open -a TextEdit notes.txt')" 'deny'
 refute "mentioning Terminal in a commit is fine" claude "$(bash_cmd "git commit -m 'block osascript tell application \"Terminal\"'")" 'deny'

@@ -214,7 +214,7 @@ static void usage(void) {
         "  kai allow-fetch <domain> --agent claude [--for 1h]\n"
         "  kai allow-mcp <server> [<tool>] --agent A [--for 1h]\n"
         "  kai allow-upload <file> --to <host> --agent A [--for 1h]\n"
-        "  kai allow-capture --agent A [--for 15m]  screen, microphone, camera, app control\n"
+        "  kai allow-capture --app <name> --agent A [--for 15m]  screen and app control\n"
         "  kai block <host> [--agent A]      keep agents from reaching a host\n"
         "  kai rules                         what each agent can reach, and why\n"
         "  kai undo                          reverse the last allow/block\n"

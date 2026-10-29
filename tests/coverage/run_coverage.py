@@ -233,7 +233,7 @@ OPS = [
     ("upload", "Network upload command (`curl -d @file`)"),
     ("mcp", "MCP tool call (no rule for the server)"),
     ("web_fetch", "The agent's own web fetch (secret in the URL)"),
-    ("capture", "Screen, microphone, camera or app control (screencapture, ffmpeg/sox, osascript)"),
+    ("capture", "Screen and app control (screencapture, ffmpeg/sox, osascript)"),
     ("capture_tool", "The agent's own screenshot or computer-use tool"),
 ]
 
@@ -250,7 +250,8 @@ BYPASS = {
     "prompt_secret": "Only the prompt as you submit it: not tool results, not files the agent reads later.",
     "file_tool": "Reads through the shell or a script are separate rows.",
     "capture": "Recognized commands only: screencapture, ffmpeg/sox/rec from a live device, imagesnap, cliclick, "
-               "osascript that tells an app. A program the agent writes can call the capture APIs directly.",
+               "osascript that tells an app; allowed per app (kai allow-capture --app, or the agent's page in "
+               "the app). A program the agent writes can call the capture APIs directly.",
     "capture_tool": "Recognized by tool name (screenshot, computer). A web page screenshot in a browser tool isn't "
                     "counted as the screen.",
 }

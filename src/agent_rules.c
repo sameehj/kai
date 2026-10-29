@@ -8,7 +8,7 @@
  *   kai allow-fetch <domain> --agent A [--for 1h]
  *   kai allow-mcp <server> [<tool>] --agent A [--for 1h]
  *   kai allow-upload <file> --to <host> --agent A [--for 1h]
- *   kai allow-capture --agent A [--for 15m]
+ *   kai allow-capture --app <name> --agent A [--for 15m]
  *   kai block <host> [--agent A]
  *   kai undo
  *
@@ -167,6 +167,24 @@ int kai_cli_grant_add(int allow, const char *op, const char *agent, const char *
     cJSON_AddNumberToObject(r, "created", (double)time(NULL));
     cJSON_AddItemToArray(a, r);
     int rc = save_rules(a);
+    cJSON_Delete(a);
+    return rc;
+}
+
+int kai_cli_grant_remove(const char *op, const char *agent, const char *target) {
+    if (!op || !agent || !target) return -1;
+    char t[256];
+    kai_strlcpy(t, target, sizeof t);
+    lower(t);
+    cJSON *a = load_rules();
+    int removed = 0;
+    for (int i = cJSON_GetArraySize(a) - 1; i >= 0; i--) {
+        cJSON *r = cJSON_GetArrayItem(a, i);
+        if (!strcmp(jstr(r, "kind"), "allow") && !strcmp(jstr(r, "op"), op) && !strcmp(jstr(r, "agent"), agent) &&
+            !strcmp(jstr(r, "target"), t)) { cJSON_DeleteItemFromArray(a, i); removed = 1; }
+    }
+    int rc = -1;
+    if (removed) { push_history(); rc = save_rules(a); }
     cJSON_Delete(a);
     return rc;
 }
@@ -392,17 +410,48 @@ int kai_upload_parse(const char *cmd, char *file, size_t fn, char *host, size_t 
     return 1;
 }
 
-/* ---- screen, microphone, camera and app control (release batch 16) ----
- * The commands an agent runs to capture or to drive other apps. macOS grants
- * these permissions per app, so an agent inherits whatever its terminal or
- * editor holds. A program the agent writes can call the capture APIs itself;
- * that isn't seen here. */
-typedef struct { char what[96]; int osascript; } cap_acc;
+/* ---- screen and app control (release batch 16) ----
+ * The commands an agent runs to capture the screen, microphone or camera, or
+ * to drive another app. Each is named by an app: the app a script tells, or
+ * the program that captures, and grants are per app. macOS grants these
+ * permissions per app, so an agent inherits whatever its terminal or editor
+ * holds. A program the agent writes can call the capture APIs itself; that
+ * isn't seen here. */
+typedef struct { char what[96]; char app[64]; int osascript; } cap_acc;
 
 static int has_word(const char *s, const char *w) { return s && strcasestr(s, w) != NULL; }
 
 static int system_audio(const char *s) {
     return has_word(s, "blackhole") || has_word(s, "soundflower") || has_word(s, "loopback");
+}
+
+/* The quoted name after `mark` (tell application "X", Application('X')). */
+static int quoted_after(const char *text, const char *mark, char *out, size_t n) {
+    size_t ml = strlen(mark);
+    for (const char *t = text; t && (t = strcasestr(t, mark)) != NULL; t += ml) {
+        const char *q = t + ml;
+        while (*q == ' ' || *q == '\\') q++;
+        if (*q != '"' && *q != '\'') continue;
+        char qc = *q++;
+        size_t l = 0;
+        while (q[l] && q[l] != qc && q[l] != '\\') l++;
+        if (!l || !q[l] || l >= n) continue;
+        memcpy(out, q, l);
+        out[l] = '\0';
+        return 1;
+    }
+    return 0;
+}
+
+int kai_told_app(const char *text, char *out, size_t n) {
+    if (out && n) out[0] = '\0';
+    if (!text || !out || n < 2) return 0;
+    return quoted_after(text, "tell application", out, n) || quoted_after(text, "Application(", out, n);
+}
+
+static void cap_set(cap_acc *c, const char *what, const char *app) {
+    kai_strlcpy(c->what, what, sizeof c->what);
+    kai_strlcpy(c->app, app, sizeof c->app);
 }
 
 static void walk_capture(char **argv, int argc, void *ud) {
@@ -413,7 +462,7 @@ static void walk_capture(char **argv, int argc, void *ud) {
     if (!strcmp(b, "screencapture")) {
         int video = 0;
         for (int k = i + 1; k < argc; k++) if (!strcmp(argv[k], "-v") || !strcmp(argv[k], "-V")) video = 1;
-        kai_strlcpy(c->what, video ? "record your screen" : "take a screenshot of your screen", sizeof c->what);
+        cap_set(c, video ? "record your screen" : "take a screenshot of your screen", b);
     } else if (!strcmp(b, "ffmpeg")) {
         int avf = 0; const char *in = NULL;
         for (int k = i + 1; k + 1 < argc; k++) {
@@ -421,9 +470,8 @@ static void walk_capture(char **argv, int argc, void *ud) {
             else if (!strcmp(argv[k], "-i") && avf && !in) in = argv[k + 1];
         }
         if (!avf) return;
-        if (in && system_audio(in)) kai_strlcpy(c->what, "record your Mac's sound", sizeof c->what);
-        else if (in && in[0] == ':') kai_strlcpy(c->what, "record from your microphone", sizeof c->what);
-        else kai_strlcpy(c->what, "record your camera or screen", sizeof c->what);
+        cap_set(c, in && system_audio(in) ? "record your Mac's sound"
+                 : in && in[0] == ':' ? "record from your microphone" : "record your camera or screen", b);
     } else if (!strcmp(b, "rec") || !strcmp(b, "sox")) {
         int live = !strcmp(b, "rec");
         for (int k = i + 1; k < argc; k++) {
@@ -431,50 +479,51 @@ static void walk_capture(char **argv, int argc, void *ud) {
                 live = 1;
             if (system_audio(argv[k])) { live = 2; break; }
         }
-        if (live) kai_strlcpy(c->what, live == 2 ? "record your Mac's sound" : "record from your microphone",
-                              sizeof c->what);
+        if (live) cap_set(c, live == 2 ? "record your Mac's sound" : "record from your microphone", b);
     } else if (!strcmp(b, "imagesnap")) {
-        kai_strlcpy(c->what, "take a photo with your camera", sizeof c->what);
+        cap_set(c, "take a photo with your camera", b);
     } else if (!strcmp(b, "cliclick")) {
-        kai_strlcpy(c->what, "control your mouse and keyboard", sizeof c->what);
+        cap_set(c, "control your mouse and keyboard", b);
     } else if (!strcmp(b, "osascript")) {
         c->osascript = 1;
         for (int k = i + 1; k < argc; k++) {
-            const char *t = strcasestr(argv[k], "tell application");
-            if (!t && !strstr(argv[k], "Application(")) continue;
-            char app[64] = "";
-            const char *q = t ? strpbrk(t, "\"'") : NULL;
-            if (q) {
-                const char *e = strchr(q + 1, *q);
-                size_t l = e ? (size_t)(e - q - 1) : 0;
-                if (l && l < sizeof app) { memcpy(app, q + 1, l); app[l] = '\0'; }
+            char app[64];
+            if (kai_told_app(argv[k], app, sizeof app)) {
+                char what[96];
+                snprintf(what, sizeof what, "control %s", app);
+                cap_set(c, what, app);
+                return;
             }
-            if (app[0]) snprintf(c->what, sizeof c->what, "control another app (%s) with AppleScript", app);
-            else kai_strlcpy(c->what, "control other apps with AppleScript", sizeof c->what);
-            return;
         }
-        c->what[0] = '\0';
     }
 }
 
-int kai_capture_match(const char *cmd, char *what, size_t n) {
+int kai_capture_match(const char *cmd, char *what, size_t n, char *app, size_t an) {
     if (what && n) what[0] = '\0';
+    if (app && an) app[0] = '\0';
     if (!cmd || !*cmd) return 0;
     cap_acc c;
     memset(&c, 0, sizeof c);
     kai_shell_walk(cmd, walk_capture, NULL, &c);
     /* a script piped or fed into osascript is in the text, not its argv */
-    if (!c.what[0] && c.osascript && strcasestr(cmd, "tell application"))
-        kai_strlcpy(c.what, "control other apps with AppleScript", sizeof c.what);
+    char told[64];
+    if (!c.what[0] && c.osascript && kai_told_app(cmd, told, sizeof told)) {
+        char w[96];
+        snprintf(w, sizeof w, "control %s", told);
+        cap_set(&c, w, told);
+    }
     if (!c.what[0]) return 0;
     if (what) kai_strlcpy(what, c.what, n);
+    if (app) kai_strlcpy(app, c.app, an);
     return 1;
 }
 
-/* An agent's own tool: computer use or a screenshot of the screen. A web
- * page's screenshot in a browser tool isn't the screen. */
-int kai_capture_tool(const char *tool, char *what, size_t n) {
+/* An agent's own tool: computer use or a screenshot of the screen, named by
+ * its MCP server (or the tool). A web page's screenshot in a browser tool
+ * isn't the screen. */
+int kai_capture_tool(const char *tool, char *what, size_t n, char *app, size_t an) {
     if (what && n) what[0] = '\0';
+    if (app && an) app[0] = '\0';
     if (!tool || !*tool) return 0;
     char t[256];
     kai_strlcpy(t, tool, sizeof t);
@@ -484,6 +533,13 @@ int kai_capture_tool(const char *tool, char *what, size_t n) {
                   : strstr(t, "computer") ? "see and control your screen" : NULL;
     if (!w) return 0;
     if (what) kai_strlcpy(what, w, n);
+    if (app) {
+        char server[64] = "";
+        const char *s = !strncmp(tool, "mcp__", 5) ? tool + 5 : NULL;
+        const char *e = s ? strstr(s, "__") : NULL;
+        if (e && (size_t)(e - s) < sizeof server) { memcpy(server, s, (size_t)(e - s)); server[e - s] = '\0'; }
+        kai_strlcpy(app, server[0] ? server : tool, an);
+    }
     return 1;
 }
 
@@ -696,31 +752,37 @@ int kai_cmd_allow_upload(int argc, char **argv) {
 }
 
 int kai_cmd_allow_capture(int argc, char **argv) {
+    /* --app <name> is this command's own; the rest are the usual options */
+    const char *app = NULL;
+    char *rest[64];
+    int nrest = 0, given = 0;
+    for (int i = 0; i < argc && nrest < 64; i++) {
+        if (!strcmp(argv[i], "--app") && i + 1 < argc) { app = argv[++i]; continue; }
+        if (!strcmp(argv[i], "--for")) given = 1;
+        rest[nrest++] = argv[i];
+    }
     args_t a;
-    int rc = parse_args("allow-capture", argc, argv, &a, 0);
+    int rc = parse_args("allow-capture", nrest, rest, &a, 0);
     if (rc) return rc;
-    if (a.target || !a.agent) { fprintf(stderr, "usage: kai allow-capture --agent claude|codex|cursor [--for 15m]\n"); return 2; }
-    int given = 0;
-    for (int i = 0; i < argc; i++) if (!strcmp(argv[i], "--for")) given = 1;
+    if (a.target || !a.agent || !app || !*app) {
+        fprintf(stderr, "usage: kai allow-capture --app <name> --agent claude|codex|cursor [--for 15m]\n"
+                        "  <name> is the app Kai's message names: the app controlled (Safari, Terminal) or the "
+                        "program that captures (screencapture, ffmpeg).\n");
+        return 2;
+    }
     if (!given) a.secs = 900;
-    if (a.secs > 86400) { fprintf(stderr, "kai allow-capture: --for is at most 1d for capture.\n"); return 2; }
+    if (a.secs > 86400) { fprintf(stderr, "kai allow-capture: --for is at most 1d for screen and app control.\n"); return 2; }
     const char *no = agent_supports("capture", 0, a.agent);
     if (no) { fprintf(stderr, "kai allow-capture: %s.\n", no); return 2; }
-    /* The app has no capture setting yet, so this works with the app too;
-     * never from inside an agent. */
-    if (under_agent()) {
-        fprintf(stderr, "kai allow-capture: refused. Run this in your own terminal, not from an agent.\n"
-                        "(A convenience, not a security boundary.)\n");
-        return 3;
-    }
+    if ((rc = gatekeep("allow-capture"))) return rc;   /* one writer: with the app, the app keeps these */
     long long until = (long long)time(NULL) + a.secs;
-    if (kai_cli_grant_add(1, "capture", a.agent, "all", NULL, until, NULL, NULL, 0) != 0) {
+    if (kai_cli_grant_add(1, "capture", a.agent, app, NULL, until, NULL, NULL, 0) != 0) {
         fprintf(stderr, "kai allow-capture: couldn't save the grant\n"); return 1;
     }
     char what[400];
-    snprintf(what, sizeof what, "Allowed %s to take screenshots, record the screen, microphone or camera, and control "
-             "other apps through the commands and tools Kai checks. macOS still asks for its own permission",
-             agent_title(a.agent));
+    snprintf(what, sizeof what, "Allowed %s to use or control %s (screen and app control), only through the commands "
+             "and tools Kai checks; other apps still need their own. macOS still asks for its own permission",
+             agent_title(a.agent), app);
     return finish("allow-capture", what, until);
 }
 
@@ -731,7 +793,7 @@ int kai_cmd_allow(int argc, char **argv) {
                     "  kai allow-fetch <domain> --agent claude [--for 1h]\n"
                     "  kai allow-mcp <server> [<tool>] --agent A [--for 1h]\n"
                     "  kai allow-upload <file> --to <host> --agent A [--for 1h]\n"
-                    "  kai allow-capture --agent A [--for 15m]\n");
+                    "  kai allow-capture --app <name> --agent A [--for 15m]\n");
     return 2;
 }
 
@@ -787,7 +849,7 @@ int kai_cmd_rules(int argc, char **argv) {
         else if (!strcmp(op, "fetch"))
             printf("  allows  %-12s to fetch from %s, %s\n", who, t, when);
         else if (!strcmp(op, "capture"))
-            printf("  allows  %-12s screen, microphone, camera and app control, %s\n", who, when);
+            printf("  allows  %-12s screen and app control: %s, %s\n", who, t, when);
         else
             printf("  allows  %-12s to %s %s (file tool), %s\n", who, op, shown_t, when);
         shown++;
