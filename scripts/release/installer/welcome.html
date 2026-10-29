@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial -->
+<html lang="en"><head><meta charset="utf-8"><title>Kai Preview</title>
+<style>body{font:13px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;margin:18px;color:#1d1d1f}
+h1{font-size:18px;margin:0 0 6px} .contract{border-left:3px solid #8a9a2a;padding:6px 12px;background:#f5f6ef}
+ol{padding-left:20px} li{margin:4px 0}</style></head>
+<body>
+<h1>Kai Preview: give AI more work, not more access.</h1>
+<p class="contract"><b>Kai Preview checks supported actions inside Claude Code, Codex and Cursor before they run.</b>
+It is an extra safety layer, not isolation or OS-level enforcement: hooks run with your permissions, cover only the
+actions each agent reports to them, and a program the agent runs can get around them. Codex runs hooks only after
+you trust them.</p>
+<ol>
+<li><b>Install Kai.</b> This package installs the <code>kai</code> command and adds Kai's checks to the agents that
+already use them. Run <code>kai install</code> afterwards for any other agent.</li>
+<li><b>Kai checks your agents and stops the risky moves</b>: reading your keys, sending files out, secrets in
+prompts. Each stop says what happened, why it matters, and what you can do.</li>
+<li><b>You decide what they can do, narrowly.</b> When Kai stops something legitimate, its message gives the exact
+command to run in your own terminal, for one agent, one operation, one target, with an expiry.</li>
+</ol>
+<p>After installing: <code>kai demo</code> shows the checks working with a fake secret, and <code>kai status</code>
+shows what is checked for each agent.</p>
+</body></html>

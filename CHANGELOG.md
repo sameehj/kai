@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.2.0-preview.1 (release candidate, 2026-10-29)
+Kai Preview checks supported actions inside Claude Code, Codex and Cursor before
+they run. It is an extra safety layer, not isolation or OS-level enforcement.
+Release notes: docs/release/v0.2.0-preview.1.md.
+- Stop messages say what, why, and the exact narrow command where Kai identified
+  the target. The verb is "stopped" (Preview 1 never says "blocked" or "protected").
+- Narrow terminal grants: `kai allow-file --read/--write`, `allow-fetch`, `allow-mcp`,
+  `allow-upload --to`, `block`, `rules`, `undo`. Each is one agent, one operation, one
+  target, with an expiry. Files are pinned to the exact file. They refuse inside an
+  agent; with the Kai app installed, use the app.
+- `kai status` / `kai doctor` per agent: Installed, Configured, Trusted, Self-test,
+  Live verification. `kai demo` and `kai demo --live`.
+- Policy integrity: a fingerprint on every Kai write. Malformed, unrecognized rule,
+  changed outside Kai and missing are reported separately. A missing policy that Kai
+  wrote stops tool actions.
+- Claude Code's web fetch is checked (URL secrets, `kai block`, `on_fetch block`).
+  MCP tools work without the app (`kai allow-mcp`).
+- docs/COVERAGE.md: event, input, stage, can block, bypasses, and live or synthetic
+  evidence per agent and action.
+- Chrome extension 0.2.0: no `tabs` permission. The popup shows the sites checked,
+  redacted before sending, not checked, and Not a secret.
+- Installer: welcome and readme pages with the contract. Postinstall registers the
+  browser and refreshes Kai's hooks where they are already installed, for the
+  signed-in user (backups kept, changes logged).
+- App (pilot): GitHub, package registries and Apple developer services are no longer
+  category switches. Each host is asked about, with a plain description from a host
+  catalog, and old switch settings migrate to exact per-host rules
+  (<kai home>/migrations/channels.txt).
+
 ## Unreleased
 - Storage wall can now be loaded and enforce on a dev machine: the ES
   extension is embedded by the storage build (`make try-app-storage`), the

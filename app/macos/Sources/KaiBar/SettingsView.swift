@@ -539,8 +539,8 @@ private struct NetworkPage: View {
             // B2 agent profiles: what the built-in model hosts allow, and the limit.
             Text("Built in for every agent: this Mac and the model and sign-in hosts (anthropic.com, openai.com, "
                + "cursor.sh and others). Kai can't tell the model connection from other data sent to the same host. "
-               + "GitHub, package registries and Apple developer services are optional channels, off by default: "
-               + "turn them on per agent in Agent Control.")
+               + "Everything else, such as GitHub or a package registry, is asked about per host the first time "
+               + "an agent tries it.")
                 .font(.system(size: 12)).foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }

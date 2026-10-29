@@ -226,28 +226,29 @@ static const char *const BUILTIN_EGRESS[] = {
     "anthropic.com", "claude.ai", "claude.com", "openai.com", "chatgpt.com",
     "openrouter.ai", "googleapis.com", "cursor.sh", "cursor.com",
     "cursorapi.com", "cursor-cdn.com",
-    /* Code hosting and package registries are optional channels now (spec §4):
-     * broad exfiltration and supply-chain routes, so off until you turn them on
-     * for an agent (channel <agent>/<name>). */
+    /* Code hosting, package registries and the like are asked about per host
+     * (spec v2.1 B.4: no fixed categories); the catalog below only describes. */
 };
 
-/* Optional channels: a named set of hosts an agent can be given in one step. */
-static const struct { const char *name, *label; const char *hosts[16]; } CHANNELS[] = {
-    {"code-hosting", "Code hosting (GitHub, GitLab, Bitbucket)",
-     {"github.com", "githubusercontent.com", "ghcr.io", "gitlab.com", "bitbucket.org", NULL}},
-    {"packages", "Package registries (npm, PyPI, crates.io, Go, RubyGems, Maven, Docker Hub, Homebrew)",
-     {"npmjs.org", "npmjs.com", "yarnpkg.com", "pypi.org", "pythonhosted.org", "crates.io",
-      "proxy.golang.org", "sum.golang.org", "rubygems.org", "repo.maven.apache.org", "repo1.maven.org",
-      "docker.io", "brew.sh", NULL}},
-    {"apple-developer", "Apple developer services (Xcode signing, App Store Connect)",
-     {"developerservices2.apple.com", "developer.apple.com", "appstoreconnect.apple.com", NULL}},
+/* The switches the previous app build had (code hosting, packages, Apple
+ * developer). Kept only so the app can turn an old "channel <agent>/<name>"
+ * line into exact per-host rules once; nothing reads them to allow. */
+static const struct { const char *name; const char *hosts[16]; } LEGACY_CHANNELS[] = {
+    {"code-hosting", {"github.com", "githubusercontent.com", "ghcr.io", "gitlab.com", "bitbucket.org", NULL}},
+    {"packages", {"npmjs.org", "npmjs.com", "yarnpkg.com", "pypi.org", "pythonhosted.org", "crates.io",
+                  "proxy.golang.org", "sum.golang.org", "rubygems.org", "repo.maven.apache.org", "repo1.maven.org",
+                  "docker.io", "brew.sh", NULL}},
+    {"apple-developer", {"developerservices2.apple.com", "developer.apple.com", "appstoreconnect.apple.com", NULL}},
 };
 
-int kai_channel_info(int i, const char **name, const char **label) {
-    if (i < 0 || (size_t)i >= sizeof CHANNELS / sizeof CHANNELS[0]) return 0;
-    if (name) *name = CHANNELS[i].name;
-    if (label) *label = CHANNELS[i].label;
-    return 1;
+const char *kai_channel_legacy_host(const char *name, int i) {
+    if (!name || i < 0) return NULL;
+    for (size_t c = 0; c < sizeof LEGACY_CHANNELS / sizeof LEGACY_CHANNELS[0]; c++) {
+        if (strcmp(name, LEGACY_CHANNELS[c].name)) continue;
+        for (int k = 0; LEGACY_CHANNELS[c].hosts[k]; k++) if (k == i) return LEGACY_CHANNELS[c].hosts[k];
+        return NULL;
+    }
+    return NULL;
 }
 
 static int host_in(const char *host, const char *dom) {
@@ -255,20 +256,52 @@ static int host_in(const char *host, const char *dom) {
     return hl == l ? !strcasecmp(host, dom) : hl > l && host[hl - l - 1] == '.' && !strcasecmp(host + hl - l, dom);
 }
 
-int kai_agent_channel_allows(const kai_policy *p, const char *agent, const char *host) {
-    if (!p || !agent || !host || !*host) return 0;
-    for (int c = 0; c < p->nchannels; c++) {
-        const char *e = p->channels[c], *slash = strchr(e, '/');
-        if (!slash) continue;
-        size_t al = (size_t)(slash - e);
-        if (!(al == 1 && e[0] == '*') && !(strlen(agent) == al && !strncmp(e, agent, al))) continue;
-        for (size_t i = 0; i < sizeof CHANNELS / sizeof CHANNELS[0]; i++) {
-            if (strcmp(slash + 1, CHANNELS[i].name)) continue;
-            for (int h = 0; CHANNELS[i].hosts[h]; h++)
-                if (host_in(host, CHANNELS[i].hosts[h])) return 1;
-        }
-    }
-    return 0;
+/* Spec v2.1 B.3: a host catalog for explanation only. It names the service
+ * and its group; it never allows anything, and unknown stays unknown. */
+static const struct { const char *dom, *desc, *group; } CATALOG[] = {
+    {"github.com", "GitHub, where code is hosted and reviewed", "Code"},
+    {"githubusercontent.com", "GitHub's file and download host", "Code"},
+    {"ghcr.io", "GitHub's container registry", "Code"},
+    {"gitlab.com", "GitLab, where code is hosted and reviewed", "Code"},
+    {"bitbucket.org", "Bitbucket, where code is hosted and reviewed", "Code"},
+    {"npmjs.org", "The npm package registry (JavaScript)", "Packages"},
+    {"npmjs.com", "The npm website", "Packages"},
+    {"yarnpkg.com", "The Yarn package registry mirror (JavaScript)", "Packages"},
+    {"pypi.org", "The Python Package Index", "Packages"},
+    {"pythonhosted.org", "Python package downloads", "Packages"},
+    {"crates.io", "The Rust package registry", "Packages"},
+    {"proxy.golang.org", "The Go module proxy", "Packages"},
+    {"sum.golang.org", "The Go checksum database", "Packages"},
+    {"rubygems.org", "The Ruby package registry", "Packages"},
+    {"repo.maven.apache.org", "Maven Central (Java packages)", "Packages"},
+    {"repo1.maven.org", "Maven Central (Java packages)", "Packages"},
+    {"docker.io", "Docker Hub, a container image registry", "Packages"},
+    {"brew.sh", "Homebrew, the macOS package manager", "Packages"},
+    {"developerservices2.apple.com", "An Apple developer service, used for signing and development tasks", "Apple development"},
+    {"appstoreconnect.apple.com", "App Store Connect, for publishing apps", "Apple development"},
+    {"developer.apple.com", "Apple's developer website", "Apple development"},
+    {"figma.com", "Figma, a design tool", "Design"},
+    {"doubleclick.net", "Google's ad network", "Ads"},
+    {"googlesyndication.com", "Google's ad network", "Ads"},
+    {"wordpress.com", "WordPress, a site builder and CMS", "CMS"},
+    {"contentful.com", "Contentful, a content management service", "CMS"},
+    {"readthedocs.io", "Read the Docs, project documentation", "Docs"},
+    {"stackoverflow.com", "Stack Overflow, programming questions and answers", "Docs"},
+    {"developer.mozilla.org", "MDN, web documentation", "Docs"},
+    {"console.aws.amazon.com", "The AWS console", "Cloud consoles"},
+    {"amazonaws.com", "Amazon Web Services", "Cloud consoles"},
+    {"console.cloud.google.com", "The Google Cloud console", "Cloud consoles"},
+    {"portal.azure.com", "The Azure portal", "Cloud consoles"},
+    {"vercel.com", "Vercel, a hosting service", "Cloud consoles"},
+    {"netlify.com", "Netlify, a hosting service", "Cloud consoles"},
+};
+
+const char *kai_host_describe(const char *host, const char **group) {
+    if (group) *group = NULL;
+    if (!host || !*host) return NULL;
+    for (size_t i = 0; i < sizeof CATALOG / sizeof CATALOG[0]; i++)
+        if (host_in(host, CATALOG[i].dom)) { if (group) *group = CATALOG[i].group; return CATALOG[i].desc; }
+    return NULL;
 }
 
 /* Hosts one agent needs that others shouldn't get (each also covers its
@@ -288,6 +321,17 @@ int kai_agent_profile_host(int i, const char **agent, const char **host, int *do
     if (host) *host = AGENT_PROFILE_EGRESS[i].host;
     if (documented) *documented = AGENT_PROFILE_EGRESS[i].documented;
     return 1;
+}
+
+/* Each agent's verified signing identity (signing id + Team ID), as
+ * kai_pid_code_identity reports it for the agent's own binary. Used when the
+ * app makes a rule for an agent before it has seen a card from it. */
+const char *kai_agent_verified_identity(const char *agent) {
+    if (!agent) return NULL;
+    if (!strcmp(agent, "claude")) return "com.anthropic.claude-code (Q6L2SF6YDW)";
+    if (!strcmp(agent, "codex")) return "codex (2DC432GLL2)";
+    if (!strcmp(agent, "cursor")) return "com.todesktop.230313mzl4w4u92 (VDXQ22DGB9)";
+    return NULL;
 }
 
 int kai_agent_profile_allows(const char *agent, const char *host) {
@@ -506,10 +550,6 @@ static kai_policy *parse(const char *text, const char *source, char *err,
             if (strcmp(v, "block") == 0) p->storage_mode = KAI_STORAGE_BLOCK;
             else if (strcmp(v, "log") == 0) p->storage_mode = KAI_STORAGE_LOG;
             else p->storage_mode = KAI_STORAGE_OFF;
-        } else if (strcmp(d, "channel") == 0) {
-            char *v;
-            if (next_tok(&cur, &v) && v[0] != '#' && strchr(v, '/') && p->nchannels < KAI_MAX_LIST)
-                p->channels[p->nchannels++] = strdup(v);
         } else if (strcmp(d, "egress_allow") == 0) {
             char *v;
             while (next_tok(&cur, &v) && v[0] != '#') {
@@ -817,7 +857,6 @@ void kai_policy_free(kai_policy *p) {
     for (int i = 0; i < p->nprotect; i++) free(p->protect[i]);
     for (int i = 0; i < p->nallow; i++) free(p->allow[i]);
     for (int i = 0; i < p->negress; i++) free(p->egress_allow[i]);
-    for (int i = 0; i < p->nchannels; i++) free(p->channels[i]);
     for (int i = 0; i < p->nagents; i++) free(p->agents[i].pattern);
     for (int i = 0; i < p->nexempt; i++) free(p->exempt[i].pattern);
     free(p);

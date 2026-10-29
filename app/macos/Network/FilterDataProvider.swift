@@ -349,7 +349,6 @@ final class Engine {
         var why = [CChar](repeating: 0, count: 256)
         if kai_egress_endpoint_allowed(p, host, ip, Int32(port) ?? 0, &why, why.count) == 1 { return true }
         if let h = host, kai_agent_profile_allows(agent, h) == 1 { return true }   // e.g. Cursor's sign-in
-        if let h = host, kai_agent_channel_allows(p, agent, h) == 1 { return true } // channels you turned on
         let target = host ?? "\(ip):\(port)"
         let block = mode == KAI_EGRESS_BLOCK
         // B2: telemetry and crash reports are an optional channel: denied

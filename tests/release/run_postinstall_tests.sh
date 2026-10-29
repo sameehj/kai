@@ -15,6 +15,8 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/launchctl" <<EOF
 #!/bin/sh
 echo "\$@" >> "$TMP/calls"
+# simulate kai install changing Claude Code's settings in the fake home
+case "\$*" in *"HOME=$TMP/home "*"install claude"*) echo " " >> "$TMP/home/.claude/settings.json" ;; esac
 EOF
 chmod +x "$TMP/bin/launchctl"
 me=$(id -un); myuid=$(id -u)
@@ -25,7 +27,7 @@ out=$(PATH="$TMP/bin:$PATH" KAI_CONSOLE_USER="$me" sh "$PI"); rc=$?
 call=$(cat "$TMP/calls" 2>/dev/null)
 [ "$rc" = 0 ] && pass "exits 0" || fail "exit $rc"
 case "$call" in
-    "asuser $myuid sudo -u $me -H env HOME=$myhome /usr/local/bin/kai install chrome") pass "runs kai install chrome as the console user, with that user's HOME" ;;
+    *"asuser $myuid sudo -u $me -H env HOME=$myhome /usr/local/bin/kai install chrome"*) pass "runs kai install chrome as the console user, with that user's HOME" ;;
     *) fail "unexpected call: $call" ;;
 esac
 case "$out" in *"registered kai with $me"*) pass "notes it in the installer log" ;; *) fail "no note: $out" ;; esac
@@ -39,6 +41,21 @@ for who in root loginwindow ""; do
         fail "console '${who:-<none>}': rc=$rc calls=$(cat "$TMP/calls" 2>/dev/null) out=$out"
     fi
 done
+
+echo "== refresh agents that already have Kai's hooks =="
+CH="$TMP/home"; mkdir -p "$CH/.claude" "$CH/.codex" "$CH/.cursor"
+printf '{"hooks":{"PreToolUse":[{"hooks":[{"command":"/x/kai hook claude"}]}]}}' > "$CH/.claude/settings.json"
+printf '{"hooks":{"PreToolUse":[{"hooks":[{"command":"/x/kai hook codex"}]}]}}' > "$CH/.codex/hooks.json"
+printf '{"version":1,"hooks":{}}' > "$CH/.cursor/hooks.json"
+rm -f "$TMP/calls"
+out=$(PATH="$TMP/bin:$PATH" KAI_CONSOLE_USER="$me" KAI_CONSOLE_HOME="$CH" sh "$PI")
+calls=$(cat "$TMP/calls" 2>/dev/null)
+case "$calls" in *"kai install claude"*) pass "re-installs Claude Code's hooks (it had them)" ;; *) fail "no claude reinstall: $calls" ;; esac
+case "$calls" in *"kai install codex"*) pass "re-installs Codex's hooks (it had them)" ;; *) fail "no codex reinstall: $calls" ;; esac
+case "$calls" in *"kai install cursor"*) fail "touched Cursor, which had no Kai hooks" ;; *) pass "leaves an agent without Kai's hooks alone" ;; esac
+case "$calls" in *"asuser $myuid sudo -u $me -H env HOME=$CH /usr/local/bin/kai install claude"*) pass "...as the console user, with that user's HOME" ;; *) fail "wrong user/home: $calls" ;; esac
+case "$out" in *"Claude Code: hooks updated"*"backups kept"*) pass "logs what changed, and that backups are kept" ;; *) fail "no change log: $out" ;; esac
+case "$out" in *"Codex: hooks already current"*) pass "...and what didn't change" ;; *) fail "no unchanged note: $out" ;; esac
 
 rm -f "$TMP/calls"
 out=$(PATH="$TMP/bin:$PATH" KAI_CONSOLE_USER=daemon sh "$PI"); rc=$?

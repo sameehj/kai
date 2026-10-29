@@ -2277,27 +2277,32 @@ static void test_agent_rules(void) {
 /* Spec §4: GitHub and package registries are optional channels, off by default,
  * turned on per agent with a "channel <agent>/<channel>" policy line. */
 static void test_channels(void) {
-    printf("optional channels: code hosting, packages, Apple developer (spec 4)\n");
-    char err[256], why[256];
+    printf("no fixed categories (spec v2.1 B.3, B.4): catalog describes, never allows\n");
+    char err[256], why[256], first[64];
     kai_policy *d = kai_policy_from_string("egress block\n", err, sizeof err);
     CHECK(d && kai_egress_endpoint_allowed(d, "github.com", "1.2.3.4", 443, why, sizeof why) != 1,
-          "github.com isn't built in any more");
+          "github.com isn't built in");
     CHECK(d && kai_egress_endpoint_allowed(d, "api.anthropic.com", "1.2.3.4", 443, why, sizeof why) == 1,
           "model APIs still are");
-    CHECK(d && !kai_agent_channel_allows(d, "claude", "github.com"), "no channel: off");
     kai_policy_free(d);
-    kai_policy *p = kai_policy_from_string("egress block\nchannel claude/code-hosting\nchannel */packages\n", err, sizeof err);
-    CHECK(p && kai_agent_channel_allows(p, "claude", "github.com") && kai_agent_channel_allows(p, "claude", "raw.githubusercontent.com"),
-          "code hosting on for Claude Code: GitHub and its content hosts");
-    CHECK(p && !kai_agent_channel_allows(p, "codex", "github.com"), "...not for Codex");
-    CHECK(p && kai_agent_channel_allows(p, "codex", "registry.npmjs.org") && kai_agent_channel_allows(p, "cursor", "pypi.org"),
-          "packages on for every agent");
-    CHECK(p && !kai_agent_channel_allows(p, "claude", "developerservices2.apple.com"), "Apple developer stays off");
-    CHECK(p && !kai_agent_channel_allows(p, "claude", "evilgithub.com"), "suffix match is on a dot");
+    kai_policy *p = kai_policy_from_string("egress block\nchannel claude/code-hosting\n", err, sizeof err);
+    CHECK(p && kai_policy_unknown(p, first, sizeof first) == 1 && !strcmp(first, "channel"),
+          "a leftover channel line grants nothing and shows as unrecognized");
+    CHECK(p && kai_egress_endpoint_allowed(p, "github.com", "1.2.3.4", 443, why, sizeof why) != 1,
+          "...github.com is still asked about");
     kai_policy_free(p);
-    const char *name, *label; int i;
-    for (i = 0; kai_channel_info(i, &name, &label); i++) {}
-    CHECK(i == 3, "three channels are listed for Settings");
+    const char *group = NULL;
+    const char *desc = kai_host_describe("developerservices2.apple.com", &group);
+    CHECK(desc && strstr(desc, "Apple developer service") && group && !strcmp(group, "Apple development"),
+          "catalog: a plain description and group");
+    CHECK(kai_host_describe("api.github.com", &group) != NULL, "catalog: describes a subdomain of a known service");
+    CHECK(kai_host_describe("unfamiliar.example", &group) == NULL, "catalog: unknown stays unknown");
+    CHECK(kai_host_describe("evilgithub.com", &group) == NULL, "catalog: matches on a dot only");
+    int n = 0;
+    for (const char *h; (h = kai_channel_legacy_host("code-hosting", n)); n++) {}
+    CHECK(n == 5 && !strcmp(kai_channel_legacy_host("code-hosting", 0), "github.com"),
+          "migration list for the old code-hosting switch: 5 exact hosts");
+    CHECK(kai_channel_legacy_host("no-such-switch", 0) == NULL, "...nothing for an unknown switch");
 }
 
 /* Spec v2.1 A.6b: policy integrity, honest scope. Kai records a fingerprint

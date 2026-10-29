@@ -127,6 +127,23 @@ o=$(dk status)
 has "hooks switched off in Claude Code: Not checking" "$o" "Claude Code  Not checking"
 has "...and why" "$o" "hooks are switched off in its settings"
 
+echo "== a detached reader outside any agent check (spec v2.1 A.8) =="
+X="$TMP/detached"; mkdir -p "$X/.kai"
+printf 'API_TOKEN=kai-detached-0000-not-real\n' > "$X/secret.env"
+printf 'import time\ntime.sleep(1)\nopen("%s/leak.txt","w").write(open("%s/secret.env").read())\n' "$X" "$X" > "$X/reader.py"
+HOME="$X" KAI_HOME="$X/.kai" KAI_NO_APP=1 "$KAI" install claude >/dev/null 2>&1
+before=$(cat "$X/.kai/audit.log" 2>/dev/null | wc -l | tr -d ' ')
+(cd "$X" && nohup python3 reader.py >/dev/null 2>&1 &)
+i=0; while [ ! -f "$X/leak.txt" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+[ -f "$X/leak.txt" ] && pass "the detached reader read the file (no hook event, nothing stopped it)" || fail "reader didn't run"
+after=$(cat "$X/.kai/audit.log" 2>/dev/null | wc -l | tr -d ' ')
+[ "$before" = "$after" ] && pass "Kai's log records nothing for it" || fail "log changed: $before -> $after"
+o=$(HOME="$X" KAI_HOME="$X/.kai" KAI_NO_APP=1 "$KAI" status 2>&1)
+has "kai status says what a program does on its own isn't checked" "$o" "Not checked      what a program the agent runs does on its own"
+hasnt "...and claims no protection" "$o" "Protected"
+cov="$(cd "$(dirname "$KAI")/../.." && pwd)/docs/COVERAGE.md"
+has "COVERAGE.md lists detached processes as not checked" "$(cat "$cov")" "| Detached or background processes | No hook event | Not checked |"
+
 echo "== policy set =="
 "$KAI" policy set on_upload ask >/dev/null
 has "set creates the policy file" "$(ls "$KAI_HOME")" "policy"

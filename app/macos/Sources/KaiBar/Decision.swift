@@ -48,8 +48,10 @@ struct DecisionSheet: View {
                 Text(whenLine).font(.system(size: 11)).foregroundStyle(Theme.muted)
             }
             if event.isNetwork && event.isBlock && !event.isUnknownHost && !event.isSilent {
-                Text("Kai can't see what was sent over this encrypted connection.")
-                    .font(.system(size: 11)).foregroundStyle(Theme.muted)
+                Text(HostCatalog.line(host)).font(.system(size: 12)).foregroundStyle(Theme.soft)
+                Text("If you allow it: \(event.agentName) can connect to this host for the time you choose. Kai can't "
+                     + "see what is sent over the encrypted connection. Kai doesn't know why this was requested.")
+                    .font(.system(size: 11)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             }
             if let d = done { result(d) } else { options }
             if showWhy {
@@ -171,7 +173,6 @@ struct AgentReachView: View {
     private var title: String {
         switch agent { case "claude": "Claude Code"; case "codex": "Codex"; case "cursor": "Cursor"; default: agent }
     }
-    private var channels: [String] { model.policy?.channels ?? [] }
     private var allowedRules: [DecisionRule] { grants.rules.filter { $0.isAllow && $0.agent == agent } }
     private var keptBlocked: [DecisionRule] { grants.rules.filter { !$0.isAllow && $0.agent == agent } }
     private var sessionGrants: [ActiveGrant] { grants.grants.filter { $0.agent == agent && $0.op == 2 } }
@@ -185,25 +186,15 @@ struct AgentReachView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Text("What \(title) can reach").font(.title3).fontWeight(.semibold)
-                Text("Built in: this Mac and the model APIs\(agent == "cursor" ? ", plus Cursor's sign-in" : ""). Everything else is asked about.")
-                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
-
-                section("Optional channels") {
-                    ForEach(channelList, id: \.name) { c in
-                        let mine = channels.contains("\(agent)/\(c.name)"), all = channels.contains("*/\(c.name)")
-                        Toggle(isOn: Binding(get: { mine || all },
-                                             set: { on in on ? model.add("channel", "\(agent)/\(c.name)")
-                                                             : model.remove("channel", "\(agent)/\(c.name)") })) {
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(c.label).font(.system(size: 12))
-                                if all { Text("On for every agent").font(.system(size: 11)).foregroundStyle(Theme.muted) }
-                            }
-                        }
-                        .toggleStyle(.switch).controlSize(.small).disabled(all || model.busy)
-                    }
-                    Text("Off by default: these are broad routes for sending data out or pulling in code. Turning one on needs Touch ID.")
-                        .font(.system(size: 11)).foregroundStyle(Theme.muted)
+                // Spec v2.1 B.4: no fixed category switches.
+                DisclosureGroup("\(title)'s own model and sign-in connections are allowed so it can work. Everything else is asked about.") {
+                    Text("Allowed by \(title)'s profile: this Mac (loopback only) and its model and sign-in hosts"
+                         + (agent == "cursor" ? ", including Cursor's sign-in hosts" : "")
+                         + ". Data sent to them isn't inspected by the Internet wall. Anything else, such as GitHub "
+                         + "or a package registry, gets a card the first time, and you choose for that exact host.")
+                        .font(.system(size: 11)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
                 }
+                .font(.system(size: 12))
 
                 section("Allowed") {
                     if allowedRules.isEmpty && sessionGrants.isEmpty { empty("Nothing beyond the built-ins.") }
@@ -241,14 +232,6 @@ struct AgentReachView: View {
             }
             .padding(16)
         }
-    }
-
-    private var channelList: [(name: String, label: String)] {
-        var out: [(String, String)] = []
-        var i: Int32 = 0
-        var n: UnsafePointer<CChar>? = nil, l: UnsafePointer<CChar>? = nil
-        while kai_channel_info(i, &n, &l) == 1, let n, let l { out.append((String(cString: n), String(cString: l))); i += 1 }
-        return out
     }
 
     private func section<C: View>(_ t: String, @ViewBuilder _ c: () -> C) -> some View {
@@ -329,5 +312,15 @@ struct ChatsDetail: View {
             }
             .padding(16)
         }
+    }
+}
+
+/// Spec v2.1 B.3: explanation only. Describes the service, never the agent's
+/// intent, and never allows anything.
+enum HostCatalog {
+    static func line(_ host: String) -> String {
+        var g: UnsafePointer<CChar>? = nil
+        if let d = kai_host_describe(host, &g) { return String(cString: d) + "." }
+        return "An unfamiliar site: \(host)."
     }
 }

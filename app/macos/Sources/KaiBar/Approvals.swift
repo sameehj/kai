@@ -570,6 +570,70 @@ final class GrantManager: ObservableObject {
                       && (e.identity == nil || $0.identity == e.identity) }
     }
 
+    // ---- Spec v2.1 B.4: one-time migration of the old category switches ----
+
+    /// Turn each old "channel <agent>/<switch>" line into exact per-host Allow
+    /// rules for that agent (no subdomains), signed with the agent's verified
+    /// identity. The switch was turned on with owner authentication, so the
+    /// rules carry it. Writes <kai home>/migrations/channels.txt, audits each
+    /// rule, and returns the lines to remove from the policy.
+    @discardableResult
+    func migrateChannels(_ lines: [String]) -> (report: [String], done: [String]) {
+        var report: [String] = [], done: [String] = []
+        for entry in lines {
+            let parts = entry.split(separator: "/", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            let agents = parts[0] == "*" ? ["claude", "codex", "cursor"] : [parts[0]]
+            var hosts: [String] = []
+            var i: Int32 = 0
+            while let h = kai_channel_legacy_host(parts[1], i) { hosts.append(String(cString: h)); i += 1 }
+            if hosts.isEmpty { report.append("\(entry): unknown switch, removed, nothing migrated"); done.append(entry); continue }
+            for a in agents {
+                guard let idp = kai_agent_verified_identity(a) else { continue }
+                let ident = String(cString: idp)
+                for h in hosts where !rules.contains(where: { $0.isAllow && $0.agent == a && $0.dest == h && !$0.isTemporary }) {
+                    if writeRuleRaw(agent: a, identity: ident, dest: h) {
+                        kai_grant_audit("approved", "migration", a, h, 2, "sign",
+                                        "rule migrated from the \(parts[1]) switch for \(ident)")
+                        report.append("\(a): allow \(h) (exact host, every session) from the \(parts[1]) switch")
+                    }
+                }
+            }
+            done.append(entry)
+        }
+        if !report.isEmpty || !done.isEmpty {
+            let dir = home + "/.kai/migrations"
+            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true,
+                                                     attributes: [.posixPermissions: 0o700])
+            let text = "Kai migrated the old category switches to per-host rules ("
+                + Date().formatted(date: .abbreviated, time: .shortened) + "):\n"
+                + report.map { "  " + $0 }.joined(separator: "\n")
+                + "\nSubdomains (api.github.com, raw.githubusercontent.com, ...) are now asked about per host.\n"
+            FileManager.default.createFile(atPath: dir + "/channels.txt", contents: Data(text.utf8),
+                                           attributes: [.posixPermissions: 0o600])
+        }
+        refresh()
+        return (report, done)
+    }
+
+    private func writeRuleRaw(agent: String, identity: String, dest: String) -> Bool {
+        guard let key = KaiApprovalKey.ensure() else { return false }
+        let rid = UUID().uuidString
+        let json: String? = key.withUnsafeBytes { raw -> String? in
+            guard let base = raw.bindMemory(to: UInt8.self).baseAddress,
+                  let c = kai_rule_build_json_until(rid, Int32(KAI_RULE_ALLOW), identity, agent, dest, 2,
+                                                    Int64(Date().timeIntervalSince1970), 0, 1, base, key.count)
+            else { return nil }
+            defer { free(c) }
+            return String(cString: c)
+        }
+        guard let json else { return false }
+        try? FileManager.default.createDirectory(atPath: rulesDir, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        return FileManager.default.createFile(atPath: rulesDir + "/" + rid + ".json", contents: Data(json.utf8),
+                                              attributes: [.posixPermissions: 0o600])
+    }
+
     func dismissTelemetryHint(_ agent: String) {
         try? FileManager.default.removeItem(atPath: hintsDir + "/telemetry-" + agent)
         refresh()
@@ -777,6 +841,10 @@ struct ApprovalCard: View {
             Text("\(req.agentTitle)\(req.sessionLabel) wanted to \(req.verb) \(req.thing)"
                  + (count > 1 ? " (\(count) times)." : "."))
                 .font(.system(size: 13, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
+            if req.op == "connect" && !req.unknownHost {
+                Text(HostCatalog.line(req.resource) + " Kai doesn't know why this was requested.")
+                    .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             Text(tier == 3 ? "Kai blocked it because \(req.whyItMatters). This is a secret: confirm with Touch ID."
                            : "Kai blocked it because \(req.whyItMatters).")
                 .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

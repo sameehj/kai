@@ -82,19 +82,34 @@ cp scripts/release/postinstall "$OUT/scripts/postinstall"
 chmod +x "$OUT/scripts/postinstall"
 
 ID=io.github.sameehj.kai.preview
-if [ "$MODE" = "--test" ]; then
-    PKG="$OUT/Kai-Preview-$VERSION-UNSIGNED-TEST.pkg"
-    pkgbuild --root "$STAGE" --identifier "$ID" --version "$VERSION" --scripts "$OUT/scripts" \
-             --install-location / "$PKG" >/dev/null
-    echo "UNSIGNED test package (not for release): $PKG"
-else
+# Welcome and readme pages (the Preview 1 contract and the three steps), via a
+# distribution file. Both the test and the release package carry them.
+RES="$OUT/resources"
+mkdir -p "$RES"
+cp scripts/release/installer/welcome.html scripts/release/installer/readme.html "$RES/"
+[ "$MODE" = "--test" ] || {
     codesign --force --options runtime --timestamp --sign "$KAI_DEVID_APP" "$STAGE/usr/local/bin/kai"
     codesign --verify --strict "$STAGE/usr/local/bin/kai"
-    COMP="$OUT/component.pkg"
-    pkgbuild --root "$STAGE" --identifier "$ID" --version "$VERSION" --scripts "$OUT/scripts" \
-             --install-location / "$COMP" >/dev/null
+}
+COMP="$OUT/component.pkg"
+pkgbuild --root "$STAGE" --identifier "$ID" --version "$VERSION" --scripts "$OUT/scripts" \
+         --install-location / "$COMP" >/dev/null
+DIST="$OUT/distribution.xml"
+productbuild --synthesize --package "$COMP" "$DIST" >/dev/null
+# add the pages and a title right after the opening tag
+awk '{print} /<installer-gui-script/ && !done {print "    <title>Kai Preview</title>"; \
+     print "    <welcome file=\"welcome.html\" mime-type=\"text/html\"/>"; \
+     print "    <readme file=\"readme.html\" mime-type=\"text/html\"/>"; done=1}' "$DIST" > "$DIST.tmp" && mv "$DIST.tmp" "$DIST"
+grep -q 'welcome file="welcome.html"' "$DIST" || { echo "distribution file has no welcome page"; exit 1; }
+if [ "$MODE" = "--test" ]; then
+    PKG="$OUT/Kai-Preview-$VERSION-UNSIGNED-TEST.pkg"
+    productbuild --distribution "$DIST" --resources "$RES" --package-path "$OUT" "$PKG" >/dev/null
+    rm -f "$COMP"
+    echo "UNSIGNED test package (not for release): $PKG"
+else
     PKG="$OUT/Kai-Preview-$VERSION.pkg"
-    productbuild --package "$COMP" --sign "$KAI_DEVID_INSTALLER" --timestamp "$PKG" >/dev/null
+    productbuild --distribution "$DIST" --resources "$RES" --package-path "$OUT" \
+                 --sign "$KAI_DEVID_INSTALLER" --timestamp "$PKG" >/dev/null
     rm -f "$COMP"
     xcrun notarytool submit "$PKG" --keychain-profile "$KAI_NOTARY_PROFILE" --wait
     xcrun stapler staple "$PKG"

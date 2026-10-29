@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define KAI_VERSION "0.1.0"
+#define KAI_VERSION "0.2.0-preview.1"
 /* MAJOR.MINOR.PATCH[-preview.N]; a pre-release is older than its release. */
 int kai_version_cmp(const char *a, const char *b);
 
@@ -620,11 +620,14 @@ int kai_host_is_telemetry(const char *host);
 /* Hosts in one agent's own profile (e.g. Cursor's sign-in), allowed for that
  * agent only. Each covers its subdomains. */
 int kai_agent_profile_allows(const char *agent, const char *host);
-/* Spec §4 optional channels (code hosting, package registries, Apple developer
- * services): off unless the policy has "channel <agent>/<name>" (agent "*" =
- * every agent). kai_channel_info lists them for Settings (1 while i is valid). */
-int kai_agent_channel_allows(const kai_policy *p, const char *agent, const char *host);
-int kai_channel_info(int i, const char **name, const char **label);
+/* Spec v2.1 B.3: what a host is, in plain words, and its group, or NULL.
+ * Explanation only: it never allows anything. */
+const char *kai_host_describe(const char *host, const char **group);
+/* The hosts of a switch the previous build had, for a one-time migration of
+ * "channel <agent>/<name>" lines into exact per-host rules. NULL past the end. */
+const char *kai_channel_legacy_host(const char *name, int i);
+/* An agent's verified signing identity from its profile, or NULL. */
+const char *kai_agent_verified_identity(const char *agent);
 /* The i-th profile host (0-based), for Settings: 1 while i is in range.
  * documented 0 = added from observed traffic, not the vendor's docs. */
 int kai_agent_profile_host(int i, const char **agent, const char **host, int *documented);

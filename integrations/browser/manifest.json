@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Kai",
   "short_name": "Kai",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Checks what you send to AI chats for secrets and company data, using your local Kai policy.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAttJRY/mpB8OsnFQW8/3qC1lTGvi9lKti9TEwwNkjY7VqHx3VX9eCeVe900o5XuqEilywS6KMWlsCkhrYonsqkrJR62hbAn8Wg+YUutvy3/6wZQ4k3FAzxVnAYur998jXihqxq0dkg7C+BlqhSkafrpWi0Hk8F7Gj1CIiLg46swmRCPOYFolB/KvpJ0tvPPtF0SF3v77uNG5lj3rkYpsax0h+Yx7i5ZX5n2zJtci3g+MJWu2NTHuiulyFo8aWnntZS2Jpr9hRnBA0Sy4PbgYonDEnb1/8PnPP/cd46f+cbstmTvAAc4TxhnsEGeJRhtyVqeQTi43DwK5UdGykUu2L/QIDAQAB",
   "permissions": ["nativeMessaging", "storage"],

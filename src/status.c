@@ -268,6 +268,13 @@ int kai_cmd_doctor(void) {
     } else if (integ == KAI_POLICY_OK) {
         printf("✓ policy matches what Kai last wrote\n");
     }
+    {
+        char mp[1200];
+        snprintf(mp, sizeof mp, "%s/migrations/channels.txt", kai_home());
+        size_t mn = 0;
+        char *mt = kai_read_file(mp, 1 << 16, &mn);
+        if (mt) { printf("· %s", mt); free(mt); }
+    }
     printf("· Limit: Kai can't detect a change made together with its fingerprint (%s/policy.sha256) by a program "
            "with your permissions, or prevent either.\n", kai_home());
 

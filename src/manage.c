@@ -976,24 +976,12 @@ static int policy_add(int argc, char **argv) {
     sb_t b;
     sb_init(&b);
     if (strcmp(kind, "protect") == 0 || strcmp(kind, "allow") == 0 ||
-        strcmp(kind, "egress_allow") == 0 || strcmp(kind, "channel") == 0) {
+        strcmp(kind, "egress_allow") == 0) {
         const char *path = argv[1];
         if (argc != 2 || strpbrk(path, " \t#") || has_newline(path)) {
             fprintf(stderr, "kai policy add %s: one path, no spaces or '#'\n", kind);
             lines_free(&L);
             return 1;
-        }
-        if (strcmp(kind, "channel") == 0) {
-            const char *sl = strchr(path, '/');
-            int ok = 0;
-            const char *nm;
-            for (int i = 0; sl && kai_channel_info(i, &nm, NULL); i++) if (!strcmp(sl + 1, nm)) ok = 1;
-            if (!ok) {
-                fprintf(stderr, "kai policy add channel: expected <agent>/<channel>, e.g. claude/code-hosting "
-                                "(channels: code-hosting, packages, apple-developer; agent * = every agent)\n");
-                lines_free(&L);
-                return 1;
-            }
         }
         if (strcmp(kind, "egress_allow") == 0 &&
             !kai_egress_entry_valid(strncmp(path, "*.", 2) == 0 ? path + 2 : path)) {
@@ -1104,7 +1092,7 @@ static int policy_add(int argc, char **argv) {
     }
     /* allow / egress_allow / exempt grant access or lift a block => loosening. */
     int loosens = !strcmp(kind, "allow") || !strcmp(kind, "egress_allow") ||
-                  !strcmp(kind, "exempt") || !strcmp(kind, "channel");
+                  !strcmp(kind, "exempt");
     char summary[160];
     snprintf(summary, sizeof summary, "add %s %s", kind, argc > 1 ? argv[1] : "");
     int rc = policy_commit_or_queue(&L, loosens, summary);
