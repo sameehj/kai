@@ -112,13 +112,18 @@ struct CommandResult {
 }
 
 enum KaiCLI {
-    /// The `kai` binary to drive. An installed CLI wins over the copy inside
-    /// the app bundle, so the app and the agent hooks use the same binary.
+    /// The `kai` binary to drive: the copy inside the app bundle, built from
+    /// the same commit, so the app never reads output from a different CLI
+    /// version (a separately installed `kai` drifted from the app once). KAI_BIN
+    /// overrides; an installed CLI is used only when the bundle has none.
     static let executable: URL? = {
         let fm = FileManager.default
         var candidates: [String] = []
         if let env = ProcessInfo.processInfo.environment["KAI_BIN"], !env.isEmpty {
             candidates.append(env)
+        }
+        if let bundled = Bundle.main.url(forResource: "kai", withExtension: nil) {
+            candidates.append(bundled.path)
         }
         let home = fm.homeDirectoryForCurrentUser.path
         candidates += [
@@ -126,9 +131,6 @@ enum KaiCLI {
             "/usr/local/bin/kai",
             "\(home)/.local/bin/kai",
         ]
-        if let bundled = Bundle.main.url(forResource: "kai", withExtension: nil) {
-            candidates.append(bundled.path)
-        }
         return candidates.first { fm.isExecutableFile(atPath: $0) }.map(URL.init(fileURLWithPath:))
     }()
 

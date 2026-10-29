@@ -320,6 +320,14 @@ private struct GeneralPage: View {
         Card(padding: 14) {
             VStack(spacing: 12) {
                 row("Notify me when Kai blocks something", isOn: $model.notifyOnBlock)
+                row("Play Kai sounds", isOn: $model.playSounds)
+                HStack(spacing: 12) {
+                    ForEach(KaiSound.Cue.allCases, id: \.self) { cue in
+                        Button(cue.title) { KaiSound.play(cue) }
+                            .buttonStyle(.link)
+                            .font(.system(size: 11))
+                    }
+                }
                 soundRow("Sound when Kai needs you", key: "soundApprovalNeeded", default: true)
                 soundRow("Sound when a permission is granted", key: "soundPermissionGranted", default: true)
                 soundRow("Sound when Kai blocks something", key: "soundBlocked", default: false)

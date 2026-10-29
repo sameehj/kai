@@ -17,4 +17,30 @@ cp "$ROOT/tests/app/cards_main.swift" "$OUT/cards/main.swift"
 swiftc -O -o "$OUT/cards/run" "$S/Theme.swift" "$S/Info.swift" "$S/CardActions.swift" "$OUT/cards/main.swift" || exit 1
 "$OUT/cards/run" "${KAI_CARD_SNAPSHOTS:-$OUT/cards}" || rc=1
 rm -rf "$OUT"
+# The app decodes the built kai's real `kai snapshot --json` (with a Chats row,
+# the row that once emptied the popover), so app and CLI can't drift apart.
+if [ -x "$ROOT/kai" ]; then
+    SO="$(mktemp -d)"
+    mkdir -p "$SO/home/.kai"
+    python3 -I - "$ROOT/kai" "$SO/home/.kai" <<'PY'
+import json, os, struct, subprocess, sys
+kai, home = sys.argv[1], sys.argv[2]
+b = json.dumps({"type": "status", "version": "0.2.1",
+                "sites": [{"site": "claude.ai", "open_tabs": 2, "redactions": 1, "overrides": 0}]}).encode()
+subprocess.run([kai, "chrome-extension://x/"], input=struct.pack("=I", len(b)) + b, capture_output=True,
+               env=dict(os.environ, KAI_HOME=home), timeout=20)
+PY
+    KAI_HOME="$SO/home/.kai" "$ROOT/kai" snapshot --json > "$SO/snap.json" || { echo "  FAIL kai snapshot --json"; rc=1; }
+    cp "$ROOT/tests/app/sessions_main.swift" "$SO/main.swift"
+    swiftc -O -o "$SO/run" "$S/Sessions.swift" "$SO/main.swift" || exit 1
+    "$SO/run" "$SO/snap.json" claude.ai || rc=1
+    rm -rf "$SO"
+else
+    echo "  FAIL no ./kai to decode (build it first)"; rc=1
+fi
+# Kai's sounds: every cue KaiSound.swift names ships in kai-sfx/ (the app
+# bundles that folder's .wav files as top-level resources).
+for cue in $(sed -n 's/.*case [a-zA-Z]* = "\(kai-[a-z-]*\)".*/\1/p' "$S/KaiSound.swift"); do
+    if [ -s "$ROOT/kai-sfx/$cue.wav" ]; then echo "  ok   sound $cue.wav ships"; else echo "  FAIL sound $cue.wav missing"; rc=1; fi
+done
 exit $rc

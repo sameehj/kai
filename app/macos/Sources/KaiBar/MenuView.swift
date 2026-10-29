@@ -56,9 +56,25 @@ struct MenuView: View {
     private var hero: some View {
         let n = agents.workingNow.count
         return VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("\(n)").font(Theme.display(34)).foregroundStyle(glow)
-                Text("agent\(n == 1 ? "" : "s") working").font(.system(size: 13)).foregroundStyle(Theme.soft)
+            if let err = agents.sourceError {
+                // Never a false "0 agents working": the list couldn't be read.
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text("Kai can't list sessions right now ·").font(.system(size: 13)).foregroundStyle(Theme.amber)
+                    Button("Details") { openDecision = openDecision == "sessions-error" ? nil : "sessions-error" }
+                        .buttonStyle(.plain).font(.system(size: 13)).foregroundStyle(Theme.lime)
+                        .popover(isPresented: Binding(get: { openDecision == "sessions-error" },
+                                                      set: { if !$0 { openDecision = nil } }), arrowEdge: .leading) {
+                            Text(err).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true).padding(14).frame(width: 340)
+                        }
+                }
+            } else if !agents.loaded {
+                Text("Looking for agent sessions…").font(.system(size: 13)).foregroundStyle(Theme.soft)
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("\(n)").font(Theme.display(34)).foregroundStyle(glow)
+                    Text("agent\(n == 1 ? "" : "s") working").font(.system(size: 13)).foregroundStyle(Theme.soft)
+                }
             }
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(model.valueLine).font(.system(size: 12)).foregroundStyle(Theme.muted)
@@ -327,7 +343,7 @@ struct MenuView: View {
             Image("KaiLogo").resizable().frame(width: 26, height: 26).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(model.statusSentence(storageOn: storage.isOn, networkOn: wall.isOn,
-                                          agents: agents.workingNow.count))
+                                          agents: agents.countKnown ? agents.workingNow.count : -1))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(model.health == .problem ? Theme.coral : glow)
                     .fixedSize(horizontal: false, vertical: true)

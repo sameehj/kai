@@ -186,4 +186,16 @@ kai-release:
 	@mkdir -p build
 	$(CC) $(CFLAGS) -DKAI_RELEASE -o build/kai-release $(CORE) $(APP) $(LDLIBS)
 
-.PHONY: kai-release all asan fuzz test escape validation chrome-zip app app-dev app-storage try-app-storage try-app install-app install uninstall clean
+# The CLI bundled in Kai.app (Release): Universal (x86_64 + arm64, macOS 13)
+# and a release build. Built independently of the host-native objects above:
+# compiling the sources in one invocation gives both slices the same macOS 13
+# deployment target and never reuses stale single-arch .o files.
+build/kai-universal: $(CORE) $(APP) include/kai.h src/internal.h
+	mkdir -p build
+	$(CC) $(CFLAGS) -DKAI_RELEASE -DKAI_PRODUCT_BUILD=1 -arch x86_64 -arch arm64 \
+	  -mmacosx-version-min=13.0 -o $@ $(CORE) $(APP) $(LDLIBS)
+	xcrun lipo $@ -verify_arch x86_64 arm64
+
+kai-universal: build/kai-universal
+
+.PHONY: kai-universal kai-release all asan fuzz test escape validation chrome-zip app app-dev app-storage try-app-storage try-app install-app install uninstall clean

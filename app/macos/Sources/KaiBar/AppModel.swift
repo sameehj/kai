@@ -38,6 +38,9 @@ final class AppModel: ObservableObject {
             if notifyOnBlock { Notifier.requestPermission() }
         }
     }
+    @Published var playSounds: Bool {
+        didSet { UserDefaults.standard.set(playSounds, forKey: "playSounds") }
+    }
 
     let cliPath = KaiCLI.executable?.path
     private var tail: AuditTail?
@@ -48,6 +51,7 @@ final class AppModel: ObservableObject {
 
     init() {
         notifyOnBlock = UserDefaults.standard.object(forKey: "notifyOnBlock") as? Bool ?? true
+        playSounds = UserDefaults.standard.object(forKey: "playSounds") as? Bool ?? true
         AppModel.ensureGroupContainer()
         Task { await refresh() }
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
@@ -265,6 +269,7 @@ final class AppModel: ObservableObject {
     }
 
     private func tick() {
+        AuditEvent.filesEnforcing = kai_wall_observed_level("storage") == 2   // verified block, not the policy
         pollAudit()
         ticks += 1
         // The CLI is cheap but not free: check full status every 10 seconds.
@@ -301,7 +306,7 @@ final class AppModel: ObservableObject {
             if let t = lastNotified[key], now.timeIntervalSince(t) < 600 { continue }
             lastNotified[key] = now
             let g = groups[key]!
-            Notifier.post(g.last!, count: g.count)
+            Notifier.post(g.last!, count: g.count, sound: playSounds ? .blocked : nil)
         }
     }
 
@@ -533,14 +538,14 @@ enum Notifier {
     }
 
     /// count > 1: several blocks of the same rule arrived together.
-    static func post(_ e: AuditEvent, count: Int = 1) {
+    static func post(_ e: AuditEvent, count: Int = 1, sound: KaiSound.Cue? = nil) {
         guard available else { return }
         let c = UNMutableNotificationContent()
         c.title = "Kai blocked \(e.agentName)" + (count > 1 ? " \(count) times" : "")
         var body = e.detail.isEmpty ? e.rule : e.detail
         if let t = e.excerpt { body += "\n" + (t.split(separator: "\n").first.map(String.init) ?? t) }
         c.body = body
-        c.sound = .default
+        if let sound { c.sound = UNNotificationSound(named: UNNotificationSoundName(rawValue: sound.fileName)) }
         let req = UNNotificationRequest(identifier: e.id, content: c, trigger: nil)
         // Asking is a no-op once the user has answered; the first block asks.
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in

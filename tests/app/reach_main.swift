@@ -31,7 +31,12 @@ check(ReachedHost.group(events, allowed: ["example.org"]).map(\.host) == ["devel
 
 print("plain sentences (spec 4, 8)")
 let own = ev(#"{"ts":"2026-10-29T08:06:00Z","source":"claude","event":"PreToolUse","decision":"block","rule":"~/.kai","detail":"command touches protected path (~/.kai)","h":"b1","tool":"Bash","target":"cat ~/.kai/policy"}"#)
-check(own.plainSentence == "Claude Code tried to read Kai's settings. Always protected.", "Kai's own files: \(own.plainSentence)")
+check(own.plainSentence == "Claude Code tried to read Kai's settings. Stopped.",
+      "Kai's own files, Files wall not enforcing: no \"Always protected\" (\(own.plainSentence))")
+AuditEvent.filesEnforcing = true
+check(own.plainSentence == "Claude Code tried to read Kai's settings. Always protected.",
+      "...and with the Files wall enforcing: \(own.plainSentence)")
+AuditEvent.filesEnforcing = false
 let ssh = ev(#"{"ts":"2026-10-29T08:07:00Z","source":"claude","event":"PreToolUse","decision":"block","rule":"~/.ssh","detail":"Kai blocked reading `~/.ssh/id_ed25519`: private keys can unlock your servers.","h":"b2","tool":"Read","target":"~/.ssh/id_ed25519"}"#)
 check(ssh.plainSentence == "Claude Code tried reading ~/.ssh/id_ed25519. Blocked.", "a protected file: \(ssh.plainSentence)")
 check(!events[0].plainSentence.contains("..") && !events[0].plainSentence.contains("not_on"), "no double period, no rule names")

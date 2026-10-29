@@ -12,6 +12,10 @@ struct EventGroup: Identifiable {
 }
 
 struct AuditEvent: Decodable, Identifiable, Equatable {
+    /// "Always protected" only while the Files wall is verified enforcing (its
+    /// heartbeat says block); otherwise a hook stopped it, and Kai says so.
+    /// Set by the app from kai_wall_observed_level("storage").
+    static var filesEnforcing = false
     let ts: String
     let source: String
     let event: String
@@ -164,7 +168,8 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
         // Spec §4/§8: an agent check, in words; the rule stays behind Why?.
         if isBlock && isBuiltinRule {
             let changes = rule == "kai_self_protect" || ["Write", "Edit", "MultiEdit"].contains(tool ?? "")
-            return "\(who) tried to \(changes ? "change" : "read") Kai's settings. Always protected."
+            return "\(who) tried to \(changes ? "change" : "read") Kai's settings. "
+                + (AuditEvent.filesEnforcing ? "Always protected." : "Stopped.")
         }
         if isBlock && detail.hasPrefix("Kai blocked ") {
             let rest = detail.dropFirst("Kai blocked ".count)

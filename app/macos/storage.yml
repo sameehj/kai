@@ -7,11 +7,8 @@
 #
 #   make app-storage KAI_TEAM=<team>      build the app WITH the storage ext
 #
-# The extension defaults to notify mode (observe/log, never block). Real
-# blocking is compiled only with KAI_STORAGE_ENFORCE=1 and should be tried on
-# a VM first. This overlay does NOT embed the extension in the app yet (so a
-# stray build can't load it): to load it, add `- target: KaiStorage` to the
-# Kai target's dependencies and an activation request, per docs/WALLS.md.
+# This overlay embeds the storage extension and compiles its AUTH path.
+# The configured storage mode still controls whether it observes or blocks.
 include:
   - project.yml
 
