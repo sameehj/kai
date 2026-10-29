@@ -460,6 +460,33 @@ private struct NetworkPage: View {
         }
     }
 
+    // Fix 5: hosts in one agent's profile; ones Kai added from observed traffic
+    // (not the vendor's docs) are marked for review.
+    private var profileHosts: some View {
+        var rows: [(agent: String, host: String, documented: Bool)] = []
+        var i: Int32 = 0
+        var a: UnsafePointer<CChar>? = nil, h: UnsafePointer<CChar>? = nil
+        var d: Int32 = 0
+        while kai_agent_profile_host(i, &a, &h, &d) == 1, let a, let h {
+            rows.append((String(cString: a), String(cString: h), d == 1)); i += 1
+        }
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Agent profile hosts").font(Theme.display(16, .semibold))
+            Text("Allowed for that agent only.").font(.system(size: 12)).foregroundStyle(Theme.muted)
+            ForEach(rows, id: \.host) { r in
+                HStack(spacing: 8) {
+                    Text(r.host).font(Theme.mono)
+                    Text(r.agent == "cursor" ? "Cursor" : r.agent).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    if !r.documented {
+                        Text("observed, not documented").font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.amber)
+                            .help("Kai added this from traffic it saw, not from the vendor's documentation. Review it.")
+                    }
+                }
+            }
+        }
+    }
+
     private func turnOffClaudeTelemetry() {
         Task {
             guard await OwnerAuth.shared.confirm("change Claude Code's settings to turn off its telemetry") else { return }
@@ -498,6 +525,9 @@ private struct NetworkPage: View {
                                       ("off", "Off", "Agents reach anything.")],
                             selected: model.policy?.switches["egress"] ?? "log") { model.setSwitch("egress", $0) }
                     .disabled(model.busy || model.policy == nil)
+                Text("Watch and Protect both turn off QUIC for agents, so Kai can see which sites they reach. "
+                   + "Agents fall back to normal HTTPS; in Watch nothing else is blocked.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             }
             hosts
             EditableList(kind: "egress_allow", title: "Your allowed destinations",
@@ -506,6 +536,7 @@ private struct NetworkPage: View {
                              + "and package registries are built in.",
                          items: model.policy?.egressAllow ?? [], placeholder: "artifacts.yourcompany.com or 10.0.0.0/8")
             telemetry
+            profileHosts
             // B2 agent profiles: what the built-in model hosts allow, and the limit.
             Text("Built in for every agent: the model and sign-in hosts (anthropic.com, openai.com, cursor.sh and "
                + "others). Kai can't tell the model connection from other data sent to the same host.")
@@ -896,7 +927,7 @@ private struct PermissionsPage: View {
             Text("No rules. Make one from a card: More… → Create a rule.")
                 .font(.system(size: 13)).foregroundStyle(Theme.muted)
         }
-        ForEach(allow) { r in ruleRow(r, line: "\(r.agentTitle) may connect to \(r.dest) in every session") }
+        ForEach(allow) { r in ruleRow(r, line: "\(r.agentTitle) may connect to \(r.dest) \(r.untilLabel)") }
         if !kept.isEmpty {
             CapsLabel("Kept blocked").padding(.top, 4)
             Text("Kai doesn't ask about these again; each attempt is still blocked and recorded.")
@@ -1293,6 +1324,10 @@ private struct RowActions: View {
             HStack(spacing: 8) {
                 if sessionLive {
                     Button("Allow for this session") { grants.allowForSession(event) }.buttonStyle(GhostButtonStyle())
+                } else if event.identity != nil {
+                    Button("Allow \(event.agentName) to reach \(event.target ?? "") for 1 hour") {
+                        grants.allowForHour(grants.request(from: event))
+                    }.buttonStyle(GhostButtonStyle())
                 }
                 Button("Create a rule…") { confirmRule = true }.buttonStyle(GhostButtonStyle())
                     .disabled(event.identity == nil)

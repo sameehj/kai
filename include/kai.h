@@ -585,6 +585,7 @@ typedef struct {
     char dest[KAI_GRANT_RES_MAX];
     int op;
     long long created_utc;
+    long long expires_utc;      /* 0 = until removed; else a temporary allow */
     int authenticated;
     char hmac[65];
 } kai_decision_rule;
@@ -594,6 +595,12 @@ char *kai_rule_build_json(const char *id, int kind, const char *identity, const 
                           const char *dest, int op, long long created, int authenticated,
                           const unsigned char *key, size_t keylen);
 int kai_rule_from_json(const char *json, kai_decision_rule *out);
+/* Fix 2: the same with an expiry. A temporary Allow (at most a day) needs no
+ * owner authentication; it is for "Allow <agent> to reach <host> for 1 hour"
+ * when there is no session to bind to. */
+char *kai_rule_build_json_until(const char *id, int kind, const char *identity, const char *agent,
+                                const char *dest, int op, long long created, long long expires,
+                                int authenticated, const unsigned char *key, size_t keylen);
 /* KAI_RULE_ALLOW, KAI_RULE_KEEP_BLOCKED (wins over an Allow) or 0. Only
  * verified rules count. dir NULL = kai_rules_dir(). */
 int kai_rule_lookup(const char *dir, const char *identity, const char *dest, int op,
@@ -604,6 +611,9 @@ int kai_host_is_telemetry(const char *host);
 /* Hosts in one agent's own profile (e.g. Cursor's sign-in), allowed for that
  * agent only. Each covers its subdomains. */
 int kai_agent_profile_allows(const char *agent, const char *host);
+/* The i-th profile host (0-based), for Settings: 1 while i is in range.
+ * documented 0 = added from observed traffic, not the vendor's docs. */
+int kai_agent_profile_host(int i, const char **agent, const char **host, int *documented);
 /* Set env.<key>=<value> in Claude Code's settings (backup, atomic; refuses
  * invalid JSON with 3). The app calls it after owner authentication. */
 int kai_claude_set_env(const char *key, const char *value);
@@ -794,6 +804,11 @@ typedef struct {
     const char *identity; /* the agent's verified signing identity, if known */
 } kai_audit_entry;
 int kai_audit_write(const kai_audit_entry *e);
+/* Today's (date NULL) or a given day's ("YYYY-MM-DD", local) counts of
+ * meaningful records: secrets kept private and other blocks. Written with each
+ * record, so it survives rotation and isn't limited to the app's buffer.
+ * Returns 1 if the day has a counter file, else 0 (both counts 0). */
+int kai_daily_counts(const char *date, int *secrets, int *other);
 
 /* ---- Denial records (M0: make failure visible) ----
  * A denial's `rule` field carries a REASON CODE from this controlled

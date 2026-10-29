@@ -76,14 +76,9 @@ chmod +x "$OUT/scripts/preinstall"
 
 # postinstall: register kai's native host with the signed-in user's browsers,
 # so the store extension can reach kai right away (no Terminal step).
-cat > "$OUT/scripts/postinstall" <<'EOF'
-#!/bin/sh
-user=$(stat -f %Su /dev/console)
-[ -n "$user" ] && [ "$user" != root ] || exit 0
-uid=$(id -u "$user")
-launchctl asuser "$uid" sudo -u "$user" /usr/local/bin/kai install chrome >/dev/null 2>&1 || true
-exit 0
-EOF
+# Console user only; nobody signed in: skipped with a note in the installer log
+# (tests/release/run_postinstall_tests.sh).
+cp scripts/release/postinstall "$OUT/scripts/postinstall"
 chmod +x "$OUT/scripts/postinstall"
 
 ID=io.github.sameehj.kai.preview

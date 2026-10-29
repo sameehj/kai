@@ -220,6 +220,70 @@ long long kai_hook_last_seen(const char *agent) {
     return stat(path, &st) == 0 ? (long long)st.st_mtime : 0;
 }
 
+/* Fix 1: the per-day counter behind "Kai kept 3 secrets private today". One
+ * byte per meaningful record, appended to <kai home>/daily/<local date> (an
+ * O_APPEND write this small is atomic, so hooks and walls can share it). It is
+ * independent of the log, so rotation doesn't reset it. 's' = a secret kept
+ * private (a redaction, or a block of a protected file or a secret), 'b' =
+ * another block. Telemetry, a remembered Keep blocked, the QUIC fallback and
+ * grant bookkeeping are never counted. */
+static char daily_kind(const kai_audit_entry *e) {
+    const char *d = e->decision ? e->decision : "", *det = e->detail ? e->detail : "";
+    const char *src = e->source ? e->source : "", *rule = e->rule ? e->rule : "";
+    if (!strcmp(src, "grant") || !strncmp(det, "telemetry to ", 13) || !strncmp(det, "kept blocked", 12) ||
+        (!strcmp(src, "network") && e->target && !strcmp(e->target, "QUIC")))
+        return 0;
+    if (!strcmp(d, "redact") || !strcmp(d, "replace")) return 's';
+    if (strcmp(d, "block") != 0) return 0;
+    if (!strcmp(src, "storage") || !strncmp(rule, "secret", 6) || strstr(det, "protected")) return 's';
+    return 'b';
+}
+
+static void daily_path(const char *date, char *out, size_t n) {
+    char today[16];
+    if (!date) {
+        time_t now = time(NULL);
+        struct tm tmv;
+        localtime_r(&now, &tmv);
+        strftime(today, sizeof today, "%Y-%m-%d", &tmv);
+        date = today;
+    }
+    snprintf(out, n, "%s/daily/%s", kai_home(), date);
+}
+
+static void daily_count(const kai_audit_entry *e) {
+    char k = daily_kind(e);
+    if (!k) return;
+    char dir[1100], fp[1200];
+    snprintf(dir, sizeof dir, "%s/daily", kai_home());
+    mkdir(dir, 0700);
+    daily_path(NULL, fp, sizeof fp);
+    int fd = open(fp, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW, 0600);
+    if (fd < 0) return;
+    if (write(fd, &k, 1) != 1) { /* best effort: the log itself is the record */ }
+    if (geteuid() == 0) {               /* a wall running as root: keep it the user's */
+        struct stat hs;
+        if (stat(kai_home(), &hs) == 0) { if (fchown(fd, hs.st_uid, hs.st_gid) != 0 || chown(dir, hs.st_uid, hs.st_gid) != 0) {} }
+    }
+    close(fd);
+}
+
+int kai_daily_counts(const char *date, int *secrets, int *other) {
+    if (secrets) *secrets = 0;
+    if (other) *other = 0;
+    char fp[1200];
+    daily_path(date, fp, sizeof fp);
+    size_t n = 0;
+    char *t = kai_read_file(fp, 64u << 20, &n);
+    if (!t) return 0;
+    for (size_t i = 0; i < n; i++) {
+        if (t[i] == 's' && secrets) (*secrets)++;
+        else if (t[i] == 'b' && other) (*other)++;
+    }
+    free(t);
+    return 1;
+}
+
 int kai_audit_write(const kai_audit_entry *e) {
     if (g_suppress) return 0;
     ensure_home();
@@ -252,6 +316,7 @@ int kai_audit_write(const kai_audit_entry *e) {
     int rc = append_record(fd, e);
     flock(fd, LOCK_UN);
     close(fd);
+    if (rc == 0) daily_count(e);
     return rc;
 }
 

@@ -8,7 +8,7 @@ What Kai's **agent checks** (hooks inside each agent) do for each operation. Thi
 - **Denied by agent check**: the hook inside the agent refused it. Nothing here is *blocked by macOS*.
 - **Known bypass**: what the check can't see.
 
-Evidence: each agent's hook event, in that agent's format, sent to the real `kai hook` with the default policy in a throwaway home (`python3 -I tests/coverage/run_coverage.py ./kai`). Generated 2026-10-28.
+Evidence: each agent's hook event, in that agent's format, sent to the real `kai hook` with the default policy in a throwaway home (`python3 -I tests/coverage/run_coverage.py ./kai`). Generated 2026-10-29.
 
 ## Claude Code (2.1.312 (Claude Code))
 

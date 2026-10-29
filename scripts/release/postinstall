@@ -1,0 +1,39 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
+#
+# Kai Preview postinstall (runs as root after the package installs). Registers
+# kai's native host with the browsers of the user signed in at the console, so
+# the Chrome Web Store extension reaches kai without a Terminal step.
+#
+# Only the console user: run as that user (launchctl asuser + sudo -u, with
+# that user's own HOME), never as root and never in root's home. Nobody signed
+# in (login window, setup assistant, a remote install): skip with a note in the
+# installer log (/var/log/install.log). A failure never fails the install.
+#
+# KAI_CONSOLE_USER overrides who is at the console (tests only).
+log() { echo "kai postinstall: $*"; }
+KAI_BIN=/usr/local/bin/kai
+
+if [ "${KAI_CONSOLE_USER+set}" = set ]; then user="$KAI_CONSOLE_USER"
+else user=$(stat -f %Su /dev/console 2>/dev/null); fi
+case "$user" in
+    ""|root|loginwindow|_mbsetupuser)
+        log "nobody is signed in; skipped registering kai with the browser (run later: kai install chrome)"
+        exit 0 ;;
+esac
+uid=$(id -u "$user" 2>/dev/null) || { log "no such user '$user'; skipped"; exit 0; }
+if [ "$uid" -lt 501 ]; then
+    log "console user '$user' is a system account; skipped"
+    exit 0
+fi
+home=$(dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+case "$home" in
+    ""|/var/root|/private/var/root) log "no home folder for '$user'; skipped"; exit 0 ;;
+esac
+
+if launchctl asuser "$uid" sudo -u "$user" -H env HOME="$home" "$KAI_BIN" install chrome >/dev/null 2>&1; then
+    log "registered kai with $user's browsers"
+else
+    log "kai install chrome failed for $user (run it later: kai install chrome)"
+fi
+exit 0

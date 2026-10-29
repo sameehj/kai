@@ -342,6 +342,12 @@ final class GrantManager: ObservableObject {
             .sorted { $0.id < $1.id }
         rules = loadJSON(dir: rulesDir).compactMap { try? JSONDecoder().decode(DecisionRule.self, from: $0) }
             .sorted { $0.created < $1.created }
+        // The app is the rules folder's only writer: drop ended 1-hour allows.
+        for r in rules where r.hasEnded {
+            kai_grant_audit("expired", r.id, r.agent, r.dest, 2, "expire", "1-hour allow ended")
+            try? FileManager.default.removeItem(atPath: rulesDir + "/" + r.id + ".json")
+        }
+        rules.removeAll(where: \.hasEnded)
         telemetryHints = ((try? FileManager.default.contentsOfDirectory(atPath: hintsDir)) ?? [])
             .filter { $0.hasPrefix("telemetry-") }.map { String($0.dropFirst(10)) }.sorted()
         pendingPolicy = loadJSON(dir: pendingPolicyDir)
@@ -492,13 +498,32 @@ final class GrantManager: ObservableObject {
         }
     }
 
-    private func writeRule(kind: Int32, req: PendingRequest, identity: String, authenticated: Bool) -> Bool {
+    /// Fix 2: no session to bind to: allow this signed agent to reach this
+    /// host for one hour, in any of its sessions. One click, like the other
+    /// time-boxed allows; "Create a rule…" stays the permanent option.
+    func allowForHour(_ req: PendingRequest) {
+        guard req.rememberable, let ident = req.verifiedIdentity else { return }
+        if writeRule(kind: Int32(KAI_RULE_ALLOW), req: req, identity: ident, authenticated: false, ttl: 3600) {
+            KaiSounds.permissionGranted()
+            kai_grant_audit("approved", req.id, req.agent, req.resource, 2, "sign",
+                            "allowed for 1 hour for \(ident)")
+            Notifier.say("Kai allowed \(req.agentTitle) to reach \(req.resource)", "For 1 hour.")
+            for r in pending where r.op == "connect" && r.resource == req.resource && r.identity == req.identity {
+                clearPending(r)
+            }
+        }
+        refresh()
+    }
+
+    private func writeRule(kind: Int32, req: PendingRequest, identity: String, authenticated: Bool,
+                           ttl: Int = 0) -> Bool {
         guard let key = KaiApprovalKey.ensure() else { return false }
         let rid = UUID().uuidString
+        let now = Int64(Date().timeIntervalSince1970)
         let json: String? = key.withUnsafeBytes { raw -> String? in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress,
-                  let c = kai_rule_build_json(rid, kind, identity, req.agent, req.resource, 2,
-                                              Int64(Date().timeIntervalSince1970), authenticated ? 1 : 0,
+                  let c = kai_rule_build_json_until(rid, kind, identity, req.agent, req.resource, 2,
+                                                    now, ttl > 0 ? now + Int64(ttl) : 0, authenticated ? 1 : 0,
                                               base, key.count) else { return nil }
             defer { free(c) }
             return String(cString: c)
@@ -789,7 +814,15 @@ struct ApprovalCard: View {
                         Button("Allow this connection") { manager.approveOnce(req) }.keyboardShortcut(.defaultAction)
                         Button("Keep blocked") { manager.deny(req) }
                     } else {
-                        Button("Allow for this session") { ask(.session) }.keyboardShortcut(.defaultAction)
+                        if !(req.session ?? "").isEmpty {
+                            Button("Allow for this session") { ask(.session) }.keyboardShortcut(.defaultAction)
+                        } else if req.rememberable && tier < 2 {
+                            // Fix 2: no session to bind to: one hour, by signed identity.
+                            Button("Allow \(req.agentTitle) to reach \(req.resource) for 1 hour") { manager.allowForHour(req) }
+                                .keyboardShortcut(.defaultAction)
+                        } else {
+                            Button("Allow this process for 1 hour") { ask(.hour1) }.keyboardShortcut(.defaultAction)
+                        }
                         Button("Keep blocked") { manager.keepBlocked(req) }
                         Menu("More…") {
                             ForEach(tier == 2 ? [GrantDuration.day1] : [.min10, .hour1, .day1, .day7], id: \.self) { d in
@@ -929,8 +962,16 @@ struct DecisionRule: Decodable, Identifiable {
     let agent: String
     let dest: String
     let created_utc: String
+    var expires_utc: String? = nil
     var authenticated: Int? = 0
     var created: Int { Int(created_utc) ?? 0 }
+    var expires: Int { Int(expires_utc ?? "") ?? 0 }
+    var isTemporary: Bool { expires > 0 }
+    var hasEnded: Bool { isTemporary && expires <= Int(Date().timeIntervalSince1970) }
+    var untilLabel: String {
+        isTemporary ? "until " + Date(timeIntervalSince1970: TimeInterval(expires)).formatted(date: .omitted, time: .shortened)
+                    : "in every session"
+    }
     var isAllow: Bool { kind == "allow" }
     var agentTitle: String {
         switch agent {

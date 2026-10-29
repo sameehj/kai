@@ -634,10 +634,22 @@ int kai_grant_resolve(const char *path, char *buf, size_t buflen) {
  * Both are signed: an agent can't write ~/.kai, and a file copied from
  * elsewhere won't verify under this Mac's approval key. */
 static int rule_canonical(const kai_decision_rule *r, char *buf, size_t n) {
-    int w = snprintf(buf, n, "rule1\n%s\n%d\n%s\n%s\n%s\n%d\n%lld\n%d",
-                     r->id, r->kind, r->identity, r->agent, r->dest, r->op,
-                     r->created_utc, r->authenticated);
+    /* rule1 for rules that last until removed (their signatures stay valid);
+     * rule2 signs the expiry too. */
+    int w = r->expires_utc
+        ? snprintf(buf, n, "rule2\n%s\n%d\n%s\n%s\n%s\n%d\n%lld\n%lld\n%d",
+                   r->id, r->kind, r->identity, r->agent, r->dest, r->op,
+                   r->created_utc, r->expires_utc, r->authenticated)
+        : snprintf(buf, n, "rule1\n%s\n%d\n%s\n%s\n%s\n%d\n%lld\n%d",
+                   r->id, r->kind, r->identity, r->agent, r->dest, r->op,
+                   r->created_utc, r->authenticated);
     return w > 0 && (size_t)w < n;
+}
+
+/* An Allow either carries owner authentication or is temporary (a day at most). */
+static int allow_ok(const kai_decision_rule *r) {
+    if (r->authenticated) return 1;
+    return r->expires_utc > r->created_utc && r->expires_utc - r->created_utc <= 86400;
 }
 
 static int rule_hmac_ok(const kai_decision_rule *r, const unsigned char *key, size_t keylen) {
@@ -670,9 +682,15 @@ int kai_rule_dest_ok(int kind, const char *dest) {
 char *kai_rule_build_json(const char *id, int kind, const char *identity, const char *agent,
                           const char *dest, int op, long long created, int authenticated,
                           const unsigned char *key, size_t keylen) {
+    return kai_rule_build_json_until(id, kind, identity, agent, dest, op, created, 0, authenticated,
+                                     key, keylen);
+}
+
+char *kai_rule_build_json_until(const char *id, int kind, const char *identity, const char *agent,
+                                const char *dest, int op, long long created, long long expires,
+                                int authenticated, const unsigned char *key, size_t keylen) {
     if (!id || !*id || !identity || !*identity || !key || !keylen) return NULL;
     if (kind != KAI_RULE_ALLOW && kind != KAI_RULE_KEEP_BLOCKED) return NULL;
-    if (kind == KAI_RULE_ALLOW && !authenticated) return NULL;
     if (!kai_rule_dest_ok(kind, dest)) return NULL;
     kai_decision_rule r;
     memset(&r, 0, sizeof r);
@@ -683,7 +701,9 @@ char *kai_rule_build_json(const char *id, int kind, const char *identity, const 
     kai_strlcpy(r.dest, dest, sizeof r.dest);
     r.op = op;
     r.created_utc = created;
+    r.expires_utc = expires;
     r.authenticated = authenticated ? 1 : 0;
+    if (kind == KAI_RULE_ALLOW && !allow_ok(&r)) return NULL;
     char canon[3072];
     uint8_t mac[32];
     if (!rule_canonical(&r, canon, sizeof canon)) return NULL;
@@ -700,6 +720,11 @@ char *kai_rule_build_json(const char *id, int kind, const char *identity, const 
     cJSON_AddStringToObject(o, "dest", r.dest);
     cJSON_AddNumberToObject(o, "op", r.op);
     cJSON_AddStringToObject(o, "created_utc", cr);
+    if (r.expires_utc) {
+        char ex[32];
+        snprintf(ex, sizeof ex, "%lld", r.expires_utc);
+        cJSON_AddStringToObject(o, "expires_utc", ex);
+    }
     cJSON_AddNumberToObject(o, "authenticated", r.authenticated);
     cJSON_AddStringToObject(o, "hmac", r.hmac);
     char *out = cJSON_PrintUnformatted(o);
@@ -722,6 +747,7 @@ int kai_rule_from_json(const char *json, kai_decision_rule *out) {
     cpy(out->dest, sizeof out->dest, o, "dest");
     out->op = num_int(o, "op");
     out->created_utc = num_str(o, "created_utc");
+    out->expires_utc = num_str(o, "expires_utc");
     out->authenticated = num_int(o, "authenticated");
     cpy(out->hmac, sizeof out->hmac, o, "hmac");
     cJSON_Delete(o);
@@ -754,7 +780,8 @@ int kai_rule_lookup(const char *dir, const char *identity, const char *dest, int
         free(js);
         if (!ok || !rule_hmac_ok(&r, key, keylen)) continue;           /* forged/tampered */
         if (r.op != op || strcmp(r.identity, identity) != 0 || strcasecmp(r.dest, dest) != 0) continue;
-        if (r.kind == KAI_RULE_ALLOW && (!r.authenticated || !kai_rule_dest_ok(r.kind, r.dest))) continue;
+        if (r.expires_utc && (long long)time(NULL) >= r.expires_utc) continue;     /* ended */
+        if (r.kind == KAI_RULE_ALLOW && (!allow_ok(&r) || !kai_rule_dest_ok(r.kind, r.dest))) continue;
         /* Keep blocked wins over an Allow for the same thing: the tighter one. */
         if (r.kind == KAI_RULE_KEEP_BLOCKED || !found) {
             if (id_out && idn) kai_strlcpy(id_out, r.id, idn);

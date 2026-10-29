@@ -238,12 +238,20 @@ static const char *const BUILTIN_EGRESS[] = {
  * subdomains). Cursor's sign-in: https://cursor.com/help/troubleshooting/sign-in-domains
  * ("minimum hosts", not the wildcards: grok.com itself is an AI chat site).
  * workoscdn.com: seen live in Cursor's sign-in, not in Cursor's docs. */
-static const struct { const char *agent, *host; } AGENT_PROFILE_EGRESS[] = {
-    {"cursor", "cursorvm.com"},
-    {"cursor", "workoscdn.com"},
-    {"cursor", "accounts.x.ai"}, {"cursor", "accounts.spacex.ai"}, {"cursor", "auth.x.ai"},
-    {"cursor", "auth.grok.com"}, {"cursor", "auth.grokusercontent.com"}, {"cursor", "auth.grokipedia.com"},
+static const struct { const char *agent, *host; int documented; } AGENT_PROFILE_EGRESS[] = {
+    {"cursor", "cursorvm.com", 1},
+    {"cursor", "workoscdn.com", 0},   /* observed, not documented: listed in Settings for review */
+    {"cursor", "accounts.x.ai", 1}, {"cursor", "accounts.spacex.ai", 1}, {"cursor", "auth.x.ai", 1},
+    {"cursor", "auth.grok.com", 1}, {"cursor", "auth.grokusercontent.com", 1}, {"cursor", "auth.grokipedia.com", 1},
 };
+
+int kai_agent_profile_host(int i, const char **agent, const char **host, int *documented) {
+    if (i < 0 || (size_t)i >= sizeof AGENT_PROFILE_EGRESS / sizeof AGENT_PROFILE_EGRESS[0]) return 0;
+    if (agent) *agent = AGENT_PROFILE_EGRESS[i].agent;
+    if (host) *host = AGENT_PROFILE_EGRESS[i].host;
+    if (documented) *documented = AGENT_PROFILE_EGRESS[i].documented;
+    return 1;
+}
 
 int kai_agent_profile_allows(const char *agent, const char *host) {
     if (!agent || !host || !*host) return 0;

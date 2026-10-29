@@ -3,6 +3,7 @@
 // Numbers and lists the redesigned screens show, all derived from the audit
 // log events the app already follows. Nothing here is stored separately.
 import Foundation
+import KaiCore
 
 /// One destination an agent connected to that is not on the allowlist.
 struct ReachedHost: Identifiable, Equatable {
@@ -76,9 +77,11 @@ extension AppModel {
     /// Batch 2: the popover's value line, from meaningful events today only
     /// (telemetry, remembered blocks and the QUIC fallback never count).
     var valueLine: String {
-        let today = events.filter { e in e.date.map { Calendar.current.isDateInToday($0) } ?? false }
-        let secrets = today.filter(\.isSecretKept).count
-        let other = today.filter { $0.isBlock && !$0.isSilent && !$0.isGrant && !$0.isSecretKept }.count
+        // Fix 1: from the per-day counter written with each audit record, not
+        // the 300-event buffer this app keeps for display.
+        var s: Int32 = 0, b: Int32 = 0
+        kai_daily_counts(nil, &s, &b)
+        let secrets = Int(s), other = Int(b)
         var parts: [String] = []
         if secrets > 0 { parts.append("kept \(secrets) secret\(secrets == 1 ? "" : "s") private") }
         if other > 0 { parts.append("stopped \(other) risky action\(other == 1 ? "" : "s")") }

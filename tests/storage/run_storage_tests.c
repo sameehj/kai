@@ -2112,6 +2112,92 @@ static void write_rule(const char *dir, const char *name, const char *json) {
 
 /* Batch 2 item 4: "Turn off in Claude Code" writes env.DISABLE_TELEMETRY into
  * Claude Code's settings, keeping hooks and everything else, with a backup. */
+/* Fix 1: the popover's value line comes from a per-day counter written with
+ * each audit record (not the app's 300-event buffer). Telemetry, remembered
+ * blocks, the QUIC fallback and grant records never count. */
+static void audit_one(const char *source, const char *event, const char *decision, const char *rule,
+                      const char *detail, const char *target) {
+    kai_audit_entry e;
+    memset(&e, 0, sizeof e);
+    e.source = source; e.event = event; e.decision = decision; e.rule = rule; e.detail = detail;
+    e.target = target;
+    kai_audit_write(&e);
+}
+
+static void test_daily_counter(void) {
+    printf("daily counter for the value line (fix 1)\n");
+    int s0 = 0, b0 = 0, s1 = 0, b1 = 0;
+    kai_daily_counts(NULL, &s0, &b0);
+    audit_one("storage", "claude", "block", "protected_resource", "agent open of a protected file", "/u/.ssh/id_ed25519");
+    audit_one("claude", "PreToolUse", "redact", "secret:aws_key", "cleaned", NULL);
+    audit_one("claude", "PreToolUse", "block", "secret:github_token", "secret in command", NULL);
+    audit_one("network", "claude", "block", "not_on_allowlist", "connection to up.example.net (1.2.3.4:443) is not on the allowlist", "up.example.net");
+    /* never counted */
+    audit_one("network", "claude", "block", "not_on_allowlist", "telemetry to sentry.io (1.2.3.4:443); not asked about", "sentry.io");
+    audit_one("network", "claude", "block", "not_on_allowlist", "kept blocked: you chose Keep blocked for this agent and host", "up.example.net");
+    audit_one("network", "cursor", "log", "not_on_allowlist", "QUIC (UDP 443) dropped so the agent uses HTTPS", "QUIC");
+    audit_one("grant", "requested", "request", "connect", "grant requested id=x agent=claude", "up.example.net");
+    audit_one("claude", "PreToolUse", "allow", "", "", NULL);
+    audit_one("claude", "PreToolUse", "warn", "upload", "warned", NULL);
+    kai_daily_counts(NULL, &s1, &b1);
+    CHECK(s1 - s0 == 3 && b1 - b0 == 1, "3 secrets kept, 1 other block; telemetry, kept-blocked, QUIC and grants don't count");
+
+    /* a busy day across rotations: 1500 counted events with a tiny log cap */
+    setenv("KAI_AUDIT_MAX_BYTES", "20000", 1);
+    kai_daily_counts(NULL, &s0, &b0);
+    for (int i = 0; i < 1500; i++)
+        audit_one("network", "claude", "block", "not_on_allowlist", "connection to busy.example.net is not on the allowlist", "busy.example.net");
+    unsetenv("KAI_AUDIT_MAX_BYTES");
+    kai_daily_counts(NULL, &s1, &b1);
+    char old[1200]; snprintf(old, sizeof old, "%s.1", kai_audit_path());
+    CHECK(access(old, F_OK) == 0, "the busy day rotated the log");
+    CHECK(b1 - b0 == 1500 && s1 == s0, "the counter kept all 1500 across rotation (the UI buffer holds 300)");
+    CHECK(kai_daily_counts("1999-01-01", &s1, &b1) == 0 && s1 == 0 && b1 == 0, "another day starts at zero");
+}
+
+/* Fix 2: with no session to bind to, "Allow <agent> to reach <host> for 1
+ * hour" is a signed rule bound to the verified identity that expires. */
+static void test_temporary_rule(void) {
+    printf("1-hour allow by verified identity (fix 2)\n");
+    char dir[] = "/tmp/kai-trXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    const unsigned char key[] = "rules-test-key-0123456789abcdef";
+    const char *claude = "com.anthropic.claude-code (Q6L2SF6YDW)";
+    long long now = (long long)time(NULL);
+    char id[40];
+    char *t = kai_rule_build_json_until("t1", KAI_RULE_ALLOW, claude, "claude", "api.example.org",
+                                        KAI_OP_CONNECT, now, now + 3600, 0, key, sizeof key - 1);
+    CHECK(t != NULL, "a 1-hour allow needs no owner authentication");
+    write_rule(dir, "t1", t);
+    CHECK(kai_rule_lookup(dir, claude, "api.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id)
+              == KAI_RULE_ALLOW, "it allows that agent and host now");
+    CHECK(kai_rule_lookup(dir, "codex (2DC432GLL2)", "api.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "...only for that signed agent");
+    /* tampering with the expiry breaks the signature */
+    char *x = t ? strdup(t) : NULL;
+    char num[32]; snprintf(num, sizeof num, "%lld", now + 3600);
+    char *at = x ? strstr(x, num) : NULL;
+    if (at) at[0] = at[0] == '9' ? '1' : '9';
+    write_rule(dir, "t1", x);
+    CHECK(kai_rule_lookup(dir, claude, "api.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "an edited expiry doesn't verify");
+    free(x); free(t);
+
+    char *old = kai_rule_build_json_until("t2", KAI_RULE_ALLOW, claude, "claude", "old.example.org",
+                                          KAI_OP_CONNECT, now - 7200, now - 3600, 0, key, sizeof key - 1);
+    write_rule(dir, "t2", old);
+    free(old);
+    CHECK(kai_rule_lookup(dir, claude, "old.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "an expired allow stops");
+    CHECK(kai_rule_build_json_until("t3", KAI_RULE_ALLOW, claude, "claude", "api.example.org", KAI_OP_CONNECT,
+                                    now, now + 3 * 86400, 0, key, sizeof key - 1) == NULL,
+          "longer than a day without owner authentication: refused");
+    CHECK(kai_rule_build_json_until("t4", KAI_RULE_ALLOW, claude, "claude", "203.0.113.5:443", KAI_OP_CONNECT,
+                                    now, now + 3600, 0, key, sizeof key - 1) == NULL,
+          "never for an address with no hostname");
+    char cmd[700]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
 static void test_claude_env(void) {
     printf("Claude Code env switch (telemetry off)\n");
     char dir[] = "/tmp/kai-envXXXXXX";
@@ -2219,6 +2305,15 @@ static void test_decision_rules(void) {
               && !kai_agent_profile_allows("claude", "auth.grok.com") && !kai_agent_profile_allows("cursor", "grok.com")
               && !kai_agent_profile_allows("cursor", "evilauth.grok.com"),
           "agent profiles: Cursor's sign-in hosts for Cursor only, not the chat site");
+    {   /* fix 5: hosts added from observed traffic are flagged for review */
+        const char *pa, *ph; int doc, i, seen_obs = 0, seen_doc = 0, workos_doc = -1;
+        for (i = 0; kai_agent_profile_host(i, &pa, &ph, &doc); i++) {
+            if (doc) seen_doc = 1; else seen_obs = 1;
+            if (!strcmp(ph, "workoscdn.com")) workos_doc = doc;
+        }
+        CHECK(i > 0 && seen_doc && seen_obs && workos_doc == 0,
+              "profiles list each host; workoscdn.com is marked observed, not documented");
+    }
     CHECK(kai_host_is_telemetry("sentry.io") && kai_host_is_telemetry("o4507.ingest.us.sentry.io")
               && kai_host_is_telemetry("http-intake.logs.us5.datadoghq.com"),
           "telemetry hosts are recognized");
@@ -2607,6 +2702,8 @@ int main(void) {
     test_audit_rotation_chain();
     test_decision_rules();
     test_claude_env();
+    test_temporary_rule();
+    test_daily_counter();
     test_revocation_reaches_ro_store();
     test_audit_no_prompts();
     test_version_cmp();

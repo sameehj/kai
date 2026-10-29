@@ -70,6 +70,7 @@ test: kai
 	$(CC) $(CFLAGS) -o tests/storage/run_storage_tests tests/storage/run_storage_tests.c $(STORAGE_TEST_SRC) $(LDLIBS)
 	./tests/storage/run_storage_tests
 	sh tests/hooks/run_hook_tests.sh ./kai
+	sh tests/release/run_postinstall_tests.sh
 	# Suites that SET UP policy via `kai policy ...` use a throwaway binary built
 	# with the test seam (KAI_TEST_DIRECT_POLICY): the suites run inside the
 	# dev's agent tree and set loosening switches, both of which the production
