@@ -26,7 +26,7 @@ endif
 
 CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
        src/net.c src/storage.c src/storage_prof.c src/grant.c src/approval_store.c src/proc.c src/shell.c src/gateway.c src/session.c third_party/cjson/cJSON.c
-APP  = src/main.c src/hooks.c src/install.c src/manage.c src/browser.c src/native.c src/report.c src/health.c src/storaged.c src/grant_cli.c src/status.c src/agent_rules.c
+APP  = src/main.c src/hooks.c src/install.c src/manage.c src/browser.c src/native.c src/report.c src/health.c src/storaged.c src/grant_cli.c src/status.c src/agent_rules.c src/demo.c
 
 OBJ      = $(CORE:.c=.o) $(APP:.c=.o)
 COREOBJ  = $(CORE:.c=.o)

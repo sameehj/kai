@@ -55,27 +55,6 @@ static void agent_measure(agent_state *a) {
     a->last_use = last_hook_call(a->key);
 }
 
-/* "Active (hooks verified 09:14, last used 08:50)" etc. Returns 1 if active. */
-static int agent_line(const agent_state *a, char *out, size_t n) {
-    char now[16], used[16] = "";
-    clock_str((long long)time(NULL), now, sizeof now);
-    if (a->last_use) clock_str(a->last_use, used, sizeof used);
-    if (!a->installed) {
-        snprintf(out, n, a->detected ? "Not configured — run: kai install %s" : "Not detected", a->key);
-        return 0;
-    }
-    if (!a->ok) { snprintf(out, n, "Degraded: %s", a->problem[0] ? a->problem : "hook check failed"); return 0; }
-    if (!a->last_use) {
-        if (!strcmp(a->key, "codex"))
-            snprintf(out, n, "Hooks installed, not yet run by Codex — trust Kai's hooks in Codex (/hooks)");
-        else
-            snprintf(out, n, "Installed (hooks verified %s), not used yet", now);
-        return 0;
-    }
-    snprintf(out, n, "Active (hooks verified %s, last used %s)", now, used);
-    return 1;
-}
-
 static const char *wall_word(int lvl, int app) {
     if (!app) return "not included";
     switch (lvl) {
@@ -88,53 +67,150 @@ static const char *wall_word(int lvl, int app) {
 
 static int app_installed(void) { return kai_app_present(); }
 
+/* Spec v2.1 A.1: the security contract, word for word wherever it's shown. */
+static const char *CONTRACT =
+    "Kai Preview checks supported actions inside Claude Code, Codex and Cursor before they run. It is an extra "
+    "safety layer, not isolation or OS-level enforcement: hooks run with your permissions, cover only the actions "
+    "each agent reports to them, and a program the agent runs can get around them. Codex runs hooks only after "
+    "you trust them.";
+
+/* What each agent's hooks receive, from docs/COVERAGE.md. */
+static const char *agent_checks(const char *key) {
+    if (!strcmp(key, "claude")) return "file tool reads and writes, shell commands, your submitted prompts, MCP tools, web fetches";
+    if (!strcmp(key, "codex")) return "shell commands, your submitted prompts, MCP tools";
+    return "file reads, shell commands, your submitted prompts, MCP tool arguments (secrets only)";
+}
+
+/* Claude Code: hooks switched off in its own settings? */
+static int hooks_disabled(const agent_state *a) {
+    if (strcmp(a->key, "claude")) return 0;
+    char *p = kai_expand_home(a->config);
+    size_t n = 0;
+    char *t = p ? kai_read_file(p, 4 << 20, &n) : NULL;
+    free(p);
+    cJSON *o = t ? cJSON_Parse(t) : NULL;
+    free(t);
+    int off = cJSON_IsTrue(cJSON_GetObjectItem(o, "disableAllHooks"));
+    cJSON_Delete(o);
+    return off;
+}
+
+/* The entries are the ones this Kai installs (e.g. Claude Code's tool matcher
+ * includes WebFetch). */
+static int configured_current(const agent_state *a) {
+    if (strcmp(a->key, "claude")) return 1;
+    char *p = kai_expand_home(a->config);
+    size_t n = 0;
+    char *t = p ? kai_read_file(p, 4 << 20, &n) : NULL;
+    free(p);
+    int ok = t && strstr(t, "WebFetch") != NULL;
+    free(t);
+    return ok;
+}
+
+static void ago_str(long long t, char *out, size_t n) {
+    long long s = (long long)time(NULL) - t;
+    if (s < 120) snprintf(out, n, "just now");
+    else if (s < 7200) snprintf(out, n, "%lld min ago", s / 60);
+    else if (s < 172800) snprintf(out, n, "%lld h ago", s / 3600);
+    else snprintf(out, n, "%lld days ago", s / 86400);
+}
+
+/* A.3: per agent, each item measured on its own. Returns 2 checking,
+ * 1 partly, 0 not checking, -1 not installed. */
+static int agent_report(agent_state *a) {
+    agent_measure(a);
+    if (!a->installed) {
+        printf("  %-12s %s\n", a->name, a->detected ? "Not checking: Kai isn't installed for it (kai install)" : "Not detected");
+        return -1;
+    }
+    int disabled = hooks_disabled(a), current = configured_current(a);
+    int trusted;                     /* 1 yes, 0 unknown, 2 not needed */
+    if (!strcmp(a->key, "codex")) trusted = a->last_use ? 1 : 0;
+    else trusted = 2;
+    long long st = kai_selftest_last(a->key);
+    int word = (!a->ok || disabled || trusted == 0) ? 0 : !current ? 1 : 2;
+    const char *w = word == 2 ? "Checking" : word == 1 ? "Partly checking" : "Not checking";
+    printf("  %-12s %s\n", a->name, w);
+    char sts[48] = "now";
+    if (st) ago_str(st, sts, sizeof sts);
+    printf("    Installed: yes · Configured: %s · Trusted: %s · Self-test: %s\n",
+           disabled ? "hooks are switched off in its settings (disableAllHooks)"
+                    : current ? "yes" : "from an older Kai (kai install " "again)",
+           trusted == 2 ? "not needed" : trusted == 1 ? "yes (Codex has run Kai's hook)"
+                        : "unknown: Codex runs hooks only after you trust them (in Codex: /hooks)",
+           a->ok ? (st ? sts : "passed now") : (a->problem[0] ? a->problem : "failed"));
+    if (a->ok && st) printf("      (self-test passed %s; checked again now: passed)\n", sts);
+    long long when = 0;
+    char ver[200], cfg[65];
+    if (kai_live_info(a->key, &when, ver, sizeof ver, cfg, sizeof cfg)) {
+        char nowver[200], nowcfg[65], ag[48];
+        kai_agent_version(a->key, nowver, sizeof nowver);
+        kai_agent_config_sha(a->config, nowcfg);
+        ago_str(when, ag, sizeof ag);
+        const char *since = strcmp(nowver, ver) ? "; the agent was updated since"
+                          : strcmp(nowcfg, cfg) ? "; its hook settings changed since" : "; nothing changed since";
+        printf("    Live verification: verified %s (%s)%s\n", ag, ver[0] ? ver : "version unknown", since);
+    } else {
+        printf("    Live verification: never. Run kai demo --live (uses the agent and its model quota)\n");
+    }
+    printf("    Checks: %s\n", agent_checks(a->key));
+    return word;
+}
+
 int kai_cmd_status_text(void) {
     int app = app_installed();
-    printf("Kai%s %s\n", app ? "" : " Preview", KAI_VERSION);
-
     char *codex = kai_codex_hooks_path();
     agent_state agents[] = {
         {"Claude Code", "claude", "~/.claude/settings.json", 0, 0, 0, 0, ""},
         {"Codex", "codex", codex, 0, 0, 0, 0, ""},
         {"Cursor", "cursor", "~/.cursor/hooks.json", 0, 0, 0, 0, ""},
     };
-    int active = 0, configured = 0;
-    printf("Agent checks\n");
-    for (size_t i = 0; i < sizeof agents / sizeof agents[0]; i++) {
-        agent_measure(&agents[i]);
-        char line[400];
-        active += agent_line(&agents[i], line, sizeof line);
-        configured += agents[i].installed;
-        printf("  %-14s %s\n", agents[i].name, line);
+    int words[3], installed = 0, checking = 0, any_on = 0;
+    /* measure first, headline after */
+    char *buf = NULL; size_t blen = 0;
+    FILE *mem = open_memstream(&buf, &blen);
+    FILE *saved = stdout;
+    if (mem) stdout = mem;
+    for (int i = 0; i < 3; i++) {
+        words[i] = agent_report(&agents[i]);
+        if (words[i] >= 0) installed++;
+        if (words[i] == 2) checking++;
+        if (words[i] >= 1) any_on++;
     }
+    if (mem) { fflush(mem); stdout = saved; fclose(mem); }
     free(codex);
+    const char *head = installed && checking == installed ? "Checking"
+                     : any_on ? "Partly checking" : "Not checking";
+    printf("Kai%s %s · %s\n", app ? "" : " Preview", KAI_VERSION, head);
+    if (!app) printf("%s\n", CONTRACT);
+    printf("Agents\n%s", buf ? buf : "");
+    free(buf);
 
     int cdet = 0, con = kai_browser_installed(&cdet);
     const char *chats;
     char chatbuf[300];
-    if (!con) chats = cdet ? "Not configured — run: kai install chrome" : "Not detected";
-    else if (!kai_browser_extension_loaded()) chats = "Native host installed, extension not loaded in Chrome";
+    if (!con) chats = cdet ? "Not checking: Kai isn't set up for Chrome (kai install chrome)" : "Not detected";
+    else if (!kai_browser_extension_loaded()) chats = "Not checking: the Kai extension isn't loaded in Chrome";
     else {
         char *exe = kai_browser_host_exe();
         kai_health h; kai_health_chrome(exe, &h); free(exe);
-        if (h.ok) chats = "Active (extension connected)";
-        else { snprintf(chatbuf, sizeof chatbuf, "Degraded: %s", h.problem); chats = chatbuf; }
+        if (h.ok) chats = "Checking (sites not yet verified: see docs/COVERAGE.md)";
+        else { snprintf(chatbuf, sizeof chatbuf, "Not checking: %s", h.problem); chats = chatbuf; }
     }
     printf("%-16s %s\n", "Chats (Chrome)", chats);
 
     int files = kai_wall_observed_level("storage"), internet = kai_wall_observed_level("network");
     if (!app)
-        printf("%-16s %s\n", "OS protection", "Not included in this preview (Files, Internet)");
+        printf("%-16s %s\n", "OS enforcement", "Not included in Preview 1");
     else
-        printf("%-16s Files: %s · Internet: %s%s\n", "OS protection", wall_word(files, 1),
+        printf("%-16s Files: %s · Internet: %s%s\n", "OS enforcement", wall_word(files, 1),
                internet < 0 ? "not verified" : wall_word(internet, 1),
                kai_wall_paused("storage", (long long)time(NULL)) ? " (Kai is paused)" : "");
 
-    const char *coverage;
-    if (active == 0) coverage = configured ? "None verified yet: no agent has used Kai's checks" : "None: no agent configured";
-    else if (app && files == 2 && internet == 2) coverage = "Agent checks + Files + Internet";
-    else coverage = "Partial: agent checks only";
-    printf("%-16s %s\n", "Coverage", coverage);
+    printf("%-16s %s\n", "Not checked", "what a program the agent runs does on its own, tool results, other "
+                                          "model traffic, and actions an agent doesn't report to its hooks "
+                                          "(docs/COVERAGE.md)");
 
     int nl = 0; char verr[256] = "";
     struct stat st;
@@ -147,15 +223,15 @@ int kai_cmd_status_text(void) {
 
     int ks = 0, kb = 0;
     kai_daily_counts(NULL, &ks, &kb);
-    if (ks || kb) printf("%-16s %d secret%s kept private, %d risky action%s stopped\n", "Today",
-                         ks, ks == 1 ? "" : "s", kb, kb == 1 ? "" : "s");
-    else printf("%-16s %s\n", "Today", "Nothing risky yet");
-    if (!app) {
-        printf("%-16s %s\n", "Your rules", "kai rules (allow or block a site: kai allow / kai block)");
-        printf("%-16s %s\n", "Limits", "Kai's checks run inside each agent. A program an agent writes and runs "
-                                        "can get around them, and could edit Kai's settings or rules.");
-    }
+    printf("%-16s %d action%s stopped (kai log show)\n", "Today", ks + kb, ks + kb == 1 ? "" : "s");
+    if (!app) printf("%-16s %s\n", "Your rules", "kai rules · kai allow-file / allow-fetch / allow-mcp / allow-upload");
 
+    {
+        char d2[160];
+        int ig = kai_policy_integrity(d2, sizeof d2);
+        if (ig == KAI_POLICY_CHANGED) printf("%-16s %s\n", "Policy", "Kai's rules were changed outside Kai. Check them: kai policy show");
+        else if (ig == KAI_POLICY_MISSING) printf("%-16s %s\n", "Policy", "Missing: tool checks stop every action. Run kai init");
+    }
     printf("Run `kai doctor` for details.\n");
     return 0;
 }
@@ -167,8 +243,33 @@ int kai_cmd_doctor(void) {
 
     char err[256];
     kai_policy *p = kai_policy_load(NULL, err, sizeof err);
-    if (!p) { printf("✗ policy: %s\n", err); problems++; }
-    else { printf("✓ policy loads (%s)\n", kai_policy_source(p)); kai_policy_free(p); }
+    /* A.6b: four separate states, each in its own words. */
+    char idet[160];
+    int integ = kai_policy_integrity(idet, sizeof idet);
+    if (!p) {
+        if (integ == KAI_POLICY_MISSING)
+            printf("✗ policy: missing. Kai wrote %s and it's gone, so tool checks stop every action. Run kai init.\n",
+                   kai_policy_file());
+        else
+            printf("✗ policy: malformed or unreadable (%s). Tool checks stop every action until it's fixed; "
+                   "prompts are let through with a warning.\n", err);
+        problems++;
+    } else {
+        char first[64];
+        int unk = kai_policy_unknown(p, first, sizeof first);
+        printf("✓ policy loads (%s)\n", kai_policy_source(p));
+        if (unk) { printf("! policy: %d unrecognized rule%s (first: %s), not applied by this version of Kai\n",
+                          unk, unk == 1 ? "" : "s", first); problems++; }
+        kai_policy_free(p);
+    }
+    if (integ == KAI_POLICY_CHANGED) {
+        printf("! policy changed outside Kai (%s). If you didn't edit it yourself, check it: kai policy show\n", idet);
+        problems++;
+    } else if (integ == KAI_POLICY_OK) {
+        printf("✓ policy matches what Kai last wrote\n");
+    }
+    printf("· Limit: Kai can't detect a change made together with its fingerprint (%s/policy.sha256) by a program "
+           "with your permissions, or prevent either.\n", kai_home());
 
     char *codex = kai_codex_hooks_path();
     agent_state agents[] = {

@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
-// Spec §6: one sentence of status, today's count, the last event with "Not a
-// secret", and what Kai checks. Same words as the app: "kept out" for secrets.
+// Spec v2.1 A.7: one status sentence, today's redactions before sending, the
+// last event with "Not a secret". Three outcomes, never mixed: redacted before
+// sending, noticed after sending (this version never does), not checked.
 const $ = (id) => document.getElementById(id);
+// Sites the Chats coverage matrix proves (docs/COVERAGE.md). Empty until the
+// manual runs are recorded; others say "not yet verified".
+const VERIFIED_SITES = [];
 
 function ago(ts) {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
@@ -14,28 +18,33 @@ function ago(ts) {
 async function openChats() {
   try {
     const { kaiOpenPages: pages = {} } = await chrome.storage.session.get("kaiOpenPages");
-    return Object.keys(pages).length;
-  } catch { return 0; }
+    return Object.values(pages);
+  } catch { return []; }
 }
 
 chrome.runtime.sendMessage({ type: "ping" }, async (r) => {
   const ok = r && r.ok;
-  const n = await openChats();
-  $("status").textContent = !ok ? "Kai isn't connected"
-    : n === 0 ? "Kai checks your AI chats" : `Kai is checking ${n} chat${n === 1 ? "" : "s"}`;
+  const pages = await openChats();
+  const sites = [...new Set(pages)];
+  const unverified = sites.filter((s) => !VERIFIED_SITES.includes(s));
+  $("status").textContent = !ok ? "Not checking: Kai isn't connected"
+    : sites.length === 0 ? "Checking AI chats when you open one"
+    : `Checking ${pages.length} chat${pages.length === 1 ? "" : "s"} on ${sites.join(", ")}`
+      + (unverified.length ? " (not yet verified on these sites)" : "");
   $("help").hidden = !!ok;
 });
 
 chrome.storage.local.get(["kaiToday", "kaiLast"], ({ kaiToday: t, kaiLast: last }) => {
-  const n = t && t.day === new Date().toDateString() ? t.n : 0;
-  $("today").textContent = n ? `${n} secret${n === 1 ? "" : "s"} kept out today` : "Nothing kept out today";
+  const today = t && t.day === new Date().toDateString();
+  const n = today ? t.n || 0 : 0, nc = today ? t.nc || 0 : 0;
+  $("today").textContent = `Today: ${n} redacted before sending` + (nc ? ` · ${nc} sent not checked` : "");
   if (!last) return;
   $("last").hidden = false;
   $("lastText").innerHTML = "";
   const b = document.createElement("b");
   b.textContent = last.site;
-  $("lastText").append(b, last.action === "redacted" ? ": Kai removed a secret before sending."
-                                                    : ": Kai held a message with a secret.");
+  $("lastText").append(b, last.action === "redacted" ? ": a secret was redacted before sending."
+                                                    : ": a message with a secret was held before sending.");
   $("lastAgo").textContent = ago(last.ts);
   if (last.reported) { $("notSecret").textContent = "Reported"; $("notSecret").disabled = true; }
 });

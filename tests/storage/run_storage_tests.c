@@ -2201,37 +2201,77 @@ static void test_temporary_rule(void) {
 /* Spec §5.3: Preview 1's terminal rules (kai allow / block / rules / undo),
  * the hosts a command reaches, and refusing inside an agent. */
 static void test_agent_rules(void) {
-    printf("terminal rules: kai allow / block / undo (spec 5.3)\n");
+    printf("terminal grants: agent + operation + target + expiry (spec v2.1 A.6)\n");
     char hosts[8][256];
     int n = kai_command_hosts("curl -sS -d @notes.txt https://Up.Example.net:8443/x?y=1", hosts, 8);
     CHECK(n == 1 && !strcmp(hosts[0], "up.example.net"), "a URL's host, lowercased, no port");
     n = kai_command_hosts("scp notes.txt deploy@db.example.com:/tmp && nc paste.example.org 9000 < notes.txt", hosts, 8);
     CHECK(n == 2 && !strcmp(hosts[0], "db.example.com") && !strcmp(hosts[1], "paste.example.org"),
           "scp user@host: and nc <host>");
-    CHECK(kai_command_hosts("cat notes.txt | grep x", hosts, 8) == 0, "no destination: none");
 
+    char f[1024], h[256], form[16];
+    CHECK(kai_upload_parse("curl -sS -d @notes.txt https://up.example.net/x", f, sizeof f, h, sizeof h, form, sizeof form)
+              && !strcmp(f, "notes.txt") && !strcmp(h, "up.example.net") && !strcmp(form, "curl"),
+          "upload parse: curl -d @file URL");
+    CHECK(kai_upload_parse("curl -F 'doc=@./a.pdf;type=application/pdf' https://x.example/u", f, sizeof f, h, sizeof h, form, sizeof form)
+              && !strcmp(f, "./a.pdf"), "upload parse: curl -F name=@file;type=");
+    CHECK(kai_upload_parse("scp -P 2222 build.tgz deploy@db.example.com:/srv", f, sizeof f, h, sizeof h, form, sizeof form)
+              && !strcmp(f, "build.tgz") && !strcmp(h, "db.example.com") && !strcmp(form, "scp"), "upload parse: scp");
+    CHECK(!kai_upload_parse("cat notes.txt | curl -d @- https://x.example", f, sizeof f, h, sizeof h, form, sizeof form),
+          "upload parse: a pipe isn't identified");
+    CHECK(!kai_upload_parse("curl -d @a.txt -d @b.txt https://x.example", f, sizeof f, h, sizeof h, form, sizeof form),
+          "upload parse: two files aren't identified");
+    CHECK(!kai_upload_parse("nc x.example 9000 < notes.txt", f, sizeof f, h, sizeof h, form, sizeof form),
+          "upload parse: a redirect isn't identified");
+    CHECK(!kai_upload_parse("curl -d @a.txt https://x.example; rm -rf x", f, sizeof f, h, sizeof h, form, sizeof form),
+          "upload parse: two commands aren't identified");
+
+    char dir[] = "/tmp/kai-grXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char env[700], other[700], link[700], rp[1200];
+    snprintf(env, sizeof env, "%s/.env", dir);
+    snprintf(other, sizeof other, "%s/other.txt", dir);
+    snprintf(link, sizeof link, "%s/link.env", dir);
+    snprintf(rp, sizeof rp, "%s/agent-rules.json", kai_home());
+    unlink(rp);
+    FILE *w = fopen(env, "w"); if (w) { fputs("A=1\n", w); fclose(w); }
+    w = fopen(other, "w"); if (w) { fputs("B=2\n", w); fclose(w); }
     long long now = (long long)time(NULL);
-    char rp[1200]; snprintf(rp, sizeof rp, "%s/agent-rules.json", kai_home());
-    unlink(rp);
-    CHECK(kai_agent_rule_for("claude", "up.example.net", now) == 0, "no rules: nothing");
-    CHECK(kai_agent_rule_add(KAI_AGENT_RULE_ALLOW, "claude", "up.example.net", now + 3600) == 0, "allow for 1h");
-    CHECK(kai_agent_rule_for("claude", "up.example.net", now) == KAI_AGENT_RULE_ALLOW, "...applies to that agent");
-    CHECK(kai_agent_rule_for("codex", "up.example.net", now) == 0, "...not another agent");
-    CHECK(kai_agent_rule_for("claude", "x.up.example.net", now) == 0, "...not a subdomain");
-    CHECK(kai_agent_rule_for("claude", "up.example.net", now + 7200) == 0, "...and ends after an hour");
-    CHECK(kai_agent_rule_add(KAI_AGENT_RULE_BLOCK, "*", "example.org", 0) == 0, "block for every agent");
-    CHECK(kai_agent_rule_for("cursor", "cdn.example.org", now) == KAI_AGENT_RULE_BLOCK,
-          "a block covers subdomains and every agent");
-    CHECK(kai_agent_rule_undo() == 0 && kai_agent_rule_for("cursor", "example.org", now) == 0,
-          "undo reverses the last change");
-    CHECK(kai_agent_rule_for("claude", "up.example.net", now) == KAI_AGENT_RULE_ALLOW, "...and only the last");
-    CHECK(kai_agent_rule_undo() == 0 && kai_agent_rule_for("claude", "up.example.net", now) == 0, "undo again");
-    CHECK(kai_agent_rule_undo() != 0, "nothing left to undo");
-    CHECK(kai_agent_rule_add(KAI_AGENT_RULE_ALLOW, "claude", "203.0.113.5", now + 3600) == 0,
-          "an address can be allowed from the terminal (the user typed it)");
-    unlink(rp);
 
+    CHECK(kai_cli_grant_add(1, "read", "claude", ".env", NULL, now + 3600, dir, NULL, 0) == 0,
+          "allow-file .env --read, relative to the user's folder");
+    CHECK(kai_cli_grant_allows("read", "claude", env, NULL, "/", now), "the read grant applies to that file");
+    CHECK(kai_cli_grant_allows("read", "claude", ".env", NULL, dir, now), "...also when the agent names it relatively");
+    CHECK(!kai_cli_grant_allows("write", "claude", env, NULL, "/", now), "a read grant doesn't allow writing");
+    CHECK(!kai_cli_grant_allows("upload", "claude", env, "up.example.net", "/", now), "...or uploading");
+    CHECK(!kai_cli_grant_allows("read", "codex", env, NULL, "/", now), "two agents, one grant: the other isn't covered");
+    CHECK(!kai_cli_grant_allows("read", "claude", env, NULL, "/", now + 7200), "an expired grant stops applying");
+
+    symlink(env, link);
+    CHECK(kai_cli_grant_allows("read", "claude", link, NULL, "/", now), "a symlink to the granted file resolves to it");
+    unlink(env);
+    symlink(other, env);
+    CHECK(!kai_cli_grant_allows("read", "claude", env, NULL, "/", now), "the path re-linked elsewhere: grant doesn't apply");
+    unlink(env);
+    w = fopen(env, "w"); if (w) { fputs("A=1\n", w); fclose(w); }
+    CHECK(!kai_cli_grant_allows("read", "claude", env, NULL, "/", now), "the file replaced by a new one: grant doesn't apply");
+
+    CHECK(kai_cli_grant_add(1, "upload", "claude", env, "up.example.net", now + 3600, NULL, NULL, 0) == 0, "allow-upload");
+    CHECK(kai_cli_grant_allows("upload", "claude", env, "UP.example.net", "/", now), "upload grant: that file to that host");
+    CHECK(!kai_cli_grant_allows("upload", "claude", env, "evil.example", "/", now), "...not another host");
+    CHECK(kai_cli_grant_add(1, "mcp", "claude", "notion", "search", now + 3600, NULL, NULL, 0) == 0, "allow-mcp server tool");
+    CHECK(kai_cli_grant_allows("mcp", "claude", "notion", "search", NULL, now) &&
+          !kai_cli_grant_allows("mcp", "claude", "notion", "delete_page", NULL, now), "mcp grant: only that tool");
+    CHECK(kai_cli_grant_add(1, "fetch", "claude", "Docs.Example.org", NULL, now + 3600, NULL, NULL, 0) == 0 &&
+          kai_cli_grant_allows("fetch", "claude", "docs.example.org", NULL, NULL, now) &&
+          !kai_cli_grant_allows("fetch", "claude", "api.docs.example.org", NULL, NULL, now),
+          "fetch grant: exactly that host, never a subdomain");
+    CHECK(kai_cli_grant_add(0, "reach", "*", "example.org", NULL, 0, NULL, NULL, 0) == 0 &&
+          kai_agent_rule_for("cursor", "cdn.example.org", now) == KAI_AGENT_RULE_BLOCK, "a block covers subdomains, every agent");
+    CHECK(kai_agent_rule_undo() == 0 && kai_agent_rule_for("cursor", "example.org", now) == 0, "undo reverses the last change");
+    CHECK(kai_cli_grant_allows("mcp", "claude", "notion", "search", NULL, now), "...and only the last");
     unlink(rp);
+    char cmd[800]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
 }
 
 /* Spec §4: GitHub and package registries are optional channels, off by default,
@@ -2258,6 +2298,68 @@ static void test_channels(void) {
     const char *name, *label; int i;
     for (i = 0; kai_channel_info(i, &name, &label); i++) {}
     CHECK(i == 3, "three channels are listed for Settings");
+}
+
+/* Spec v2.1 A.6b: policy integrity, honest scope. Kai records a fingerprint
+ * when it writes the policy; a change by anything else shows as "changed
+ * outside Kai" (unless that something also rewrote the fingerprint: the
+ * stated limit). Malformed, unrecognized and missing are separate states. */
+static void test_policy_integrity(void) {
+    printf("policy integrity (spec v2.1 A.6b)\n");
+    char home[] = "/tmp/kai-integXXXXXX";
+    if (!mkdtemp(home)) { CHECK(0, "mkdtemp"); return; }
+    char cmd[1600], pol[700], fp[700], out[700], err[256], first[64];
+    snprintf(pol, sizeof pol, "%s/policy", home);
+    snprintf(fp, sizeof fp, "%s/policy.sha256", home);
+    snprintf(out, sizeof out, "%s/o.txt", home);
+    #define K(args) (snprintf(cmd, sizeof cmd, "env -u KAI_POLICY KAI_HOME='%s' HOME='%s' tests/cli/kai-test " args " > '%s' 2>&1", home, home, out), system(cmd))
+    CHECK(K("init") == 0 && access(fp, F_OK) == 0, "kai init records the fingerprint");
+    K("doctor");
+    CHECK(file_contains(out, "policy matches what Kai last wrote"), "doctor: unchanged");
+    CHECK(K("policy set on_fetch block") == 0, "a Kai write");
+    K("doctor");
+    CHECK(file_contains(out, "policy matches what Kai last wrote"), "...keeps the fingerprint current");
+
+    FILE *f = fopen(pol, "a"); if (f) { fputs("protect ~/agent-added\n", f); fclose(f); }
+    K("doctor");
+    CHECK(file_contains(out, "changed outside Kai"), "an agent editing the policy file directly: changed outside Kai");
+    K("status");
+    CHECK(file_contains(out, "changed outside Kai"), "...status says so too");
+
+    /* the stated limit: rewrite the fingerprint as well, and it isn't detected */
+    snprintf(cmd, sizeof cmd, "shasum -a 256 '%s' | cut -c1-64 > '%s'", pol, fp); (void)system(cmd);
+    K("doctor");
+    CHECK(!file_contains(out, "changed outside Kai") && file_contains(out, "can't detect a change made together with"),
+          "policy and fingerprint both edited: not detected, and doctor says that's the limit");
+
+    f = fopen(pol, "a"); if (f) { fputs("frobnicate yes\n", f); fclose(f); }
+    kai_policy *p = kai_policy_load(pol, err, sizeof err);
+    CHECK(p && kai_policy_unknown(p, first, sizeof first) == 1 && !strcmp(first, "frobnicate"),
+          "an unrecognized rule is counted, not silently dropped");
+    if (p) kai_policy_free(p);
+    K("doctor");
+    CHECK(file_contains(out, "unrecognized") && file_contains(out, "frobnicate"), "doctor: unrecognized rule, named");
+
+    f = fopen(pol, "a"); if (f) { fputs("rule_upload broken ((\n", f); fclose(f); }
+    K("doctor");
+    CHECK(file_contains(out, "malformed"), "doctor: malformed, its own state");
+
+    unlink(pol);
+    snprintf(cmd, sizeof cmd, "printf '%%s' '{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\"session_id\":\"i\","
+             "\"tool_input\":{\"file_path\":\"/tmp/readme.txt\"},\"cwd\":\"/tmp\"}' | env -u KAI_POLICY KAI_HOME='%s' HOME='%s' "
+             "tests/cli/kai-test hook claude > '%s' 2>&1", home, home, out);
+    (void)system(cmd);
+    CHECK(file_contains(out, "deny") && file_contains(out, "Kai can't read its rules, so it stopped this action"),
+          "policy missing after Kai wrote it: tool checks fail closed with the doctor hint");
+    snprintf(cmd, sizeof cmd, "printf '%%s' '{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"i\",\"prompt\":\"hi\"}' | "
+             "env -u KAI_POLICY KAI_HOME='%s' HOME='%s' tests/cli/kai-test hook claude > '%s' 2>&1", home, home, out);
+    (void)system(cmd);
+    CHECK(!file_contains(out, "\"decision\"") && file_contains(out, "this prompt wasn't checked"),
+          "...the prompt check warns and allows");
+    K("doctor");
+    CHECK(file_contains(out, "missing"), "doctor: missing");
+    #undef K
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", home); (void)system(cmd);
 }
 
 static void test_claude_env(void) {
@@ -2764,6 +2866,7 @@ int main(void) {
     test_audit_rotation_chain();
     test_decision_rules();
     test_claude_env();
+    test_policy_integrity();
     test_channels();
     test_agent_rules();
     test_temporary_rule();

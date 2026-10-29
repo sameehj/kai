@@ -58,13 +58,16 @@ chrome.runtime.onInstalled.addListener(() => { ask({ type: "ping" }); reportStat
 
 // Spec §6: today's "secrets kept out" and the last event, for the popup.
 const TODAY_KEY = "kaiToday", LAST_KEY = "kaiLast";
-async function keptOut(site, action) {
+// Spec v2.1 A.7 outcomes: n = redacted before sending, nc = not checked
+// (Kai unreachable and sent anyway). Nothing is noticed after sending.
+async function bumpToday(field) {
   const day = new Date().toDateString();
-  const { [TODAY_KEY]: t = { day, n: 0 } } = await chrome.storage.local.get(TODAY_KEY);
-  const today = t.day === day ? t : { day, n: 0 };
-  today.n += 1;
+  const { [TODAY_KEY]: t = { day, n: 0, nc: 0 } } = await chrome.storage.local.get(TODAY_KEY);
+  const today = t.day === day ? { n: 0, nc: 0, ...t } : { day, n: 0, nc: 0 };
+  today[field] = (today[field] || 0) + 1;
   await chrome.storage.local.set({ [TODAY_KEY]: today });
 }
+async function keptOut(site, action) { await bumpToday("n"); }
 async function rememberLast(site, action, summary) {
   await chrome.storage.local.set({ [LAST_KEY]: { site, action, summary, ts: Date.now() } });
 }
@@ -153,6 +156,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                                 summary: String(msg.summary || "") });
       scheduleReport();
       sendResponse(reply);
+    } else if (msg?.type === "not_checked") {
+      await bumpToday("nc");
+      sendResponse({ ok: true });
     } else if (msg?.type === "not_secret") {   // from the popup's last event
       const { [LAST_KEY]: last } = await chrome.storage.local.get(LAST_KEY);
       if (!last) { sendResponse({ ok: false, error: "nothing to report" }); return; }

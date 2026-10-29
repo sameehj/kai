@@ -59,6 +59,7 @@ static int cmd_init(void) {
     if (!f) { fprintf(stderr, "Cannot write %s\n", full); return 1; }
     fputs(kai_default_policy(), f);
     fclose(f);
+    kai_policy_record_fingerprint();   /* A.6b: Kai wrote it */
     printf("Wrote default policy to %s\n", full);
     return 0;
 }
@@ -202,9 +203,13 @@ static void usage(void) {
         "  kai redact                        clean stdin -> stdout\n"
         "  kai init                          write ~/.kai/policy\n"
         "  kai doctor                        check policy and installs\n"
+        "  kai demo [--live]                 prove Kai's hooks work (--live: with a real agent session)\n"
         "  kai status [--json]               same as doctor; --json for scripts/app\n"
         "  kai policy [show|set|add|remove]  view or change the policy safely\n"
-        "  kai allow <host> --agent A [--for 1h]  let one agent reach a host (your own terminal)\n"
+        "  kai allow-file <path> --read|--write --agent A [--for 1h]\n"
+        "  kai allow-fetch <domain> --agent claude [--for 1h]\n"
+        "  kai allow-mcp <server> [<tool>] --agent A [--for 1h]\n"
+        "  kai allow-upload <file> --to <host> --agent A [--for 1h]\n"
         "  kai block <host> [--agent A]      keep agents from reaching a host\n"
         "  kai rules                         what each agent can reach, and why\n"
         "  kai undo                          reverse the last allow/block\n"
@@ -248,7 +253,12 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "agents") == 0) return kai_cmd_agents(rest, restv);
     if (strcmp(cmd, "why") == 0) return kai_cmd_why(rest, restv);
     if (strcmp(cmd, "denials") == 0) return kai_cmd_denials(rest, restv);
+    if (strcmp(cmd, "demo") == 0) return kai_cmd_demo(rest, restv);
     if (strcmp(cmd, "allow") == 0) return kai_cmd_allow(rest, restv);
+    if (strcmp(cmd, "allow-file") == 0) return kai_cmd_allow_file(rest, restv);
+    if (strcmp(cmd, "allow-fetch") == 0) return kai_cmd_allow_fetch(rest, restv);
+    if (strcmp(cmd, "allow-mcp") == 0) return kai_cmd_allow_mcp(rest, restv);
+    if (strcmp(cmd, "allow-upload") == 0) return kai_cmd_allow_upload(rest, restv);
     if (strcmp(cmd, "block") == 0) return kai_cmd_block(rest, restv);
     if (strcmp(cmd, "rules") == 0) return kai_cmd_rules(rest, restv);
     if (strcmp(cmd, "undo") == 0) return kai_cmd_undo(rest, restv);

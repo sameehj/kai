@@ -445,6 +445,7 @@ static int policy_write_text(const char *txt, const char *path) {
         fprintf(stderr, "kai policy: cannot write %s\n", path);
         return 1;
     }
+    if (!strcmp(path, kai_policy_file())) kai_policy_record_fingerprint();   /* A.6b */
     return 0;
 }
 
@@ -521,6 +522,7 @@ static const struct {
     {"on_prompt_secret", "block", {"block", "warn", NULL}},
     {"on_file_secret", "ask", {"ask", "block", "warn", NULL}},
     {"on_upload", "block", {"block", "ask", "warn", NULL}},
+    {"on_fetch", "allow", {"allow", "block", NULL}},
     {"injection", "warn", {"warn", "off", NULL}},
     {"max_scan_bytes", "2000000", {NULL}},
     {"egress", "log", {"log", "block", "off", NULL}},
@@ -714,6 +716,7 @@ static int switch_rank(const char *key, const char *val) {
         {"on_prompt_secret", {"warn", "block", NULL}},
         {"on_file_secret",   {"warn", "ask", "block", NULL}},
         {"on_upload",        {"warn", "ask", "block", NULL}},
+        {"on_fetch",         {"allow", "block", NULL}},
         {"injection",        {"off", "warn", NULL}},
         {"egress",           {"off", "log", "block", NULL}},
         {"storage",          {"off", "log", "block", NULL}},

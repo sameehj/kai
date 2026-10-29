@@ -168,7 +168,7 @@ static int install_claude(const char *exe) {
         cJSON_AddItemToObject(root, "hooks", hooks);
     }
     ensure_event(hooks, "UserPromptSubmit", NULL, exe);
-    ensure_event(hooks, "PreToolUse", "Bash|Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Glob|LS", exe);
+    ensure_event(hooks, "PreToolUse", "Bash|Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Glob|LS|WebFetch", exe);
     ensure_event(hooks, "PreToolUse", "mcp__.*", exe);
     ensure_event(hooks, "PostToolUse", NULL, exe);
     ensure_event(hooks, "SessionStart", NULL, exe); /* Item 7: up-front protection/SSH hint */
@@ -528,9 +528,11 @@ static void version_record(void) {
 /* Spec §2: the first save. After installing, say what is watched and how to
  * see Kai work in ten seconds. */
 static void try_it(const char *names) {
-    printf("\nKai is watching %s.\n"
-           "Try it: ask your agent to read ~/.ssh/id_rsa. Kai blocks it and tells you why.\n"
-           "Then: kai status (what's covered), kai rules (what agents can reach).\n", names);
+    printf("\nKai Preview now checks %s before supported actions run. It's an extra safety layer, not "
+           "isolation: a program the agent runs can get around it.\n"
+           "See it work: kai demo (a fake secret; nothing real is touched).\n"
+           "Confirm with a real agent session: kai demo --live (uses the agent and its model quota).\n"
+           "Then: kai status (what's checked), kai rules (what you've allowed).\n", names);
 }
 
 int kai_cmd_install(int argc, char **argv) {

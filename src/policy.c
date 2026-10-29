@@ -8,6 +8,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 /* Upload patterns from earlier default policies, matched against raw command
  * text, and their replacements for the command view (kai_shell_view). A
@@ -479,6 +480,9 @@ static kai_policy *parse(const char *text, const char *source, char *err,
             char *rep;
             p->file_secret_action = p->file_secret_ask ? KAI_ACT_BLOCK : parse_action(v, &rep);
             if (!p->file_secret_ask) free(rep);
+        } else if (strcmp(d, "on_fetch") == 0) {
+            char *v; if (!next_tok(&cur, &v)) continue;
+            p->fetch_block = strcmp(v, "block") == 0;
         } else if (strcmp(d, "on_upload") == 0) {
             char *v; if (!next_tok(&cur, &v)) continue;
             p->upload_ask = strcmp(v, "ask") == 0;
@@ -598,7 +602,10 @@ static kai_policy *parse(const char *text, const char *source, char *err,
             char *v; if (!next_tok(&cur, &v)) continue;
             p->audit_context = strcmp(v, "off") != 0;
         } else {
-            /* unknown directive: ignore, forward-compatible */
+            /* unknown directive: not applied (forward-compatible), but counted
+             * so kai doctor can say "unrecognized rule" instead of hiding it */
+            if (!p->nunknown) kai_strlcpy(p->unknown_first, d, sizeof p->unknown_first);
+            p->nunknown++;
         }
     }
     free(copy);
@@ -710,6 +717,54 @@ kai_policy *kai_policy_from_string(const char *text, char *err, size_t errlen) {
     return parse(text, "string", err, errlen);
 }
 
+void kai_sha256_hex(const void *data, size_t n, char out[65]);
+
+static const char *fingerprint_path(void) {
+    static char buf[1200];
+    snprintf(buf, sizeof buf, "%s/policy.sha256", kai_home());
+    return buf;
+}
+
+void kai_policy_record_fingerprint(void) {
+    size_t n = 0;
+    char *t = kai_read_file(kai_policy_file(), 4000000, &n);
+    if (!t) return;
+    char hex[65];
+    kai_sha256_hex(t, n, hex);
+    free(t);
+    char tmp[1300];
+    snprintf(tmp, sizeof tmp, "%s.tmp.%d", fingerprint_path(), (int)getpid());
+    FILE *f = fopen(tmp, "w");
+    if (!f) return;
+    fprintf(f, "%s\n", hex);
+    if (fclose(f) == 0) { chmod(tmp, 0600); if (rename(tmp, fingerprint_path()) != 0) unlink(tmp); }
+    else unlink(tmp);
+}
+
+int kai_policy_integrity(char *detail, size_t n) {
+    if (detail && n) detail[0] = '\0';
+    size_t fl = 0;
+    char *want = kai_read_file(fingerprint_path(), 4096, &fl);
+    if (!want) return KAI_POLICY_NO_RECORD;
+    struct stat st;
+    if (stat(kai_policy_file(), &st) != 0) { free(want); return KAI_POLICY_MISSING; }
+    size_t pl = 0;
+    char *t = kai_read_file(kai_policy_file(), 4000000, &pl);
+    if (!t) { free(want); return KAI_POLICY_UNREADABLE; }
+    char hex[65];
+    kai_sha256_hex(t, pl, hex);
+    free(t);
+    int same = fl >= 64 && !strncmp(want, hex, 64);
+    if (!same && detail) snprintf(detail, n, "recorded %.12s, now %.12s", want, hex);
+    free(want);
+    return same ? KAI_POLICY_OK : KAI_POLICY_CHANGED;
+}
+
+int kai_policy_unknown(const kai_policy *p, char *first, size_t n) {
+    if (first && n) kai_strlcpy(first, p && p->nunknown ? p->unknown_first : "", n);
+    return p ? p->nunknown : 0;
+}
+
 kai_policy *kai_policy_load(const char *path, char *err, size_t errlen) {
     char *chosen = NULL;
     if (path && *path) {
@@ -722,7 +777,12 @@ kai_policy *kai_policy_load(const char *path, char *err, size_t errlen) {
          * unsigned processes from reading ~/.kai, which is how this happens. */
         struct stat st;
         if (stat(def, &st) == 0) chosen = strdup(def);
-        else if (errno != ENOENT) {
+        else if (errno == ENOENT && kai_policy_integrity(NULL, 0) == KAI_POLICY_MISSING) {
+            /* A.6b: Kai wrote a policy and it's gone. Never fall back to the
+             * built-in defaults silently. */
+            if (err && errlen) snprintf(err, errlen, "the policy file Kai wrote is missing: %s", def);
+            return NULL;
+        } else if (errno != ENOENT) {
             if (err && errlen) snprintf(err, errlen, "cannot access policy file: %s (%s)", def, strerror(errno));
             return NULL;
         }
@@ -771,6 +831,7 @@ kai_action kai_policy_file_secret_action(const kai_policy *p) { return p->file_s
 kai_action kai_policy_upload_action(const kai_policy *p) { return p->upload_action; }
 int kai_policy_file_secret_ask(const kai_policy *p) { return p ? p->file_secret_ask : 0; }
 int kai_policy_upload_ask(const kai_policy *p) { return p ? p->upload_ask : 0; }
+int kai_policy_fetch_block(const kai_policy *p) { return p ? p->fetch_block : 0; }
 int kai_policy_audit_context(const kai_policy *p) { return p && p->audit_context; }
 
 /* '*' and '?' span anything, '/' and newlines included: the pattern is over

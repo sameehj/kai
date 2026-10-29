@@ -52,6 +52,15 @@ typedef struct kai_policy kai_policy;
 /* Load the policy. path == NULL means $KAI_POLICY, then ~/.kai/policy,
  * then the built-in defaults. Returns NULL and fills err on a parse error. */
 kai_policy *kai_policy_load(const char *path, char *err, size_t errlen);
+/* Spec v2.1 A.6b, honest scope: Kai records the policy's fingerprint when it
+ * writes it and compares on demand. A process with the user's permissions can
+ * change both, so this detects some outside changes, never all. */
+enum { KAI_POLICY_OK = 0, KAI_POLICY_CHANGED = 1, KAI_POLICY_MISSING = 2,
+       KAI_POLICY_UNREADABLE = 3, KAI_POLICY_NO_RECORD = 4 };
+void kai_policy_record_fingerprint(void);
+int kai_policy_integrity(char *detail, size_t n);
+/* Directives this version doesn't know: count, and the first one's name. */
+int kai_policy_unknown(const kai_policy *p, char *first, size_t n);
 kai_policy *kai_policy_from_string(const char *text, char *err, size_t errlen);
 void kai_policy_free(kai_policy *p);
 const char *kai_policy_source(const kai_policy *p); /* file path or "built-in" */
@@ -634,7 +643,25 @@ int kai_agent_rule_undo(void);                 /* 0 ok, -1 nothing to undo */
 /* The hosts a shell command reaches (URLs, scp/rsync/ssh user@host:, nc host),
  * lowercased, without ports. Returns how many (at most max). */
 int kai_command_hosts(const char *cmd, char hosts[][256], int max);
-int kai_app_present(void);   /* the Kai app (with its OS walls) is installed */
+/* Spec v2.1 A.6 terminal grants: allow (1) or block (0), op read|write|fetch|
+ * mcp|upload|reach, exact target (files canonical, with device+inode for read
+ * and upload), to = upload host or MCP tool ("" any), until = expiry. */
+int kai_cli_grant_add(int allow, const char *op, const char *agent, const char *target, const char *to,
+                      long long until, const char *base, char *err, size_t errlen);
+int kai_cli_grant_allows(const char *op, const char *agent, const char *target, const char *to,
+                         const char *cwd, long long now);
+/* One simple curl/scp upload Kai can read in full: its file, host and form. */
+int kai_upload_parse(const char *cmd, char *file, size_t fn, char *host, size_t hn, char *form, size_t fmn);
+int kai_policy_fetch_block(const kai_policy *p);
+int kai_app_present(void);
+/* Run the agent's installed hook command with input (A.4 self-test). */
+int kai_health_run_hook(const char *agent, const char *config, const char *input, char *out, size_t outlen);
+/* A.3/A.4: the last live verification of an agent (kai demo --live), its
+ * agent version and hook-settings fingerprint then. 1 if there is one. */
+int kai_live_info(const char *agent, long long *when, char *version, size_t vn, char *cfg, size_t cn);
+long long kai_selftest_last(const char *agent);
+void kai_agent_version(const char *agent, char *out, size_t n);
+void kai_agent_config_sha(const char *config, char out[65]);   /* the Kai app (with its OS walls) is installed */
 int kai_claude_env_is(const char *key, const char *value);
 /* The verified code-signing identity of a running process: "<signing id>
  * (<team>)", or "<signing id> (Apple)" for Apple's own. 1 when the signature

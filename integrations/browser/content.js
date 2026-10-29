@@ -158,6 +158,7 @@
       const { kaiFailMode = "ask" } = await chrome.storage.local.get("kaiFailMode").catch(() => ({}));
       if (kaiFailMode === "send") {
         toast("warn", "Sent without a Kai check", whyUnreachable(r.error));
+        ask({ type: "not_checked", site: SITE });   // spec A.7: counted as "not checked"
         lastApproved = text;
         triggerSend(composer);
         return;
@@ -168,7 +169,7 @@
         body: "Nothing was checked. " + whyUnreachable(r.error),
         actions: [
           { label: "Edit", primary: true, run: () => composer.focus() },
-          { label: "Send unchecked", run: () => { lastApproved = text; triggerSend(composer); } },
+          { label: "Send unchecked", run: () => { ask({ type: "not_checked", site: SITE }); lastApproved = text; triggerSend(composer); } },
         ],
       });
       return;

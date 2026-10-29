@@ -1,24 +1,31 @@
 /*
- * Kai — terminal rules for Preview 1 (experience spec §5.3).
+ * Kai — Preview 1 terminal grants (experience spec v2.1, A.6).
  * Copyright (C) 2026 The Kai Authors.
  * SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
  *
- *   kai allow <host> --agent <agent> [--for 1h|30m|1d | --always]
- *   kai block <host> [--agent <agent>]
- *   kai rules            what each agent can reach, and why
- *   kai undo             reverse the last change
+ *   kai rules                                        what each agent may do, and why
+ *   kai allow-file <path> --read|--write --agent A [--for 1h]
+ *   kai allow-fetch <domain> --agent A [--for 1h]
+ *   kai allow-mcp <server> [<tool>] --agent A [--for 1h]
+ *   kai allow-upload <file> --to <host> --agent A [--for 1h]
+ *   kai block <host> [--agent A]
+ *   kai undo
  *
- * Preview 1 has no Kai app, so these write <kai home>/agent-rules.json, which
- * only the in-agent checks (hooks) read. Run from inside an agent's process
- * tree they refuse. With the Kai app installed they say "Change this in Kai":
- * the app's signed rules are the ones the OS walls trust. Honest limit:
- * without the Files wall, a program an agent runs could edit this file.
+ * Every grant is exactly agent + operation + target + expiry, and covers only
+ * the checks its output lists. Files are stored canonical (absolute, symlinks
+ * resolved) with their device and inode: if the path later names a different
+ * file, a read or upload grant doesn't apply. Lower assurance, and said so:
+ * these live in <kai home>/agent-rules.json, which a program with the user's
+ * permissions can edit. Refusing inside an agent's process tree is a
+ * convenience, not a security boundary. With the Kai app installed, the app
+ * keeps the rules ("Change this in Kai").
  */
 #include "internal.h"
 #include "kai.h"
 #include "cJSON.h"
 
 #include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +33,9 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+
+#define LIMIT_LINE "Preview 1 can't stop a program with your permissions from editing Kai's rules; " \
+                   "the app release adds a protected writer."
 
 static const char *rules_path(void) {
     static char buf[1200];
@@ -59,7 +69,6 @@ static int write_atomic(const char *path, const char *data) {
     return 0;
 }
 
-/* Save the rules as they are now (one line per change) so undo can go back. */
 static void push_history(void) {
     size_t n = 0;
     char *t = kai_read_file(rules_path(), 1 << 20, &n);
@@ -82,31 +91,88 @@ static int save_rules(cJSON *a) {
 
 static void lower(char *s) { for (; *s; s++) *s = (char)tolower((unsigned char)*s); }
 
-int kai_agent_rule_add(int kind, const char *agent, const char *host, long long until) {
-    if (!host || !*host || !agent || !*agent) return -1;
-    char h[256];
-    kai_strlcpy(h, host, sizeof h);
-    lower(h);
+static const char *jstr(const cJSON *o, const char *k) {
+    const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(o, k));
+    return v ? v : "";
+}
+static double jnum(const cJSON *o, const char *k) { return cJSON_GetNumberValue(cJSON_GetObjectItem(o, k)); }
+
+/* Canonical path: relative to base (or the current directory), symlinks
+ * resolved. For a path that doesn't exist yet (a write), the folder is
+ * resolved and the name appended. 1 ok. */
+static int canonical(const char *path, const char *base, char *out, size_t n) {
+    char joined[PATH_MAX * 2];
+    if (!path || !*path) return 0;
+    if (path[0] == '~' && (path[1] == '/' || !path[1])) {
+        const char *h = getenv("HOME");
+        snprintf(joined, sizeof joined, "%s%s", h ? h : "", path + 1);
+    } else if (path[0] == '/') {
+        kai_strlcpy(joined, path, sizeof joined);
+    } else {
+        char cwd[PATH_MAX];
+        if (!base && !getcwd(cwd, sizeof cwd)) return 0;
+        snprintf(joined, sizeof joined, "%s/%s", base ? base : cwd, path);
+    }
+    char r[PATH_MAX];
+    if (realpath(joined, r)) { kai_strlcpy(out, r, n); return 1; }
+    char dir[PATH_MAX * 2];
+    kai_strlcpy(dir, joined, sizeof dir);
+    char *slash = strrchr(dir, '/');
+    if (!slash) return 0;
+    *slash = '\0';
+    if (!realpath(*dir ? dir : "/", r)) return 0;
+    snprintf(out, n, "%s/%s", r, slash + 1);
+    return 1;
+}
+
+int kai_cli_grant_add(int allow, const char *op, const char *agent, const char *target, const char *to,
+                      long long until, const char *base, char *err, size_t errlen) {
+    if (err && errlen) err[0] = '\0';
+    if (!op || !agent || !*agent || !target || !*target) return -1;
+    int file = !strcmp(op, "read") || !strcmp(op, "write") || !strcmp(op, "upload");
+    char t[PATH_MAX];
+    struct stat st;
+    long long dev = 0, ino = 0;
+    if (file) {
+        if (!canonical(target, base, t, sizeof t)) { if (err) snprintf(err, errlen, "can't find %s", target); return -1; }
+        if (strcmp(op, "write") != 0) {
+            if (stat(t, &st) != 0) { if (err) snprintf(err, errlen, "%s doesn't exist", t); return -1; }
+            dev = (long long)st.st_dev; ino = (long long)st.st_ino;
+        }
+    } else {
+        kai_strlcpy(t, target, sizeof t);
+        if (strcmp(op, "mcp") != 0) lower(t);
+    }
+    char tohost[256] = "";
+    if (to) { kai_strlcpy(tohost, to, sizeof tohost); if (!strcmp(op, "upload")) lower(tohost); }
     mkdir(kai_home(), 0700);
     push_history();
     cJSON *a = load_rules();
-    /* one rule per agent + host: a new one replaces the old */
-    for (int i = cJSON_GetArraySize(a) - 1; i >= 0; i--) {
+    for (int i = cJSON_GetArraySize(a) - 1; i >= 0; i--) {   /* one rule per agent+op+target+to */
         cJSON *r = cJSON_GetArrayItem(a, i);
-        const char *ra = cJSON_GetStringValue(cJSON_GetObjectItem(r, "agent"));
-        const char *rh = cJSON_GetStringValue(cJSON_GetObjectItem(r, "host"));
-        if (ra && rh && !strcmp(ra, agent) && !strcmp(rh, h)) cJSON_DeleteItemFromArray(a, i);
+        if (!strcmp(jstr(r, "agent"), agent) && !strcmp(jstr(r, "op"), op) &&
+            !strcmp(jstr(r, "target"), t) && !strcmp(jstr(r, "to"), tohost))
+            cJSON_DeleteItemFromArray(a, i);
     }
     cJSON *r = cJSON_CreateObject();
-    cJSON_AddStringToObject(r, "kind", kind == KAI_AGENT_RULE_BLOCK ? "block" : "allow");
+    cJSON_AddStringToObject(r, "kind", allow ? "allow" : "block");
+    cJSON_AddStringToObject(r, "op", op);
     cJSON_AddStringToObject(r, "agent", agent);
-    cJSON_AddStringToObject(r, "host", h);
+    cJSON_AddStringToObject(r, "target", t);
+    cJSON_AddStringToObject(r, "to", tohost);
+    cJSON_AddNumberToObject(r, "dev", (double)dev);
+    cJSON_AddNumberToObject(r, "ino", (double)ino);
     cJSON_AddNumberToObject(r, "until", (double)until);
     cJSON_AddNumberToObject(r, "created", (double)time(NULL));
     cJSON_AddItemToArray(a, r);
     int rc = save_rules(a);
     cJSON_Delete(a);
     return rc;
+}
+
+int kai_agent_rule_add(int kind, const char *agent, const char *host, long long until) {
+    return kai_cli_grant_add(kind == KAI_AGENT_RULE_BLOCK ? 0 : 1, kind == KAI_AGENT_RULE_BLOCK ? "reach" : "fetch",
+                             agent, host, NULL, until, NULL, NULL, 0);
 }
 
 int kai_agent_rule_undo(void) {
@@ -127,33 +193,65 @@ int kai_agent_rule_undo(void) {
     return rc;
 }
 
-/* An allow is exact; a block also covers subdomains. */
 static int host_covers(const char *rule, const char *host, int subdomains) {
     size_t rl = strlen(rule), hl = strlen(host);
     if (rl == hl) return !strcasecmp(rule, host);
     return subdomains && hl > rl && host[hl - rl - 1] == '.' && !strcasecmp(host + hl - rl, rule);
 }
 
+static int live(const cJSON *r, long long now) {
+    double until = jnum(r, "until");
+    return !(until > 0 && (long long)until <= now);
+}
+
+/* A host you blocked (subdomains too). KAI_AGENT_RULE_BLOCK or 0. */
 int kai_agent_rule_for(const char *agent, const char *host, long long now) {
     if (!agent || !host || !*host) return 0;
     cJSON *a = load_rules();
     int found = 0;
     cJSON *r;
     cJSON_ArrayForEach(r, a) {
-        const char *k = cJSON_GetStringValue(cJSON_GetObjectItem(r, "kind"));
-        const char *ra = cJSON_GetStringValue(cJSON_GetObjectItem(r, "agent"));
-        const char *rh = cJSON_GetStringValue(cJSON_GetObjectItem(r, "host"));
-        double until = cJSON_GetNumberValue(cJSON_GetObjectItem(r, "until"));
-        if (!k || !ra || !rh) continue;
+        if (strcmp(jstr(r, "kind"), "block") || strcmp(jstr(r, "op"), "reach") || !live(r, now)) continue;
+        const char *ra = jstr(r, "agent");
         if (strcmp(ra, "*") && strcmp(ra, agent)) continue;
-        if (until > 0 && (long long)until <= now) continue;
-        int block = !strcmp(k, "block");
-        if (!host_covers(rh, host, block)) continue;
-        if (block) { found = KAI_AGENT_RULE_BLOCK; break; }   /* a block wins */
-        found = KAI_AGENT_RULE_ALLOW;
+        if (host_covers(jstr(r, "target"), host, 1)) { found = KAI_AGENT_RULE_BLOCK; break; }
     }
     cJSON_Delete(a);
     return found;
+}
+
+int kai_cli_grant_allows(const char *op, const char *agent, const char *target, const char *to,
+                         const char *cwd, long long now) {
+    if (!op || !agent || !target || !*target) return 0;
+    int file = !strcmp(op, "read") || !strcmp(op, "write") || !strcmp(op, "upload");
+    char t[PATH_MAX];
+    struct stat st;
+    int have_st = 0;
+    if (file) {
+        if (!canonical(target, cwd, t, sizeof t)) return 0;
+        have_st = stat(t, &st) == 0;
+    } else {
+        kai_strlcpy(t, target, sizeof t);
+        if (strcmp(op, "mcp") != 0) lower(t);
+    }
+    cJSON *a = load_rules();
+    int ok = 0;
+    cJSON *r;
+    cJSON_ArrayForEach(r, a) {
+        if (strcmp(jstr(r, "kind"), "allow") || strcmp(jstr(r, "op"), op) || !live(r, now)) continue;
+        if (strcmp(jstr(r, "agent"), agent)) continue;          /* one agent; never "*" */
+        if (strcmp(jstr(r, "target"), t)) continue;            /* exact */
+        const char *rto = jstr(r, "to");
+        if (!strcmp(op, "mcp")) { if (*rto && (!to || strcmp(rto, to))) continue; }   /* "" = any tool */
+        else if (!strcmp(op, "upload")) { if (!to || strcasecmp(rto, to)) continue; }
+        if (file && strcmp(op, "write") != 0) {               /* the same file it was granted on */
+            if (!have_st || (long long)st.st_dev != (long long)jnum(r, "dev") ||
+                (long long)st.st_ino != (long long)jnum(r, "ino")) continue;
+        }
+        ok = 1; break;
+    }
+    cJSON_Delete(a);
+    return ok;
 }
 
 /* ---- the hosts a shell command reaches ---- */
@@ -163,13 +261,24 @@ static int add_host(char hosts[][256], int n, int max, const char *s, size_t len
     char h[256];
     memcpy(h, s, len); h[len] = '\0';
     lower(h);
-    if (!strchr(h, '.') && strcmp(h, "localhost") != 0) return n;   /* not a host name */
+    if (!strchr(h, '.') && strcmp(h, "localhost") != 0) return n;
     for (int i = 0; i < n; i++) if (!strcmp(hosts[i], h)) return n;
     kai_strlcpy(hosts[n], h, 256);
     return n + 1;
 }
 
 static int hostch(char c) { return isalnum((unsigned char)c) || c == '.' || c == '-'; }
+
+static size_t url_host(const char *u, const char **start) {
+    const char *h = strstr(u, "://");
+    h = h ? h + 3 : u;
+    const char *at = strpbrk(h, "@/");
+    if (at && *at == '@') h = at + 1;
+    size_t l = 0;
+    while (hostch(h[l])) l++;
+    *start = h;
+    return l;
+}
 
 typedef struct { char (*hosts)[256]; int n, max; } host_acc;
 
@@ -183,17 +292,12 @@ static void walk_hosts(char **argv, int argc, void *ud) {
     int netcat_done = 0;
     for (int k = i + 1; k < argc; k++) {
         const char *a = argv[k];
-        const char *u = strstr(a, "://");
-        if (u) {
-            const char *h = u + 3;
-            const char *at = strpbrk(h, "@/");
-            if (at && *at == '@') h = at + 1;          /* user:pass@host */
-            size_t l = 0;
-            while (hostch(h[l])) l++;
+        if (strstr(a, "://")) {
+            const char *h; size_t l = url_host(a, &h);
             acc->n = add_host(acc->hosts, acc->n, acc->max, h, l);
             continue;
         }
-        if (remote && a[0] != '-') {                   /* [user@]host:path or user@host */
+        if (remote && a[0] != '-') {
             const char *h = strchr(a, '@') ? strchr(a, '@') + 1 : a;
             size_t l = 0;
             while (hostch(h[l])) l++;
@@ -201,7 +305,7 @@ static void walk_hosts(char **argv, int argc, void *ud) {
                 acc->n = add_host(acc->hosts, acc->n, acc->max, h, l);
             continue;
         }
-        if (netcat && !netcat_done && a[0] != '-') {   /* nc [opts] host port */
+        if (netcat && !netcat_done && a[0] != '-') {
             size_t l = 0;
             while (hostch(a[l])) l++;
             if (l && a[l] == '\0') { acc->n = add_host(acc->hosts, acc->n, acc->max, a, l); netcat_done = 1; }
@@ -216,9 +320,79 @@ int kai_command_hosts(const char *cmd, char hosts[][256], int max) {
     return acc.n;
 }
 
+/* ---- A.5/A.6: what an upload command sends, when Kai can tell ----
+ * Only a single simple command, in one of these forms:
+ *   curl ... (-d|--data|--data-binary|-F name=)@FILE ... URL
+ *   curl ... (-T|--upload-file) FILE ... URL
+ *   scp [opts] FILE [user@]HOST:PATH
+ * Anything else (pipes, redirects, several commands, files or hosts) isn't
+ * identified, so no narrow allow is offered or honoured. */
+typedef struct { int ncmd; char file[PATH_MAX]; char host[256]; char form[16]; int nfile, nhost; } up_acc;
+
+static void walk_upload(char **argv, int argc, void *ud) {
+    up_acc *u = ud;
+    u->ncmd++;
+    int i = kai_shell_command_start(argv, argc);
+    if (i >= argc) return;
+    const char *b = strrchr(argv[i], '/') ? strrchr(argv[i], '/') + 1 : argv[i];
+    if (!strcmp(b, "curl")) {
+        kai_strlcpy(u->form, "curl", sizeof u->form);
+        for (int k = i + 1; k < argc; k++) {
+            const char *a = argv[k];
+            const char *f = NULL;
+            if ((!strcmp(a, "-d") || !strcmp(a, "--data") || !strcmp(a, "--data-binary") ||
+                 !strcmp(a, "-F") || !strcmp(a, "--form")) && k + 1 < argc) {
+                const char *v = argv[++k];
+                const char *at = strchr(v, '@');
+                if (at && (at == v || !strcmp(a, "-F") || !strcmp(a, "--form"))) f = at + 1;
+            } else if ((!strcmp(a, "-T") || !strcmp(a, "--upload-file")) && k + 1 < argc) {
+                f = argv[++k];
+            } else if (strstr(a, "://")) {
+                const char *h; size_t l = url_host(a, &h);
+                if (l && l < sizeof u->host) { memcpy(u->host, h, l); u->host[l] = '\0'; u->nhost++; }
+            }
+            if (f && *f) {
+                char tmp[PATH_MAX];
+                kai_strlcpy(tmp, f, sizeof tmp);
+                char *semi = strchr(tmp, ';');            /* -F x=@file;type=... */
+                if (semi) *semi = '\0';
+                kai_strlcpy(u->file, tmp, sizeof u->file); u->nfile++;
+            }
+        }
+    } else if (!strcmp(b, "scp")) {
+        kai_strlcpy(u->form, "scp", sizeof u->form);
+        for (int k = i + 1; k < argc; k++) {
+            const char *a = argv[k];
+            if (a[0] == '-') { if (!strcmp(a, "-P") || !strcmp(a, "-i") || !strcmp(a, "-o")) k++; continue; }
+            const char *colon = strchr(a, ':');
+            if (colon) {
+                const char *at = strchr(a, '@');
+                const char *h = at && at < colon ? at + 1 : a;
+                size_t l = (size_t)(colon - h);
+                if (l && l < sizeof u->host) { memcpy(u->host, h, l); u->host[l] = '\0'; u->nhost++; }
+            } else { kai_strlcpy(u->file, a, sizeof u->file); u->nfile++; }
+        }
+    }
+}
+
+int kai_upload_parse(const char *cmd, char *file, size_t fn, char *host, size_t hn, char *form, size_t fmn) {
+    if (file && fn) file[0] = '\0';
+    if (host && hn) host[0] = '\0';
+    if (form && fmn) form[0] = '\0';
+    if (!cmd || strpbrk(cmd, "|`$<>\n")) return 0;   /* one simple command only */
+    up_acc u;
+    memset(&u, 0, sizeof u);
+    kai_shell_walk(cmd, walk_upload, NULL, &u);
+    if (u.ncmd != 1 || u.nfile != 1 || u.nhost != 1 || !u.form[0]) return 0;
+    lower(u.host);
+    if (file) kai_strlcpy(file, u.file, fn);
+    if (host) kai_strlcpy(host, u.host, hn);
+    if (form) kai_strlcpy(form, u.form, fmn);
+    return 1;
+}
+
 /* ---- the commands ---- */
 
-int kai_app_present(void);
 int kai_app_present(void) {
     const char *e = getenv("KAI_NO_APP");
     if (e && *e == '1') return 0;
@@ -261,72 +435,206 @@ static long long parse_for(const char *s) {
 
 static int gatekeep(const char *verb) {
     if (under_agent()) {
-        fprintf(stderr, "kai %s: refused. Run this in your own terminal, not from an agent.\n", verb);
+        fprintf(stderr, "kai %s: refused. Run this in your own terminal, not from an agent.\n"
+                        "(A convenience, not a security boundary.)\n", verb);
         return 3;
     }
     if (kai_app_present()) {
-        fprintf(stderr, "Change this in Kai: click a blocked item in Kai's Activity (or its card) to allow or "
-                        "keep it blocked.\n(With the Kai app, the app keeps the rules, so Files and Internet "
-                        "protection follow them too.)\n");
+        fprintf(stderr, "Change this in Kai: click the blocked item in Kai's Activity (or its card).\n"
+                        "(With the Kai app, the app keeps the rules.)\n");
         return 4;
     }
     return 0;
 }
 
-static int cmd_rule(int kind, int argc, char **argv) {
-    const char *verb = kind == KAI_AGENT_RULE_BLOCK ? "block" : "allow";
-    const char *host = NULL, *agent = NULL;
-    long long secs = kind == KAI_AGENT_RULE_ALLOW ? 3600 : 0;
+static void when_str(long long until, char *out, size_t n) {
+    time_t t = (time_t)until; struct tm tmv; localtime_r(&t, &tmv);
+    strftime(out, n, "until %H:%M", &tmv);
+}
+
+static void shorten(const char *path, char *out, size_t n) {
+    const char *h = getenv("HOME");
+    size_t hl = h ? strlen(h) : 0;
+    if (hl && !strncmp(path, h, hl) && path[hl] == '/') snprintf(out, n, "~%s", path + hl);
+    else kai_strlcpy(out, path, n);
+}
+
+/* Which agents a grant can apply to, from the coverage matrix. NULL = fine,
+ * else why not. */
+static const char *agent_supports(const char *op, int write, const char *agent) {
+    if (!agent || (strcmp(agent, "claude") && strcmp(agent, "codex") && strcmp(agent, "cursor")))
+        return "--agent takes claude, codex or cursor";
+    if (!strcmp(op, "file")) {
+        if (!strcmp(agent, "codex")) return "Codex has no file tool that reports to Kai (its file access goes through shell commands)";
+        if (write && !strcmp(agent, "cursor")) return "Cursor doesn't report file writes to Kai";
+    }
+    if (!strcmp(op, "fetch") && strcmp(agent, "claude")) return "only Claude Code reports its web fetches to Kai";
+    if (!strcmp(op, "mcp") && !strcmp(agent, "cursor"))
+        return "Cursor's MCP calls are only checked for secrets in their arguments; there's nothing to allow";
+    return NULL;
+}
+
+typedef struct { const char *target, *to, *tool, *agent; long long secs; int read, write; } args_t;
+
+static int parse_args(const char *verb, int argc, char **argv, args_t *a, int want_two) {
+    memset(a, 0, sizeof *a);
+    a->secs = 3600;
     for (int i = 0; i < argc; i++) {
-        if (!strcmp(argv[i], "--agent") && i + 1 < argc) agent = argv[++i];
+        if (!strcmp(argv[i], "--agent") && i + 1 < argc) a->agent = argv[++i];
+        else if (!strcmp(argv[i], "--to") && i + 1 < argc) a->to = argv[++i];
+        else if (!strcmp(argv[i], "--read")) a->read = 1;
+        else if (!strcmp(argv[i], "--write")) a->write = 1;
         else if (!strcmp(argv[i], "--for") && i + 1 < argc) {
-            if ((secs = parse_for(argv[++i])) < 0) { fprintf(stderr, "kai %s: --for takes 30m, 1h or 1d\n", verb); return 2; }
-        } else if (!strcmp(argv[i], "--always")) secs = 0;
-        else if (argv[i][0] != '-' && !host) host = argv[i];
+            if ((a->secs = parse_for(argv[++i])) < 0 || a->secs > 7 * 86400) {
+                fprintf(stderr, "kai %s: --for takes a duration up to 7d, like 30m, 1h or 1d\n", verb); return 2;
+            }
+        } else if (argv[i][0] != '-' && !a->target) a->target = argv[i];
+        else if (argv[i][0] != '-' && want_two && !a->tool) a->tool = argv[i];
         else { fprintf(stderr, "kai %s: unknown option %s\n", verb, argv[i]); return 2; }
     }
-    if (!host) {
-        fprintf(stderr, kind == KAI_AGENT_RULE_ALLOW
-                ? "usage: kai allow <host> --agent claude|codex|cursor [--for 1h | --always]\n"
-                : "usage: kai block <host> [--agent claude|codex|cursor]\n");
-        return 2;
-    }
-    if (kind == KAI_AGENT_RULE_ALLOW && !agent) {
-        fprintf(stderr, "kai allow: say which agent: --agent claude, --agent codex or --agent cursor\n");
-        return 2;
-    }
-    if (!agent) agent = "*";
-    int g = gatekeep(verb);
-    if (g) return g;
-    long long until = secs ? (long long)time(NULL) + secs : 0;
-    if (kai_agent_rule_add(kind, agent, host, until) != 0) { fprintf(stderr, "kai %s: couldn't save the rule\n", verb); return 1; }
-    char detail[600];
-    snprintf(detail, sizeof detail, "kai %s %s for %s%s", verb, host, agent, until ? " (time-boxed)" : "");
-    kai_audit("kai", verb, "note", "terminal_rule", detail);
-    if (kind == KAI_AGENT_RULE_ALLOW) {
-        char when[64] = "until you remove it (kai undo, or kai block)";
-        if (until) {
-            time_t t = (time_t)until; struct tm tmv; localtime_r(&t, &tmv);
-            strftime(when, sizeof when, "until %H:%M", &tmv);
-        }
-        printf("Allowed %s to reach %s %s.\n", agent_title(agent), host, when);
-    } else {
-        printf("Blocked %s from reaching %s (and its subdomains).\n", agent_title(agent), host);
-    }
-    printf("Undo: kai undo\n");
     return 0;
 }
 
-int kai_cmd_allow(int argc, char **argv) { return cmd_rule(KAI_AGENT_RULE_ALLOW, argc, argv); }
-int kai_cmd_block(int argc, char **argv) { return cmd_rule(KAI_AGENT_RULE_BLOCK, argc, argv); }
+static int finish(const char *verb, const char *what, long long until) {
+    char when[32];
+    when_str(until, when, sizeof when);
+    printf("%s, %s.\n", what, when);
+    char d[900];
+    snprintf(d, sizeof d, "kai %s: %s, %s", verb, what, when);
+    kai_audit("kai", verb, "note", "terminal_grant", d);
+    printf("Undo: kai undo · See all: kai rules\n%s\n", LIMIT_LINE);
+    return 0;
+}
+
+int kai_cmd_allow_file(int argc, char **argv) {
+    args_t a;
+    int rc = parse_args("allow-file", argc, argv, &a, 0);
+    if (rc) return rc;
+    if (!a.target || !a.agent || a.read == a.write) {
+        fprintf(stderr, "usage: kai allow-file <path> --read|--write --agent claude|cursor [--for 1h]\n"); return 2;
+    }
+    const char *no = agent_supports("file", a.write, a.agent);
+    if (no) { fprintf(stderr, "kai allow-file: %s.\n", no); return 2; }
+    if ((rc = gatekeep("allow-file"))) return rc;
+    const char *op = a.read ? "read" : "write";
+    long long until = (long long)time(NULL) + a.secs;
+    char err[300];
+    if (kai_cli_grant_add(1, op, a.agent, a.target, NULL, until, NULL, err, sizeof err) != 0) {
+        fprintf(stderr, "kai allow-file: %s\n", err[0] ? err : "couldn't save the grant"); return 1;
+    }
+    char canon[PATH_MAX], shown[PATH_MAX];
+    canonical(a.target, NULL, canon, sizeof canon);
+    shorten(canon, shown, sizeof shown);
+    char what[PATH_MAX + 300];
+    snprintf(what, sizeof what, "Allowed %s to %s %s with its file tool (%s) only. Shell commands such as `cat` "
+             "are still checked, and uploading it isn't allowed",
+             agent_title(a.agent), op, shown, a.read ? (!strcmp(a.agent, "cursor") ? "file reads" : "Read")
+                                                   : "Write, Edit");
+    if (a.read) printf("This grant follows this exact file: if %s is replaced or re-linked, it stops applying.\n", shown);
+    return finish("allow-file", what, until);
+}
+
+int kai_cmd_allow_fetch(int argc, char **argv) {
+    args_t a;
+    int rc = parse_args("allow-fetch", argc, argv, &a, 0);
+    if (rc) return rc;
+    if (!a.target || !a.agent) { fprintf(stderr, "usage: kai allow-fetch <domain> --agent claude [--for 1h]\n"); return 2; }
+    const char *no = agent_supports("fetch", 0, a.agent);
+    if (no) { fprintf(stderr, "kai allow-fetch: %s.\n", no); return 2; }
+    if ((rc = gatekeep("allow-fetch"))) return rc;
+    long long until = (long long)time(NULL) + a.secs;
+    if (kai_cli_grant_add(1, "fetch", a.agent, a.target, NULL, until, NULL, NULL, 0) != 0) {
+        fprintf(stderr, "kai allow-fetch: couldn't save the grant\n"); return 1;
+    }
+    char what[600];
+    snprintf(what, sizeof what, "Allowed %s's web fetch tool to use %s (exactly this host). This doesn't make %s "
+             "reachable: connections made any other way aren't governed by Kai Preview",
+             agent_title(a.agent), a.target, a.target);
+    return finish("allow-fetch", what, until);
+}
+
+int kai_cmd_allow_mcp(int argc, char **argv) {
+    args_t a;
+    int rc = parse_args("allow-mcp", argc, argv, &a, 1);
+    if (rc) return rc;
+    if (!a.target || !a.agent) { fprintf(stderr, "usage: kai allow-mcp <server> [<tool>] --agent claude|codex [--for 1h]\n"); return 2; }
+    const char *no = agent_supports("mcp", 0, a.agent);
+    if (no) { fprintf(stderr, "kai allow-mcp: %s.\n", no); return 2; }
+    if ((rc = gatekeep("allow-mcp"))) return rc;
+    long long until = (long long)time(NULL) + a.secs;
+    if (kai_cli_grant_add(1, "mcp", a.agent, a.target, a.tool ? a.tool : "", until, NULL, NULL, 0) != 0) {
+        fprintf(stderr, "kai allow-mcp: couldn't save the grant\n"); return 1;
+    }
+    char what[400];
+    if (a.tool)
+        snprintf(what, sizeof what, "Allowed %s to use the tool %s from the MCP server %s (secrets in its arguments "
+                 "are still stopped)", agent_title(a.agent), a.tool, a.target);
+    else
+        snprintf(what, sizeof what, "Allowed %s to use every tool from the MCP server %s (secrets in their "
+                 "arguments are still stopped)", agent_title(a.agent), a.target);
+    return finish("allow-mcp", what, until);
+}
+
+int kai_cmd_allow_upload(int argc, char **argv) {
+    args_t a;
+    int rc = parse_args("allow-upload", argc, argv, &a, 0);
+    if (rc) return rc;
+    if (!a.target || !a.to || !a.agent) {
+        fprintf(stderr, "usage: kai allow-upload <file> --to <host> --agent claude|codex|cursor [--for 1h]\n"); return 2;
+    }
+    const char *no = agent_supports("upload", 0, a.agent);
+    if (no) { fprintf(stderr, "kai allow-upload: %s.\n", no); return 2; }
+    if ((rc = gatekeep("allow-upload"))) return rc;
+    long long until = (long long)time(NULL) + a.secs;
+    char err[300];
+    if (kai_cli_grant_add(1, "upload", a.agent, a.target, a.to, until, NULL, err, sizeof err) != 0) {
+        fprintf(stderr, "kai allow-upload: %s\n", err[0] ? err : "couldn't save the grant"); return 1;
+    }
+    char canon[PATH_MAX], shown[PATH_MAX];
+    canonical(a.target, NULL, canon, sizeof canon);
+    shorten(canon, shown, sizeof shown);
+    char what[PATH_MAX + 400];
+    snprintf(what, sizeof what, "Allowed %s to send %s to %s, only as one simple curl or scp command that Kai "
+             "can read in full", agent_title(a.agent), shown, a.to);
+    return finish("allow-upload", what, until);
+}
+
+int kai_cmd_allow(int argc, char **argv) {
+    (void)argc; (void)argv;
+    fprintf(stderr, "Say exactly what to allow:\n"
+                    "  kai allow-file <path> --read|--write --agent A [--for 1h]\n"
+                    "  kai allow-fetch <domain> --agent claude [--for 1h]\n"
+                    "  kai allow-mcp <server> [<tool>] --agent A [--for 1h]\n"
+                    "  kai allow-upload <file> --to <host> --agent A [--for 1h]\n");
+    return 2;
+}
+
+int kai_cmd_block(int argc, char **argv) {
+    args_t a;
+    int rc = parse_args("block", argc, argv, &a, 0);
+    if (rc) return rc;
+    if (!a.target) { fprintf(stderr, "usage: kai block <host> [--agent claude|codex|cursor]\n"); return 2; }
+    if ((rc = gatekeep("block"))) return rc;
+    const char *agent = a.agent ? a.agent : "*";
+    if (kai_cli_grant_add(0, "reach", agent, a.target, NULL, 0, NULL, NULL, 0) != 0) {
+        fprintf(stderr, "kai block: couldn't save the rule\n"); return 1;
+    }
+    char d[400];
+    snprintf(d, sizeof d, "kai block %s for %s", a.target, agent);
+    kai_audit("kai", "block", "note", "terminal_rule", d);
+    printf("Kai now stops %s's checked actions that reach %s (and its subdomains): shell commands that name it "
+           "and web fetches. Until you remove it.\nUndo: kai undo · See all: kai rules\n%s\n",
+           agent_title(agent), a.target, LIMIT_LINE);
+    return 0;
+}
 
 int kai_cmd_undo(int argc, char **argv) {
     (void)argc; (void)argv;
     int g = gatekeep("undo");
     if (g) return g;
-    if (kai_agent_rule_undo() != 0) { printf("Nothing to undo.\n"); return 1; }
+    if (kai_agent_rule_undo() != 0) { printf("Nothing to undo.\n%s\n", LIMIT_LINE); return 1; }
     kai_audit("kai", "undo", "note", "terminal_rule", "kai undo: last rule change reversed");
-    printf("Undone: the rules are back to before your last change. See them: kai rules\n");
+    printf("Undone: the rules are back to before your last change. See them: kai rules\n%s\n", LIMIT_LINE);
     return 0;
 }
 
@@ -335,24 +643,29 @@ int kai_cmd_rules(int argc, char **argv) {
     cJSON *a = load_rules();
     long long now = (long long)time(NULL);
     int shown = 0;
-    printf("What your agents can reach (rules you made with kai allow / kai block)\n");
+    printf("What each agent may do beyond your policy (kai allow-… / kai block)\n");
     cJSON *r;
     cJSON_ArrayForEach(r, a) {
-        const char *k = cJSON_GetStringValue(cJSON_GetObjectItem(r, "kind"));
-        const char *ra = cJSON_GetStringValue(cJSON_GetObjectItem(r, "agent"));
-        const char *rh = cJSON_GetStringValue(cJSON_GetObjectItem(r, "host"));
-        long long until = (long long)cJSON_GetNumberValue(cJSON_GetObjectItem(r, "until"));
-        if (!k || !ra || !rh || (until > 0 && until <= now)) continue;
-        char when[48] = "";
-        if (until) { time_t t = (time_t)until; struct tm tmv; localtime_r(&t, &tmv);
-                     strftime(when, sizeof when, " until %H:%M", &tmv); }
-        printf("  %-8s %-14s %s%s\n", !strcmp(k, "block") ? "blocked" : "allowed", agent_title(ra), rh,
-               !strcmp(k, "block") ? " (and subdomains)" : when);
+        if (!live(r, now)) continue;
+        const char *op = jstr(r, "op"), *t = jstr(r, "target"), *to = jstr(r, "to");
+        char shown_t[PATH_MAX], when[32] = "until removed";
+        shorten(t, shown_t, sizeof shown_t);
+        if (jnum(r, "until") > 0) when_str((long long)jnum(r, "until"), when, sizeof when);
+        const char *who = agent_title(jstr(r, "agent"));
+        if (!strcmp(jstr(r, "kind"), "block"))
+            printf("  stops   %-12s reaching %s (and subdomains)\n", who, t);
+        else if (!strcmp(op, "mcp"))
+            printf("  allows  %-12s MCP %s · %s, %s\n", who, t, *to ? to : "every tool", when);
+        else if (!strcmp(op, "upload"))
+            printf("  allows  %-12s to send %s to %s, %s\n", who, shown_t, to, when);
+        else if (!strcmp(op, "fetch"))
+            printf("  allows  %-12s to fetch from %s, %s\n", who, t, when);
+        else
+            printf("  allows  %-12s to %s %s (file tool), %s\n", who, op, shown_t, when);
         shown++;
     }
-    if (!shown) printf("  none yet. Everything else follows your policy (kai policy show).\n");
-    printf("These are read by Kai's checks inside each agent. Without OS protection (Files), a program "
-           "an agent runs could edit them.\n");
+    if (!shown) printf("  nothing. Everything follows your policy (kai policy show).\n");
+    printf("%s\n", LIMIT_LINE);
     cJSON_Delete(a);
     return 0;
 }

@@ -14,7 +14,7 @@
   **macOS + Linux** · **Claude Code + Cursor** · **Codex (preview)** · **Open source**
 </div>
 
-> **This preview is a guardrail, not a sandbox.** Its checks run inside each agent, so a program the agent writes and runs can get around them. See [the coverage table](#-what-preview-1-checks-per-agent) for exactly what's checked. OS-level protection for Files and Internet is in private testing and comes in a later release.
+> **Kai Preview checks supported actions inside Claude Code, Codex and Cursor *before they run*.** It is an extra safety layer, not isolation or OS-level enforcement: hooks run with your permissions, cover only the actions each agent reports to them, and a program the agent runs can get around them. Codex runs hooks only after you trust them. [Exactly what's checked, per agent](docs/COVERAGE.md).
 
 ---
 
@@ -22,17 +22,18 @@
 
 1. **Install Kai.** One package; it adds its checks to Claude Code, Codex and Cursor, and to Chrome for AI chats.
 2. **Kai watches your agents and stops the risky moves:** reading your keys, sending your code somewhere you never chose, pasting secrets into a chat. Each block says what happened, why it matters, and what you can do.
-3. **You decide what they can reach, once.** `kai allow example.org --agent claude --for 1h` in your own terminal (agents can't run it), `kai block`, `kai rules` to see everything, `kai undo` to take it back.
+3. **You decide what they can do, narrowly.** When Kai stops something legitimate, its message gives the exact command to run in your own terminal, e.g. `kai allow-file ./.env --read --agent claude --for 1h`. Every grant is one agent, one operation, one target, with an expiry: `kai allow-file`, `kai allow-fetch`, `kai allow-mcp`, `kai allow-upload`, `kai block`, `kai rules` to see them, `kai undo` to take one back.
 
 Then hand your agents bigger jobs and stop babysitting them.
 
 ```text
 $ kai install
-Kai is watching Claude Code, Codex and Cursor.
-Try it: ask your agent to read ~/.ssh/id_rsa. Kai blocks it and tells you why.
+Kai Preview now checks Claude Code, Codex and Cursor before supported actions run.
+See it work: kai demo (a fake secret; nothing real is touched).
+Confirm with a real agent session: kai demo --live
 ```
 
-**Honest limits.** Kai's checks run *inside* each agent. A program an agent writes and runs can get around them, and without OS protection it could also edit Kai's settings and rules. `kai status` says this too. OS protection for Files and Internet is in private testing.
+**Honest limits.** Kai's checks run *inside* each agent, with your permissions. A program an agent writes and runs can get around them. Kai's rules and policy are files a program with your permissions can edit: Kai notices a policy changed outside Kai when it can (`kai doctor`), but can't prevent it or detect every change, including one made together with its fingerprint. The app release adds a protected writer and OS-level enforcement for Files and Internet.
 
 ## 🛡️ Why Kai?
 

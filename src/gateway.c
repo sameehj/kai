@@ -485,7 +485,7 @@ static void handle(int fd) {
     if (rep.nhits) kai_report_summary(&rep, summary, sizeof summary);
     if (rep.worst >= KAI_ACT_BLOCK) {
         char msg[1200];
-        snprintf(msg, sizeof msg, "Blocked by Kai: request contains blocked content (%s)", summary);
+        snprintf(msg, sizeof msg, "Kai stopped this request: it contains content your policy stops (%s)", summary);
         respond_error(fd, 403, u, msg);
         kai_audit("gateway", u->name, "block", "request", summary);
     } else {

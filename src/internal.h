@@ -42,7 +42,12 @@ const char *kai_policy_file(void); /* $KAI_POLICY or <kai home>/policy */
 #ifndef KAI_STORE_EXTENSION_ID /* set at build time: make KAI_STORE_ID=<32 letters a-p> */
 #define KAI_STORE_EXTENSION_ID ""
 #endif
+int kai_cmd_demo(int argc, char **argv);
 int kai_cmd_allow(int argc, char **argv);
+int kai_cmd_allow_file(int argc, char **argv);
+int kai_cmd_allow_fetch(int argc, char **argv);
+int kai_cmd_allow_mcp(int argc, char **argv);
+int kai_cmd_allow_upload(int argc, char **argv);
 int kai_cmd_block(int argc, char **argv);
 int kai_cmd_rules(int argc, char **argv);
 int kai_cmd_undo(int argc, char **argv);
@@ -125,6 +130,8 @@ int kai_plausible_password_value(const char *match, size_t len);
 
 struct kai_policy {
     char source[512];
+    int nunknown;             /* directives this version doesn't know (A.6b) */
+    char unknown_first[64];
     kai_rule *rules;
     int nrules, caprules; /* content rules, in order */
     kai_rule *inj;
@@ -141,6 +148,7 @@ struct kai_policy {
     kai_action upload_action;
     int file_secret_ask; /* "ask": the agent asks the user (Claude Code), else block */
     int upload_ask;
+    int fetch_block;     /* on_fetch block: the fetch tool needs a kai allow-fetch */
     int injection_on;
     size_t max_scan;
     /* network wall */
