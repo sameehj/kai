@@ -59,6 +59,7 @@ kai allow-file ./.env --read --agent claude --for 1h      # the file tool may re
 kai allow-fetch docs.example.org --agent claude --for 1h  # the agent's fetch tool may use this host
 kai allow-mcp notion search --agent claude --for 1h       # one MCP tool (or every tool of a server)
 kai allow-upload ./report.pdf --to files.example.com --agent claude --for 1h
+kai allow-capture --agent claude --for 15m                # screenshots, recording, app control
 kai block paste.example.org                               # stop commands and fetches that reach it
 kai rules                                                 # what each agent may do, and why
 kai undo                                                  # take back the last change
@@ -80,6 +81,7 @@ The Kai extension checks what you paste and send on AI chat sites (ChatGPT, Clau
 - Kai checks only what an agent reports to its hooks: not tool results, not the agent's other model traffic.
 - Kai's rules and policy are files a program with your permissions can edit. Kai notices some policy changes made outside Kai (`kai doctor`), never all, and prevents none.
 - No OS-level enforcement in this preview.
+- Screen, microphone, camera and app control: Kai stops the commands and tools it recognizes (`screencapture`, `ffmpeg`/`sox` recording, `osascript` telling an app, computer-use tools). A program the agent writes can call the capture APIs directly. Kai can't change macOS privacy prompts: macOS grants these permissions per app, so every agent run in Terminal, iTerm or Cursor inherits what that app holds (`kai doctor` lists them where it can read them).
 
 ## Design references
 
@@ -93,6 +95,7 @@ Kai is designed with reference to, and does not claim compliance with:
 ## Roadmap
 
 - **Next: the Kai app.** A menu-bar app with OS-level **Files** and **Internet** protection in an upcoming release (in private testing). It adds per-agent pages, decision cards, and a protected writer for Kai's rules.
+- **With the app: capture inside agent process trees.** Blocking screen, microphone and camera capture tools started inside an agent's process tree through Endpoint Security, and a notice when an agent host app's privacy permissions change, where macOS provides the event on the target version.
 - Later: team policy, Linux, and Windows.
 
 Roadmap items are plans, not delivered guarantees. More detail on how Kai works, other agents and the optional local AI gateway: [docs/OVERVIEW.md](docs/OVERVIEW.md).

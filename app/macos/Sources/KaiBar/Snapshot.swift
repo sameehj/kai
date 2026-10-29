@@ -44,6 +44,19 @@ enum Snapshot {
         }
 
         render(MenuView(), width: 360, height: nil, name: "popover")
+        // The decision cards at the popover's width with the longest agent and
+        // host names (fixtures: live data rarely has a card waiting).
+        let longHost = "artifacts-eu-west-1.internal-registry.example-enterprise.com"
+        let dec = JSONDecoder()
+        if let req = try? dec.decode(PendingRequest.self, from: Data(#"{"id":"fx","agent":"claude","pid":1,"pidversion":1,"strength":2,"resource":"\#(longHost)","op":"connect","ts":0,"session":"fx-session","project":"/Users/me/projects/kai","identity":"Developer ID Application: Anthropic PBC","hostKnown":true}"#.utf8)),
+           let ev = try? dec.decode(AuditEvent.self, from: Data(#"{"ts":"2026-10-29T08:00:00Z","source":"network","event":"claude","decision":"block","rule":"not_on_allowlist","detail":"connection to \#(longHost) is not on the allowlist","h":"fx1","target":"\#(longHost)","identity":"Developer ID Application: Anthropic PBC"}"#.utf8)) {
+            let grants = GrantManager()
+            render(VStack(alignment: .leading, spacing: 12) {
+                       ApprovalCard(req: req, count: 3, manager: grants)
+                       DecisionSheet(event: ev, count: 2, grants: grants)
+                   }.padding(16).background(Theme.ink),
+                   width: 360, height: nil, name: "popover-cards")
+        }
         let saved = UserDefaults.standard.string(forKey: "settingsPage")
         UserDefaults.standard.set(SettingsPage.agentControl.rawValue, forKey: "settingsPage")
         render(SettingsView(), width: 1100, height: 760, name: "agent-control")

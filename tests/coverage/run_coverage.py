@@ -132,6 +132,11 @@ def claude_like(sb, agent, op, cmd_as_argv=False):
     if op == "mcp":
         return sb.hook(agent, {"hook_event_name": "PreToolUse", "tool_name": "mcp__github__create_issue",
                                "session_id": "cov", "tool_input": {"title": "x"}, "cwd": h})
+    if op == "capture":
+        return sb.hook(agent, bash("screencapture -x " + h + "/s.png"))
+    if op == "capture_tool":
+        return sb.hook(agent, {"hook_event_name": "PreToolUse", "tool_name": "mcp__computer-use__screenshot",
+                               "session_id": "cov", "tool_input": {}, "cwd": h})
 
 
 def cursor(sb, op):
@@ -157,6 +162,12 @@ def cursor(sb, op):
     if op == "mcp":
         return sb.hook("cursor", dict(base, hook_event_name="beforeMCPExecution", tool_name="create_issue",
                                       tool_input="{\"title\":\"x\"}"))
+    if op == "capture":
+        return sb.hook("cursor", dict(base, hook_event_name="beforeShellExecution",
+                                      command="screencapture -x " + h + "/s.png"))
+    if op == "capture_tool":
+        return sb.hook("cursor", dict(base, hook_event_name="beforeMCPExecution", tool_name="screenshot",
+                                      tool_input="{}"))
 
 
 # Spec v2.1 A.2: per agent and action, the hook event, what it receives, when
@@ -172,6 +183,8 @@ META = {
         "upload": ("PreToolUse (Bash)", "command text (parsed)", "before it runs"),
         "mcp": ("PreToolUse (mcp__server__tool)", "server, tool, argument keys and values", "before the call"),
         "web_fetch": ("PreToolUse (WebFetch)", "the URL", "before the fetch"),
+        "capture": ("PreToolUse (Bash)", "command text (parsed)", "before it runs"),
+        "capture_tool": ("PreToolUse (mcp__computer-use__…)", "tool name", "before the call"),
     },
     "codex": {
         "file_tool": ("none (no file tool)", "", ""),
@@ -182,6 +195,8 @@ META = {
         "upload": ("PreToolUse (shell)", "argv (parsed)", "before it runs"),
         "mcp": ("PreToolUse (MCP tool)", "server, tool, arguments", "before the call"),
         "web_fetch": ("none (no fetch event)", "", ""),
+        "capture": ("PreToolUse (shell)", "argv (parsed)", "before it runs"),
+        "capture_tool": ("PreToolUse (MCP tool)", "tool name", "before the call"),
     },
     "cursor": {
         "file_tool": ("beforeReadFile", "file path", "before the read"),
@@ -192,6 +207,8 @@ META = {
         "upload": ("beforeShellExecution", "command text (parsed)", "before it runs"),
         "mcp": ("beforeMCPExecution", "tool name and arguments, not the server", "before the call"),
         "web_fetch": ("none (no fetch event)", "", ""),
+        "capture": ("beforeShellExecution", "command text (parsed)", "before it runs"),
+        "capture_tool": ("beforeMCPExecution", "tool name", "before the call"),
     },
 }
 
@@ -201,6 +218,10 @@ NOT_CHECKED = [
     ("A direct `curl` to a model endpoint", "Parsed as a command; its content isn't checked as a prompt", "Not checked as a prompt"),
     ("A program the agent writes and runs, and its children", "The hook sees only the command that starts it", "Not checked"),
     ("Detached or background processes", "No hook event", "Not checked"),
+    ("A program the agent writes that calls the screen, microphone or camera APIs itself",
+     "The hook sees only the command that starts it", "Not checked"),
+    ("macOS privacy prompts (Screen Recording, Microphone, Camera, Accessibility)",
+     "macOS grants them per app; Kai can't change them. `kai doctor` lists what agent host apps hold", "Not changed"),
 ]
 
 OPS = [
@@ -212,6 +233,8 @@ OPS = [
     ("upload", "Network upload command (`curl -d @file`)"),
     ("mcp", "MCP tool call (no rule for the server)"),
     ("web_fetch", "The agent's own web fetch (secret in the URL)"),
+    ("capture", "Screen, microphone, camera or app control (screencapture, ffmpeg/sox, osascript)"),
+    ("capture_tool", "The agent's own screenshot or computer-use tool"),
 ]
 
 BYPASS = {
@@ -226,6 +249,10 @@ BYPASS = {
                  "any other way aren't governed.",
     "prompt_secret": "Only the prompt as you submit it: not tool results, not files the agent reads later.",
     "file_tool": "Reads through the shell or a script are separate rows.",
+    "capture": "Recognized commands only: screencapture, ffmpeg/sox/rec from a live device, imagesnap, cliclick, "
+               "osascript that tells an app. A program the agent writes can call the capture APIs directly.",
+    "capture_tool": "Recognized by tool name (screenshot, computer). A web page screenshot in a browser tool isn't "
+                    "counted as the screen.",
 }
 
 def live_evidence():
@@ -341,7 +368,7 @@ def main():
     bad = []
     for name, key, ver in agents:
         r = results[key]
-        for op in ("shell_read", "prompt_secret", "upload"):
+        for op in ("shell_read", "prompt_secret", "upload", "capture", "capture_tool"):
             if r.get(op) and not r[op]["denied"]:
                 bad.append(name + ": " + op)
         if r.get("file_tool") and not r["file_tool"]["denied"]:

@@ -85,31 +85,19 @@ struct DecisionSheet: View {
                  + "If the agent needed it, its next try usually names the site.")
         } else if event.isNetwork && event.isBlock && !event.isSilent {
             let signed = event.identity != nil
-            HStack(spacing: 8) {
-                if signed {
-                    Button("Allow for 1 hour") { grants.allowForHour(grants.request(from: event)); done = .hour(Date().addingTimeInterval(3600)) }
-                        .buttonStyle(GhostButtonStyle())
-                    InfoButton(text: InfoText.oneHour)
-                }
-                if sessionLive {
-                    Button("Allow this session") { grants.allowForSession(event); done = .session }.buttonStyle(GhostButtonStyle())
-                    InfoButton(text: InfoText.thisSession)
-                }
-                if signed {
-                    Button("Keep blocked") { grants.keepBlocked(grants.request(from: event)); done = .kept }
-                        .buttonStyle(GhostButtonStyle())
-                }
-            }
-            HStack(spacing: 10) {
-                Text("More:").font(.system(size: 11)).foregroundStyle(Theme.muted)
-                Button("Always allow for \(event.agentName) (Touch ID)") { confirmRule = true }
-                    .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(signed ? Theme.lime : Theme.muted)
-                    .disabled(!signed)
-                    .help(signed ? "" : "Kai didn't record which signed agent this was (an older record).")
-                InfoButton(text: InfoText.always)
-                Button(showWhy ? "Hide" : "Why?") { showWhy.toggle() }
-                    .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Theme.muted)
-            }
+            // Action-only labels (the title names the agent and the site);
+            // stacked full width when they don't fit, never truncated.
+            CardActions(actions: (sessionLive ? [CardAction(title: "Allow this session", info: InfoText.thisSession) {
+                                      grants.allowForSession(event); done = .session }] : [])
+                                 + (signed ? [CardAction(title: "Allow 1 hour", info: InfoText.oneHour) {
+                                      grants.allowForHour(grants.request(from: event)); done = .hour(Date().addingTimeInterval(3600)) },
+                                    CardAction(title: "Keep blocked") {
+                                      grants.keepBlocked(grants.request(from: event)); done = .kept }] : []),
+                        more: [CardAction(title: "Always allow (Touch ID)", enabled: signed,
+                                          help: signed ? "" : "Kai didn't record which signed agent this was (an older record).") {
+                                   confirmRule = true }],
+                        moreInfo: InfoText.always,
+                        why: (label: showWhy ? "Hide" : "Why?", toggle: { showWhy.toggle() }))
         } else if event.isStorage && event.isBlock, let req = grants.pendingFor(event) {
             ApprovalCard(req: req, manager: grants)
         } else if event.decision == "redact" || event.decision == "replace" {
@@ -259,11 +247,11 @@ struct AgentReachView: View {
     private func row<T: View>(_ main: String, _ sub: String, @ViewBuilder trailing: () -> T) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 1) {
-                Text(main).font(.system(size: 13))
-                Text(sub).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                Text(main).font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
+                Text(sub).font(.system(size: 11)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
-            trailing()
+            Spacer(minLength: 8)
+            HStack(spacing: 6) { trailing() }.fixedSize()   // buttons keep their whole label; the text wraps
         }
         .padding(8).background(Theme.surface, in: RoundedRectangle(cornerRadius: 8))
     }

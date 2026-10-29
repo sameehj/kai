@@ -254,6 +254,72 @@ int kai_cmd_status_text(void) {
     return 0;
 }
 
+/* Release batch 16: which agent host apps hold Screen Recording, Microphone,
+ * Camera or Accessibility. macOS keeps these in its TCC databases (the user's
+ * for Microphone and Camera, the system's for Screen Recording and
+ * Accessibility), readable only with Full Disk Access. Unreadable = not
+ * measured, never "none". */
+static const struct { const char *bundle, *name; } HOST_APPS[] = {
+    {"com.apple.Terminal", "Terminal"}, {"com.googlecode.iterm2", "iTerm"},
+    {"com.todesktop.230313mzl4w4u92", "Cursor"}, {"com.openai.codex", "Codex"},
+    {"com.microsoft.VSCode", "VS Code"}, {"dev.warp.Warp-Stable", "Warp"},
+    {"com.mitchellh.ghostty", "Ghostty"}, {"com.anthropic.claudefordesktop", "Claude"},
+};
+#define NHOST_APPS (sizeof HOST_APPS / sizeof HOST_APPS[0])
+
+/* held[i] gets the services app i holds, as words. 1 measured, 0 not. */
+static int tcc_read(const char *db, char held[][96]) {
+    struct stat st;
+    if (strchr(db, '\'') || stat(db, &st) != 0) return 0;
+    char cmd[1600];
+    snprintf(cmd, sizeof cmd, "/usr/bin/sqlite3 -readonly '%s' \"SELECT service || '|' || client FROM access "
+             "WHERE auth_value = 2 AND service IN ('kTCCServiceScreenCapture','kTCCServiceMicrophone',"
+             "'kTCCServiceCamera','kTCCServiceAccessibility')\" 2>/dev/null", db);
+    FILE *f = popen(cmd, "r");
+    if (!f) return 0;
+    char line[512];
+    while (fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\n")] = '\0';
+        char *bar = strchr(line, '|');
+        if (!bar) continue;
+        *bar = '\0';
+        const char *svc = !strcmp(line, "kTCCServiceScreenCapture") ? "Screen Recording"
+                        : !strcmp(line, "kTCCServiceMicrophone") ? "Microphone"
+                        : !strcmp(line, "kTCCServiceCamera") ? "Camera" : "Accessibility";
+        for (size_t i = 0; i < NHOST_APPS; i++) {
+            if (strcmp(bar + 1, HOST_APPS[i].bundle) || strstr(held[i], svc)) continue;
+            size_t l = strlen(held[i]);
+            snprintf(held[i] + l, 96 - l, "%s%s", l ? ", " : "", svc);
+        }
+    }
+    return pclose(f) == 0;
+}
+
+static void privacy_report(void) {
+    printf("Privacy permissions of agent host apps (Screen Recording, Microphone, Camera, Accessibility)\n");
+    printf("  · macOS grants these per app, so every agent run in that app inherits them.\n");
+    char held[NHOST_APPS][96];
+    memset(held, 0, sizeof held);
+    char user_db[1200];
+    const char *h = getenv("HOME");
+    snprintf(user_db, sizeof user_db, "%s/Library/Application Support/com.apple.TCC/TCC.db", h ? h : "");
+    int mine = tcc_read(user_db, held);
+    int sys = tcc_read("/Library/Application Support/com.apple.TCC/TCC.db", held);
+    int any = 0;
+    for (size_t i = 0; i < NHOST_APPS; i++)
+        if (held[i][0]) { printf("  ! %s: %s\n", HOST_APPS[i].name, held[i]); any = 1; }
+    if (!mine && !sys) {
+        printf("  · not measured: macOS shows this list only to apps with Full Disk Access. Check System Settings > "
+               "Privacy & Security (Screen Recording, Microphone, Camera, Accessibility).\n");
+        return;
+    }
+    if (!any) printf("  ✓ none of Terminal, iTerm, Cursor, Codex, VS Code, Warp, Ghostty, Claude holds them%s\n",
+                     mine && sys ? "" : " (partly measured)");
+    if (!mine) printf("  · Microphone and Camera: not measured (your privacy database isn't readable here)\n");
+    if (!sys) printf("  · Screen Recording and Accessibility: not measured (the system privacy database needs Full "
+                     "Disk Access)\n");
+}
+
 /* `kai doctor`: every check behind `kai status`, with what was looked at. */
 int kai_cmd_doctor(void) {
     int problems = 0;
@@ -407,8 +473,8 @@ int kai_cmd_doctor(void) {
     } else {
         printf("· OS protection (Files, Internet): not included in this preview\n");
     }
-    printf("· Accessibility: not measured - an agent's host app with Accessibility permission could click "
-           "Kai's buttons; check System Settings > Privacy & Security > Accessibility\n");
+    privacy_report();
+    printf("  · With Accessibility, an agent's host app could also click Kai's buttons.\n");
 
     printf("%s\n", problems ? "Problems found." : "No problems found.");
     return problems ? 1 : 0;

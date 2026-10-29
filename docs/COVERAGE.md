@@ -21,6 +21,8 @@ Evidence: each agent's hook event, in that agent's format, sent to the real `kai
 | Network upload command (`curl -d @file`) | PreToolUse (Bash) | command text (parsed) | before it runs | Yes | Uploads by a script or an unrecognized tool, or to an allowed host, aren't recognized. | live 2026-10-28, Claude Code 2.1.312 (manual run: curl -d @notes.txt stopped); synthetic 2026-10-29: stopped |
 | MCP tool call (no rule for the server) | PreToolUse (mcp__server__tool) | server, tool, argument keys and values | before the call | Yes | Claude Code / Codex: stopped until you allow the server (kai allow-mcp; in the app, a card). Cursor: its MCP event doesn't name the server, so only the arguments are scanned for secrets. | synthetic 2026-10-29: stopped |
 | The agent's own web fetch (secret in the URL) | PreToolUse (WebFetch) | the URL | before the fetch | Yes | Only the URL is checked; by default fetches are allowed (on_fetch allow). Connections made any other way aren't governed. | synthetic 2026-10-29: stopped |
+| Screen, microphone, camera or app control (screencapture, ffmpeg/sox, osascript) | PreToolUse (Bash) | command text (parsed) | before it runs | Yes | Recognized commands only: screencapture, ffmpeg/sox/rec from a live device, imagesnap, cliclick, osascript that tells an app. A program the agent writes can call the capture APIs directly. | synthetic 2026-10-29: stopped |
+| The agent's own screenshot or computer-use tool | PreToolUse (mcp__computer-use__…) | tool name | before the call | Yes | Recognized by tool name (screenshot, computer). A web page screenshot in a browser tool isn't counted as the screen. | synthetic 2026-10-29: stopped |
 
 ## Codex (codex-cli 0.162.1)
 
@@ -34,6 +36,8 @@ Evidence: each agent's hook event, in that agent's format, sent to the real `kai
 | Network upload command (`curl -d @file`) | PreToolUse (shell) | argv (parsed) | before it runs | Yes | Uploads by a script or an unrecognized tool, or to an allowed host, aren't recognized. | synthetic 2026-10-29: stopped |
 | MCP tool call (no rule for the server) | PreToolUse (MCP tool) | server, tool, arguments | before the call | Yes | Claude Code / Codex: stopped until you allow the server (kai allow-mcp; in the app, a card). Cursor: its MCP event doesn't name the server, so only the arguments are scanned for secrets. | synthetic 2026-10-29: stopped |
 | The agent's own web fetch (secret in the URL) | none (no fetch event) | n/a | n/a | No | Only the URL is checked; by default fetches are allowed (on_fetch allow). Connections made any other way aren't governed. | not applicable |
+| Screen, microphone, camera or app control (screencapture, ffmpeg/sox, osascript) | PreToolUse (shell) | argv (parsed) | before it runs | Yes | Recognized commands only: screencapture, ffmpeg/sox/rec from a live device, imagesnap, cliclick, osascript that tells an app. A program the agent writes can call the capture APIs directly. | synthetic 2026-10-29: stopped |
+| The agent's own screenshot or computer-use tool | PreToolUse (MCP tool) | tool name | before the call | Yes | Recognized by tool name (screenshot, computer). A web page screenshot in a browser tool isn't counted as the screen. | synthetic 2026-10-29: stopped |
 
 ## Cursor (Cursor 3.27.22)
 
@@ -47,6 +51,8 @@ Evidence: each agent's hook event, in that agent's format, sent to the real `kai
 | Network upload command (`curl -d @file`) | beforeShellExecution | command text (parsed) | before it runs | Yes | Uploads by a script or an unrecognized tool, or to an allowed host, aren't recognized. | synthetic 2026-10-29: stopped |
 | MCP tool call (no rule for the server) | beforeMCPExecution | tool name and arguments, not the server | before the call | No | Claude Code / Codex: stopped until you allow the server (kai allow-mcp; in the app, a card). Cursor: its MCP event doesn't name the server, so only the arguments are scanned for secrets. | synthetic 2026-10-29: allowed |
 | The agent's own web fetch (secret in the URL) | none (no fetch event) | n/a | n/a | No | Only the URL is checked; by default fetches are allowed (on_fetch allow). Connections made any other way aren't governed. | not applicable |
+| Screen, microphone, camera or app control (screencapture, ffmpeg/sox, osascript) | beforeShellExecution | command text (parsed) | before it runs | Yes | Recognized commands only: screencapture, ffmpeg/sox/rec from a live device, imagesnap, cliclick, osascript that tells an app. A program the agent writes can call the capture APIs directly. | synthetic 2026-10-29: stopped |
+| The agent's own screenshot or computer-use tool | beforeMCPExecution | tool name | before the call | Yes | Recognized by tool name (screenshot, computer). A web page screenshot in a browser tool isn't counted as the screen. | synthetic 2026-10-29: stopped |
 
 ## Not checked by any agent's hooks
 
@@ -57,6 +63,8 @@ Evidence: each agent's hook event, in that agent's format, sent to the real `kai
 | A direct `curl` to a model endpoint | Parsed as a command; its content isn't checked as a prompt | Not checked as a prompt |
 | A program the agent writes and runs, and its children | The hook sees only the command that starts it | Not checked |
 | Detached or background processes | No hook event | Not checked |
+| A program the agent writes that calls the screen, microphone or camera APIs itself | The hook sees only the command that starts it | Not checked |
+| macOS privacy prompts (Screen Recording, Microphone, Camera, Accessibility) | macOS grants them per app; Kai can't change them. `kai doctor` lists what agent host apps hold | Not changed |
 
 ## Live check: Claude Code 2.1.312 on a real session (2026-10-28)
 

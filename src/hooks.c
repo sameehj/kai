@@ -237,6 +237,21 @@ static void say_upload(char *out, size_t n, const char *cmd, const char *agent, 
                  tool, shown, host, agent);
 }
 
+/* Release batch 16: screen, microphone, camera or app control, unless the
+ * user's kai allow-capture covers this agent. Fills out with the stop. */
+static int capture_stopped(const char *what, const char *agent, const char *cwd, char *out, size_t n) {
+    if (!what || !*what || kai_cli_grant_allows("capture", agent, "all", NULL, cwd, (long long)time(NULL))) return 0;
+    const char *title = !strcmp(agent, "claude") ? "Claude Code" : !strcmp(agent, "codex") ? "Codex"
+                      : !strcmp(agent, "cursor") ? "Cursor" : agent;
+    snprintf(out, n, "%s wants to %s. If this was intended: kai allow-capture --agent %s --for 15m.", title, what, agent);
+    return 1;
+}
+
+/* The stop already reads as a sentence to the user: no "Kai stopped this:". */
+static int own_words(const char *reason) {
+    return !strncmp(reason, "Kai ", 4) || strstr(reason, "kai allow-capture --agent") != NULL;
+}
+
 /* A host the user blocked (kai block): 2 and fills host, else 0. */
 static int rules_decide(const char *cmd, const char *agent, char *host, size_t hn) {
     char hosts[8][256];
@@ -1007,8 +1022,16 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
          * file/command rules. No rule = ask. We show "MCP · server · tool" and
          * the argument KEYS only (libkai redacts values); server descriptions
          * and annotations like readOnlyHint are never read and never decide. */
-        char mcp_server[64] = "", mcp_tool[64] = "";
-        if (kai_mcp_parse_tool(tool, mcp_server, sizeof mcp_server, mcp_tool, sizeof mcp_tool)) {
+        char mcp_server[64] = "", mcp_tool[64] = "", capwhat[96] = "";
+        int cap_tool = kai_capture_tool(tool, capwhat, sizeof capwhat);
+        if (cap_tool && capture_stopped(capwhat, source, cwd, reason, sizeof reason)) {
+            decision = KAI_ACT_BLOCK; ask = 0;   /* never the agent's own ask: auto mode could approve it */
+            kai_strlcpy(rule, "capture", sizeof rule);
+            subject = strdup(tool);
+        } else if (cap_tool) {
+            decision = KAI_ACT_NONE;   /* the user's kai allow-capture */
+            kai_strlcpy(rule, "terminal_grant", sizeof rule);
+        } else if (kai_mcp_parse_tool(tool, mcp_server, sizeof mcp_server, mcp_tool, sizeof mcp_tool)) {
             /* MCP is Kai-card-only. The hook never reads grants or the approval
              * key (an agent-tree process must not): it asks the app's control
              * service, which runs as the signed app - the only reader of the key.
@@ -1119,6 +1142,12 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 kai_strlcpy(match, app, sizeof match);
                 snprintf(reason, sizeof reason,
                          "command makes another app (%s) run commands, outside Kai's checks", app);
+            } else if (kai_capture_match(cmd, capwhat, sizeof capwhat) &&
+                       capture_stopped(capwhat, source, cwd, reason, sizeof reason) &&
+                       !skip_exempt("capture", &ex)) {
+                decision = KAI_ACT_BLOCK;
+                kai_strlcpy(rule, "capture", sizeof rule);
+                kai_strlcpy(match, capwhat, sizeof match);
             } else if (kai_command_touches_protected_as(p, source, cmd, cwd, why, sizeof why,
                                                         skip_exempt, &ex)) {
                 decision = KAI_ACT_BLOCK;
@@ -1261,7 +1290,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             char msg[600];
             if (ask)
                 snprintf(msg, sizeof msg, "Kai: %s Allow it this time?", reason);
-            else if (!strncmp(reason, "Kai ", 4))
+            else if (own_words(reason))
                 snprintf(msg, sizeof msg, "%s", reason);
             else
                 snprintf(msg, sizeof msg, "Kai stopped this: %s", reason);
@@ -1330,7 +1359,7 @@ static void cursor_deny(const char *user_msg) {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "permission", "deny");
     char msg[600];
-    if (!strncmp(user_msg, "Kai ", 4)) snprintf(msg, sizeof msg, "%s", user_msg);
+    if (own_words(user_msg)) snprintf(msg, sizeof msg, "%s", user_msg);
     else snprintf(msg, sizeof msg, "Kai stopped this: %s", user_msg);
     cJSON_AddStringToObject(o, "user_message", msg);
     cJSON_AddStringToObject(o, "agent_message", msg);
@@ -1363,6 +1392,7 @@ static int hook_cursor(const char *json) {
     const char *tool = NULL, *subject = NULL, *app = NULL;
     next_kind kind = NEXT_TOOL;
     exempt_ctx ex = {p, NULL, ""};
+    char capwhat[96] = "";
 
     if (ev && strcmp(ev, "beforeReadFile") == 0) {
         tool = "Read";
@@ -1406,6 +1436,12 @@ static int hook_cursor(const char *json) {
             kai_strlcpy(match, app, sizeof match);
             snprintf(reason, sizeof reason,
                      "command makes another app (%s) run commands, outside Kai's checks", app);
+        } else if (cmd && kai_capture_match(cmd, capwhat, sizeof capwhat) &&
+                   capture_stopped(capwhat, "cursor", cwd, reason, sizeof reason) &&
+                   !skip_exempt("capture", &ex)) {
+            deny = 1;
+            kai_strlcpy(why, "capture", sizeof why);
+            kai_strlcpy(match, capwhat, sizeof match);
         } else if (cmd && kai_command_touches_protected_as(p, "cursor", cmd, cwd, why, sizeof why,
                                                            skip_exempt, &ex)) {
             deny = 1; say_protected(reason, sizeof reason, NULL, why, why, "cursor", cwd);
@@ -1431,7 +1467,11 @@ static int hook_cursor(const char *json) {
         subject = ti;
         kai_report rep;
         char *c = kai_scan_text(p, ti ? ti : "", &rep); free(c);
-        if (rep.worst >= KAI_ACT_REDACT) {
+        if (kai_capture_tool(cjstr(root, "tool_name"), capwhat, sizeof capwhat) &&
+            capture_stopped(capwhat, "cursor", cwd, reason, sizeof reason)) {
+            deny = 1;
+            kai_strlcpy(why, "capture", sizeof why);
+        } else if (rep.worst >= KAI_ACT_REDACT) {
             deny = 1; kai_report_summary(&rep, reason, sizeof reason);
             kai_strlcpy(why, "mcp_arguments", sizeof why);
         }

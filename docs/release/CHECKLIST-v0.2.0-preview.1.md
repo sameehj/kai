@@ -57,4 +57,6 @@ Everything here waits on Sameeh. The code side is on `fix/ux-review-phase-a`; `m
 | A11 | Telemetry | Settings → Internet → Agent telemetry: Claude Code and Codex "Turn off in <agent>"; Cursor "No setting from Cursor; Kai keeps blocking it." | |
 | B12 | ⓘ buttons | Each opens its copy (value line, Working now, Idle, Watch, Protect, 1 hour, this session, always, coverage) | |
 | B13 | Preview labels | "Preview" badge in popover and Settings; Preview sentence in README, installer welcome, `kai status` | |
+| 16 | Capture | In Claude Code ask for a screenshot: "Claude Code wants to take a screenshot of your screen. If this was intended: kai allow-capture --agent claude --for 15m."; run that in your own terminal and retry (goes through). `kai doctor` → "Privacy permissions of agent host apps" (lists apps, or "not measured" without Full Disk Access) | |
+| 17 | Decision cards | Popover, Activity and Agent Control cards at their narrowest: labels "Allow this session", "Allow 1 hour", "Keep blocked", "More ▾"; stacked full width when they don't fit; no "…" in any label | |
 | B14 | Docs | README order; Design references say "designed with reference to"; DESIGN.md and IMPLEMENTATION_STATUS.md current-state notes | |

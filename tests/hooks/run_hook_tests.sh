@@ -139,7 +139,10 @@ expect "open a .command file" claude "$(bash_cmd 'open ./deploy.command')" 'deny
 expect "cursor: osascript tells Terminal" cursor \
   "$(python3 -I -c 'import json,sys; print(json.dumps({"hook_event_name":"beforeShellExecution","command":sys.argv[1]}))' "osascript -e 'tell application \"Terminal\" to do script \"ls\"'")" '"deny"'
 refute "osascript notification is fine" claude "$(bash_cmd "osascript -e 'display notification \"Terminal tests done\" with title \"Build\"'")" 'deny'
-refute "osascript to another app is fine" claude "$(bash_cmd "osascript -e 'tell application \"Music\" to pause'")" 'deny'
+# release batch 16: telling any app is app control, stopped with kai allow-capture
+expect "osascript to another app: app control" claude "$(bash_cmd "osascript -e 'tell application \"Music\" to pause'")" 'kai allow-capture --agent claude'
+refute "a piped script without tell application is fine" claude "$(bash_cmd "echo 'display notification \"x\"' | osascript")" 'deny'
+expect "a piped script that tells an app is app control" claude "$(bash_cmd "echo 'tell application \"Music\" to pause' | osascript")" 'kai allow-capture'
 refute "open -a Terminal alone is fine" claude "$(bash_cmd 'open -a Terminal')" 'deny'
 refute "open a file in its editor is fine" claude "$(bash_cmd 'open -a TextEdit notes.txt')" 'deny'
 refute "mentioning Terminal in a commit is fine" claude "$(bash_cmd "git commit -m 'block osascript tell application \"Terminal\"'")" 'deny'

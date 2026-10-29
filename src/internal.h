@@ -57,6 +57,7 @@ int kai_cmd_allow_file(int argc, char **argv);
 int kai_cmd_allow_fetch(int argc, char **argv);
 int kai_cmd_allow_mcp(int argc, char **argv);
 int kai_cmd_allow_upload(int argc, char **argv);
+int kai_cmd_allow_capture(int argc, char **argv);
 int kai_cmd_block(int argc, char **argv);
 int kai_cmd_rules(int argc, char **argv);
 int kai_cmd_undo(int argc, char **argv);

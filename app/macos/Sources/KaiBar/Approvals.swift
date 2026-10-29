@@ -964,46 +964,26 @@ struct ApprovalCard: View {
                 .padding(8).frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.25)))
             }
-            HStack(spacing: 8) {
-                switch tier {
-                case 4:
-                    Text("Always protected").font(.caption).foregroundStyle(.secondary)
-                    Button("Dismiss") { manager.deny(req) }
-                case 3:
-                    // The grant matches the label: the requested op, this session, 15 min.
-                    Button("Allow for 15 minutes (Touch ID)") { manager.approve(req, duration: .min10) }
-                        .keyboardShortcut(.defaultAction)
-                    Button("Keep blocked") { manager.deny(req) }
-                default:
-                    if req.unknownHost {
-                        // B2 hostname honesty: only this connection, no rule.
-                        Button("Allow this connection") { manager.approveOnce(req) }.keyboardShortcut(.defaultAction)
-                        Button("Keep blocked") { manager.deny(req) }
-                    } else {
-                        if !(req.session ?? "").isEmpty {
-                            Button("Allow for this session") { ask(.session) }.keyboardShortcut(.defaultAction)
-                        } else if req.rememberable && tier < 2 {
-                            // Fix 2: no session to bind to: one hour, by signed identity.
-                            Button("Allow \(req.agentTitle) to reach \(req.resource) for 1 hour") { manager.allowForHour(req) }
-                                .keyboardShortcut(.defaultAction)
-                        } else {
-                            Button("Allow this process for 1 hour") { ask(.hour1) }.keyboardShortcut(.defaultAction)
-                        }
-                        Button("Keep blocked") { manager.keepBlocked(req) }
-                        Menu("More…") {
-                            ForEach(tier == 2 ? [GrantDuration.day1] : [.min10, .hour1, .day1, .day7], id: \.self) { d in
-                                Button("Allow for \(d.label)") { ask(d) }
-                            }
-                            if req.rememberable && tier < 2 {
-                                Divider()
-                                Button("Create a rule…") { showRule = true }
-                            }
-                        }.menuStyle(.borderlessButton).fixedSize()
-                    }
+            // Labels are actions only: the title above names the agent and the
+            // site. CardActions stacks them when they don't fit; none truncates.
+            let why = (label: showWhy ? "Hide" : "Why?", toggle: { withAnimation { showWhy.toggle() } })
+            switch tier {
+            case 4:
+                Text("Always protected").font(.caption).foregroundStyle(.secondary)
+                CardActions(actions: [CardAction(title: "Dismiss") { manager.deny(req) }], why: why)
+            case 3:
+                // The grant matches the label: the requested op, this session, 15 min.
+                CardActions(actions: [CardAction(title: "Allow 15 minutes (Touch ID)", primary: true) { manager.approve(req, duration: .min10) },
+                                      CardAction(title: "Keep blocked") { manager.deny(req) }], why: why)
+            default:
+                if req.unknownHost {
+                    // B2 hostname honesty: only this connection, no rule.
+                    CardActions(actions: [CardAction(title: "Allow this connection", primary: true) { manager.approveOnce(req) },
+                                          CardAction(title: "Keep blocked") { manager.deny(req) }], why: why)
+                } else {
+                    CardActions(actions: allowActions + [CardAction(title: "Keep blocked") { manager.keepBlocked(req) }],
+                                more: moreActions, why: why)
                 }
-                Spacer()
-                Button(showWhy ? "Hide" : "Why?") { withAnimation { showWhy.toggle() } }
-                    .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
             }
         }
         .padding(10)
@@ -1023,6 +1003,30 @@ struct ApprovalCard: View {
         } message: {
             Text(RuleText.covers(agent: req.agentTitle, identity: req.verifiedIdentity ?? "", host: req.resource))
         }
+    }
+
+    /// "Allow this session" (when there is one), then "Allow 1 hour".
+    private var allowActions: [CardAction] {
+        let session = !(req.session ?? "").isEmpty
+        var a: [CardAction] = []
+        if session {
+            a.append(CardAction(title: "Allow this session", info: InfoText.thisSession, primary: true) { ask(.session) })
+        }
+        if !session && req.rememberable && tier < 2 {
+            // Fix 2: no session to bind to: one hour, by signed identity.
+            a.append(CardAction(title: "Allow 1 hour", info: InfoText.oneHour, primary: true) { manager.allowForHour(req) })
+        } else {
+            a.append(CardAction(title: "Allow 1 hour", info: InfoText.oneHour, primary: !session) { ask(.hour1) })
+        }
+        return a
+    }
+
+    private var moreActions: [CardAction] {
+        var m = (tier == 2 ? [GrantDuration.day1] : [.min10, .day1, .day7]).map { d in
+            CardAction(title: "Allow \(d.label)") { ask(d) }
+        }
+        if req.rememberable && tier < 2 { m.append(CardAction(title: "Create a rule…") { showRule = true }) }
+        return m
     }
 
     /// Ask: one click; when it overrides your own rule (tier 2), a short confirm.
