@@ -41,7 +41,11 @@ final class FilterDataProvider: NEFilterDataProvider {
         // how many were an agent's, blocked; paused; can it write the audit log.
         // ("Enforcing" with zero agent flows is a claim, not a measurement.)
         let st = engine.stats()
+        // B4: which policy this wall runs, so status can tell current from stale.
+        var fp = [CChar](repeating: 0, count: 16)
+        kai_policy_fingerprint(&fp, fp.count)
         let json = "{\"wall\":\"network\",\"mode\":\"\(mode)\",\"enforcing\":\(m == KAI_EGRESS_BLOCK),"
+                 + "\"policy\":\"\(String(cString: fp))\","
                  + "\"flows\":\(st.flows),\"agent_flows\":\(st.agentFlows),\"blocked\":\(st.blocked),"
                  + "\"paused\":\(st.paused),\"audit_writable\":\(st.auditWritable),\"policy_agents\":\(st.policyAgents),"
                  + "\"running\":true,\"ts\":\(Int(Date().timeIntervalSince1970))}"
@@ -120,10 +124,10 @@ final class FilterDataProvider: NEFilterDataProvider {
             hint = host
         }
         if proto == IPPROTO_UDP && port == "443" {
-            // QUIC hides the name in an encrypted Initial. Dropping it makes the
-            // client fall back to TCP, where the SNI is readable.
-            return engine.decide(host: nil, agent: agent, ip: ip, port: port, what: "QUIC",
-                                 pid: pid, pidv: pidv) ? .allow() : .drop()
+            // QUIC hides the site name in an encrypted Initial. Drop it for
+            // agents (Watch and Protect) without a card: the client falls back
+            // to HTTPS over TCP, where Kai reads the name and decides there.
+            return engine.dropQUIC(agent: agent, ip: ip) ? .drop() : .allow()
         }
         if proto == IPPROTO_TCP && (port == "443" || port == "80") {
             engine.remember(flow, agent: agent, ip: ip, port: port, hint: hint, pid: pid, pidv: pidv)
@@ -157,7 +161,8 @@ final class FilterDataProvider: NEFilterDataProvider {
             return NEFilterDataVerdict(passBytes: 0, peekBytes: offset + readBytes.count + 4096)
         default:
             engine.forget(flow)
-            let what = ctx.port == "443" ? "TLS without server name" : "HTTP without Host"
+            let what = ctx.port == "443" ? "an encrypted connection without a site name"
+                                         : "a web connection without a site name"
             if let h = ctx.hint { // fall back to the flow's own name
                 return engine.decide(host: h, agent: ctx.agent, ip: ctx.ip, port: ctx.port,
                                      pid: ctx.pid, pidv: ctx.pidv) ? .allow() : .drop()
@@ -224,11 +229,11 @@ final class Engine {
         let gdir = home + "/.kai/grants"
         let key = FileManager.default.contents(atPath: home + "/.kai/approval.key") ?? Data()
         if key.count != 32 {
-            grantStore = kai_approval_store_open(nil, gdir, nil, 0, 2)
+            grantStore = kai_approval_store_open_ro(nil, gdir, nil, 0, 2)   // the app alone writes grants
         } else {
             key.withUnsafeBytes { raw in
                 if let base = raw.bindMemory(to: UInt8.self).baseAddress {
-                    grantStore = kai_approval_store_open(nil, gdir, base, key.count, 2)
+                    grantStore = kai_approval_store_open_ro(nil, gdir, base, key.count, 2)
                 }
             }
             approvalKeyInstalled = grantStore != nil
@@ -343,21 +348,95 @@ final class Engine {
         if paused { return true }   // wall paused (time-boxed, auto-resume): allow
         var why = [CChar](repeating: 0, count: 256)
         if kai_egress_endpoint_allowed(p, host, ip, Int32(port) ?? 0, &why, why.count) == 1 { return true }
+        if let h = host, kai_agent_profile_allows(agent, h) == 1 { return true }   // e.g. Cursor's sign-in
         let target = host ?? "\(ip):\(port)"
+        let block = mode == KAI_EGRESS_BLOCK
+        // B2: telemetry and crash reports are an optional channel: denied
+        // without a card, audited, and one passive hint per agent in the app.
+        if let h = host, kai_host_is_telemetry(h) == 1 {
+            if block { nBlocked += 1 }
+            auditLocked(agent: agent, decision: block ? "block" : "log", target: target,
+                        detail: "telemetry to \(h) (\(ip):\(port)); not asked about")
+            if block { noteTelemetryHint(agent: agent, host: h) }
+            return !block
+        }
+        // B2: the user's own decisions, bound to the agent's verified signing
+        // identity and this exact host (never to an IP with no known name).
+        let ident = host == nil ? "" : identityLocked(pid: pid)
+        if !ident.isEmpty, let gs = grantStore {
+            var rid = [CChar](repeating: 0, count: 40)
+            switch kai_approval_store_rule(gs, ident, target, Int32(KAI_OP_CONNECT.rawValue), &rid, rid.count) {
+            case Int32(KAI_RULE_ALLOW):
+                kai_grant_audit("used", String(cString: rid), agent, target, Int32(KAI_OP_CONNECT.rawValue),
+                                "allow", "your rule for \(ident)")
+                return true
+            case Int32(KAI_RULE_KEEP_BLOCKED):
+                if block { nBlocked += 1 }
+                auditLocked(agent: agent, decision: block ? "block" : "log", target: target,
+                            detail: "kept blocked: you chose Keep blocked for this agent and host")
+                return !block
+            default: break
+            }
+        }
         // M1.4: a valid human-approved endpoint grant allows this destination.
         if endpointGrantAllows(pid: pid, pidv: pidv, agent: agent, dest: target) {
             kai_grant_audit("used", "(granted)", agent, target, Int32(KAI_OP_CONNECT.rawValue),
                             "allow", "scoped egress grant")
             return true
         }
-        let block = mode == KAI_EGRESS_BLOCK
         if block { nBlocked += 1 }
         let detail = host == nil
             ? "\(what ?? "connection") to \(ip):\(port), host unknown"
             : "connection to \(host!) (\(ip):\(port)) is not on the allowlist"
-        auditLocked(agent: agent, decision: block ? "block" : "log", target: target, detail: detail)
-        if block { requestEgressApproval(pid: pid, pidv: pidv, agent: agent, dest: target) }
+        auditLocked(agent: agent, decision: block ? "block" : "log", target: target, detail: detail,
+                    session: sessionFor(pid: pid, pidv: pidv).sid, identity: ident)
+        if block { requestEgressApproval(pid: pid, pidv: pidv, agent: agent, dest: target,
+                                         identity: ident, hostKnown: host != nil) }
         return !block
+    }
+
+    /// B2: the verified signing identity of the agent this process belongs to
+    /// ("com.anthropic.claude-code (Q6L2SF6YDW)"), "" when unknown or unsigned.
+    /// The agent's own process, not the child (curl) that opened the socket.
+    /// Cached briefly per agent pid; only reached for a flow that isn't allowed.
+    private var identityCache: [pid_t: (String, Date)] = [:]
+    private func identityLocked(pid: pid_t) -> String {
+        guard let pol = policy, pid > 0 else { return "" }
+        var name = [CChar](repeating: 0, count: 64)
+        var apid: Int32 = 0
+        guard kai_process_agent(pol, pid, &name, name.count, &apid) == 1, apid > 0 else { return "" }
+        if let (v, t) = identityCache[apid], Date().timeIntervalSince(t) < 60 { return v }
+        var out = [CChar](repeating: 0, count: 200)
+        let v = kai_pid_code_identity(apid, &out, out.count) == 1 ? String(cString: out) : ""
+        if identityCache.count > 1024 { identityCache.removeAll() }
+        identityCache[apid] = (v, Date())
+        return v
+    }
+
+    /// B2: one passive hint per agent ("Claude Code telemetry is blocked ...").
+    /// The app reads <kai home>/hints/telemetry-<agent>.
+    private var telemetryHinted = Set<String>()
+    private func noteTelemetryHint(agent: String, host: String) {
+        guard !telemetryHinted.contains(agent) else { return }
+        telemetryHinted.insert(agent)
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        let dir = home + "/.kai/hints"
+        mkdir(dir, 0o700)
+        let fp = dir + "/telemetry-" + agent.filter { $0.isLetter || $0.isNumber || $0 == "-" }
+        FileManager.default.createFile(atPath: fp, contents: Data("\(host)\n".utf8),
+                                       attributes: [.posixPermissions: 0o600])
+        if let o = owner { chown(dir, o.uid, o.gid); chown(fp, o.uid, o.gid) }
+    }
+
+    /// QUIC from an agent: dropped (so it falls back to HTTPS) unless Internet
+    /// is off or Kai is paused. Noted in the log once per agent every 10
+    /// minutes, as "log": it is a fallback, not a decision about a site.
+    func dropQUIC(agent: String, ip: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let p = policy, kai_policy_egress_mode(p) != KAI_EGRESS_OFF, !paused else { return false }
+        auditLocked(agent: agent, decision: "log", target: "QUIC",
+                    detail: "QUIC (UDP 443) dropped so the agent uses HTTPS, where Kai can see the site")
+        return true
     }
 
     /// Does a valid endpoint grant authorize this agent process to reach `dest`?
@@ -424,7 +503,8 @@ final class Engine {
 
     /// Stage an async approval request for a blocked destination (deduped), so
     /// the user can approve it instead of the agent only seeing a dead socket.
-    private func requestEgressApproval(pid: pid_t, pidv: UInt32, agent: String, dest: String) {
+    private func requestEgressApproval(pid: pid_t, pidv: UInt32, agent: String, dest: String,
+                                       identity: String, hostKnown: Bool) {
         let key = "\(pid):\(dest)"
         if let last = pendingSeen[key], Date().timeIntervalSince(last) < 600 { return }
         if pendingSeen.count > 4096 { pendingSeen.removeAll() }
@@ -444,7 +524,8 @@ final class Engine {
                          (sess.project.isEmpty ? "" : "\"project\":\"\(esc(sess.project))\",")
         let json = "{\"id\":\"\(id)\",\"agent\":\"\(esc(agent))\",\"pid\":\(pid)," +
                    "\"pidversion\":\(pidv),\"strength\":1,\"resource\":\"\(esc(dest))\"," +
-                   sessFields + "\"op\":\"connect\",\"ts\":\(Int(Date().timeIntervalSince1970))}"
+                   sessFields + (identity.isEmpty ? "" : "\"identity\":\"\(esc(identity))\",") +
+                   "\"hostKnown\":\(hostKnown),\"op\":\"connect\",\"ts\":\(Int(Date().timeIntervalSince1970))}"
         let fp = dir + "/" + id + ".json"
         let fd = open(fp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0o644)
         if fd >= 0 { fchmod(fd, 0o644); let b = Array(json.utf8)
@@ -457,7 +538,8 @@ final class Engine {
 
     /// One audit record per agent+target+decision every 10 minutes, so a
     /// chatty tool can't flood the log.
-    private func auditLocked(agent: String, decision: String, target: String, detail: String) {
+    private func auditLocked(agent: String, decision: String, target: String, detail: String,
+                             session: String = "", identity: String = "") {
         let key = "\(agent)|\(decision)|\(target)"
         if let last = recentLogs[key], Date().timeIntervalSince(last) < 600 { return }
         if recentLogs.count > 4096 { recentLogs.removeAll() }
@@ -465,8 +547,9 @@ final class Engine {
         // Structured denial: reason code "not_on_allowlist" goes in `rule`, the
         // destination in `target`. Fixes the record that read "rule: <host>" as
         // if a rule matched -- no rule matched; the host was absent from the list.
-        kai_denial_audit("network", agent, decision, target, "connect",
-                         KAI_REASON_NOT_ALLOWLISTED, nil, detail)
+        kai_denial_audit_ex("network", agent, decision, target, "connect",
+                            KAI_REASON_NOT_ALLOWLISTED, nil, detail,
+                            session.isEmpty ? nil : session, identity.isEmpty ? nil : identity)
         // We run as root: keep the user's audit log owned by the user.
         if let o = owner, !auditPath.isEmpty {
             chown(auditPath, o.uid, o.gid)

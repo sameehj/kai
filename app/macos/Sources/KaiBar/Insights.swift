@@ -3,17 +3,7 @@
 // Numbers and lists the redesigned screens show, all derived from the audit
 // log events the app already follows. Nothing here is stored separately.
 import Foundation
-
-/// One destination an agent connected to that is not on the allowlist.
-struct ReachedHost: Identifiable, Equatable {
-    let host: String
-    var agents: Set<String>
-    var count: Int
-    var blocked: Bool
-    var last: Date?
-    var id: String { host }
-    var agentList: String { agents.sorted().joined(separator: ", ") }
-}
+import KaiCore
 
 extension AppModel {
     private var weekEvents: [AuditEvent] {
@@ -31,26 +21,29 @@ extension AppModel {
 
     /// Hosts the network wall recorded, most recent first.
     var reachedHosts: [ReachedHost] {
-        var byHost: [String: ReachedHost] = [:]
-        for e in events where e.source == "network" && !e.rule.isEmpty {
-            var h = byHost[e.rule] ?? ReachedHost(host: e.rule, agents: [], count: 0, blocked: false, last: nil)
-            h.agents.insert(e.agentName)
-            h.count += 1
-            h.blocked = h.blocked || e.isBlock
-            if let d = e.date, d > (h.last ?? .distantPast) { h.last = d }
-            byHost[e.rule] = h
+        ReachedHost.group(events, allowed: Set(policy?.egressAllow ?? []))
+    }
+
+    /// Spec §2: Activity's weekly line, from the per-day counters (last 7 days).
+    var weeklyLine: String {
+        var secrets = 0, blocked = 0, paused = 0
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
+        for d in 0..<7 {
+            let day = f.string(from: Date().addingTimeInterval(-Double(d) * 86400))
+            secrets += Int(kai_daily_count(day, CChar(UInt8(ascii: "s")))) + Int(kai_daily_count(day, CChar(UInt8(ascii: "c"))))
+            blocked += Int(kai_daily_count(day, CChar(UInt8(ascii: "b"))))
+            paused += Int(kai_daily_count(day, CChar(UInt8(ascii: "p"))))
         }
-        let allowed = Set(policy?.egressAllow ?? [])
-        return byHost.values
-            .filter { !allowed.contains($0.host) }
-            .sorted { ($0.last ?? .distantPast) > ($1.last ?? .distantPast) }
+        _ = paused
+        return "This week: \(secrets) secret\(secrets == 1 ? "" : "s") kept private · \(blocked) action"
+            + "\(blocked == 1 ? "" : "s") stopped"
     }
 
     /// What deserves a line in the menu: things Kai stopped or cleaned.
     /// Prompt-injection suspicions and noticed hosts are signals, not
     /// incidents; they stay on the Activity page.
     var importantEvents: [AuditEvent] {
-        events.filter { $0.isBlock || $0.decision == "redact" || $0.decision == "replace" }
+        events.filter { ($0.isBlock || $0.decision == "redact" || $0.decision == "replace") && !$0.isSilent && !$0.isGrant }
     }
 
     /// Identical incidents collapsed with a count, for the menu's Recent list.
@@ -73,6 +66,31 @@ extension AppModel {
     /// A hook block that is still "fresh" (last 30 s), shown as a notice card.
     /// Wall blocks (storage, network) are left out: each stages its own
     /// decision card in Needs you, so showing them here would double up.
+    /// Batch 2: the popover's value line, from meaningful events today only
+    /// (telemetry, remembered blocks and the QUIC fallback never count).
+    var valueLine: String {
+        // Fix 1: from the per-day counter written with each audit record, not
+        // the 300-event buffer this app keeps for display.
+        var s: Int32 = 0, b: Int32 = 0
+        kai_daily_counts(nil, &s, &b)
+        let secrets = Int(s), other = Int(b)
+        // "N secrets kept private · M actions stopped today"
+        if secrets == 0 && other == 0 { return "Nothing stopped today" }
+        return "\(secrets) secret\(secrets == 1 ? "" : "s") kept private · \(other) action\(other == 1 ? "" : "s") stopped today"
+    }
+
+    /// Today's most repeated stopped item, when it repeated (exact, from the log).
+    var topToday: (item: String, count: Int)? {
+        var buf = [CChar](repeating: 0, count: 256)
+        var n: Int32 = 0
+        guard kai_daily_top(&buf, buf.count, &n) == 1 else { return nil }
+        // only when one item dominates: at least 5 times and half of today's stops
+        var s: Int32 = 0, b: Int32 = 0
+        kai_daily_counts(nil, &s, &b)
+        guard n >= 5, Int(n) * 2 >= Int(s + b) else { return nil }
+        return (String(cString: buf), Int(n))
+    }
+
     var freshBlock: AuditEvent? {
         guard let t = lastBlockAt, Date().timeIntervalSince(t) < 30 else { return nil }
         return events.first {

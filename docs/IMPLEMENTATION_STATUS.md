@@ -7,6 +7,16 @@ missing. Produced from a read-only audit of the source (v `0.1.0`); every claim
 is tied to code. **A feature existing in code is not a security guarantee** —
 the status column says how far each one is actually established.
 
+## Update — v0.2.0-preview.1 (`fix/ux-review-phase-a`, 2026-10-29)
+
+> **Current state (v0.2.0-preview.1, 2026-10-29).**
+> - **Preview 1** is the `kai` command, the checks inside Claude Code, Codex and Cursor (hooks), and the Chrome extension. It has **no protected writer**: Kai's policy and terminal rules (`kai allow-…`) are files a program with your permissions can edit; Kai notices some outside policy changes (fingerprint), never all.
+> - **The control service is removed** (no XPC service, LaunchAgent or SMAppService). In the app release, **the Kai app is the only writer** of policy and signed rules; the `kai` command shows them and, when the app is installed, says "Change this in Kai".
+> - **The gateway is optional**: a manual opt-in local proxy, not part of the Preview 1 promise or the release checks.
+> - **OS-level Files and Internet protection** (Endpoint Security, network extension) ships with the Kai app in an upcoming release.
+> - What each agent reports and what Kai can stop: [COVERAGE.md](COVERAGE.md). The contract and its tests: [audit/preview1-contract.md](audit/preview1-contract.md).
+
+
 ## Update — PR #2 (`fix/ux-review-phase-a`, 2026-10-28)
 
 Sections below predate this branch where they say the storage wall or the
@@ -19,13 +29,15 @@ approval UI are unbuilt or not live; this is what changed (details in the PR).
 | Approvals UI | Decision cards (Ask / Touch ID / Always protected), session permissions, Revoke, break-glass writes honored | compile + unit; card flow **not yet live-checked** (live check 2) |
 | Sessions | One session id (Kai's, from the registry) for pause, activity, permissions and topics; working / idle / ended; IDE apps as one row | **V live** for the list; unit-tested |
 | Pause | Per session and global, shown as Pausing… until the wall's heartbeat confirms; hooks and wall read the same marker | unit-tested; live check pending |
-| One Kai | Second copy hands over and quits; lock backstop; only `/Applications/Kai.app` with the release signature hosts the control service | unit-tested; live check pending |
+| One Kai | A second copy quits (lock in ~/.kai/run); only `/Applications/Kai.app` with the release signature writes policy and permissions (storage wall) | unit-tested; **V live** (second copy quit, agent launch logged) |
+| CLI writes | **Removed in v1**: no XPC control service / LaunchAgent / SMAppService. The app writes in-process; `kai policy set/add/remove` and `kai grant create/revoke` print "Change this in Kai" and open the Settings page; reads unchanged. MCP decided in the hook. May return later with two-way signature checks | **V** (tests) |
+| Login persistence | `~/Library/LaunchAgents`, `/Library/LaunchAgents`, `/Library/LaunchDaemons`: agent reads allowed, writes Ask-level | unit-tested |
 | CLI status | `kai status` leads with the one status sentence (verified walls, working sessions) | **V** |
 | Tests inside an agent | Hook-settings cases skip with "needs a non-agent shell" | **V** |
 
 Still open: DNS (port 53) always allowed (`docs/ESCAPES.md`), the S8
-three-session acceptance run, MCP approval live run, signed XPC
-registration live run, and the browser AI-chats live run.
+three-session acceptance run, MCP approval live run, and the browser
+AI-chats live run. (The signed XPC control path was removed in v1.)
 
 Companion docs: `docs/WALLS.md` (wall design), `docs/THREAT_MODEL.md`,
 `docs/SECURITY-VALIDATION.md`, `docs/ESCAPES.md` (known bypasses),

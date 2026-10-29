@@ -1,5 +1,15 @@
 # Kai MVP — Design (for review before we build)
 
+This is the original MVP design, kept for its reasoning. Where it differs from today, the note below wins.
+
+> **Current state (v0.2.0-preview.1, 2026-10-29).**
+> - **Preview 1** is the `kai` command, the checks inside Claude Code, Codex and Cursor (hooks), and the Chrome extension. It has **no protected writer**: Kai's policy and terminal rules (`kai allow-…`) are files a program with your permissions can edit; Kai notices some outside policy changes (fingerprint), never all.
+> - **The control service is removed** (no XPC service, LaunchAgent or SMAppService). In the app release, **the Kai app is the only writer** of policy and signed rules; the `kai` command shows them and, when the app is installed, says "Change this in Kai".
+> - **The gateway is optional**: a manual opt-in local proxy, not part of the Preview 1 promise or the release checks.
+> - **OS-level Files and Internet protection** (Endpoint Security, network extension) ships with the Kai app in an upcoming release.
+> - What each agent reports and what Kai can stop: [COVERAGE.md](COVERAGE.md). The contract and its tests: [audit/preview1-contract.md](audit/preview1-contract.md).
+
+
 *Draft, October 15, 2026. Nothing below is built yet. Please review, then we build.*
 
 ## 1. What the MVP is
@@ -172,7 +182,7 @@ Every non-allow decision goes to the audit log.
 brew install kai            # later; for now: make && sudo make install
 kai install claude          # adds Kai hooks to ~/.claude/settings.json (backup kept)
 kai install cursor          # adds Kai hooks to ~/.cursor/hooks.json (backup kept)
-kai service install         # runs the gateway in the background (launchd / systemd)
+kai service install         # runs the gateway in the background (launchd / systemd)   (optional; not part of Preview 1)
 echo 'eval "$(kai env)"' >> ~/.zshrc   # points ANTHROPIC/OPENAI base URLs at the gateway
 ```
 
@@ -272,3 +282,24 @@ tool result / prompt ─▶ fast rules (MVP) ─▶ small local classifier ─�
 3. **Shell commands that look like uploads** (`curl -d @file`): ask every time, or deny unless the host is on an allowlist?
 4. **Name:** keep "Kai" pending a trademark search?
 5. **GitHub org:** where the repo lives (your account or a new org), so the CLA bot and CI can be set up.
+
+
+## Control path — v1 decision (2026-10-28): CLI writes removed, no control service
+
+The XPC control service, its LaunchAgent and the SMAppService registration
+are **removed in v1**. The Kai app is the only writer of policy and
+permissions, in-process (libkai's `kai_policy_dispatch`; grants are signed in
+the app as before); the storage wall lets only `/Applications/Kai.app` write
+the policy store. The `kai` CLI shows policy and permissions (`policy show`,
+`status`, `sessions`, `agents`, `why`, `denials`) and, for a change
+(`policy set/add/remove`, `grant create/revoke`), prints "Change this in Kai"
+and opens the matching Settings page (`kai://settings/<page>`, only for a
+person at a terminal). MCP approvals are decided in the hook: session from the
+wall's pid map, grant trusted by location (the grants folder is app-write-only).
+
+Why: live, the service's launchd registration pointed at a deleted
+`build/Kai.app` copy (macOS's background-task database kept the app's old
+location, and every agent the app registered inherited it), so every CLI write
+hung, and an old copy had been able to claim the service at all. CLI writes may
+return later, with signature checks in both directions (the CLI verifying the
+service, the service verifying the CLI).

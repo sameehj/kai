@@ -33,6 +33,13 @@ struct SessionRow: Decodable, Identifiable, Equatable {
     let agent: String
     var topic: String = ""
     var topicReportedByAgent: Bool = true
+    /// The topic without stray whitespace or line breaks (an empty-looking
+    /// topic drew an empty first line).
+    var topicLine: String {
+        var buf = [CChar](repeating: 0, count: 512)
+        kai_topic_clean(topic, &buf, buf.count)
+        return String(cString: buf).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
     var project: String = ""
     var hostApp: String = ""
     var startedUtc: Int = 0
@@ -61,9 +68,29 @@ struct SessionRow: Decodable, Identifiable, Equatable {
     var isSession: Bool { kind == "session" }
     var isIDE: Bool { workspaces != nil }
     var window: String { !tty.isEmpty ? tty : (hostApp.isEmpty ? "—" : hostApp) }
-    var projectName: String {
-        if let w = workspaces { return "\(w.count) workspace\(w.count == 1 ? "" : "s")" }
+    /// The project (or app) without the suffix that tells duplicates apart.
+    var projectBase: String {
+        if let w = workspaces {
+            return w.isEmpty ? (hostApp.isEmpty ? displayAgent : hostApp)
+                             : "\(w.count) workspace\(w.count == 1 ? "" : "s")"
+        }
         return project.isEmpty ? "—" : (project as NSString).lastPathComponent
+    }
+    var projectName: String {
+        if let w = workspaces {
+            // B1: count only what is known; "0 workspaces" on an active app misleads.
+            return w.isEmpty ? (hostApp.isEmpty ? displayAgent : hostApp)
+                             : "\(w.count) workspace\(w.count == 1 ? "" : "s")"
+        }
+        let base = project.isEmpty ? "—" : (project as NSString).lastPathComponent
+        return nameSuffix.isEmpty ? base : "\(base) · \(nameSuffix)"
+    }
+    /// B1: set by AgentsModel when two live sessions would read the same: the
+    /// topic, else the terminal, else the start time.
+    var nameSuffix: String = ""
+    enum CodingKeys: String, CodingKey {
+        case id, agent, topic, topicReportedByAgent, project, hostApp, startedUtc, endedUtc, childCount,
+             source, kind, tty, enforcement, state, activity, lastActiveUtc, workspaces
     }
     /// Proper product names, not the lowercase classifier.
     var displayAgent: String {
@@ -160,7 +187,17 @@ final class AgentsModel: ObservableObject {
         refreshing = true
         defer { refreshing = false }
         if let s = await KaiCLI.decode(Snapshot.self, ["snapshot", "--json"]) {
-            if s.sessions != sessions { sessions = s.sessions }
+            var rows = s.sessions
+            // Two live sessions with the same agent + project: tell them apart.
+            let keyOf = { (r: SessionRow) in r.displayAgent + "|" + r.project }
+            let dup = Dictionary(grouping: rows.filter { $0.isActive && $0.workspaces == nil }, by: keyOf)
+                .filter { $0.value.count > 1 }
+            for i in rows.indices where rows[i].isActive && dup[keyOf(rows[i])] != nil {
+                let r = rows[i]
+                rows[i].nameSuffix = !r.topic.isEmpty ? String(r.topic.prefix(30))
+                                   : !r.tty.isEmpty ? r.tty : "started \(r.startedClock)"
+            }
+            if rows != sessions { sessions = rows }
             agents = s.agents
             loaded = true
         }
@@ -283,10 +320,11 @@ struct SessionRowView: View {
                     Text(session.enforcementShort).font(.caption2)
                         .foregroundStyle(session.enforcementShort == "Files + Internet" ? .green
                                          : session.enforcementShort == "seen only" ? .secondary : .orange)
+                    if let i = InfoText.coverage(session.enforcementShort) { InfoButton(text: i) }
                     if !session.isActive { Text("ended").font(.caption2).foregroundStyle(.secondary) }
                 }
-                if !session.topic.isEmpty {   // hook-reported topic, or hidden
-                    Text(session.topic).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                if !session.topicLine.isEmpty {   // hook-reported topic, or hidden
+                    Text(session.topicLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 HStack(spacing: 6) {          // project once, window/tab, time
                     Text(session.projectName)
@@ -315,25 +353,18 @@ struct SessionDetail: View {
                         // wall doesn't cover can't be paused.
                         let storageCovered = session.source == "es" &&
                             session.enforcement.hasPrefix("Enforced: Files")
-                        if storageCovered {
+                        if storageCovered && DevFlags.perSessionPause {
                             PauseControl(state: grants.pauseState(session.id), until: grants.pauseEnds(session.id),
                                          pause: { grants.pauseSession(session.id, minutes: 15) },
                                          resume: { grants.pauseSession(session.id, minutes: 0) },
                                          extend: { grants.extendPause(session.id) })
                                 .frame(maxWidth: 360)
-                        } else {
-                            // The wall keys sessions to the agent root (Phase A item
-                            // 5), so this shows only until the wall first sees the
-                            // session act; the global pause always works meanwhile.
-                            Button("Pause Kai for all agents (15 min)") { grants.pauseAll(minutes: 15) }
-                                .help("Pause isn't available for this session yet, so this pauses Kai "
-                                      + "for every agent for 15 minutes, then resumes by itself.")
-                        }
+                        }   // no global pause here: it lives in the popover (Pause Kai · 15 min)
                     }
                 }
-                if !session.topic.isEmpty {
+                if !session.topicLine.isEmpty {
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(session.topic)
+                        Text(session.topicLine)
                         Text("topic reported by agent").font(.caption2).foregroundStyle(.secondary)
                     }
                 }

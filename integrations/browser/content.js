@@ -102,6 +102,12 @@
   });
   const scan = (text) => ask({ type: "scan", text, site: SITE });
 
+  // Say which chat site this page is (and when it goes away), for the "AI
+  // chats" status: the site name only, never the URL or any chat text.
+  ask({ type: "page", site: SITE, open: true });
+  window.addEventListener("pageshow", (e) => { if (e.persisted) ask({ type: "page", site: SITE, open: true }); });
+  window.addEventListener("pagehide", () => { ask({ type: "page", site: SITE, open: false }); });
+
   // Why Kai couldn't check, in words, with the one thing that fixes it.
   function whyUnreachable(error) {
     const e = String(error || "");
@@ -152,6 +158,7 @@
       const { kaiFailMode = "ask" } = await chrome.storage.local.get("kaiFailMode").catch(() => ({}));
       if (kaiFailMode === "send") {
         toast("warn", "Sent without a Kai check", whyUnreachable(r.error));
+        ask({ type: "not_checked", site: SITE });   // spec A.7: counted as "not checked"
         lastApproved = text;
         triggerSend(composer);
         return;
@@ -162,7 +169,7 @@
         body: "Nothing was checked. " + whyUnreachable(r.error),
         actions: [
           { label: "Edit", primary: true, run: () => composer.focus() },
-          { label: "Send unchecked", run: () => { lastApproved = text; triggerSend(composer); } },
+          { label: "Send unchecked", run: () => { ask({ type: "not_checked", site: SITE }); lastApproved = text; triggerSend(composer); } },
         ],
       });
       return;

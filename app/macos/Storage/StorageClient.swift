@@ -175,7 +175,11 @@ final class StorageClient {
         enforcing = (mode == KAI_STORAGE_BLOCK)
         if let gs = grantStore { gen = kai_approval_store_generation(gs) }
         #endif
+        // B4: which policy this wall runs, so status can tell current from stale.
+        var fp = [CChar](repeating: 0, count: 16)
+        kai_policy_fingerprint(&fp, fp.count)
         let json = "{\"wall\":\"storage\",\"mode\":\"\(modeName)\",\"enforcing\":\(enforcing)," +
+                   "\"policy\":\"\(String(cString: fp))\"," +
                    "\"filter\":\"\(filter)\",\"grant_generation\":\(gen)," +
                    "\"paused\":\(pausedStorage),\"paused_sessions\":[\(pausedList)]," +
                    "\"ts\":\(Int(Date().timeIntervalSince1970))}"
@@ -201,12 +205,12 @@ final class StorageClient {
         let gdir = home + "/.kai/grants"
         let key = FileManager.default.contents(atPath: home + "/.kai/approval.key") ?? Data()
         if key.count != 32 {
-            grantStore = kai_approval_store_open(nil, gdir, nil, 0, 2)
+            grantStore = kai_approval_store_open_ro(nil, gdir, nil, 0, 2)   // the app alone writes grants
             dlog("grants: store opened policy-only (no approval key; grants not honored)")
         } else {
             key.withUnsafeBytes { raw in
                 if let base = raw.bindMemory(to: UInt8.self).baseAddress {
-                    grantStore = kai_approval_store_open(nil, gdir, base, key.count, 2)
+                    grantStore = kai_approval_store_open_ro(nil, gdir, base, key.count, 2)
                 }
             }
             approvalKeyInstalled = grantStore != nil
@@ -857,13 +861,28 @@ final class StorageClient {
             // could drive - is blocked, so an agent tree can never obtain it.
             let signer = esString(proc.pointee.signing_id)
             let exe = path(proc.pointee.executable)
-            let isNetworkExt = signer == "io.github.sameehj.kai.network" &&
-                               exe.hasPrefix("/Library/SystemExtensions/")
-            if !isApp && !(isNetworkExt && !write) {
+            let team = esString(proc.pointee.team_id)
+            if kai_approval_key_access(signer, team, exe, write ? 1 : 0) == 0 {   // unit-tested in libkai
                 for p in paths where kai_path_is_approval_key(p) == 1 {
                     dlog("BLOCK \(op) approval-key \(signer) pid \(pid(proc)) \(p)")
                     auditKaiComponent(signer: signer, exe: exe, pid: pid(proc), op: op, path: p,
                                       why: "approval-key-app-only")
+                    return false
+                }
+            }
+            // B1: a Kai component gets its own state only. A path protected by
+            // the user's rules (~/.ssh, .env, *.key, login items, ...) is denied
+            // to the app, the extensions and a kai CLI an agent runs; only the
+            // kai CLI the user runs keeps access (kai_component_may_touch).
+            let underAgent = !(classify(proc) ?? "").isEmpty
+            lock.lock(); let cpol = policy; lock.unlock()
+            for p in paths where !p.isEmpty {
+                var cwhy = [CChar](repeating: 0, count: 256)
+                if kai_path_protected(cpol, p, nil, &cwhy, cwhy.count) == 1,
+                   kai_component_may_touch(signer, underAgent ? 1 : 0, cwhy) == 0 {
+                    dlog("BLOCK \(op) component \(signer) pid \(pid(proc)) \(p)")
+                    auditKaiComponent(signer: signer, exe: exe, pid: pid(proc), op: op, path: p,
+                                      why: "kai-component-own-state-only: " + String(cString: cwhy))
                     return false
                 }
             }
@@ -879,8 +898,8 @@ final class StorageClient {
                         }
                     } else if kai_path_is_control_store(p) == 1, let under, !under.isEmpty {
                         dlog("BLOCK \(op) kai-signed-under-agent \(under) pid \(pid(proc)) \(p)")
-                        audit(decision: "block", agent: under + " (kai)", op: op, path: p,
-                              why: "kai-control-store")
+                        auditKaiComponent(signer: signer, exe: exe, pid: pid(proc), op: op, path: p,
+                                          why: "kai-control-store", under: under)
                         return false
                     }
                 }
@@ -1001,8 +1020,9 @@ final class StorageClient {
     /// once per component + file every 10 minutes so a retry loop can't flood
     /// Activity.
     private var componentBlocksSeen: [String: Date] = [:]
-    private func auditKaiComponent(signer: String, exe: String, pid: pid_t, op: String, path p: String, why: String) {
-        let key = signer + "|" + exe + "|" + p
+    private func auditKaiComponent(signer: String, exe: String, pid: pid_t, op: String, path p: String,
+                                   why: String, under: String = "") {
+        let key = signer + "|" + exe + "|" + p + "|" + why + "|" + under
         lock.lock()
         if let t = componentBlocksSeen[key], Date().timeIntervalSince(t) < 600 { lock.unlock(); return }
         if componentBlocksSeen.count > 1024 { componentBlocksSeen.removeAll() }
@@ -1017,7 +1037,8 @@ final class StorageClient {
         case "kai": name = "kai command-line tool"
         default: name = "Kai component \(signer.isEmpty ? exe : signer)"
         }
-        audit(decision: "block", agent: "\(name) (pid \(pid))", op: op, path: p, why: why)
+        audit(decision: "block", agent: "\(name)\(under.isEmpty ? "" : " run by \(under)") (pid \(pid))",
+              op: op, path: p, why: why)
     }
 
     // MARK: console user + audit

@@ -1,0 +1,12 @@
+{
+  "_how": "Live = a real agent session invoked Kai's hook and honoured the answer. Recorded by hand from kai demo --live or a recorded manual run; never generated.",
+  "claude": {
+    "file_tool": "2026-10-29, Claude Code 2.1.312 (kai demo --live: Read of a fake .env stopped, session 939530bf)",
+    "shell_read": "2026-10-28, Claude Code 2.1.312 (manual run: cat .env stopped)",
+    "upload": "2026-10-28, Claude Code 2.1.312 (manual run: curl -d @notes.txt stopped)"
+  },
+  "codex": {
+    "shell_read": "2026-10-29, codex-cli 0.162.1 (kai demo --live: cat of a fake .env stopped, session 01a18738)"
+  },
+  "cursor": {}
+}

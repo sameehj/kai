@@ -154,6 +154,40 @@ int kai_audit_token_identity(const void *tokbytes, size_t toklen, char *team, si
     return ok;
 }
 
+int kai_pid_code_identity(int pid, char *out, size_t n) {
+    if (n) out[0] = '\0';
+    if (pid <= 0) return 0;
+    CFNumberRef num = CFNumberCreate(NULL, kCFNumberIntType, &pid);
+    const void *keys[] = {kSecGuestAttributePid};
+    const void *vals[] = {num};
+    CFDictionaryRef attrs = CFDictionaryCreate(NULL, keys, vals, 1, &kCFTypeDictionaryKeyCallBacks,
+                                               &kCFTypeDictionaryValueCallBacks);
+    SecCodeRef code = NULL;
+    int ok = 0;
+    if (SecCodeCopyGuestWithAttributes(NULL, attrs, kSecCSDefaultFlags, &code) == errSecSuccess) {
+        SecRequirementRef req = NULL;
+        SecRequirementCreateWithString(CFSTR("anchor apple generic"), kSecCSDefaultFlags, &req);
+        if (SecCodeCheckValidity(code, kSecCSDefaultFlags, req) == errSecSuccess) {
+            CFDictionaryRef info = NULL;
+            if (SecCodeCopySigningInformation((SecStaticCodeRef)code, kSecCSSigningInformation,
+                                              &info) == errSecSuccess && info) {
+                char sid[128] = "", team[32] = "";
+                CFStringRef s = CFDictionaryGetValue(info, kSecCodeInfoIdentifier);
+                CFStringRef t = CFDictionaryGetValue(info, kSecCodeInfoTeamIdentifier);
+                if (s) CFStringGetCString(s, sid, sizeof sid, kCFStringEncodingUTF8);
+                if (t) CFStringGetCString(t, team, sizeof team, kCFStringEncodingUTF8);
+                if (sid[0]) { snprintf(out, n, "%s (%s)", sid, team[0] ? team : "Apple"); ok = 1; }
+                CFRelease(info);
+            }
+        }
+        if (req) CFRelease(req);
+        CFRelease(code);
+    }
+    CFRelease(attrs);
+    CFRelease(num);
+    return ok;
+}
+
 /* The executable path of a pid, "" if unavailable. Cheap (one syscall). */
 void kai_pid_exe(int pid, char *out, size_t n) {
     if (n) out[0] = '\0';
@@ -192,6 +226,7 @@ int kai_proc_read(int pid, kai_proc *out) {
     return 0;
 }
 int kai_proc_read_fast(int pid, kai_proc *out) { return kai_proc_read(pid, out); }
+int kai_pid_code_identity(int pid, char *out, size_t n) { (void)pid; if (n) out[0] = '\0'; return 0; }
 void kai_pid_exe(int pid, char *out, size_t n) {
     if (n) out[0] = '\0';
     char path[64];

@@ -17,6 +17,7 @@
 #include "cJSON.h"
 
 #include <stdio.h>
+#include <dirent.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -192,26 +193,14 @@ static int grant_create(int argc, char **argv) {
     return 0;
 }
 
-/* kai pause <storage|network|all> <minutes> ; kai resume <...> (M1.7). Refuses
- * agent callers, like grant changes. */
+/* B2: pausing lowers protection, so it is accepted only from Kai's own app UI
+ * (one click, time-boxed), never from a command an agent could run. kai resume
+ * stays: it only turns checks back on. */
 int kai_cmd_pause(int argc, char **argv) {
-    if (refuse_if_agent("pause")) return 3;
-    if (argc < 1) { fprintf(stderr, "usage: kai pause <storage|network|all|session <id>> <minutes>\n"); return 2; }
-    if (!strcmp(argv[0], "session")) {       /* S6: pause one session only */
-        if (argc < 2) { fprintf(stderr, "usage: kai pause session <id> [minutes]\n"); return 2; }
-        long long mins = (argc >= 3) ? strtoll(argv[2], NULL, 10) : 15;
-        if (kai_session_pause_write(argv[1], mins) != 0) { fprintf(stderr, "kai pause: bad session id\n"); return 1; }
-        printf("paused session %s for %lld min (auto-resumes; never-tier still applies)\n", argv[1], mins);
-        return 0;
-    }
-    long long mins = (argc >= 2) ? strtoll(argv[1], NULL, 10) : 15;
-    const char *wall = argv[0];
-    const char *walls[] = { "storage", "network" };
-    for (int i = 0; i < 2; i++)
-        if (!strcmp(wall, "all") || !strcmp(wall, walls[i]))
-            kai_wall_pause_write(walls[i], mins);
-    printf("paused %s for %lld min (auto-resumes)\n", wall, mins);
-    return 0;
+    (void)argc; (void)argv;
+    fprintf(stderr, "Pause Kai from the menu bar: click Kai, then Pause Kai (15 minutes, resumes by itself).\n"
+                    "(There is no pause command, so an agent can't pause Kai.)\n");
+    return 4;
 }
 int kai_cmd_resume(int argc, char **argv) {
     if (refuse_if_agent("resume")) return 3;
@@ -233,14 +222,9 @@ int kai_cmd_grant(int argc, char **argv) {
     const char *sub = argc > 0 ? argv[0] : "list";
     if (!strcmp(sub, "list")) return grant_list(argc > 1 && !strcmp(argv[1], "--json"), NULL);
 #ifndef KAI_TEST_DIRECT_POLICY
-    /* Writes go to the one control path (the signed app's service); the CLI
-     * never writes grants itself. */
-    if (!strcmp(sub, "create") || !strcmp(sub, "revoke")) {
-        char msg[600] = "";
-        int rc = kai_control_request("grant", argc, argv, msg, sizeof msg);
-        if (msg[0]) fprintf(rc == 0 ? stdout : stderr, "%s\n", msg);
-        return rc;
-    }
+    /* v1: permissions are given and revoked only in Kai (the app is the one
+     * writer); the CLI lists them. */
+    if (!strcmp(sub, "create") || !strcmp(sub, "revoke")) return kai_cli_change_in_kai(argc, argv);
 #endif
     if (!strcmp(sub, "revoke")) return grant_revoke(argc > 1 ? argv[1] : NULL);
     if (!strcmp(sub, "create")) return grant_create(argc - 1, argv + 1);
@@ -265,9 +249,23 @@ typedef struct {
     long long wslast[ROW_MAX_WS];
 } sess_row;
 
+/* Working: a tool call in progress, or an event in the last 15 minutes. */
+static int session_busy(const kai_session *s, long long now) {
+    if (s->source != KAI_SESS_SCAN && kai_session_busy(s->id, now)) return 1;
+    if (s->root_pid > 0) {
+        char k[32]; snprintf(k, sizeof k, "pid-%d", s->root_pid);
+        if (kai_session_busy(k, now)) return 1;
+    }
+    return 0;
+}
+
+static int row_working(const sess_row *r, long long now) {
+    return kai_session_working(r->last, now) || session_busy(&r->s, now);
+}
+
 static const char *row_activity(const sess_row *r, long long now) {
     if (r->s.ended_utc) return "ended";
-    return kai_session_working(r->last, now) ? "working" : "idle";
+    return row_working(r, now) ? "working" : "idle";
 }
 
 /* A live record whose root runs under another live record's root of the same
@@ -432,7 +430,7 @@ int kai_sessions_working_count(void) {
     long long now = (long long)time(NULL);
     int w = 0;
     for (int i = 0; i < n; i++)
-        if (!r[i].s.ended_utc && r[i].s.kind == KAI_KIND_SESSION && kai_session_working(r[i].last, now)) w++;
+        if (!r[i].s.ended_utc && r[i].s.kind == KAI_KIND_SESSION && row_working(&r[i], now)) w++;
     free(r);
     return w;
 }
@@ -565,6 +563,45 @@ int kai_cmd_snapshot(int argc, char **argv) {
     kai_cmd_agents(1, a);
     fflush(stdout);
     printf("}\n");
+    return 0;
+}
+
+/* `kai pending [--json]`: the decision cards waiting for you (read-only) -
+ * what Kai's popover shows under "Needs you". */
+int kai_cmd_pending(int argc, char **argv) {
+    int json = argc > 0 && !strcmp(argv[0], "--json");
+    char dir[1200]; snprintf(dir, sizeof dir, "%s/pending", kai_home());
+    DIR *d = opendir(dir);
+    cJSON *arr = cJSON_CreateArray();
+    struct dirent *e;
+    while (d && (e = readdir(d))) {
+        size_t nl = strlen(e->d_name);
+        if (e->d_name[0] == '.' || nl < 6 || strcmp(e->d_name + nl - 5, ".json")) continue;
+        char p[1400]; snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+        size_t len = 0; char *t = kai_read_file(p, 1 << 16, &len);
+        cJSON *o = t ? cJSON_Parse(t) : NULL;
+        free(t);
+        if (o) cJSON_AddItemToArray(arr, o);
+    }
+    if (d) closedir(d);
+    if (json) {
+        char *js = cJSON_PrintUnformatted(arr);
+        printf("%s\n", js ? js : "[]");
+        free(js);
+    } else {
+        cJSON *o = NULL; int n = 0;
+        cJSON_ArrayForEach(o, arr) {
+            const char *ag = cJSON_GetStringValue(cJSON_GetObjectItem(o, "agent"));
+            const char *op = cJSON_GetStringValue(cJSON_GetObjectItem(o, "op"));
+            const char *rs = cJSON_GetStringValue(cJSON_GetObjectItem(o, "resource"));
+            const char *ss = cJSON_GetStringValue(cJSON_GetObjectItem(o, "session"));
+            printf("%-8s %-8s %-40s session %s\n", ag ? ag : "?", op ? op : "?", rs ? rs : "?",
+                   ss && *ss ? ss : "(none)");
+            n++;
+        }
+        if (!n) printf("(nothing waiting)\n");
+    }
+    cJSON_Delete(arr);
     return 0;
 }
 

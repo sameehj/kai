@@ -10,6 +10,8 @@ struct MenuView: View {
     @Environment(\.openWindow) private var openWindow
     @AppStorage("settingsPage") private var settingsPage = SettingsPage.agentControl.rawValue
     @State private var dismissedBlock: String?
+    @State private var showPermissions = false
+    @State private var openDecision: String?
     @StateObject private var grantManager = GrantManager()
     @ObservedObject private var agents = AgentsModel.shared
 
@@ -27,12 +29,14 @@ struct MenuView: View {
                             dismiss: { withAnimation { dismissedBlock = b.id } },
                             details: { open(.activity) })
             }
-            statusLine
-            globalPause
-            pauseBanner
-            protection
+            hero
+            pausedBanner
+            if DevFlags.perSessionPause { pauseBanner }
+            migratedConfirm
             needsYou
             activeNow
+            chatsRow
+            protectionsLine
             permissions
             recent
             footer
@@ -48,39 +52,71 @@ struct MenuView: View {
         .task { await model.refresh(); wall.refresh(); await agents.refresh() }
     }
 
-    // Item 2: a short status headline + a full second line (no truncation),
-    // from observed enforcement only — replaces the big shield and the weekly
-    // counters (those stay in the window).
-    private var statusLine: some View {
-        let running = agents.workingNow.count   // the one definition: working now
-        let needs = grantManager.pending.count + grantManager.pendingPolicy.count
-        let activeGrants = grantManager.grants.count
-        let blockedToday = model.events.filter {
-            $0.isBlock && ($0.date.map { Calendar.current.isDateInToday($0) } ?? false)
-        }.count
-        return VStack(alignment: .leading, spacing: 3) {
-            // headline from the shared measured status (observed enforcement)
-            Text(model.statusSentence(storageOn: storage.isOn, networkOn: wall.isOn, agents: running))
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(model.health == .problem ? Theme.coral : glow)
-                .fixedSize(horizontal: false, vertical: true)
-            if let note = model.internetUnverifiedNote(networkOn: wall.isOn) {
-                Text(note).font(.system(size: 11)).foregroundStyle(Theme.amber)
-            }
+    // Batch 2: one large number and one value line, from meaningful events.
+    private var hero: some View {
+        let n = agents.workingNow.count
+        return VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("\(running)").font(Theme.display(34)).foregroundStyle(glow)
-                Text("agent\(running == 1 ? "" : "s") working now")
-                    .font(.system(size: 13)).foregroundStyle(Theme.soft)
+                Text("\(n)").font(Theme.display(34)).foregroundStyle(glow)
+                Text("agent\(n == 1 ? "" : "s") working").font(.system(size: 13)).foregroundStyle(Theme.soft)
             }
-            HStack(spacing: 6) {
-                Text("\(needs) needs you").foregroundStyle(needs > 0 ? Theme.amber : Theme.muted)
-                Text("·").foregroundStyle(Theme.muted)
-                Text("\(activeGrants) permission\(activeGrants == 1 ? "" : "s")").foregroundStyle(Theme.muted)
-                Text("·").foregroundStyle(Theme.muted)
-                Text("\(blockedToday) blocked today").foregroundStyle(Theme.muted)
-            }.font(.system(size: 11))
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(model.valueLine).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
+                InfoButton(text: InfoText.secretsKept + " " + InfoText.actionsStopped)
+            }
+            // The most repeated stop today (exact, from the log), with Review.
+            if let m = model.topToday {
+                HStack(spacing: 4) {
+                    Text("Most: \(m.item), \(m.count) times ·").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    Button("Review") { openDecision = openDecision == "top" ? nil : "top" }
+                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
+                        .popover(isPresented: Binding(get: { openDecision == "top" },
+                                                      set: { if !$0 { openDecision = nil } }), arrowEdge: .leading) {
+                            if let e = model.events.first(where: { $0.target == m.item && $0.isBlock }) {
+                                DecisionSheet(event: e, count: m.count, grants: grantManager)
+                                    .environmentObject(model).padding(14).frame(width: 340)
+                            } else {
+                                Text("\(m.item): stopped \(m.count) times today. Details are in Activity.")
+                                    .font(.system(size: 12)).padding(14).frame(width: 300)
+                            }
+                        }
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// What a session row would say if every session were covered like the
+    /// headline; a row shows its coverage only when it differs.
+    private var expectedCoverage: String {
+        let l = model.levels(storageOn: storage.isOn, networkOn: wall.isOn)
+        switch (l.files > 0, l.internet > 0) {
+        case (true, true): return "Files + Internet"
+        case (true, false): return "Files only"
+        case (false, true): return "Internet only"
+        default: return "seen only"
+        }
+    }
+
+    // Migration: one line; the details (Keep with Touch ID, Remove) are on the
+    // agent's page behind Review.
+    @AppStorage("agentControlOpen") private var agentControlOpen = ""
+    @ViewBuilder private var migratedConfirm: some View {
+        let ms = grantManager.migratedRules
+        if let first = ms.first {
+            let name = ms.count == 1 ? HostCatalog.shortName(first.dest) : "\(ms.count) sites"
+            let days = max(1, Int((Double(first.expires) - Date().timeIntervalSince1970) / 86400.0 + 0.5))
+            Button {
+                agentControlOpen = "agent:" + first.agent
+                open(.agentControl)
+            } label: {
+                Text("Kai tidied up an old setting: \(name) \(ms.count == 1 ? "is" : "are") allowed for \(first.agentTitle) "
+                     + "for \(days) day\(days == 1 ? "" : "s"). Review ›")
+                    .font(.system(size: 12)).foregroundStyle(Theme.soft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }.buttonStyle(.plain)
+        }
     }
 
     private var needsYou: some View {
@@ -109,7 +145,7 @@ struct MenuView: View {
         return VStack(alignment: .leading, spacing: 6) {
             if !running.isEmpty || idleCount > 0 {
                 HStack {
-                    CapsLabel("Working now")
+                    InfoHeading(title: "Working now", info: InfoText.workingNow)
                     Spacer()
                     Button("Open Agent Control") { openAgentControl() }
                         .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
@@ -120,9 +156,11 @@ struct MenuView: View {
                         .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.muted)
                     ForEach(rows.prefix(4)) { s in
                         let gc = grantManager.grants.filter { $0.session_id == s.id }.count
-                        Button { openAgentControl() } label: { PopoverSessionRow(session: s, grants: gc) }
+                        Button { openAgentControl() } label: {
+                            PopoverSessionRow(session: s, grants: gc, expectedCoverage: expectedCoverage)
+                        }
                             .buttonStyle(.plain)
-                        if grantManager.pauseState(s.id) == Int32(KAI_PAUSE_NONE) {
+                        if DevFlags.perSessionPause && grantManager.pauseState(s.id) == Int32(KAI_PAUSE_NONE) {
                             PauseControl(state: Int32(KAI_PAUSE_NONE), until: nil,
                                          pause: { grantManager.pauseSession(s.id, minutes: 15) },
                                          resume: {}, extend: {})
@@ -132,7 +170,7 @@ struct MenuView: View {
                 }
                 if idleCount > 0 {
                     Button { openAgentControl() } label: {
-                        Text("\(idleCount) idle").font(.system(size: 11)).foregroundStyle(Theme.muted)
+                        Text("\(idleCount) idle session\(idleCount == 1 ? "" : "s") ›").font(.system(size: 11)).foregroundStyle(Theme.muted)
                     }.buttonStyle(.plain)
                 }
             }
@@ -141,13 +179,27 @@ struct MenuView: View {
 
     private var permissions: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if !grantManager.grantGroups.isEmpty {
-                CapsLabel("Permissions")
-                ForEach(grantManager.grantGroups) { g in
+            // B1: active only here (history lives in Agent Control); every row
+            // names agent, resource, scope and time left.
+            let active = grantManager.grantGroups.filter { !$0.isExpired }
+            let n = active.reduce(0) { $0 + $1.count }
+            if !active.isEmpty {
+                Button { withAnimation { showPermissions.toggle() } } label: {
+                    HStack {
+                        Text("\(n) permission\(n == 1 ? "" : "s")").font(.system(size: 12))
+                        Image(systemName: showPermissions ? "chevron.down" : "chevron.right").font(.system(size: 10))
+                        Spacer()
+                    }.foregroundStyle(Theme.soft).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+            }
+            if !active.isEmpty && showPermissions {
+                ForEach(active) { g in
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 1) {
-                            Text("\(g.agent) · \(g.opLabel) · \(g.scopeLabel)"
+                            Text("\(g.agent) · \(g.opLabel) \(g.resourceLabel) · \(g.scopeLabel)"
                                  + (g.count > 1 ? " ×\(g.count)" : "")).font(.system(size: 12))
+                                .lineLimit(1).truncationMode(.middle)
+                                .help(g.resource)
                             Text(g.status).font(.system(size: 11))
                                 .foregroundStyle(g.status == "expired" ? Theme.muted : Theme.lime)
                         }
@@ -160,14 +212,44 @@ struct MenuView: View {
         }
     }
 
-    // Phase A item 5: one guaranteed way out. Pauses both walls for 15 minutes
-    // and resumes by itself; while paused, a banner with the end time + Resume.
-    @ViewBuilder private var globalPause: some View {
-        PauseControl(state: grantManager.pauseState(nil), until: grantManager.pauseEnds(nil),
-                     pauseLabel: "Pause Kai for 15 minutes",
-                     pause: { grantManager.pauseAll(minutes: 15) },
-                     resume: { grantManager.pauseAll(minutes: 0) },
-                     extend: { grantManager.extendPause(nil) })
+    // Phase A item 5 / B3: one guaranteed way out. Pause (footer) stops both
+    // walls for 15 minutes and resumes by itself; while paused, a banner says
+    // what that means, with the end time, Resume and +15 min.
+    @ViewBuilder private var pausedBanner: some View {
+        let st = grantManager.pauseState(nil)
+        if st != Int32(KAI_PAUSE_NONE) {
+            PauseControl(state: st, until: grantManager.pauseEnds(nil),
+                         title: "Kai is paused until \(grantManager.pauseEnds(nil).map { $0.formatted(date: .omitted, time: .shortened) } ?? "soon")",
+                         note: PauseText.global,
+                         pause: {}, resume: { grantManager.pauseAll(minutes: 0) },
+                         extend: { grantManager.extendPause(nil) })
+        }
+    }
+
+    // B3: one line of protections, from measured state. Durable changes
+    // (Watch, Off) live in Settings, behind owner authentication.
+    private var protectionsLine: some View {
+        let l = model.levels(storageOn: storage.isOn, networkOn: wall.isOn)
+        let chrome = model.agentInfo(.chrome)
+        let chats = chrome.installed && chrome.extensionLoaded != false
+        return Button { open(.files) } label: {
+            HStack(spacing: 6) {
+                if StorageWall.included {
+                    Text(ProtectionText.mark("Files", level: storage.isOn ? (l.files > 0 ? l.files : -1) : 0))
+                } else {
+                    Text("Files: later release").foregroundStyle(Theme.muted)
+                }
+                Text("·").foregroundStyle(Theme.muted)
+                Text(ProtectionText.mark("Internet", level: l.internet))
+                Text("·").foregroundStyle(Theme.muted)
+                Text(!chats ? "Chats: off" : ChatSite.extensionOutdated ? "Chats: reload" : "Chats ✓")
+                Spacer()
+                Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(Theme.muted)
+            }
+            .font(.system(size: 12)).foregroundStyle(Theme.soft).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open Settings to change Files, Internet or Chats.")
     }
 
     // Item 1: a persistent banner while any session is paused, with Resume.
@@ -188,13 +270,45 @@ struct MenuView: View {
 
     private func openAgentControl() { open(.agentControl) }
 
+    /// Spec §4: orange is for problems. A protection you switched off is a
+    /// state, not a problem: neutral, and "Files: off" in the protections line.
     private var glow: Color {
-        if alert != nil { return Theme.coral }
-        if model.health == .problem { return Theme.coral }
-        switch model.observedProtection(storageOn: storage.isOn, networkOn: wall.isOn) {
-        case .protected: return Theme.lime
-        case .partial: return Theme.amber
-        case .notProtected: return Theme.coral
+        if alert != nil || model.health == .problem { return Theme.coral }
+        if grantManager.pauseState(nil) != Int32(KAI_PAUSE_NONE) { return Theme.amber }
+        if storage.stateWord == "unhealthy" || wall.stateWord == "unhealthy" { return Theme.amber }
+        if storage.stateWord == "protecting" || wall.stateWord == "protecting" { return Theme.lime }
+        return Theme.soft
+    }
+
+    // Spec §6: chats are a protection surface like agents.
+    @ViewBuilder private var chatsRow: some View {
+        let chrome = model.agentInfo(.chrome)
+        if chrome.installed {
+            if ChatSite.extensionOutdated || model.chromeNeedsExtension {
+                Button { model.openExtensionSetup() } label: {
+                    Text("Chats: reload the Kai extension in Chrome").font(.system(size: 12)).foregroundStyle(Theme.amber)
+                }.buttonStyle(.plain)
+            } else {
+                let openSites = ChatSite.load().filter { $0.openTabs > 0 }
+                let red = openSites.reduce(0) { $0 + $1.redactedToday }
+                if !openSites.isEmpty {
+                    Button { agentControlOpen = "chats"; open(.agentControl) } label: {
+                        VStack(alignment: .leading, spacing: 1) {
+                            HStack(spacing: 4) {
+                                Text("Chats · \(openSites.count) open: " + openSites.prefix(2).map(\.site).joined(separator: ", ")
+                                     + (openSites.count > 2 ? "…" : ""))
+                                    .font(.system(size: 13, weight: .medium)).lineLimit(1)
+                                InfoButton(text: InfoText.chats)
+                            }
+                            Text(red == 0 ? "Nothing redacted today" : "\(red) redacted before sending today")
+                                .font(.system(size: 11)).foregroundStyle(Theme.muted)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(Theme.sidebar, in: RoundedRectangle(cornerRadius: 8))
+                    }.buttonStyle(.plain)
+                }
+            }
         }
     }
 
@@ -206,10 +320,22 @@ struct MenuView: View {
         .animation(.easeInOut(duration: 0.6), value: glow)
     }
 
+    // B3: one header line from capability state ("Protected · 3 agents
+    // working", "Partly protected · Files is watching only", "Kai is paused").
     private var header: some View {
         HStack(spacing: 10) {
             Image("KaiLogo").resizable().frame(width: 26, height: 26).accessibilityHidden(true)
-            Text("Kai").font(Theme.display(18))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(model.statusSentence(storageOn: storage.isOn, networkOn: wall.isOn,
+                                          agents: agents.workingNow.count))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(model.health == .problem ? Theme.coral : glow)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let note = model.internetUnverifiedNote(networkOn: wall.isOn) {
+                    Text(note).font(.system(size: 11)).foregroundStyle(Theme.amber)
+                }
+            }
+            PreviewBadge()
             if !KaiInstance.isRelease { DevBadge() }
             Spacer()
             if model.busy { ProgressView().controlSize(.small) }
@@ -235,25 +361,11 @@ struct MenuView: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    private var protection: some View {
-        // Interim (before S5): the menu shows the two system walls only. Per-agent
-        // toggles live in Settings → General (agents are on by default); the menu
-        // stays focused on observed protection and what needs the user.
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                CapsLabel("Protection")
-                Spacer()
-                Button("Agents") { open(.agentControl) }
-                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
-            }
-            Text("Covers every agent on this Mac.")
-                .font(.system(size: 11)).foregroundStyle(Theme.muted)
-            NetworkCard()
-            StorageCard()
-        }
+    @ViewBuilder private var recent: some View {
+        if !recentItems.isEmpty { recentList }
     }
 
-    private var recent: some View {
+    private var recentList: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 CapsLabel("Recent")
@@ -261,37 +373,39 @@ struct MenuView: View {
                 Button("See all") { open(.activity) }
                     .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
             }
-            let items = Array(model.importantEventGroups.prefix(3))
-            if items.isEmpty {
-                Text("Nothing blocked yet.").font(.system(size: 13)).foregroundStyle(Theme.muted)
-            }
-            ForEach(items) { EventLine(event: $0.event, count: $0.count) }
-            let hosts = model.reachedHosts.count
-            if hosts > 0 {
-                Button { open(.internet) } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "eye").foregroundStyle(Theme.muted)
-                        Text("\(hosts) new host\(hosts == 1 ? "" : "s") noticed (not blocked)")
-                            .foregroundStyle(Theme.soft)
-                        Spacer()
-                        Text("Review").foregroundStyle(Theme.lime)
-                    }
-                    .font(.system(size: 13))
-                    .padding(.horizontal, 10).padding(.vertical, 8)
-                    .background(Theme.sidebar, in: RoundedRectangle(cornerRadius: 10))
-                    .overlay(RoundedRectangle(cornerRadius: 10)
-                        .stroke(Theme.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+            // Spec §5.1: every row opens its decision sheet.
+            ForEach(recentItems) { g in
+                Button { openDecision = openDecision == g.event.id ? nil : g.event.id } label: {
+                    EventLine(event: g.event, count: g.count, plain: true).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .popover(isPresented: Binding(get: { openDecision == g.event.id },
+                                              set: { if !$0 { openDecision = nil } }), arrowEdge: .leading) {
+                    DecisionSheet(event: g.event, count: g.count, grants: grantManager)
+                        .environmentObject(model)
+                        .padding(14).frame(width: 340)
+                }
             }
         }
     }
 
+    /// B3: Recent shows only meaningful events from the last hour.
+    private var recentItems: [EventGroup] {
+        let hourAgo = Date().addingTimeInterval(-3600)
+        return Array(model.importantEventGroups.filter { ($0.event.date ?? .distantPast) > hourAgo }.prefix(3))
+    }
+
     private var footer: some View {
-        HStack {
-            Button("Edit Policy") { model.openPolicyFile() }
+        HStack(spacing: 14) {
+            if grantManager.pauseState(nil) == Int32(KAI_PAUSE_NONE) {
+                Button { grantManager.pauseAll(minutes: 15) } label: {
+                    Label("Pause Kai · 15 min", systemImage: "pause.circle")
+                }
+                .help("Pauses Kai for 15 minutes, then it resumes by itself. Kai's own settings stay protected.")
+            }
+            Button("Settings") { open(.files) }
             Spacer()
-            Button("Quit Kai") { NSApp.terminate(nil) }
+            Button("Quit") { NSApp.terminate(nil) }
         }
         .buttonStyle(.plain)
         .font(.system(size: 12))
@@ -521,7 +635,10 @@ struct NetworkCard: View {
             }
             Spacer()
             Toggle("Internet", isOn: Binding(get: { wall.isOn },
-                                                 set: { $0 ? wall.turnOn() : wall.turnOff() }))
+                                                 set: { on in
+                                                     if on { wall.turnOn(); return }
+                                                     Task { if await OwnerAuth.shared.confirm("turn off Internet protection") { wall.turnOff() } }
+                                                 }))
                 .toggleStyle(KaiToggleStyle()).labelsHidden()
                 .disabled(wall.state == .activating || wall.state == .checking)
         }
@@ -570,7 +687,10 @@ struct StorageCard: View {
             }
             Spacer()
             Toggle("Files", isOn: Binding(get: { storage.isOn },
-                                                 set: { $0 ? storage.turnOn() : storage.turnOff() }))
+                                                 set: { on in
+                                                     if on { storage.turnOn(); return }
+                                                     Task { if await OwnerAuth.shared.confirm("turn off Files protection") { storage.turnOff() } }
+                                                 }))
                 .toggleStyle(KaiToggleStyle()).labelsHidden()
                 .disabled(storage.state == .activating || storage.state == .checking)
         }
@@ -587,6 +707,23 @@ struct StorageCard: View {
 struct PopoverSessionRow: View {
     let session: SessionRow
     var grants: Int = 0
+    var expectedCoverage = "Files + Internet"
+    /// Spec §4: never empty, never the agent's name twice. Topic, else the
+    /// workspace or project; for an app (Cursor), the workspace name.
+    private var topic: String { session.topicLine }
+    private var title: String {
+        if !topic.isEmpty { return topic }
+        if let w = session.workspaces, let first = w.first {
+            return w.count > 1 ? "\(first.name) +\(w.count - 1)" : first.name
+        }
+        let p = session.projectBase
+        return (p.isEmpty || p == "—" || p == session.hostApp) ? session.displayAgent : p
+    }
+    private var secondLine: String {
+        if session.workspaces != nil { return session.activeLabel }   // an app: just its activity
+        return [topic.isEmpty ? "" : session.projectBase, session.window, session.activeLabel]
+            .filter { !$0.isEmpty && $0 != "—" && $0 != title }.joined(separator: " · ")
+    }
     private var badge: Color {
         session.enforcementShort == "Files + Internet" ? Theme.lime
         : session.enforcementShort == "seen only" ? Theme.muted : Theme.amber
@@ -596,20 +733,16 @@ struct PopoverSessionRow: View {
             Circle().fill(badge).frame(width: 7, height: 7)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
-                    Text(session.projectName).font(.system(size: 13, weight: .medium))
-                    Text(session.enforcementShort).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                    if session.enforcementShort != expectedCoverage {
+                        Text(session.enforcementShort).font(.system(size: 11)).foregroundStyle(Theme.amber)
+                    }
                     if grants > 0 {
                         Text("\(grants) permission\(grants == 1 ? "" : "s")")
                             .font(.system(size: 11)).foregroundStyle(Theme.lime)
                     }
                 }
-                if !session.topic.isEmpty {   // hook topic, or hidden — never the project twice
-                    Text(session.topic).font(.system(size: 11)).foregroundStyle(Theme.soft).lineLimit(1)
-                }
-                HStack(spacing: 6) {
-                    Text(session.window)
-                    if !session.activeLabel.isEmpty { Text("· \(session.activeLabel)") }
-                }.font(.system(size: 10)).foregroundStyle(Theme.muted).lineLimit(1)
+                Text(secondLine).font(.system(size: 10)).foregroundStyle(Theme.muted).lineLimit(1)
             }
             Spacer()
             Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(Theme.muted)
@@ -622,10 +755,12 @@ struct PopoverSessionRow: View {
 struct EventLine: View {
     let event: AuditEvent
     var count: Int = 1
+    var plain = false
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Circle().fill(event.isBlock ? Theme.coral : Theme.amber).frame(width: 8, height: 8)
-            Text(event.summary + (count > 1 ? "  ×\(count)" : ""))
+            Text((plain ? event.plainSentence : event.summary) + (count > 1 ? "  ×\(count)" : ""))
+                .lineLimit(nil)
                 .font(.system(size: 13)).foregroundStyle(Theme.soft)
                 .lineLimit(2).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
@@ -687,6 +822,8 @@ struct PauseControl: View {
     let state: Int32
     let until: Date?
     var pauseLabel = "Pause 15 min"
+    var title: String? = nil
+    var note = "Kai's own settings stay protected."
     let pause: () -> Void
     let resume: () -> Void
     let extend: () -> Void
@@ -697,15 +834,16 @@ struct PauseControl: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
                     Image(systemName: "pause.circle.fill").foregroundStyle(Theme.amber)
-                    Text("Paused · resumes \(until.map { $0.formatted(date: .omitted, time: .shortened) } ?? "soon")")
-                        .font(.system(size: 12))
+                    Text(title ?? "Paused · resumes \(until.map { $0.formatted(date: .omitted, time: .shortened) } ?? "soon")")
+                        .font(.system(size: 12, weight: title == nil ? .regular : .semibold))
                     Spacer()
                     Button("+15 min", action: extend)
                         .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.muted)
                     Button("Resume", action: resume)
                         .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
                 }
-                Text("Kai's own settings stay protected.").font(.system(size: 11)).foregroundStyle(Theme.muted)
+                Text(note).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(8)
             .background(Theme.amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
@@ -735,5 +873,32 @@ struct DevBadge: View {
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(Theme.amber, in: Capsule())
             .help("A development copy: it doesn't run Kai's control service. The installed Kai in /Applications does.")
+    }
+}
+
+/// B3: per-session pause is out of the release contract until it is verified
+/// end to end on the real extensions. Hidden unless a developer turns it on:
+///   defaults write io.github.sameehj.kai devPerSessionPause -bool YES
+enum DevFlags {
+    static var perSessionPause: Bool { UserDefaults.standard.bool(forKey: "devPerSessionPause") }
+}
+
+enum PauseText {
+    /// What a global pause means, exactly: the hooks and Files let soft blocks
+    /// through and log them; the Internet wall lets everything through
+    /// unrecorded; Kai's own files stay blocked.
+    static let global = "Agents aren't being checked and nothing is blocked. Files notes what it would have "
+        + "blocked; Internet activity isn't recorded. Kai's own settings stay protected."
+}
+
+enum ProtectionText {
+    /// "Files ✓", "Files: watching", "Files: off", "Files: not running".
+    static func mark(_ name: String, level: Int32) -> String {
+        switch level {
+        case 2: return "\(name) ✓"
+        case 1: return "\(name): watching"
+        case 0: return "\(name): off"
+        default: return "\(name): not running"
+        }
     }
 }

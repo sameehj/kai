@@ -6,7 +6,9 @@
 #include <fnmatch.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 /* Upload patterns from earlier default policies, matched against raw command
  * text, and their replacements for the command view (kai_shell_view). A
@@ -224,14 +226,126 @@ static const char *const BUILTIN_EGRESS[] = {
     "anthropic.com", "claude.ai", "claude.com", "openai.com", "chatgpt.com",
     "openrouter.ai", "googleapis.com", "cursor.sh", "cursor.com",
     "cursorapi.com", "cursor-cdn.com",
-    /* source hosting */
-    "github.com", "githubusercontent.com", "gitlab.com", "bitbucket.org",
-    /* package registries */
-    "npmjs.org", "npmjs.com", "yarnpkg.com", "pypi.org", "pythonhosted.org",
-    "crates.io", "proxy.golang.org", "sum.golang.org", "rubygems.org",
-    "repo.maven.apache.org", "repo1.maven.org", "docker.io", "ghcr.io",
-    "brew.sh",
+    /* Code hosting, package registries and the like are asked about per host
+     * (spec v2.1 B.4: no fixed categories); the catalog below only describes. */
 };
+
+/* The switches the previous app build had (code hosting, packages, Apple
+ * developer). Kept only so the app can turn an old "channel <agent>/<name>"
+ * line into exact per-host rules once; nothing reads them to allow. */
+static const struct { const char *name; const char *hosts[16]; } LEGACY_CHANNELS[] = {
+    {"code-hosting", {"github.com", "githubusercontent.com", "ghcr.io", "gitlab.com", "bitbucket.org", NULL}},
+    {"packages", {"npmjs.org", "npmjs.com", "yarnpkg.com", "pypi.org", "pythonhosted.org", "crates.io",
+                  "proxy.golang.org", "sum.golang.org", "rubygems.org", "repo.maven.apache.org", "repo1.maven.org",
+                  "docker.io", "brew.sh", NULL}},
+    {"apple-developer", {"developerservices2.apple.com", "developer.apple.com", "appstoreconnect.apple.com", NULL}},
+};
+
+const char *kai_channel_legacy_host(const char *name, int i) {
+    if (!name || i < 0) return NULL;
+    for (size_t c = 0; c < sizeof LEGACY_CHANNELS / sizeof LEGACY_CHANNELS[0]; c++) {
+        if (strcmp(name, LEGACY_CHANNELS[c].name)) continue;
+        for (int k = 0; LEGACY_CHANNELS[c].hosts[k]; k++) if (k == i) return LEGACY_CHANNELS[c].hosts[k];
+        return NULL;
+    }
+    return NULL;
+}
+
+static int host_in(const char *host, const char *dom) {
+    size_t hl = strlen(host), l = strlen(dom);
+    return hl == l ? !strcasecmp(host, dom) : hl > l && host[hl - l - 1] == '.' && !strcasecmp(host + hl - l, dom);
+}
+
+/* Spec v2.1 B.3: a host catalog for explanation only. It names the service
+ * and its group; it never allows anything, and unknown stays unknown. */
+static const struct { const char *dom, *desc, *group; } CATALOG[] = {
+    {"github.com", "GitHub, where code is hosted and reviewed", "Code"},
+    {"githubusercontent.com", "GitHub's file and download host", "Code"},
+    {"ghcr.io", "GitHub's container registry", "Code"},
+    {"gitlab.com", "GitLab, where code is hosted and reviewed", "Code"},
+    {"bitbucket.org", "Bitbucket, where code is hosted and reviewed", "Code"},
+    {"npmjs.org", "The npm package registry (JavaScript)", "Packages"},
+    {"npmjs.com", "The npm website", "Packages"},
+    {"yarnpkg.com", "The Yarn package registry mirror (JavaScript)", "Packages"},
+    {"pypi.org", "The Python Package Index", "Packages"},
+    {"pythonhosted.org", "Python package downloads", "Packages"},
+    {"crates.io", "The Rust package registry", "Packages"},
+    {"proxy.golang.org", "The Go module proxy", "Packages"},
+    {"sum.golang.org", "The Go checksum database", "Packages"},
+    {"rubygems.org", "The Ruby package registry", "Packages"},
+    {"repo.maven.apache.org", "Maven Central (Java packages)", "Packages"},
+    {"repo1.maven.org", "Maven Central (Java packages)", "Packages"},
+    {"docker.io", "Docker Hub, a container image registry", "Packages"},
+    {"brew.sh", "Homebrew, the macOS package manager", "Packages"},
+    {"developerservices2.apple.com", "An Apple developer service, used for signing and development tasks", "Apple development"},
+    {"appstoreconnect.apple.com", "App Store Connect, for publishing apps", "Apple development"},
+    {"developer.apple.com", "Apple's developer website", "Apple development"},
+    {"figma.com", "Figma, a design tool", "Design"},
+    {"doubleclick.net", "Google's ad network", "Ads"},
+    {"googlesyndication.com", "Google's ad network", "Ads"},
+    {"wordpress.com", "WordPress, a site builder and CMS", "CMS"},
+    {"contentful.com", "Contentful, a content management service", "CMS"},
+    {"readthedocs.io", "Read the Docs, project documentation", "Docs"},
+    {"stackoverflow.com", "Stack Overflow, programming questions and answers", "Docs"},
+    {"developer.mozilla.org", "MDN, web documentation", "Docs"},
+    {"console.aws.amazon.com", "The AWS console", "Cloud consoles"},
+    {"amazonaws.com", "Amazon Web Services", "Cloud consoles"},
+    {"console.cloud.google.com", "The Google Cloud console", "Cloud consoles"},
+    {"portal.azure.com", "The Azure portal", "Cloud consoles"},
+    {"vercel.com", "Vercel, a hosting service", "Cloud consoles"},
+    {"netlify.com", "Netlify, a hosting service", "Cloud consoles"},
+};
+
+const char *kai_host_describe(const char *host, const char **group) {
+    if (group) *group = NULL;
+    if (!host || !*host) return NULL;
+    for (size_t i = 0; i < sizeof CATALOG / sizeof CATALOG[0]; i++)
+        if (host_in(host, CATALOG[i].dom)) { if (group) *group = CATALOG[i].group; return CATALOG[i].desc; }
+    return NULL;
+}
+
+/* Hosts one agent needs that others shouldn't get (each also covers its
+ * subdomains). Cursor's sign-in: https://cursor.com/help/troubleshooting/sign-in-domains
+ * ("minimum hosts", not the wildcards: grok.com itself is an AI chat site).
+ * workoscdn.com: seen live in Cursor's sign-in, not in Cursor's docs. */
+static const struct { const char *agent, *host; int documented; } AGENT_PROFILE_EGRESS[] = {
+    {"cursor", "cursorvm.com", 1},
+    {"cursor", "workoscdn.com", 0},   /* observed, not documented: listed in Settings for review */
+    {"cursor", "accounts.x.ai", 1}, {"cursor", "accounts.spacex.ai", 1}, {"cursor", "auth.x.ai", 1},
+    {"cursor", "auth.grok.com", 1}, {"cursor", "auth.grokusercontent.com", 1}, {"cursor", "auth.grokipedia.com", 1},
+};
+
+int kai_agent_profile_host(int i, const char **agent, const char **host, int *documented) {
+    if (i < 0 || (size_t)i >= sizeof AGENT_PROFILE_EGRESS / sizeof AGENT_PROFILE_EGRESS[0]) return 0;
+    if (agent) *agent = AGENT_PROFILE_EGRESS[i].agent;
+    if (host) *host = AGENT_PROFILE_EGRESS[i].host;
+    if (documented) *documented = AGENT_PROFILE_EGRESS[i].documented;
+    return 1;
+}
+
+/* Each agent's verified signing identity (signing id + Team ID), as
+ * kai_pid_code_identity reports it for the agent's own binary. Used when the
+ * app makes a rule for an agent before it has seen a card from it. */
+const char *kai_agent_verified_identity(const char *agent) {
+    if (!agent) return NULL;
+    if (!strcmp(agent, "claude")) return "com.anthropic.claude-code (Q6L2SF6YDW)";
+    if (!strcmp(agent, "codex")) return "codex (2DC432GLL2)";
+    if (!strcmp(agent, "cursor")) return "com.todesktop.230313mzl4w4u92 (VDXQ22DGB9)";
+    return NULL;
+}
+
+int kai_agent_profile_allows(const char *agent, const char *host) {
+    if (!agent || !host || !*host) return 0;
+    size_t hl = strlen(host);
+    for (size_t i = 0; i < sizeof AGENT_PROFILE_EGRESS / sizeof AGENT_PROFILE_EGRESS[0]; i++) {
+        if (strcmp(agent, AGENT_PROFILE_EGRESS[i].agent) != 0) continue;
+        const char *h = AGENT_PROFILE_EGRESS[i].host;
+        size_t l = strlen(h);
+        if (hl == l ? !strcasecmp(host, h) : hl > l && host[hl - l - 1] == '.' && !strcasecmp(host + hl - l, h))
+            return 1;
+    }
+    return 0;
+}
 
 static char *trimdup(const char *s) {
     while (*s == ' ' || *s == '\t') s++;
@@ -410,6 +524,9 @@ static kai_policy *parse(const char *text, const char *source, char *err,
             char *rep;
             p->file_secret_action = p->file_secret_ask ? KAI_ACT_BLOCK : parse_action(v, &rep);
             if (!p->file_secret_ask) free(rep);
+        } else if (strcmp(d, "on_fetch") == 0) {
+            char *v; if (!next_tok(&cur, &v)) continue;
+            p->fetch_block = strcmp(v, "block") == 0;
         } else if (strcmp(d, "on_upload") == 0) {
             char *v; if (!next_tok(&cur, &v)) continue;
             p->upload_ask = strcmp(v, "ask") == 0;
@@ -525,7 +642,10 @@ static kai_policy *parse(const char *text, const char *source, char *err,
             char *v; if (!next_tok(&cur, &v)) continue;
             p->audit_context = strcmp(v, "off") != 0;
         } else {
-            /* unknown directive: ignore, forward-compatible */
+            /* unknown directive: not applied (forward-compatible), but counted
+             * so kai doctor can say "unrecognized rule" instead of hiding it */
+            if (!p->nunknown) kai_strlcpy(p->unknown_first, d, sizeof p->unknown_first);
+            p->nunknown++;
         }
     }
     free(copy);
@@ -576,7 +696,7 @@ const char *kai_default_policy(void) { return DEFAULT_POLICY; }
 const char *kai_policy_file(void) {
     static char buf[1200];
     if (buf[0]) return buf;
-    const char *env = getenv("KAI_POLICY");
+    const char *env = KAI_ENV_OVERRIDES ? getenv("KAI_POLICY") : NULL;   /* dev/test only */
     if (env && *env) kai_strlcpy(buf, env, sizeof buf);
     else snprintf(buf, sizeof buf, "%s/policy", kai_home());
     return buf;
@@ -637,6 +757,54 @@ kai_policy *kai_policy_from_string(const char *text, char *err, size_t errlen) {
     return parse(text, "string", err, errlen);
 }
 
+void kai_sha256_hex(const void *data, size_t n, char out[65]);
+
+static const char *fingerprint_path(void) {
+    static char buf[1200];
+    snprintf(buf, sizeof buf, "%s/policy.sha256", kai_home());
+    return buf;
+}
+
+void kai_policy_record_fingerprint(void) {
+    size_t n = 0;
+    char *t = kai_read_file(kai_policy_file(), 4000000, &n);
+    if (!t) return;
+    char hex[65];
+    kai_sha256_hex(t, n, hex);
+    free(t);
+    char tmp[1300];
+    snprintf(tmp, sizeof tmp, "%s.tmp.%d", fingerprint_path(), (int)getpid());
+    FILE *f = fopen(tmp, "w");
+    if (!f) return;
+    fprintf(f, "%s\n", hex);
+    if (fclose(f) == 0) { chmod(tmp, 0600); if (rename(tmp, fingerprint_path()) != 0) unlink(tmp); }
+    else unlink(tmp);
+}
+
+int kai_policy_integrity(char *detail, size_t n) {
+    if (detail && n) detail[0] = '\0';
+    size_t fl = 0;
+    char *want = kai_read_file(fingerprint_path(), 4096, &fl);
+    if (!want) return KAI_POLICY_NO_RECORD;
+    struct stat st;
+    if (stat(kai_policy_file(), &st) != 0) { free(want); return KAI_POLICY_MISSING; }
+    size_t pl = 0;
+    char *t = kai_read_file(kai_policy_file(), 4000000, &pl);
+    if (!t) { free(want); return KAI_POLICY_UNREADABLE; }
+    char hex[65];
+    kai_sha256_hex(t, pl, hex);
+    free(t);
+    int same = fl >= 64 && !strncmp(want, hex, 64);
+    if (!same && detail) snprintf(detail, n, "recorded %.12s, now %.12s", want, hex);
+    free(want);
+    return same ? KAI_POLICY_OK : KAI_POLICY_CHANGED;
+}
+
+int kai_policy_unknown(const kai_policy *p, char *first, size_t n) {
+    if (first && n) kai_strlcpy(first, p && p->nunknown ? p->unknown_first : "", n);
+    return p ? p->nunknown : 0;
+}
+
 kai_policy *kai_policy_load(const char *path, char *err, size_t errlen) {
     char *chosen = NULL;
     if (path && *path) {
@@ -649,7 +817,12 @@ kai_policy *kai_policy_load(const char *path, char *err, size_t errlen) {
          * unsigned processes from reading ~/.kai, which is how this happens. */
         struct stat st;
         if (stat(def, &st) == 0) chosen = strdup(def);
-        else if (errno != ENOENT) {
+        else if (errno == ENOENT && kai_policy_integrity(NULL, 0) == KAI_POLICY_MISSING) {
+            /* A.6b: Kai wrote a policy and it's gone. Never fall back to the
+             * built-in defaults silently. */
+            if (err && errlen) snprintf(err, errlen, "the policy file Kai wrote is missing: %s", def);
+            return NULL;
+        } else if (errno != ENOENT) {
             if (err && errlen) snprintf(err, errlen, "cannot access policy file: %s (%s)", def, strerror(errno));
             return NULL;
         }
@@ -697,6 +870,7 @@ kai_action kai_policy_file_secret_action(const kai_policy *p) { return p->file_s
 kai_action kai_policy_upload_action(const kai_policy *p) { return p->upload_action; }
 int kai_policy_file_secret_ask(const kai_policy *p) { return p ? p->file_secret_ask : 0; }
 int kai_policy_upload_ask(const kai_policy *p) { return p ? p->upload_ask : 0; }
+int kai_policy_fetch_block(const kai_policy *p) { return p ? p->fetch_block : 0; }
 int kai_policy_audit_context(const kai_policy *p) { return p && p->audit_context; }
 
 /* '*' and '?' span anything, '/' and newlines included: the pattern is over

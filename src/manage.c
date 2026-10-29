@@ -17,8 +17,17 @@
  * Edits keep the file's comments and layout, are validated by parsing the
  * result before anything is written, and replace the file atomically.
  */
+/* Build guard: the policy test seam (KAI_TEST_DIRECT_POLICY - lets the throwaway
+ * tests/cli/kai-test binary write policy directly and skips the pending-hold)
+ * must never reach a shipped build. Product builds define KAI_PRODUCT_BUILD. */
+#if defined(KAI_PRODUCT_BUILD) && defined(KAI_TEST_DIRECT_POLICY)
+#error "KAI_TEST_DIRECT_POLICY must never be compiled into a product build"
+#endif
 #include "cJSON.h"
 #include "internal.h"
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <ctype.h>
 #include <dirent.h>
@@ -64,6 +73,11 @@ static int agent_installed(const char *rel, const char *needle, int *detected) {
     }
     free(path);
     return on;
+}
+
+/* Exposed for `kai status` / `kai doctor` (status.c). */
+int kai_agent_hooks_installed(const char *rel, const char *needle, int *detected) {
+    return agent_installed(rel, needle, detected);
 }
 
 static int file_exists(const char *path) {
@@ -431,6 +445,7 @@ static int policy_write_text(const char *txt, const char *path) {
         fprintf(stderr, "kai policy: cannot write %s\n", path);
         return 1;
     }
+    if (!strcmp(path, kai_policy_file())) kai_policy_record_fingerprint();   /* A.6b */
     return 0;
 }
 
@@ -507,6 +522,7 @@ static const struct {
     {"on_prompt_secret", "block", {"block", "warn", NULL}},
     {"on_file_secret", "ask", {"ask", "block", "warn", NULL}},
     {"on_upload", "block", {"block", "ask", "warn", NULL}},
+    {"on_fetch", "allow", {"allow", "block", NULL}},
     {"injection", "warn", {"warn", "off", NULL}},
     {"max_scan_bytes", "2000000", {NULL}},
     {"egress", "log", {"log", "block", "off", NULL}},
@@ -578,6 +594,7 @@ static int policy_show(int json) {
     cJSON *protect = cJSON_CreateArray(), *allow = cJSON_CreateArray();
     cJSON *terms = cJSON_CreateArray(), *rules = cJSON_CreateArray();
     cJSON *egress = cJSON_CreateArray();
+    cJSON *channels = cJSON_CreateArray();
     cJSON *agents = cJSON_CreateArray();
     cJSON *exempt = cJSON_CreateArray();
     for (int i = 0; i < L.n; i++) {
@@ -591,6 +608,12 @@ static int policy_show(int json) {
             memcpy(valbuf[si], arg, n);
             valbuf[si][n] = '\0';
             vals[si] = valbuf[si];
+        } else if (strcmp(dir, "channel") == 0) {
+            char *v = malloc(al + 1);
+            if (!v) continue;
+            memcpy(v, arg, al); v[al] = '\0';
+            cJSON_AddItemToArray(channels, cJSON_CreateString(v));
+            free(v);
         } else if (strcmp(dir, "protect") == 0 || strcmp(dir, "allow") == 0 ||
                    strcmp(dir, "egress_allow") == 0) {
             char *v = malloc(al + 1);
@@ -667,6 +690,7 @@ static int policy_show(int json) {
     cJSON_AddItemToObject(o, "protect", protect);
     cJSON_AddItemToObject(o, "allow", allow);
     cJSON_AddItemToObject(o, "egress_allow", egress);
+    cJSON_AddItemToObject(o, "channels", channels);
     cJSON_AddItemToObject(o, "terms", terms);
     cJSON_AddItemToObject(o, "rules", rules);
     cJSON_AddItemToObject(o, "agents", agents);
@@ -692,6 +716,7 @@ static int switch_rank(const char *key, const char *val) {
         {"on_prompt_secret", {"warn", "block", NULL}},
         {"on_file_secret",   {"warn", "ask", "block", NULL}},
         {"on_upload",        {"warn", "ask", "block", NULL}},
+        {"on_fetch",         {"allow", "block", NULL}},
         {"injection",        {"off", "warn", NULL}},
         {"egress",           {"off", "log", "block", NULL}},
         {"storage",          {"off", "log", "block", NULL}},
@@ -719,14 +744,9 @@ static int set_loosens(const char *key, const char *oldval, const char *newval) 
     return rn < ro;
 }
 
-/* When the control service applies a change on a client's behalf, the real
- * caller is the client, not the app. The service sets its pid here so the audit
- * records the client's process tree; 0 means "this process" (the CLI itself, in
- * the test seam). */
+/* The audit records the process tree of whoever made the change: the Kai app
+ * (its in-process writes) or, in the test seam, the CLI itself. */
 static int g_caller_pid = 0;
-static int g_policy_pending = 0;   /* set by policy_commit_or_queue: was the last change held? */
-void kai_caller_pid_set(int pid) { g_caller_pid = pid; }
-int kai_policy_last_was_pending(void) { return g_policy_pending; }
 
 /* Build "comm(pid) <- comm(ppid) <- ..." up the process tree and the calling
  * process's own code-signing Team ID, for the policy-change audit (#3). */
@@ -791,7 +811,6 @@ static int policy_commit_or_queue(const lines_t *L, int loosens, const char *sum
     loosens = 0;   /* test seam: apply directly so the cli suite can assert the
                       edit mechanics; the pending-hold is covered elsewhere. */
 #endif
-    g_policy_pending = loosens;   /* so the control service can tell the caller */
     char chain[512], team[32];
     caller_context(chain, sizeof chain, team, sizeof team);
     char detail[1200];
@@ -1106,7 +1125,7 @@ static int policy_remove(int argc, char **argv) {
     const char *kind = argv[0];
     if (strcmp(kind, "protect") && strcmp(kind, "allow") && strcmp(kind, "term") &&
         strcmp(kind, "rule") && strcmp(kind, "egress_allow") && strcmp(kind, "agent") &&
-        strcmp(kind, "exempt"))
+        strcmp(kind, "exempt") && strcmp(kind, "channel"))
         goto usage;
     lines_t L;
     if (lines_load(&L) != 0) { fprintf(stderr, "kai policy: cannot read policy\n"); return 1; }
@@ -1233,18 +1252,50 @@ int kai_policy_dispatch(int argc, char **argv, int caller_is_agent) {
     return 1;
 }
 
+/* v1: the Kai app is the ONLY writer of policy and permissions, in-process.
+ * The CLI shows them (policy show, status, sessions, agents, why, denials) but
+ * a change is made in Kai: say so and open the matching Settings page. (CLI
+ * writes may return later, with signature checks in both directions.) The
+ * window opens only for a person at a terminal, never for a script or agent. */
+static const struct { const char *page, *title; } SETTINGS_PAGES[] = {
+    {"files", "Files"}, {"internet", "Internet"}, {"advanced", "Advanced"},
+    {"agentControl", "Agent Control"},
+};
+
+const char *kai_settings_page_for(int argc, char **argv) {
+    const char *sub = argc > 0 ? argv[0] : "";
+    const char *what = argc > 1 ? argv[1] : "";
+    if (!strcmp(sub, "create") || !strcmp(sub, "revoke")) return "agentControl";   /* kai grant */
+    if (!strcmp(sub, "set"))
+        return !strcmp(what, "storage") ? "files" : !strcmp(what, "egress") ? "internet" : "advanced";
+    if (!strcmp(sub, "add") || !strcmp(sub, "remove"))
+        return (!strcmp(what, "protect") || !strcmp(what, "allow")) ? "files"
+             : (!strcmp(what, "egress_allow") || !strcmp(what, "channel")) ? "internet" : "advanced";
+    return "advanced";
+}
+
+int kai_cli_change_in_kai(int argc, char **argv) {
+    const char *page = kai_settings_page_for(argc, argv), *title = page;
+    for (size_t i = 0; i < sizeof SETTINGS_PAGES / sizeof SETTINGS_PAGES[0]; i++)
+        if (!strcmp(SETTINGS_PAGES[i].page, page)) title = SETTINGS_PAGES[i].title;
+    fprintf(stderr, "Change this in Kai: Settings \xE2\x86\x92 %s.\n"
+                    "(In this version the kai command shows policy and permissions but doesn't change them.)\n",
+            title);
+    if (isatty(STDIN_FILENO) && isatty(STDERR_FILENO)) {
+        char url[128]; snprintf(url, sizeof url, "kai://settings/%s", page);
+        pid_t pid;
+        char *av[] = {"/usr/bin/open", url, NULL};
+        extern char **environ;
+        if (posix_spawn(&pid, "/usr/bin/open", NULL, NULL, av, environ) == 0) waitpid(pid, NULL, 0);
+    }
+    return 4;
+}
+
 int kai_cmd_policy(int argc, char **argv) {
     const char *sub = argc > 0 ? argv[0] : "show";
     int is_write = !strcmp(sub, "set") || !strcmp(sub, "add") || !strcmp(sub, "remove");
 #ifndef KAI_TEST_DIRECT_POLICY
-    /* Writes go to the one control path: the signed Kai app's XPC service. The
-     * CLI never writes policy itself. Reads (path/show/pending) stay local. */
-    if (is_write) {
-        char msg[600] = "";
-        int rc = kai_control_request("policy", argc, argv, msg, sizeof msg);
-        if (msg[0]) fprintf(rc == 0 ? stdout : stderr, "%s\n", msg);
-        return rc;
-    }
+    if (is_write) return kai_cli_change_in_kai(argc, argv);
 #endif
     int is_agent = is_write && policy_caller_is_agent();
     return kai_policy_dispatch(argc, argv, is_agent);

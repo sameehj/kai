@@ -254,8 +254,8 @@ static void test_egress(void) {
     char why[256];
     CHECK(kai_policy_egress_mode(p) == KAI_EGRESS_BLOCK, "egress block parsed");
     CHECK(kai_egress_allowed(p, "api.anthropic.com", why, sizeof why), "built-in model API");
-    CHECK(kai_egress_allowed(p, "GitHub.com", why, sizeof why), "case-insensitive");
-    CHECK(kai_egress_allowed(p, "registry.npmjs.org.", why, sizeof why), "trailing dot");
+    CHECK(kai_egress_allowed(p, "API.Anthropic.com", why, sizeof why), "case-insensitive");
+    CHECK(kai_egress_allowed(p, "api.openai.com.", why, sizeof why), "trailing dot");
     CHECK(kai_egress_allowed(p, "git.corp.example.com", why, sizeof why), "user wildcard entry");
     CHECK(kai_egress_allowed(p, "corp.example.com", why, sizeof why), "entry covers itself");
     CHECK(kai_egress_allowed(p, "artifacts.example.org", why, sizeof why), "second entry on line");
@@ -286,7 +286,9 @@ static void test_egress(void) {
     CHECK(!kai_egress_endpoint_allowed(n, "db.example.com", "198.51.100.7", 22, why, sizeof why), "host:port, other port");
     CHECK(!kai_egress_allowed(n, "db.example.com", why, sizeof why), "host:port isn't an any-port host");
     CHECK(kai_egress_endpoint_allowed(n, "x.lan.example.org", "198.51.100.7", 22, why, sizeof why), "host, any port");
-    CHECK(kai_egress_endpoint_allowed(n, "github.com", "140.82.112.3", 443, why, sizeof why), "built-in host");
+    CHECK(kai_egress_endpoint_allowed(n, "api.anthropic.com", "160.79.104.10", 443, why, sizeof why), "built-in host");
+    CHECK(!kai_egress_endpoint_allowed(n, "github.com", "140.82.112.3", 443, why, sizeof why),
+          "github.com is an optional channel now, not built in (spec 4)");
     CHECK(!kai_egress_endpoint_allowed(n, NULL, "35.180.86.68", 22, why, sizeof why), "unknown ip refused");
     CHECK(!kai_egress_endpoint_allowed(n, NULL, "?", 22, why, sizeof why), "unreadable ip refused");
     kai_policy_free(n);

@@ -1,0 +1,27 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial -->
+<html lang="en"><head><meta charset="utf-8"><title>Before you install</title>
+<style>body{font:13px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;margin:18px;color:#1d1d1f}
+h2{font-size:14px;margin:14px 0 4px} li{margin:3px 0}</style></head>
+<body>
+<h2>What this installer does</h2>
+<ul>
+<li>Installs <code>/usr/local/bin/kai</code> (Universal, macOS 13 or later) and Kai's default policy.</li>
+<li>For the person signed in: registers Kai with Chrome-family browsers, and refreshes Kai's hooks in Claude Code,
+Codex and Cursor <i>only where Kai's hooks are already installed</i>. Each settings file keeps your original as
+<code>.kai-bak</code> and the previous state as <code>.kai-bak.prev</code>. What changed is written to
+<code>/var/log/install.log</code>.</li>
+<li>Refuses to install over a newer Kai.</li>
+</ul>
+<h2>What Kai Preview doesn't do</h2>
+<ul>
+<li>No OS-level enforcement: no Files or Internet protection in this preview.</li>
+<li>It checks only actions an agent reports to its hooks: see what's checked, per agent, in
+<code>docs/COVERAGE.md</code> or with <code>kai status</code>.</li>
+<li>A program with your permissions can change Kai's rules and policy. Kai notices some outside policy changes
+(<code>kai doctor</code>), not all, and prevents none.</li>
+</ul>
+<h2>Remove it</h2>
+<p><code>kai uninstall all</code> removes Kai's hooks; <code>kai uninstall all --purge</code> also removes Kai's
+settings and log.</p>
+</body></html>

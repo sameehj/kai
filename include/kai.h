@@ -17,7 +17,9 @@
 extern "C" {
 #endif
 
-#define KAI_VERSION "0.1.0"
+#define KAI_VERSION "0.2.0-preview.1"
+/* MAJOR.MINOR.PATCH[-preview.N]; a pre-release is older than its release. */
+int kai_version_cmp(const char *a, const char *b);
 
 /* What to do when a rule matches. Ordered by severity. */
 typedef enum {
@@ -50,6 +52,15 @@ typedef struct kai_policy kai_policy;
 /* Load the policy. path == NULL means $KAI_POLICY, then ~/.kai/policy,
  * then the built-in defaults. Returns NULL and fills err on a parse error. */
 kai_policy *kai_policy_load(const char *path, char *err, size_t errlen);
+/* Spec v2.1 A.6b, honest scope: Kai records the policy's fingerprint when it
+ * writes it and compares on demand. A process with the user's permissions can
+ * change both, so this detects some outside changes, never all. */
+enum { KAI_POLICY_OK = 0, KAI_POLICY_CHANGED = 1, KAI_POLICY_MISSING = 2,
+       KAI_POLICY_UNREADABLE = 3, KAI_POLICY_NO_RECORD = 4 };
+void kai_policy_record_fingerprint(void);
+int kai_policy_integrity(char *detail, size_t n);
+/* Directives this version doesn't know: count, and the first one's name. */
+int kai_policy_unknown(const kai_policy *p, char *first, size_t n);
 kai_policy *kai_policy_from_string(const char *text, char *err, size_t errlen);
 void kai_policy_free(kai_policy *p);
 const char *kai_policy_source(const kai_policy *p); /* file path or "built-in" */
@@ -144,6 +155,9 @@ int kai_control_read_allowed(const char *rule);
  * carry the OVERRIDE tier (grant-overridable), since they change which websites
  * the Mac trusts. */
 int kai_rule_is_trust_store(const char *rule);
+/* Login persistence (~/Library/LaunchAgents, /Library/LaunchAgents,
+ * /Library/LaunchDaemons): reads allowed, a write is Ask-level. */
+int kai_rule_is_persistence(const char *rule);
 /* A public, non-secret file inside a .ssh dir (known_hosts[.old], config, *.pub):
  * agents may READ these; private keys stay protected. 1 if it is one. */
 int kai_ssh_public_file(const char *path);
@@ -206,8 +220,8 @@ int kai_session_for_pid(int pid, unsigned long long live_pidv, char *out, size_t
 /* Service side of an MCP call: derive the session from caller_pid, allow (rc 0)
  * if a session grant covers it, else stage a pending card (rc 10). Runs in the
  * app (the only reader of the approval key). */
-int kai_mcp_service_request(int caller_pid, const char *server, const char *tool,
-                            const char *host, char *msg, size_t msglen);
+int kai_mcp_request(int caller_pid, const char *server, const char *tool,
+                    const char *host, int verify_signature, char *msg, size_t msglen);
 
 /* How far the user may override Kai's protection of a matched resource. S4 acts
  * on these; the storage/network walls already make non-builtin protections
@@ -235,27 +249,13 @@ int kai_path_is_policy_store(const char *path);
 /* The approval key: only the app may read it (never agent-tree kai). */
 int kai_path_is_approval_key(const char *path);
 
-/* ---- the one authenticated control path (v1 Step 3) ----
- * The signed Kai app hosts an XPC Mach service; it is the only writer of the
- * policy store. The `kai` CLI is a client. */
-#define KAI_CONTROL_MACH_NAME "io.github.sameehj.kai.control"
-/* CLI side: send a write command ("policy"/"grant" + argv) to the app's service
- * and relay its message. Returns the service's exit code, or non-zero with a
- * clear message if the app isn't running. Never writes the store itself. */
-int kai_control_request(const char *op, int argc, char **argv, char *msg, size_t msglen);
-/* Start the Mach-service listener; the signed app calls this once at launch. */
-int kai_control_service_start(void);
-/* Service side (run in the app, in C): apply an already-verified request. The
- * app has checked the caller by audit token + code signature + agent tree and
- * passes caller_pid (for the audit chain) and caller_is_agent. */
-int kai_control_service_apply(const char *op, int argc, char **argv,
-                              int caller_pid, int caller_is_agent,
-                              char *msg, size_t msglen);
-/* The app sets the real caller's pid around an apply so the audit records the
- * client's process tree, not the app's; the grant/policy dispatchers below do
- * the agent-aware write. */
-void kai_caller_pid_set(int pid);
-int  kai_policy_last_was_pending(void);
+/* ---- policy and permission changes (v1) ----
+ * The Kai app is the only writer, in-process (kai_policy_dispatch). The CLI
+ * shows policy and permissions; for a change it prints "Change this in Kai"
+ * and opens the matching Settings page (kai://settings/<page>). */
+int kai_policy_dispatch(int argc, char **argv, int caller_is_agent);
+const char *kai_settings_page_for(int argc, char **argv);
+int kai_cli_change_in_kai(int argc, char **argv);
 /* ---- Kai -> agent hints (Item 7): fixed catalog text, never generated ---- */
 /* Hint text for a catalog key (git/ssh/scp/gh/aws/gcloud/npm/gpg/docker), or a
  * fallback. Always non-NULL. Phrased as "ask the user to run it", never the agent. */
@@ -373,6 +373,10 @@ const char *kai_enforcement_from_levels(int files, int internet);
 /* Session activity: "working" = a command or hook in the last 15 minutes. */
 #define KAI_WORKING_WINDOW 900
 int kai_session_working(long long last_active, long long now);
+/* A tool call in progress (allowed PreToolUse seen, PostToolUse not yet).
+ * since 0 clears. kai_session_busy: in progress for under 6 hours. */
+int kai_session_inflight_set(const char *sid, long long since);
+int kai_session_busy(const char *sid, long long now);
 const char *kai_session_activity_dir(void);
 /* Record activity for a session (and the working folder it ran in). */
 int kai_session_activity_touch(const char *sid, const char *workspace, long long now);
@@ -391,6 +395,17 @@ const char *kai_status_sentence(int files, int internet, int agents, int paused,
 /* A wall's VERIFIED level from its root-owned heartbeat: 2 block, 1 log, 0 off,
  * -1 not verified. Never inferred from the policy. */
 int kai_wall_observed_level(const char *wall);
+/* B3: wall state words for Settings: not installed · off · starting ·
+ * watching · protecting · unhealthy. */
+enum { KAI_WALL_OS_NOT_INSTALLED = 0, KAI_WALL_OS_OFF = 1, KAI_WALL_OS_STARTING = 2,
+       KAI_WALL_OS_ON = 3, KAI_WALL_OS_FAILED = 4 };
+const char *kai_wall_state_word(int os, int level);
+/* B4: the loaded policy's fingerprint (12 hex of SHA-256, or "built-in"); the
+ * walls put it in their heartbeat so status can say whether they run the
+ * current policy. */
+void kai_policy_fingerprint(char *out, size_t n);
+/* A field from a wall's verified heartbeat, as text. 1 found, else 0. */
+int kai_heartbeat_field(const char *wall, const char *key, char *out, size_t n);
 /* Verify one heartbeat file: owned by `owner`, not group/world-writable, fresh
  * (30 s), naming `wall`. Level as above, -1 if any check fails. */
 int kai_heartbeat_level(const char *path, const char *wall, uid_t owner);
@@ -403,6 +418,9 @@ int kai_pause_state(const char *sid, long long now);
  * only it hosts the control service. */
 #define KAI_RELEASE_TEAM "KD446VDTM2"
 int kai_app_is_release(const char *bundle_path, const char *team);
+/* May this Kai-signed process open the approval key? (exact signing id + Team
+ * ID + location; the app r/w, the network extension read-only, nothing else) */
+int kai_approval_key_access(const char *signing_id, const char *team, const char *exe, int write);
 /* Exclusive single-instance lock; fd to keep open, or -1 (held / can't open). */
 int kai_app_lock_acquire(const char *path);
 /* Anything paused (Kai or any session)? For the menu-bar icon. */
@@ -566,6 +584,140 @@ char *kai_grant_build_json3(const char *id, long long created, long long expires
 int kai_grant_satisfies_tier(const kai_grant *g, kai_override_tier_t tier);
 int kai_grant_session_ended(const kai_grant *g);
 
+/* ---- B2: persistent decisions ----
+ * Keep blocked (no card again; still audited) and Allow rules (every future
+ * session), bound to the VERIFIED agent identity ("<signing id> (<team>)" from
+ * kai_pid_code_identity) and an exact destination. Signed with the approval
+ * key; an Allow rule must carry owner authentication and a real hostname. */
+enum { KAI_RULE_ALLOW = 1, KAI_RULE_KEEP_BLOCKED = 2 };
+typedef struct {
+    char id[40];
+    int kind;
+    char identity[160];
+    char agent[64];
+    char dest[KAI_GRANT_RES_MAX];
+    int op;
+    long long created_utc;
+    long long expires_utc;      /* 0 = until removed; else a temporary allow */
+    int migrated;               /* from an old category switch: ends unless confirmed */
+    int authenticated;
+    char hmac[65];
+} kai_decision_rule;
+const char *kai_rules_dir(void);          /* <kai home>/rules */
+int kai_rule_dest_ok(int kind, const char *dest); /* no Allow rule for an IP */
+char *kai_rule_build_json(const char *id, int kind, const char *identity, const char *agent,
+                          const char *dest, int op, long long created, int authenticated,
+                          const unsigned char *key, size_t keylen);
+int kai_rule_from_json(const char *json, kai_decision_rule *out);
+/* Fix 2: the same with an expiry. A temporary Allow (at most a day) needs no
+ * owner authentication; it is for "Allow <agent> to reach <host> for 1 hour"
+ * when there is no session to bind to. */
+char *kai_rule_build_json_until(const char *id, int kind, const char *identity, const char *agent,
+                                const char *dest, int op, long long created, long long expires,
+                                int authenticated, const unsigned char *key, size_t keylen);
+/* KAI_RULE_ALLOW, KAI_RULE_KEEP_BLOCKED (wins over an Allow) or 0. Only
+ * verified rules count. dir NULL = kai_rules_dir(). */
+int kai_rule_lookup(const char *dir, const char *identity, const char *dest, int op,
+                    const unsigned char *key, size_t keylen, char *id_out, size_t idn);
+/* Known telemetry/crash-report hosts (B2): denied silently, audited, one
+ * passive hint per agent instead of a card. */
+int kai_host_is_telemetry(const char *host);
+/* Hosts in one agent's own profile (e.g. Cursor's sign-in), allowed for that
+ * agent only. Each covers its subdomains. */
+int kai_agent_profile_allows(const char *agent, const char *host);
+/* Spec v2.1 B.3: what a host is, in plain words, and its group, or NULL.
+ * Explanation only: it never allows anything. */
+const char *kai_host_describe(const char *host, const char **group);
+/* The hosts of a switch the previous build had, for a one-time migration of
+ * "channel <agent>/<name>" lines into exact per-host rules. NULL past the end. */
+const char *kai_channel_legacy_host(const char *name, int i);
+/* An agent's verified signing identity from its profile, or NULL. */
+const char *kai_agent_verified_identity(const char *agent);
+/* Migration evidence: did `agent` itself reach exactly `host` (a network
+ * record for it, or a permission it requested or used), in audit.log or
+ * audit.log.1? Rule approvals don't count. 1 yes, 0 no. */
+int kai_migration_evidence(const char *agent, const char *host);
+/* A rule carried over from an old switch: an Allow that ends within 7 days
+ * unless the user confirms it with a fresh owner authentication (the app then
+ * writes a normal authenticated rule). Never permanent, never authenticated. */
+char *kai_rule_build_json_migrated(const char *id, const char *identity, const char *agent, const char *dest,
+                                   int op, long long created, long long expires,
+                                   const unsigned char *key, size_t keylen);
+/* The i-th profile host (0-based), for Settings: 1 while i is in range.
+ * documented 0 = added from observed traffic, not the vendor's docs. */
+int kai_agent_profile_host(int i, const char **agent, const char **host, int *documented);
+/* Set env.<key>=<value> in Claude Code's settings (backup, atomic; refuses
+ * invalid JSON with 3). The app calls it after owner authentication. */
+int kai_claude_set_env(const char *key, const char *value);
+
+/* ---- Preview 1 terminal rules (spec §5.3): kai allow / block / rules / undo ----
+ * Read by the in-agent checks only (<kai home>/agent-rules.json). agent "*" =
+ * every agent. An allow is exact and may expire (until 0 = no end); a block
+ * covers subdomains and wins. */
+enum { KAI_AGENT_RULE_ALLOW = 1, KAI_AGENT_RULE_BLOCK = 2 };
+int kai_agent_rule_add(int kind, const char *agent, const char *host, long long until);
+int kai_agent_rule_for(const char *agent, const char *host, long long now);
+int kai_agent_rule_undo(void);                 /* 0 ok, -1 nothing to undo */
+/* The hosts a shell command reaches (URLs, scp/rsync/ssh user@host:, nc host),
+ * lowercased, without ports. Returns how many (at most max). */
+int kai_command_hosts(const char *cmd, char hosts[][256], int max);
+/* Spec v2.1 A.6 terminal grants: allow (1) or block (0), op read|write|fetch|
+ * mcp|upload|reach, exact target (files canonical, with device+inode for read
+ * and upload), to = upload host or MCP tool ("" any), until = expiry. */
+int kai_cli_grant_add(int allow, const char *op, const char *agent, const char *target, const char *to,
+                      long long until, const char *base, char *err, size_t errlen);
+int kai_cli_grant_allows(const char *op, const char *agent, const char *target, const char *to,
+                         const char *cwd, long long now);
+/* One simple curl/scp upload Kai can read in full: its file, host and form. */
+int kai_upload_parse(const char *cmd, char *file, size_t fn, char *host, size_t hn, char *form, size_t fmn);
+/* Release batch 16, screen and app control: a shell command or an agent tool
+ * that captures the screen, microphone or camera, or drives another app.
+ * 1 and fills what with the plain words ("control Safari", "take a screenshot
+ * of your screen") and app with the app a grant names (the app told, the
+ * capturing program, or the tool's MCP server); else 0. */
+int kai_capture_match(const char *cmd, char *what, size_t n, char *app, size_t an);
+int kai_capture_tool(const char *tool, char *what, size_t n, char *app, size_t an);
+/* Terminals and System Events: they run anything outside Kai's checks, so
+ * their allows need owner authentication and last at most 15 minutes. */
+#define KAI_TERMINAL_ALLOW_MAX 900
+int kai_capture_app_is_terminal(const char *app);
+/* The end of agent's live allow for op + target: latest until, -1 = never ends, 0 = none. */
+long long kai_cli_grant_until(const char *op, const char *agent, const char *target, long long now);
+/* An exact-command allow (op "exact", target = glob over the command, to = the
+ * rule it lifts) ending within max_secs (0 = any). */
+int kai_cli_command_granted(const char *agent, const char *rule, const char *cmd, long long max_secs, long long now);
+/* The app a script tells (tell application "X", Application('X')). */
+int kai_told_app(const char *text, char *out, size_t n);
+/* Remove the allow for agent + op + target (the app's Revoke). 0 removed, -1 none. */
+int kai_cli_grant_remove(const char *op, const char *agent, const char *target);
+int kai_policy_fetch_block(const kai_policy *p);
+int kai_app_present(void);
+/* Run the agent's installed hook command with input (A.4 self-test). */
+int kai_health_run_hook(const char *agent, const char *config, const char *input, char *out, size_t outlen);
+/* A.3/A.4: the last live verification of an agent (kai demo --live), its
+ * agent version and hook-settings fingerprint then. 1 if there is one. */
+int kai_live_info(const char *agent, long long *when, char *version, size_t vn, char *cfg, size_t cn);
+long long kai_selftest_last(const char *agent);
+void kai_agent_version(const char *agent, char *out, size_t n);
+void kai_agent_config_sha(const char *config, char out[65]);   /* the Kai app (with its OS walls) is installed */
+int kai_claude_env_is(const char *key, const char *value);
+/* Codex: analytics.enabled = false in its config.toml (documented switch).
+ * set 0 = only report. 1 off, 0 not off, -1 write failed, -2 left alone. */
+int kai_codex_analytics_off(int set);
+int kai_codex_analytics_off_at(const char *path, int set);
+/* Session topic from the first prompt: the first real sentence, without
+ * pasted-content placeholders or markup; "" if none. */
+void kai_topic_clean(const char *raw, char *out, size_t n);
+/* Chats: today's redactions/holds for a site; the extension's reported version. */
+int kai_daily_site(const char *site);
+int kai_daily_site_in(const char *log, const char *site);
+int kai_chat_record_extension(const char *version);
+int kai_chat_extension_version(char *out, size_t n, long long *last);
+/* The verified code-signing identity of a running process: "<signing id>
+ * (<team>)", or "<signing id> (Apple)" for Apple's own. 1 when the signature
+ * is valid (anchored to Apple), else 0 and out = "". */
+int kai_pid_code_identity(int pid, char *out, size_t n);
+
 /* Load every *.json grant under dir (e.g. <home>/grants). Caller free()s *out.
  * A grant with a durable "<dir>/<id>.used" marker (a spent one-shot) is skipped. */
 int kai_grants_load(const char *dir, kai_grant **out, int *n);
@@ -624,6 +776,15 @@ typedef struct kai_approval_store kai_approval_store;
 /* policy_path NULL = default location. key is the approval key (may be NULL/0
  * in tests with only unsigned grants, which then never match). debounce_sec
  * bounds how often reload actually re-stats the files. */
+/* An extension's store: reads grants, never writes the grants folder. */
+kai_approval_store *kai_approval_store_open_ro(const char *policy_path, const char *grants_dir,
+                                               const unsigned char *key, size_t keylen,
+                                               long long debounce_sec);
+/* B1: may a Kai component (exact signing id; under_agent = runs in an agent's
+ * tree) touch a path protected by `rule`? Kai's own state and agent hook
+ * configs: yes. A path protected by the user's rules: only the kai CLI the
+ * user runs (not under an agent). */
+int kai_component_may_touch(const char *signing_id, int under_agent, const char *rule);
 kai_approval_store *kai_approval_store_open(const char *policy_path, const char *grants_dir,
                                             const unsigned char *key, size_t keylen,
                                             long long debounce_sec);
@@ -662,6 +823,11 @@ int kai_approval_store_own_state_exempt(kai_approval_store *s, const char *agent
                                         const char *path, const char *cwd, const char *rule);
 int kai_approval_store_protected(kai_approval_store *s, const char *path,
                                  const char *cwd, char *why, size_t whylen);
+/* B2: the user's Keep blocked / Allow rule for (verified identity, dest, op),
+ * read from the "rules" folder beside the grants folder and verified with the
+ * store's key. KAI_RULE_ALLOW, KAI_RULE_KEEP_BLOCKED or 0. */
+int kai_approval_store_rule(kai_approval_store *s, const char *identity, const char *dest, int op,
+                            char *id_out, size_t idn);
 
 /* ---- Storage ES-handler profiler (dev/benchmark only; default OFF) ----
  * Lock-free, fixed-size, zero-allocation aggregation so it can be called from
@@ -730,8 +896,21 @@ typedef struct {
     const char *match;    /* the part that matched (redacted)               */
     const char *session;  /* the agent's session / conversation id          */
     const char *cwd;
+    const char *identity; /* the agent's verified signing identity, if known */
 } kai_audit_entry;
 int kai_audit_write(const kai_audit_entry *e);
+/* Today's (date NULL) or a given day's ("YYYY-MM-DD", local) counts of
+ * meaningful records: secrets kept private and other blocks. Written with each
+ * record, so it survives rotation and isn't limited to the app's buffer.
+ * Returns 1 if the day has a counter file, else 0 (both counts 0). */
+int kai_daily_counts(const char *date, int *secrets, int *other);
+/* One kind on a day: 's' secret kept (agents), 'c' kept out of an AI chat,
+ * 'b' other block, 'p' you paused Kai. Secrets in kai_daily_counts = s + c. */
+int kai_daily_count(const char *date, char kind);
+/* Today's most repeated stopped item (exact, from the log). 1 and fills top
+ * and count, or 0 when nothing meaningful was stopped today. */
+int kai_daily_top(char *top, size_t tn, int *count);
+int kai_daily_top_in(const char *log, char *top, size_t tn, int *count);
 
 /* ---- Denial records (M0: make failure visible) ----
  * A denial's `rule` field carries a REASON CODE from this controlled
@@ -747,11 +926,24 @@ int kai_audit_write(const kai_audit_entry *e);
  * decision "block"|"would-block"|"log"; resource = host:port or path (-> target);
  * op -> tool; reason_code = one of KAI_REASON_*; matched_rule -> match (may be
  * NULL/"" when no rule matched); detail = the human sentence. Logs no secrets. */
+/* A denial that also names the Kai session and the agent's verified signing
+ * identity, so Activity can offer "Allow for this session" or "Create a rule"
+ * on the row later. Either may be NULL. */
+void kai_denial_audit_ex(const char *source, const char *agent, const char *decision,
+                         const char *resource, const char *op, const char *reason_code,
+                         const char *matched_rule, const char *detail,
+                         const char *session, const char *identity);
 void kai_denial_audit(const char *source, const char *agent, const char *decision,
                       const char *resource, const char *op, const char *reason_code,
                       const char *matched_rule, const char *detail);
 /* Verify the chain. Returns 0 if intact; fills nlines and err. */
 int kai_audit_verify(const char *path, int *nlines, char *err, size_t errlen);
+/* After a rotation: is audit.log.1 intact and does it end where the current
+ * log says? 1 continues, 0 no rotation, -1 broken or missing (err says). */
+int kai_audit_verify_rotation(char *err, size_t errlen);
+/* A real hook call stamps <kai home>/hookseen/<agent>; when was it? 0 = never. */
+void kai_hook_seen(const char *agent);
+long long kai_hook_last_seen(const char *agent);
 const char *kai_home(void);       /* $KAI_HOME or ~/.kai */
 const char *kai_audit_path(void); /* <home>/audit.log    */
 

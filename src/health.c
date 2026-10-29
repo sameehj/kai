@@ -204,6 +204,41 @@ void kai_health_agent(const char *agent, const char *config, kai_health *h) {
     cJSON_Delete(root);
 }
 
+/* Spec v2.1 A.4: run the agent's installed blocking hook command (exactly as
+ * the agent would) with `input` on stdin. Returns its exit status, or -1 if
+ * no Kai hook command is installed for the agent or it couldn't run. */
+int kai_health_run_hook(const char *agent, const char *config, const char *input, char *out, size_t outlen) {
+    if (outlen) out[0] = '\0';
+    size_t n;
+    char *path = kai_expand_home(config);
+    char *txt = kai_read_file(path, 4 * 1024 * 1024, &n);
+    free(path);
+    cJSON *root = txt ? cJSON_Parse(txt) : NULL;
+    free(txt);
+    if (!root) return -1;
+    char needle[32];
+    snprintf(needle, sizeof needle, " hook %s", agent);
+    const cJSON *hooks = cJSON_GetObjectItemCaseSensitive(root, "hooks");
+    char cmd[2048] = "";
+    const cJSON *ev;
+    cJSON_ArrayForEach(ev, hooks) {
+        if (strcmp(ev->string, "PreToolUse") && strcmp(ev->string, "beforeReadFile")) continue;
+        const cJSON *g;
+        cJSON_ArrayForEach(g, ev) {
+            const cJSON *list = cJSON_GetObjectItemCaseSensitive(g, "hooks");
+            const cJSON *items = cJSON_IsArray(list) ? list : NULL;
+            for (const cJSON *e = items ? items->child : g; e && !cmd[0]; e = items ? e->next : NULL) {
+                const cJSON *c = cJSON_GetObjectItemCaseSensitive(e, "command");
+                if (cJSON_IsString(c) && strstr(c->valuestring, needle)) kai_strlcpy(cmd, c->valuestring, sizeof cmd);
+                if (!items) break;
+            }
+        }
+    }
+    cJSON_Delete(root);
+    if (!cmd[0]) return -1;
+    return run_probe(cmd, input, strlen(input), out, outlen, NULL);
+}
+
 /* Native messaging: 4-byte native-endian length, then JSON. */
 void kai_health_chrome(const char *exe, kai_health *h) {
     memset(h, 0, sizeof *h);

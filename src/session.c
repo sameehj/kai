@@ -20,6 +20,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <errno.h>
+#include <stdint.h>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <signal.h>
@@ -191,9 +192,41 @@ int kai_chat_record(const char *site, int open_tabs, int redactions, int overrid
     return 0;
 }
 
+int kai_chat_record_extension(const char *version) {
+    for (const char *c = version; c && *c; c++)
+        if (!(isdigit((unsigned char)*c) || *c == '.')) return -1;
+    mkdir(kai_home(), 0700);
+    mkdir(chat_dir(), 0700);
+    char path[1300], tmp[1400], js[160];
+    snprintf(path, sizeof path, "%s/_extension.json", chat_dir());
+    snprintf(js, sizeof js, "{\"version\":\"%s\",\"last_utc\":%lld}", version, (long long)time(NULL));
+    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
+    FILE *f = fopen(tmp, "wb");
+    if (!f) return -1;
+    int ok = fputs(js, f) >= 0;
+    ok = (fclose(f) == 0) && ok;
+    if (!ok || rename(tmp, path) != 0) { unlink(tmp); return -1; }
+    return 0;
+}
+
+int kai_chat_extension_version(char *out, size_t n, long long *last) {
+    if (n) out[0] = '\0';
+    char path[1300];
+    snprintf(path, sizeof path, "%s/_extension.json", chat_dir());
+    size_t len = 0;
+    char *t = kai_read_file(path, 4096, &len);
+    cJSON *o = t ? cJSON_Parse(t) : NULL;
+    free(t);
+    const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(o, "version"));
+    if (v) kai_strlcpy(out, v, n);
+    if (last) *last = (long long)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "last_utc"));
+    cJSON_Delete(o);
+    return v != NULL;
+}
+
 int kai_chat_load(kai_chat **out, int *n) {
     *out = NULL; *n = 0;
-    DIR *d = opendir(chat_dir());
+    DIR *d = opendir(chat_dir());   /* (the _extension.json record isn't a site) */
     if (!d) return 0;
     kai_chat *arr = NULL; int c = 0, cap = 0;
     struct dirent *e;
@@ -372,6 +405,42 @@ int kai_session_activity_touch(const char *sid, const char *workspace, long long
     return 0;
 }
 
+/* A tool call in progress: set on an allowed PreToolUse (since = when),
+ * cleared (0) on PostToolUse. Stored in the session's activity record. */
+int kai_session_inflight_set(const char *sid, long long since) {
+    if (!id_ok(sid)) return -1;
+    cJSON *o = activity_load(sid);
+    if (!o) o = cJSON_CreateObject();
+    if (!o) return -1;
+    cJSON_DeleteItemFromObject(o, "inflight");
+    if (since > 0) cJSON_AddNumberToObject(o, "inflight", (double)since);
+    char *js = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (!js) return -1;
+    char path[1300], tmp[1400];
+    mkdir(kai_home(), 0700);
+    mkdir(kai_session_dir(), 0700);
+    mkdir(kai_session_activity_dir(), 0700);
+    snprintf(path, sizeof path, "%s/%s.json", kai_session_activity_dir(), sid);
+    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
+    FILE *f = fopen(tmp, "wb");
+    if (!f) { free(js); return -1; }
+    int ok = fputs(js, f) >= 0;
+    ok = (fclose(f) == 0) && ok;
+    free(js);
+    if (!ok || rename(tmp, path) != 0) { unlink(tmp); return -1; }
+    return 0;
+}
+
+int kai_session_busy(const char *sid, long long now) {
+    if (!id_ok(sid)) return 0;
+    cJSON *o = activity_load(sid);
+    cJSON *i = o ? cJSON_GetObjectItem(o, "inflight") : NULL;
+    long long since = cJSON_IsNumber(i) ? (long long)i->valuedouble : 0;
+    cJSON_Delete(o);
+    return since > 0 && now - since < 6 * 3600;   /* a crashed agent's call doesn't count forever */
+}
+
 long long kai_session_last_active(const char *sid, const char *workspace) {
     if (!id_ok(sid)) return 0;
     cJSON *o = activity_load(sid);
@@ -527,6 +596,28 @@ int kai_app_lock_acquire(const char *path) {
     return fd;
 }
 
+/* Who may open the approval key (the grant-signing secret). The storage wall
+ * asks this for every Kai-signed process. Exact signing identifier + Team ID +
+ * where it runs from:
+ *   the installed app (/Applications/Kai.app)         read + write
+ *   the network extension (installed system extension) read only - it verifies
+ *                                                      endpoint grants
+ *   anything else, incl. the `kai` CLI an agent can run  denied */
+int kai_approval_key_access(const char *signing_id, const char *team, const char *exe, int write) {
+    if (!signing_id || !team || !exe || strcmp(team, KAI_RELEASE_TEAM) != 0) return 0;
+    if (!strcmp(signing_id, "io.github.sameehj.kai"))
+        return !strcmp(exe, "/Applications/Kai.app/Contents/MacOS/Kai");
+    if (!strcmp(signing_id, "io.github.sameehj.kai.network"))
+        return !write && !strncmp(exe, "/Library/SystemExtensions/", 26);
+    return 0;
+}
+
+int kai_component_may_touch(const char *signing_id, int under_agent, const char *rule) {
+    if (!rule || !*rule) return 1;                       /* not protected */
+    if (kai_rule_is_builtin(rule)) return 1;             /* Kai's home, agent hook configs */
+    return signing_id && !strcmp(signing_id, "kai") && !under_agent;   /* the user's own CLI */
+}
+
 int kai_pause_state(const char *sid, long long now) {
     return kai_pause_state_at("/tmp/kai-storage-health.json", 0, sid, now);
 }
@@ -547,6 +638,55 @@ const char *kai_network_heartbeat_path(void) {
 int kai_wall_observed_level(const char *wall) {
     if (wall && !strcmp(wall, "network")) return kai_heartbeat_level(kai_network_heartbeat_path(), "network", 0);
     return kai_heartbeat_level("/tmp/kai-storage-health.json", "storage", 0);
+}
+
+void kai_sha256(const void *data, size_t n, uint8_t out[32]); /* src/sha256.c */
+
+/* B3: the one word Settings shows for a wall, from what macOS says about the
+ * extension (os) and the measured heartbeat level (-1 none/unverified, 0 off,
+ * 1 watch, 2 protect). Never "protecting" without a verified heartbeat. */
+const char *kai_wall_state_word(int os, int level) {
+    switch (os) {
+    case KAI_WALL_OS_NOT_INSTALLED: return "not installed";
+    case KAI_WALL_OS_OFF:           return "off";
+    case KAI_WALL_OS_STARTING:      return "starting";
+    case KAI_WALL_OS_FAILED:        return "unhealthy";
+    default:
+        return level == 2 ? "protecting" : level == 1 ? "watching" : level == 0 ? "off" : "unhealthy";
+    }
+}
+
+/* B4: which policy a wall has loaded - the first 12 hex digits of the SHA-256
+ * of the policy file, or "built-in" when there is none. */
+void kai_policy_fingerprint(char *out, size_t n) {
+    size_t len = 0;
+    char *txt = kai_read_file(kai_policy_file(), 4u << 20, &len);
+    if (!txt) { kai_strlcpy(out, "built-in", n); return; }
+    uint8_t h[32];
+    kai_sha256(txt, len, h);
+    free(txt);
+    snprintf(out, n, "%02x%02x%02x%02x%02x%02x", h[0], h[1], h[2], h[3], h[4], h[5]);
+}
+
+/* B4: a field from a wall's VERIFIED heartbeat (same checks as the level), as
+ * text. 1 found, 0 no verified heartbeat or no such field. */
+int kai_heartbeat_field(const char *wall, const char *key, char *out, size_t n) {
+    if (n) out[0] = '\0';
+    int net = wall && !strcmp(wall, "network");
+    const char *path = net ? kai_network_heartbeat_path() : "/tmp/kai-storage-health.json";
+    if (kai_heartbeat_level(path, net ? "network" : "storage", 0) < 0) return 0;
+    size_t len = 0;
+    char *txt = kai_read_file(path, 1 << 16, &len);
+    cJSON *o = txt ? cJSON_Parse(txt) : NULL;
+    free(txt);
+    const cJSON *v = o ? cJSON_GetObjectItem(o, key) : NULL;
+    int ok = 1;
+    if (cJSON_IsString(v)) kai_strlcpy(out, v->valuestring, n);
+    else if (cJSON_IsNumber(v)) snprintf(out, n, "%lld", (long long)v->valuedouble);
+    else if (cJSON_IsBool(v)) kai_strlcpy(out, cJSON_IsTrue(v) ? "true" : "false", n);
+    else ok = 0;
+    cJSON_Delete(o);
+    return ok;
 }
 
 /* Reject an id that could escape the registry dir or hold a path separator. */
@@ -796,6 +936,51 @@ static int agent_session_bound_elsewhere(const char *agent_session, const char *
     return clash;
 }
 
+/* A session's topic is the first real sentence of the user's first prompt:
+ * pasted-content placeholders and their bodies, tags such as <system-reminder>
+ * or <command-name>, "[Pasted text #1 +40 lines]" / "[Image #1]" lines, code
+ * fences and markdown emphasis are skipped. Empty when nothing is left (the
+ * app then shows the project name). */
+void kai_topic_clean(const char *raw, char *out, size_t n) {
+    if (n) out[0] = '\0';
+    if (!raw || !n) return;
+    char *copy = strdup(raw);
+    if (!copy) return;
+    int skip_block = 0;
+    char *save = NULL;
+    for (char *line = strtok_r(copy, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+        while (*line == ' ' || *line == '\t' || *line == '\r') line++;
+        size_t L = strlen(line);
+        while (L && (line[L - 1] == ' ' || line[L - 1] == '\r' || line[L - 1] == '\t')) line[--L] = '\0';
+        if (skip_block) {                                  /* inside <pasted_content> ... </...> */
+            if (strstr(line, "pasted_content>") || strstr(line, "/pasted")) skip_block = 0;
+            continue;
+        }
+        if (!L) continue;
+        if (line[0] == '<') {
+            int opens_paste = strstr(line, "pasted_content") && !strstr(line, "/pasted_content") &&
+                              !strstr(line + 1, "</");
+            if (opens_paste && !strstr(line, "/>")) skip_block = 1;
+            continue;                                      /* markup, never a topic */
+        }
+        if (line[0] == '[' && (strstr(line, "Pasted") || strstr(line, "Image #") || strstr(line, "pasted"))) continue;
+        if (!strncmp(line, "```", 3)) continue;
+        /* the first real line: strip emphasis, keep the first sentence */
+        size_t o = 0;
+        for (size_t i = 0; line[i] && o + 1 < n; i++) {
+            if (line[i] == '*' || line[i] == '`' || (line[i] == '_' && line[i + 1] == '_')) {
+                if (line[i] == '_') i++;
+                continue;
+            }
+            out[o++] = line[i];
+            if ((line[i] == '.' || line[i] == '?' || line[i] == '!') && line[i + 1] == ' ') break;
+        }
+        out[o] = '\0';
+        break;
+    }
+    free(copy);
+}
+
 int kai_session_report_topic(const kai_policy *p, const char *es_session,
                              const char *agent_session, const char *raw_topic) {
     if (!id_ok(es_session)) return -1;   /* must be a Kai-observed ES session id */
@@ -806,7 +991,9 @@ int kai_session_report_topic(const kai_policy *p, const char *es_session,
     }
     /* Redact the topic through libkai so a secret in the first prompt never
      * reaches storage; if scanning is off we store a placeholder, never raw. */
-    char topic[128] = "";
+    char topic[128] = "", first[512];
+    kai_topic_clean(raw_topic, first, sizeof first);
+    raw_topic = first;
     if (raw_topic && *raw_topic && p) {
         kai_report rep;
         char *clean = kai_scan_text(p, raw_topic, &rep);

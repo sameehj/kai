@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial */
 #include "internal.h"
+#include "cJSON.h"
+#include <ctype.h>
+#include <sys/time.h>
 
 #include <fcntl.h>
 #include <stdlib.h>
@@ -14,7 +17,8 @@ void kai_sha256_hex(const void *data, size_t n, char out[65]);
 const char *kai_home(void) {
     static char buf[1024];
     if (buf[0]) return buf;
-    const char *env = getenv("KAI_HOME");
+    /* Release builds ignore KAI_HOME (only dev and test builds honour it). */
+    const char *env = KAI_ENV_OVERRIDES ? getenv("KAI_HOME") : NULL;
     if (env && *env) { kai_strlcpy(buf, env, sizeof buf); return buf; }
     char *h = kai_expand_home("~/.kai");
     kai_strlcpy(buf, h, sizeof buf);
@@ -118,6 +122,7 @@ static int append_record(int fd, const kai_audit_entry *e) {
     opt_field(&body, "match", e->match, 160);
     opt_field(&body, "session", e->session, 128);
     opt_field(&body, "cwd", e->cwd, 512);
+    opt_field(&body, "identity", e->identity, 160);
     sb_adds(&body, ",\"prev\":"); esc(&body, prev);
     char *bodystr = sb_take(&body);
 
@@ -159,13 +164,21 @@ static int open_locked(const char *path) {
 
 int kai_audit(const char *source, const char *event, const char *decision,
               const char *rule, const char *detail) {
-    kai_audit_entry e = {source, event, decision, rule, detail, NULL, NULL, NULL, NULL, NULL};
+    kai_audit_entry e = {source, event, decision, rule, detail, NULL, NULL, NULL, NULL, NULL, NULL};
     return kai_audit_write(&e);
 }
 
 void kai_denial_audit(const char *source, const char *agent, const char *decision,
                       const char *resource, const char *op, const char *reason_code,
                       const char *matched_rule, const char *detail) {
+    kai_denial_audit_ex(source, agent, decision, resource, op, reason_code, matched_rule, detail,
+                        NULL, NULL);
+}
+
+void kai_denial_audit_ex(const char *source, const char *agent, const char *decision,
+                         const char *resource, const char *op, const char *reason_code,
+                         const char *matched_rule, const char *detail,
+                         const char *session, const char *identity) {
     kai_audit_entry e;
     memset(&e, 0, sizeof e);
     e.source = source;
@@ -176,6 +189,8 @@ void kai_denial_audit(const char *source, const char *agent, const char *decisio
     e.tool = op;
     e.target = resource;                  /* host:port or path */
     e.match = (matched_rule && *matched_rule) ? matched_rule : NULL; /* only when a rule matched */
+    e.session = (session && *session) ? session : NULL;
+    e.identity = (identity && *identity) ? identity : NULL;
     kai_audit_write(&e);
 }
 
@@ -183,6 +198,177 @@ void kai_denial_audit(const char *source, const char *agent, const char *decisio
  * they decide is not something that happened, so it isn't recorded. */
 static int g_suppress;
 void kai_audit_suppress(int on) { g_suppress = on; }
+int kai_audit_suppressed(void) { return g_suppress; }
+
+/* A2: a real hook call (not a health probe) stamps <kai home>/hookseen/<agent>
+ * so `kai status` can say when an agent last ran Kai's checks. Outside the
+ * control store, so the signed hook may write it from an agent's tree; agents
+ * themselves can't write anything under Kai's home. */
+void kai_hook_seen(const char *agent) {
+    if (!agent || !*agent || strchr(agent, '/') || g_suppress) return;
+    char dir[1200], path[1300];
+    snprintf(dir, sizeof dir, "%s/hookseen", kai_home());
+    mkdir(kai_home(), 0700);
+    mkdir(dir, 0700);
+    snprintf(path, sizeof path, "%s/%s", dir, agent);
+    int fd = open(path, O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd >= 0) { futimes(fd, NULL); close(fd); }
+}
+
+long long kai_hook_last_seen(const char *agent) {
+    char path[1300];
+    snprintf(path, sizeof path, "%s/hookseen/%s", kai_home(), agent ? agent : "");
+    struct stat st;
+    return stat(path, &st) == 0 ? (long long)st.st_mtime : 0;
+}
+
+/* Fix 1: the per-day counter behind "Kai kept 3 secrets private today". One
+ * byte per meaningful record, appended to <kai home>/daily/<local date> (an
+ * O_APPEND write this small is atomic, so hooks and walls can share it). It is
+ * independent of the log, so rotation doesn't reset it. 's' = a secret kept
+ * private (a redaction, or a block of a protected file or a secret), 'b' =
+ * another block. Telemetry, a remembered Keep blocked, the QUIC fallback and
+ * grant bookkeeping are never counted. */
+static char daily_kind(const kai_audit_entry *e) {
+    const char *d = e->decision ? e->decision : "", *det = e->detail ? e->detail : "";
+    const char *src = e->source ? e->source : "", *rule = e->rule ? e->rule : "";
+    if (!strcmp(src, "grant") || !strncmp(det, "telemetry to ", 13) || !strncmp(det, "kept blocked", 12) ||
+        (!strcmp(src, "network") && e->target && !strcmp(e->target, "QUIC")))
+        return 0;
+    if (!strcmp(src, "pause") && !strcmp(d, "paused")) return 'p';   /* you had to stop Kai */
+    if (!strcmp(src, "browser") && (!strcmp(d, "redact") || !strcmp(d, "block"))) return 'c';  /* kept out of a chat */
+    if (!strcmp(d, "redact") || !strcmp(d, "replace")) return 's';
+    if (strcmp(d, "block") != 0) return 0;
+    if (!strcmp(src, "storage") || !strcmp(src, "browser") || !strncmp(rule, "secret", 6) ||
+        strstr(det, "protected")) return 's';
+    return 'b';
+}
+
+static void daily_path(const char *date, char *out, size_t n) {
+    char today[16];
+    if (!date) {
+        time_t now = time(NULL);
+        struct tm tmv;
+        localtime_r(&now, &tmv);
+        strftime(today, sizeof today, "%Y-%m-%d", &tmv);
+        date = today;
+    }
+    snprintf(out, n, "%s/daily/%s", kai_home(), date);
+}
+
+static void daily_count(const kai_audit_entry *e) {
+    char k = daily_kind(e);
+    if (!k) return;
+    char dir[1100], fp[1200];
+    snprintf(dir, sizeof dir, "%s/daily", kai_home());
+    mkdir(dir, 0700);
+    daily_path(NULL, fp, sizeof fp);
+    int fd = open(fp, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW, 0600);
+    if (fd < 0) return;
+    if (write(fd, &k, 1) != 1) { /* best effort: the log itself is the record */ }
+    if (geteuid() == 0) {               /* a wall running as root: keep it the user's */
+        struct stat hs;
+        if (stat(kai_home(), &hs) == 0) { if (fchown(fd, hs.st_uid, hs.st_gid) != 0 || chown(dir, hs.st_uid, hs.st_gid) != 0) {} }
+    }
+    close(fd);
+}
+
+int kai_daily_counts(const char *date, int *secrets, int *other) {
+    if (secrets) *secrets = 0;
+    if (other) *other = 0;
+    char fp[1200];
+    daily_path(date, fp, sizeof fp);
+    size_t n = 0;
+    char *t = kai_read_file(fp, 64u << 20, &n);
+    if (!t) return 0;
+    for (size_t i = 0; i < n; i++) {
+        if ((t[i] == 's' || t[i] == 'c') && secrets) (*secrets)++;
+        else if (t[i] == 'b' && other) (*other)++;
+    }
+    free(t);
+    return 1;
+}
+
+/* Spec: "Most: registry.npmjs.org, 16 times". Today's (UTC date of the
+ * records) most repeated item among meaningful stops, read from the log, so
+ * the count is exact. Same exclusions as the daily counter. */
+int kai_daily_top_in(const char *log, char *top, size_t tn, int *count) {
+    if (top && tn) top[0] = '\0';
+    if (count) *count = 0;
+    char today[16]; time_t now = time(NULL); struct tm tmv; gmtime_r(&now, &tmv);
+    strftime(today, sizeof today, "%Y-%m-%d", &tmv);
+    size_t n = 0;
+    char *t = kai_read_file(log, 64u << 20, &n);
+    if (!t) return 0;
+    struct { char k[256]; int c; } tally[512];
+    int nt = 0;
+    for (char *line = strtok(t, "\n"); line; line = strtok(NULL, "\n")) {
+        if (strncmp(line, "{\"ts\":\"", 7) || strncmp(line + 7, today, 10)) continue;
+        cJSON *o = cJSON_Parse(line);
+        if (!o) continue;
+        kai_audit_entry e;
+        memset(&e, 0, sizeof e);
+        e.source = cJSON_GetStringValue(cJSON_GetObjectItem(o, "source"));
+        e.decision = cJSON_GetStringValue(cJSON_GetObjectItem(o, "decision"));
+        e.rule = cJSON_GetStringValue(cJSON_GetObjectItem(o, "rule"));
+        e.detail = cJSON_GetStringValue(cJSON_GetObjectItem(o, "detail"));
+        e.target = cJSON_GetStringValue(cJSON_GetObjectItem(o, "target"));
+        char k = daily_kind(&e);
+        if (k && e.decision && !strcmp(e.decision, "block") && e.target && *e.target) {
+            int i;
+            for (i = 0; i < nt; i++) if (!strcmp(tally[i].k, e.target)) { tally[i].c++; break; }
+            if (i == nt && nt < 512) { kai_strlcpy(tally[nt].k, e.target, sizeof tally[nt].k); tally[nt++].c = 1; }
+        }
+        cJSON_Delete(o);
+    }
+    free(t);
+    int best = -1;
+    for (int i = 0; i < nt; i++) if (best < 0 || tally[i].c > tally[best].c) best = i;
+    if (best < 0) return 0;
+    if (top) kai_strlcpy(top, tally[best].k, tn);
+    if (count) *count = tally[best].c;
+    return 1;
+}
+
+/* Today's chat redactions and holds before sending for one site (the browser
+ * extension's records, event = site). Sent-anyway isn't counted. */
+int kai_daily_site_in(const char *log, const char *site) {
+    if (!site || !*site) return 0;
+    char today[16]; time_t now = time(NULL); struct tm tmv; gmtime_r(&now, &tmv);
+    strftime(today, sizeof today, "%Y-%m-%d", &tmv);
+    size_t n = 0;
+    char *t = kai_read_file(log, 64u << 20, &n);
+    if (!t) return 0;
+    int c = 0;
+    for (char *line = strtok(t, "\n"); line; line = strtok(NULL, "\n")) {
+        if (strncmp(line, "{\"ts\":\"", 7) || strncmp(line + 7, today, 10) || !strstr(line, site)) continue;
+        cJSON *o = cJSON_Parse(line);
+        if (!o) continue;
+        const char *src = cJSON_GetStringValue(cJSON_GetObjectItem(o, "source"));
+        const char *ev = cJSON_GetStringValue(cJSON_GetObjectItem(o, "event"));
+        const char *d = cJSON_GetStringValue(cJSON_GetObjectItem(o, "decision"));
+        if (src && ev && d && !strcmp(src, "browser") && !strcmp(ev, site) && (!strcmp(d, "redact") || !strcmp(d, "block")))
+            c++;
+        cJSON_Delete(o);
+    }
+    free(t);
+    return c;
+}
+
+int kai_daily_site(const char *site) { return kai_daily_site_in(kai_audit_path(), site); }
+
+int kai_daily_top(char *top, size_t tn, int *count) { return kai_daily_top_in(kai_audit_path(), top, tn, count); }
+
+int kai_daily_count(const char *date, char kind) {
+    char fp[1200];
+    daily_path(date, fp, sizeof fp);
+    size_t n = 0;
+    char *t = kai_read_file(fp, 64u << 20, &n);
+    int c = 0;
+    for (size_t i = 0; t && i < n; i++) c += t[i] == kind;
+    free(t);
+    return c;
+}
 
 int kai_audit_write(const kai_audit_entry *e) {
     if (g_suppress) return 0;
@@ -208,7 +394,7 @@ int kai_audit_write(const kai_audit_entry *e) {
             char note[200];
             snprintf(note, sizeof note, "previous log %s.1 ended with %s", "audit.log", ended);
             /* "allow": bookkeeping, not an event */
-            kai_audit_entry r = {"kai", "rotate", "allow", "audit.log.1", note, NULL, NULL, NULL, NULL, NULL};
+            kai_audit_entry r = {"kai", "rotate", "allow", "audit.log.1", note, NULL, NULL, NULL, NULL, NULL, NULL};
             append_record(fd, &r);
         }
     }
@@ -216,7 +402,39 @@ int kai_audit_write(const kai_audit_entry *e) {
     int rc = append_record(fd, e);
     flock(fd, LOCK_UN);
     close(fd);
+    if (rc == 0) daily_count(e);
     return rc;
+}
+
+/* A5: after a rotation the current log starts with a "rotate" record naming
+ * the old log's last hash. Check audit.log.1 is intact and really ends there.
+ * 1 = continues, 0 = no rotation recorded, -1 = broken/missing (err says). */
+int kai_audit_verify_rotation(char *err, size_t errlen) {
+    if (errlen) err[0] = '\0';
+    size_t n = 0;
+    char *cur = kai_read_file(kai_audit_path(), 64u << 20, &n);
+    if (!cur) return 0;
+    char *nl = strchr(cur, '\n'); if (nl) *nl = '\0';
+    const char *m = strstr(cur, "\"event\":\"rotate\"");
+    const char *e = m ? strstr(cur, "ended with ") : NULL;
+    char want[65] = "";
+    if (e) { e += 11; size_t k = 0; while (k < 64 && isxdigit((unsigned char)e[k])) { want[k] = e[k]; k++; } want[k] = '\0'; }
+    free(cur);
+    if (!m || !want[0]) return 0;
+    char old[1200]; snprintf(old, sizeof old, "%s.1", kai_audit_path());
+    int nlines = 0; char verr[256];
+    FILE *f = fopen(old, "rb");
+    if (!f) { snprintf(err, errlen, "audit.log.1 is missing (the current log says it ended with %.12s)", want); return -1; }
+    fclose(f);
+    if (kai_audit_verify(old, &nlines, verr, sizeof verr) != 0) { snprintf(err, errlen, "audit.log.1: %s", verr); return -1; }
+    int fd = open(old, O_RDONLY);
+    char last[65] = "";
+    if (fd >= 0) { last_hash(fd, last); close(fd); }
+    if (strcmp(last, want) != 0) {
+        snprintf(err, errlen, "audit.log.1 ends with %.12s, but the current log says %.12s", last, want);
+        return -1;
+    }
+    return 1;
 }
 
 int kai_audit_verify(const char *path, int *nlines, char *err, size_t errlen) {

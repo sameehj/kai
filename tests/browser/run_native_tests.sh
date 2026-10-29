@@ -24,7 +24,7 @@ talk() { python3 -I "$HERE/native_client.py" "$KAI" "$ORIGIN" "$@"; }
 "$KAI" policy add term 'replace:"Project X"' Project Falcon >/dev/null
 
 echo "== native messaging host =="
-has "ping answers with version" "$(talk '{"type":"ping"}')" '"version":"0.1.0"'
+has "ping answers with version" "$(talk '{"type":"ping"}')" '"version":"'
 
 r=$(talk '{"type":"scan","text":"deploy with AKIAIOSFODNN7EXAMPLE now","site":"chatgpt.com"}')
 has "secret found" "$r" '"worst":"redact"'

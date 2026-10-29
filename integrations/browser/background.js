@@ -9,12 +9,14 @@ const STATS_KEY = "kaiStats";
 const SITE_STATS_KEY = "kaiSiteStats";
 
 // The AI-chat sites Kai knows about (mirrors manifest content_scripts matches).
-// Used to group open tabs by site for the "AI chats" status report.
+// Used to group open chat pages by site for the "AI chats" status report.
 const CHAT_HOSTS = [
   "chatgpt.com", "chat.openai.com", "claude.ai", "gemini.google.com",
   "chat.deepseek.com", "perplexity.ai", "copilot.microsoft.com",
   "chat.mistral.ai", "grok.com", "poe.com",
 ];
+
+const OPEN_KEY = "kaiOpenPages";   // tab id -> site, in session storage
 
 function chatSiteOf(url) {
   let host;
@@ -54,6 +56,22 @@ function ask(message) {
 chrome.runtime.onStartup.addListener(() => { ask({ type: "ping" }); reportStatus(); });
 chrome.runtime.onInstalled.addListener(() => { ask({ type: "ping" }); reportStatus(); });
 
+// Spec §6: today's "secrets kept out" and the last event, for the popup.
+const TODAY_KEY = "kaiToday", LAST_KEY = "kaiLast";
+// Spec v2.1 A.7 outcomes: n = redacted before sending, nc = not checked
+// (Kai unreachable and sent anyway). Nothing is noticed after sending.
+async function bumpToday(field) {
+  const day = new Date().toDateString();
+  const { [TODAY_KEY]: t = { day, n: 0, nc: 0 } } = await chrome.storage.local.get(TODAY_KEY);
+  const today = t.day === day ? { n: 0, nc: 0, ...t } : { day, n: 0, nc: 0 };
+  today[field] = (today[field] || 0) + 1;
+  await chrome.storage.local.set({ [TODAY_KEY]: today });
+}
+async function keptOut(site, action) { await bumpToday("n"); }
+async function rememberLast(site, action, summary) {
+  await chrome.storage.local.set({ [LAST_KEY]: { site, action, summary, ts: Date.now() } });
+}
+
 async function bump(field) {
   const { [STATS_KEY]: s = { checked: 0, cleaned: 0, held: 0 } } = await chrome.storage.local.get(STATS_KEY);
   s[field] = (s[field] || 0) + 1;
@@ -69,19 +87,30 @@ async function bumpSite(site, field) {
   await chrome.storage.local.set({ [SITE_STATS_KEY]: ss });
 }
 
+// Which chat pages are open: each chat page's script says hello when it loads
+// and goodbye when it goes away, so Kai needs no "tabs" permission (which
+// would show users "Read your browsing history"). Kept in session storage so a
+// restarted service worker still knows. A closed tab is dropped on onRemoved,
+// which fires without that permission.
+async function openPages() {
+  try { return (await chrome.storage.session.get(OPEN_KEY))[OPEN_KEY] || {}; } catch { return {}; }
+}
+async function setPage(tabId, site) {
+  const pages = await openPages();
+  if (site) pages[tabId] = site; else delete pages[tabId];
+  try { await chrome.storage.session.set({ [OPEN_KEY]: pages }); } catch { /* best effort */ }
+  scheduleReport();
+}
+
 // Tell Kai which AI-chat sites are open and their per-site redaction/override
 // counts. Site only — never a full URL and never any chat text. This is the one
 // source for the "AI chats" section; the network wall never watches browsers.
 let reportTimer = null;
 async function reportStatus() {
-  let tabs;
-  try { tabs = await chrome.tabs.query({}); } catch { return; }
+  const pages = await openPages();
   const { [SITE_STATS_KEY]: ss = {} } = await chrome.storage.local.get(SITE_STATS_KEY);
   const openBySite = {};
-  for (const t of tabs) {
-    const site = t.url ? chatSiteOf(t.url) : null;
-    if (site) openBySite[site] = (openBySite[site] || 0) + 1;
-  }
+  for (const site of Object.values(pages)) openBySite[site] = (openBySite[site] || 0) + 1;
   // Union of sites that are open and sites we have counts for, so a closed site
   // reports open_tabs:0 instead of lingering at its last value.
   const seen = new Set([...Object.keys(openBySite), ...Object.keys(ss)]);
@@ -91,7 +120,9 @@ async function reportStatus() {
     redactions: ss[site]?.redactions || 0,
     overrides: ss[site]?.overrides || 0,
   }));
-  ask({ type: "status", sites });
+  // The version lets Kai tell a copy Chrome hasn't reloaded ("reload the Kai
+  // extension in Chrome"). Version only.
+  ask({ type: "status", version: chrome.runtime.getManifest().version, sites });
 }
 
 function scheduleReport() {
@@ -99,27 +130,42 @@ function scheduleReport() {
   reportTimer = setTimeout(() => { reportTimer = null; reportStatus(); }, 1000);
 }
 
-// Opening, closing or navigating a tab can change which chat sites are open.
-chrome.tabs.onCreated.addListener(scheduleReport);
-chrome.tabs.onRemoved.addListener(scheduleReport);
-chrome.tabs.onUpdated.addListener((_id, info) => { if (info.url || info.status === "complete") scheduleReport(); });
+// A closed tab takes its chat page with it.
+chrome.tabs.onRemoved.addListener((tabId) => { setPage(tabId, null); });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Only our own content scripts and popup talk to us.
   if (sender.id !== chrome.runtime.id) return false;
   (async () => {
-    if (msg?.type === "scan") {
+    if (msg?.type === "page") {           // a chat page loaded (open) or went away
+      const tabId = sender.tab?.id;
+      const site = chatSiteOf("https://" + String(msg.site || ""));
+      if (tabId !== undefined) await setPage(tabId, msg.open && site ? site : null);
+      sendResponse({ ok: true });
+    } else if (msg?.type === "scan") {
       const reply = await ask({ type: "scan", text: String(msg.text || ""), site: String(msg.site || "") });
       if (reply.ok) await bump("checked");
       sendResponse(reply);
     } else if (msg?.type === "decision") {
       const site = String(msg.site || "");
+      if (msg.action === "redacted" || msg.action === "blocked") await keptOut(site, msg.action);
       if (msg.action === "redacted") { await bump("cleaned"); await bumpSite(site, "redactions"); }
       if (msg.action === "sent_anyway") await bumpSite(site, "overrides");
       if (msg.action === "blocked" || msg.action === "cancelled") await bump("held");
+      if (msg.action === "redacted" || msg.action === "blocked")
+        await rememberLast(site, msg.action, String(msg.summary || ""));
       const reply = await ask({ type: "decision", site, action: String(msg.action || ""),
                                 summary: String(msg.summary || "") });
       scheduleReport();
+      sendResponse(reply);
+    } else if (msg?.type === "not_checked") {
+      await bumpToday("nc");
+      sendResponse({ ok: true });
+    } else if (msg?.type === "not_secret") {   // from the popup's last event
+      const { [LAST_KEY]: last } = await chrome.storage.local.get(LAST_KEY);
+      if (!last) { sendResponse({ ok: false, error: "nothing to report" }); return; }
+      const reply = await ask({ type: "decision", site: last.site, action: "not_a_secret", summary: last.summary || "" });
+      if (reply.ok) await chrome.storage.local.set({ [LAST_KEY]: { ...last, reported: true } });
       sendResponse(reply);
     } else if (msg?.type === "ping") {
       sendResponse(await ask({ type: "ping" }));

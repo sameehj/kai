@@ -8,6 +8,8 @@
 #include "internal.h"
 
 #include <stdio.h>
+#include <dirent.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -19,23 +21,56 @@ static char *read_or_empty(const char *path) {
     return s ? s : strdup("");
 }
 
+/* A4: atomic - a temp file in the same folder, then rename - so an install
+ * killed half-way leaves the old file or the new one, never a torn one. Keeps
+ * the existing file's permissions. */
 static int write_file(const char *path, const char *data) {
-    FILE *f = fopen(path, "wb");
+    char tmp[1300];
+    snprintf(tmp, sizeof tmp, "%s.kai-tmp.%d", path, (int)getpid());
+    struct stat st;
+    mode_t mode = stat(path, &st) == 0 ? (st.st_mode & 0777) : 0644;
+    FILE *f = fopen(tmp, "wb");
     if (!f) return -1;
     size_t len = strlen(data);
     size_t w = fwrite(data, 1, len, f);
-    int close_rc = fclose(f);
-    return w == len && close_rc == 0 ? 0 : -1;
+    int ok = w == len && fflush(f) == 0 && fsync(fileno(f)) == 0;
+    ok = (fclose(f) == 0) && ok;
+    chmod(tmp, mode);
+    if (!ok || rename(tmp, path) != 0) { unlink(tmp); return -1; }
+    return 0;
 }
 
+/* A4: <file>.kai-bak is the user's ORIGINAL, from before Kai first touched the
+ * file - never overwritten; <file>.kai-bak.prev is the state before this
+ * install. (One backup, rewritten each time, lost the original on the 2nd.) */
 static void backup(const char *path) {
     char *cur = read_or_empty(path);
     if (*cur) {
-        char bak[1200];
+        char bak[1200], prev[1250];
         snprintf(bak, sizeof bak, "%s.kai-bak", path);
-        write_file(bak, cur);
+        snprintf(prev, sizeof prev, "%s.kai-bak.prev", path);
+        struct stat st;
+        if (stat(bak, &st) != 0) write_file(bak, cur);
+        write_file(prev, cur);
     }
     free(cur);
+}
+
+/* A4 prerequisite: an existing settings file must be valid JSON (an object),
+ * or Kai refuses and changes nothing. It used to treat it as empty and write
+ * back only its own hooks. */
+static int settings_ok(const char *path) {
+    char *cur = read_or_empty(path);
+    int ok = 1;
+    if (*cur) {
+        cJSON *o = cJSON_Parse(cur);
+        ok = cJSON_IsObject(o);
+        cJSON_Delete(o);
+    }
+    free(cur);
+    if (!ok) fprintf(stderr, "%s isn't valid JSON, so Kai changed nothing. Fix it (or move it aside), "
+                             "then run kai install again.\n", path);
+    return ok;
 }
 
 static void mkparents(const char *path) {
@@ -56,6 +91,7 @@ static void mkparents(const char *path) {
 
 static cJSON *without_kai(cJSON *node);
 static void strip_legacy_handlers(cJSON *root);
+static cJSON *load_json_object(const char *path);
 
 /* Parse an agent settings file, dropping any Kai entries already in it so
  * installing twice never duplicates hooks. */
@@ -122,6 +158,7 @@ static void ensure_event(cJSON *hooks, const char *event, const char *matcher,
 
 static int install_claude(const char *exe) {
     char *path = kai_expand_home("~/.claude/settings.json");
+    if (!settings_ok(path)) { free(path); return 3; }
     mkparents(path);
     backup(path);
     cJSON *root = load_clean(path);
@@ -131,7 +168,7 @@ static int install_claude(const char *exe) {
         cJSON_AddItemToObject(root, "hooks", hooks);
     }
     ensure_event(hooks, "UserPromptSubmit", NULL, exe);
-    ensure_event(hooks, "PreToolUse", "Bash|Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Glob|LS", exe);
+    ensure_event(hooks, "PreToolUse", "Bash|Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Glob|LS|WebFetch", exe);
     ensure_event(hooks, "PreToolUse", "mcp__.*", exe);
     ensure_event(hooks, "PostToolUse", NULL, exe);
     ensure_event(hooks, "SessionStart", NULL, exe); /* Item 7: up-front protection/SSH hint */
@@ -143,6 +180,99 @@ static int install_claude(const char *exe) {
     else fprintf(stderr, "Failed to write %s\n", path);
     free(path);
     return rc;
+}
+
+/* Claude Code's own switches (e.g. DISABLE_TELEMETRY), set from Kai's
+ * Settings: env.<key> = <value> in ~/.claude/settings.json. Same care as the
+ * hooks: refuse invalid JSON, keep the original as .kai-bak, write atomically,
+ * keep everything else. 0 ok, 3 invalid settings, -1 write failed. */
+int kai_claude_set_env(const char *key, const char *value) {
+    if (!key || !*key || !value) return -1;
+    char *path = kai_expand_home("~/.claude/settings.json");
+    if (!settings_ok(path)) { free(path); return 3; }
+    mkparents(path);
+    backup(path);
+    cJSON *root = load_json_object(path);
+    cJSON *env = cJSON_GetObjectItemCaseSensitive(root, "env");
+    if (!cJSON_IsObject(env)) {
+        cJSON_DeleteItemFromObjectCaseSensitive(root, "env");
+        env = cJSON_AddObjectToObject(root, "env");
+    }
+    cJSON_DeleteItemFromObjectCaseSensitive(env, key);
+    cJSON_AddStringToObject(env, key, value);
+    char *out = cJSON_Print(root);
+    int rc = out ? write_file(path, out) : -1;
+    free(out); cJSON_Delete(root); free(path);
+    return rc;
+}
+
+/* 1 if ~/.claude/settings.json sets env.<key> to <value>. */
+int kai_claude_env_is(const char *key, const char *value) {
+    char *path = kai_expand_home("~/.claude/settings.json");
+    char *cur = read_or_empty(path);
+    free(path);
+    cJSON *root = *cur ? cJSON_Parse(cur) : NULL;
+    free(cur);
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root, "env"), key);
+    int is = cJSON_IsString(v) && value && !strcmp(v->valuestring, value);
+    cJSON_Delete(root);
+    return is;
+}
+
+/* Codex's documented switch (config reference: analytics.enabled; false also
+ * turns off its Statsig metrics exporter). 1 = off (after setting it when set),
+ * 0 = not off, -1 = can't write, -2 = a form Kai won't edit safely (e.g. an
+ * inline table) - the user changes it by hand. Backup and atomic write. */
+int kai_codex_analytics_off_at(const char *path, int set) {
+    char *cur = read_or_empty(path);
+    /* find [analytics] and its enabled line */
+    int in = 0, has_table = 0, off = 0, on_line = -1, header_line = -1, line_no = 0, other_form = 0;
+    char *copy = strdup(cur);
+    for (char *ln = copy, *nx; ln && *ln; ln = nx, line_no++) {
+        nx = strchr(ln, '\n'); if (nx) *nx++ = '\0';
+        while (*ln == ' ' || *ln == '\t') ln++;
+        if (*ln == '[') { in = !strncmp(ln, "[analytics]", 11); if (in) { has_table = 1; header_line = line_no; } continue; }
+        if (!strncmp(ln, "analytics", 9) && (ln[9] == '.' || ln[9] == ' ' || ln[9] == '=')) other_form = 1;
+        if (in && !strncmp(ln, "enabled", 7)) {
+            char *eq = strchr(ln, '=');
+            while (eq && (*++eq == ' ')) {}
+            if (eq && !strncmp(eq, "false", 5)) off = 1; else on_line = line_no;
+        }
+    }
+    free(copy);
+    if (off || !set) { free(cur); return off; }
+    if (other_form) { free(cur); return -2; }
+    /* build the new text */
+    size_t L = strlen(cur);
+    char *out = malloc(L + 64);
+    if (!out) { free(cur); return -1; }
+    out[0] = '\0';
+    if (!has_table) {
+        strcpy(out, cur);
+        if (L && cur[L - 1] != '\n') strcat(out, "\n");
+        strcat(out, "\n[analytics]\nenabled = false\n");
+    } else {
+        line_no = 0;
+        for (char *ln = cur, *nx; ln && *ln; ln = nx, line_no++) {
+            nx = strchr(ln, '\n'); if (nx) *nx++ = '\0';
+            if (line_no == on_line) { strcat(out, "enabled = false\n"); continue; }
+            strcat(out, ln); strcat(out, "\n");
+            if (line_no == header_line && on_line < 0) strcat(out, "enabled = false\n");
+        }
+    }
+    mkparents(path);
+    backup(path);
+    int rc = write_file(path, out) == 0 ? 1 : -1;
+    free(out); free(cur);
+    return rc;
+}
+
+int kai_codex_analytics_off(int set) {
+    char *home = kai_codex_home();
+    char path[1300];
+    snprintf(path, sizeof path, "%s/config.toml", home ? home : "");
+    free(home);
+    return kai_codex_analytics_off_at(path, set);
 }
 
 /* ----- Cursor: ~/.cursor/hooks.json -----
@@ -362,6 +492,7 @@ static cJSON *load_json_object(const char *path) {
 
 static int install_codex(const char *exe) {
     char *path = kai_codex_hooks_path();
+    if (!settings_ok(path)) { free(path); return 3; }
     mkparents(path);
     backup(path);
     cJSON *root = load_json_object(path);
@@ -427,24 +558,82 @@ static int codex_present(void) {
     return ok;
 }
 
+/* A4: never install an older Kai over a newer one. <kai home>/installed-version
+ * records the newest version that installed hooks. */
+static int version_guard(void) {
+    char p[1200]; snprintf(p, sizeof p, "%s/installed-version", kai_home());
+    size_t n = 0; char *v = kai_read_file(p, 256, &n);
+    if (v) {
+        v[strcspn(v, "\r\n")] = '\0';
+        int newer = kai_version_cmp(v, KAI_VERSION) > 0;
+        if (newer) fprintf(stderr, "Kai %s is installed; this is the older %s. Kai changed nothing.\n",
+                           v, KAI_VERSION);
+        free(v);
+        if (newer) return 0;
+    }
+    return 1;
+}
+
+static void version_record(void) {
+    char p[1200]; snprintf(p, sizeof p, "%s/installed-version", kai_home());
+    mkdir(kai_home(), 0700);
+    char line[64]; snprintf(line, sizeof line, "%s\n", KAI_VERSION);
+    write_file(p, line);
+}
+
+/* Spec §2: the first save. After installing, say what is watched and how to
+ * see Kai work in ten seconds. */
+static void try_it(const char *names) {
+    printf("\nKai Preview now checks %s before supported actions run. It's an extra safety layer, not "
+           "isolation: a program the agent runs can get around it.\n"
+           "See it work: kai demo (a fake secret; nothing real is touched).\n"
+           "Confirm with a real agent session: kai demo --live (uses the agent and its model quota).\n"
+           "Then: kai status (what's checked), kai rules (what you've allowed).\n", names);
+}
+
 int kai_cmd_install(int argc, char **argv) {
     const char *exe = kai_exe_path();
     const char *which = argc > 0 ? argv[0] : "";
-    if (strcmp(which, "claude") == 0) return install_claude(exe);
-    if (strcmp(which, "cursor") == 0) return install_cursor(exe);
-    if (strcmp(which, "codex") == 0) return install_codex(exe);
+    if (!version_guard()) return 3;
+    version_record();
+    int rc;
+    if (strcmp(which, "claude") == 0) { if ((rc = install_claude(exe)) == 0) try_it("Claude Code"); return rc; }
+    if (strcmp(which, "cursor") == 0) { if ((rc = install_cursor(exe)) == 0) try_it("Cursor"); return rc; }
+    if (strcmp(which, "codex") == 0) { if ((rc = install_codex(exe)) == 0) try_it("Codex"); return rc; }
     if (strcmp(which, "chrome") == 0 || strcmp(which, "browser") == 0) return kai_browser_install(exe);
     if (strcmp(which, "all") == 0 || !*which) {
         int a = install_claude(exe), b = install_cursor(exe);
-        int c = codex_present() ? install_codex(exe) : 0;
+        int has_codex = codex_present();
+        int c = has_codex ? install_codex(exe) : 0;
+        if (!a && !b && !c) try_it(has_codex ? "Claude Code, Codex and Cursor" : "Claude Code and Cursor");
         return (a || b || c) ? 1 : 0;
     }
     fprintf(stderr, "kai install: expected claude | cursor | codex | chrome | all\n");
     return 1;
 }
 
+/* rm -rf for --purge (Kai's own home only). */
+static int remove_tree(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return 0;
+    if (S_ISDIR(st.st_mode)) {
+        DIR *d = opendir(path);
+        struct dirent *e;
+        while (d && (e = readdir(d))) {
+            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+            char c[1400]; snprintf(c, sizeof c, "%s/%s", path, e->d_name);
+            remove_tree(c);
+        }
+        if (d) closedir(d);
+        return rmdir(path);
+    }
+    return unlink(path);
+}
+
 int kai_cmd_uninstall(int argc, char **argv) {
-    const char *which = argc > 0 ? argv[0] : "all";
+    const char *which = argc > 0 && strcmp(argv[0], "--purge") ? argv[0] : "all";
+    int purge = 0;
+    for (int i = 0; i < argc; i++) if (!strcmp(argv[i], "--purge")) purge = 1;
     int rc = 0;
     if (strcmp(which, "claude") == 0 || strcmp(which, "all") == 0)
         rc |= uninstall_file("~/.claude/settings.json");
@@ -454,5 +643,15 @@ int kai_cmd_uninstall(int argc, char **argv) {
         rc |= uninstall_codex();
     if (strcmp(which, "chrome") == 0 || strcmp(which, "browser") == 0 || strcmp(which, "all") == 0)
         rc |= kai_browser_uninstall();
+    /* Hooks first (no hook may call a missing binary); the user's policy and
+     * logs stay unless they ask for --purge, explicitly. */
+    if (purge) {
+        if (rc != 0) {
+            fprintf(stderr, "Some hooks weren't removed, so Kai's home was kept.\n");
+            return rc;
+        }
+        if (remove_tree(kai_home()) == 0) printf("Removed %s (policy, logs, permissions)\n", kai_home());
+        else { fprintf(stderr, "Couldn't remove %s\n", kai_home()); rc = 1; }
+    }
     return rc;
 }

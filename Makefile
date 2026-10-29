@@ -9,6 +9,11 @@ HARDEN   = -D_FORTIFY_SOURCE=2 -fstack-protector-strong
 OPT     ?= -O2
 CFLAGS  ?= $(CSTD) $(WARN) $(OPT) $(HARDEN)
 CFLAGS  += -Iinclude -Ithird_party/cjson -D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE
+# The Chrome Web Store copy's extension ID, so its native host accepts it.
+KAI_STORE_ID ?=
+ifneq ($(KAI_STORE_ID),)
+CFLAGS  += -DKAI_STORE_EXTENSION_ID='"$(KAI_STORE_ID)"'
+endif
 # libcurl (gateway) and pthreads. On macOS link Apple's libcurl from the SDK
 # explicitly, so a Homebrew/static libcurl in /usr/local can't shadow it.
 ifeq ($(shell uname -s),Darwin)
@@ -20,8 +25,8 @@ LDLIBS   = -lcurl -lpthread -lm
 endif
 
 CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
-       src/net.c src/storage.c src/storage_prof.c src/grant.c src/approval_store.c src/proc.c src/shell.c src/gateway.c src/session.c third_party/cjson/cJSON.c
-APP  = src/main.c src/hooks.c src/install.c src/manage.c src/browser.c src/native.c src/report.c src/health.c src/storaged.c src/grant_cli.c src/control.c
+       src/net.c src/storage.c src/storage_prof.c src/grant.c src/approval_store.c src/proc.c src/shell.c src/gateway.c src/session.c src/agent_rules.c third_party/cjson/cJSON.c
+APP  = src/main.c src/hooks.c src/install.c src/manage.c src/browser.c src/native.c src/report.c src/health.c src/storaged.c src/grant_cli.c src/status.c src/demo.c
 
 OBJ      = $(CORE:.c=.o) $(APP:.c=.o)
 COREOBJ  = $(CORE:.c=.o)
@@ -30,7 +35,7 @@ all: check-no-test-seam kai libkai.a
 
 # Step 3 build guard: the policy test seam (KAI_TEST_DIRECT_POLICY, which skips
 # agent-refusal and the pending-hold) must never appear in a shipped build. It
-# belongs only to the throwaway tests/cli/kai-test binary built below. control.c
+# belongs only to the throwaway tests/cli/kai-test binary built below. manage.c
 # also #errors if KAI_PRODUCT_BUILD and the seam are set together.
 check-no-test-seam:
 	@if grep -rn "KAI_TEST_DIRECT_POLICY" app/macos/*.yml | grep -vE '^\s*[^:]*:[0-9]+:\s*#' >/dev/null 2>&1; then \
@@ -65,6 +70,9 @@ test: kai
 	$(CC) $(CFLAGS) -o tests/storage/run_storage_tests tests/storage/run_storage_tests.c $(STORAGE_TEST_SRC) $(LDLIBS)
 	./tests/storage/run_storage_tests
 	sh tests/hooks/run_hook_tests.sh ./kai
+	sh tests/release/run_postinstall_tests.sh
+	sh tests/app/run_app_tests.sh
+	sh tests/release/run_release_env_tests.sh
 	# Suites that SET UP policy via `kai policy ...` use a throwaway binary built
 	# with the test seam (KAI_TEST_DIRECT_POLICY): the suites run inside the
 	# dev's agent tree and set loosening switches, both of which the production
@@ -80,6 +88,7 @@ test: kai
 	@if sh tests/hook_writes_ok.sh; then sh tests/browser/run_native_tests.sh tests/cli/kai-test; \
 	 else echo "browser tests: skipped - needs a non-agent shell (Files protection blocks agent hook settings)"; fi
 	python3 -I tests/corpus/run_corpus.py ./kai
+	python3 -I tests/coverage/run_coverage.py ./kai
 	@if sh tests/hook_writes_ok.sh; then python3 -I tests/escape/run_escape.py ./kai; \
 	 else echo "escape suite: skipped - needs a non-agent shell (Files protection blocks agent hook settings)"; fi
 
@@ -171,4 +180,10 @@ clean:
 	rm -f $(OBJ) kai libkai.a tests/run_tests tests/storage/run_storage_tests tests/cli/kai-test
 	rm -rf build app/macos/Kai.xcodeproj
 
-.PHONY: all asan fuzz test escape validation chrome-zip app app-dev app-storage try-app-storage try-app install-app install uninstall clean
+# A release kai: ignores KAI_HOME / KAI_POLICY. Built from the sources into its
+# own file, so dev objects (built without the flag) are never mixed in.
+kai-release:
+	@mkdir -p build
+	$(CC) $(CFLAGS) -DKAI_RELEASE -o build/kai-release $(CORE) $(APP) $(LDLIBS)
+
+.PHONY: kai-release all asan fuzz test escape validation chrome-zip app app-dev app-storage try-app-storage try-app install-app install uninstall clean

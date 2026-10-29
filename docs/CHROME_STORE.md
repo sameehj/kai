@@ -17,9 +17,12 @@ test page and its `file://` match. It fails if the manifest asks for more than
 ## 2. First upload, then connect the store ID to Kai
 
 1. Developer dashboard → **New item** → upload the zip. The item gets an ID.
-2. Put that ID in `KAI_STORE_EXTENSION_ID` (`src/internal.h`), rebuild, and
-   ship that Kai. `kai install chrome` then lets both the unpacked extension and
-   the store one talk to Kai, and `kai status` recognizes either.
+2. Build the Preview package with that ID:
+   `KAI_STORE_EXTENSION_ID=<id> sh scripts/release/build-preview-pkg.sh <version>`.
+   The ID is compiled in (`make KAI_STORE_ID=<id>`), and a release build refuses to
+   run without it. The package's postinstall runs `kai install chrome` as the signed-in
+   user, so both the unpacked extension and the store one can talk to Kai without a
+   Terminal step, and `kai status` recognizes either.
 3. Optional: copy the item's public key (dashboard → Package → View public key)
    into `manifest.json` `key`, so unpacked development builds use the store ID too.
 

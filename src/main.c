@@ -25,6 +25,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 int kai_cmd_hook(int argc, char **argv);
 int kai_cmd_install(int argc, char **argv);
@@ -40,12 +42,17 @@ int kai_cmd_sessions(int argc, char **argv);
 int kai_cmd_session(int argc, char **argv);
 int kai_cmd_agents(int argc, char **argv);
 int kai_cmd_snapshot(int argc, char **argv);
+int kai_cmd_pending(int argc, char **argv);
 int kai_cmd_why(int argc, char **argv);
 int kai_cmd_denials(int argc, char **argv);
 int kai_cmd_pause(int argc, char **argv);
 int kai_cmd_resume(int argc, char **argv);
 
-static int cmd_version(void) { printf("kai %s\n", KAI_VERSION); return 0; }
+static int cmd_version(void) {
+    printf("kai %s %s\n", KAI_VERSION, KAI_ENV_OVERRIDES ? "(dev build: honours KAI_HOME and KAI_POLICY)"
+                                                          : "(release build)");
+    return 0;
+}
 
 static int cmd_init(void) {
     mkdir(kai_home(), 0700);
@@ -56,6 +63,7 @@ static int cmd_init(void) {
     if (!f) { fprintf(stderr, "Cannot write %s\n", full); return 1; }
     fputs(kai_default_policy(), f);
     fclose(f);
+    kai_policy_record_fingerprint();   /* A.6b: Kai wrote it */
     printf("Wrote default policy to %s\n", full);
     return 0;
 }
@@ -102,74 +110,39 @@ static int cmd_redact(void) {
     return 0;
 }
 
-/* Phase B item 8: `kai status` leads with the same one sentence the app shows,
- * from what the walls report (never the policy), then the doctor checks. */
-static int cmd_doctor(void);
-static int cmd_status(void) {
-    char err[256], line[128];
-    kai_policy *p = kai_policy_load(NULL, err, sizeof err);
-    int agents = -1;
-    int files = kai_wall_observed_level("storage");
-    int internet = kai_wall_observed_level("network");
-    if (files < 0) files = 0;                            /* no verified heartbeat: not running */
-    /* Internet is never inferred from the policy: unverified (-1) stays out of
-     * the headline and gets its own line below. */
-    if (p) {
-        /* The one session definition (Agent Control): working now. */
-        agents = kai_sessions_working_count();
-        kai_policy_free(p);
-    }
-    printf("%s\n", kai_status_sentence(files, internet, agents,
-                                       kai_wall_paused("storage", (long long)time(NULL)) != 0,
-                                       line, sizeof line));
-    if (internet < 0) printf("Internet: not verified (no fresh heartbeat from the network extension)\n");
-    printf("\n");
-    return cmd_doctor();
-}
-
-static int cmd_doctor(void) {
-    char err[256];
-    kai_policy *p = kai_policy_load(NULL, err, sizeof err);
-    if (!p) { printf("policy: ERROR — %s\n", err); return 1; }
-    printf("policy: OK (source: %s)\n", kai_policy_source(p));
-    kai_policy_free(p);
-
-    char *cc = kai_expand_home("~/.claude/settings.json");
-    char *cu = kai_expand_home("~/.cursor/hooks.json");
-    size_t n;
-    char *s;
-    s = kai_read_file(cc, 4 * 1024 * 1024, &n);
-    printf("claude hooks: %s\n", (s && strstr(s, "hook claude")) ? "installed" : "not installed");
-    free(s);
-    s = kai_read_file(cu, 4 * 1024 * 1024, &n);
-    printf("cursor hooks: %s\n", (s && strstr(s, "hook cursor")) ? "installed" : "not installed");
-    free(s);
-    char *cx = kai_codex_hooks_path();
-    s = kai_read_file(cx, 4 * 1024 * 1024, &n);
-    printf("codex hooks: %s\n", (s && strstr(s, "hook codex")) ? "installed" : "not installed");
-    free(s);
-    free(cc); free(cu); free(cx);
-
-    int nl; char verr[256];
-    if (kai_audit_verify(NULL, &nl, verr, sizeof verr) == 0)
-        printf("audit log: OK (%d records, chain intact)\n", nl);
-    else
-        printf("audit log: %s\n", nl == 0 ? "empty" : verr);
-    return 0;
-}
+int kai_cmd_status_text(void);   /* status.c: measured state (Release Plan A2) */
+int kai_cmd_doctor(void);
 
 static int cmd_log(int argc, char **argv) {
     const char *sub = argc > 0 ? argv[0] : "tail";
     if (strcmp(sub, "verify") == 0) {
-        int nl; char err[256];
-        if (kai_audit_verify(NULL, &nl, err, sizeof err) == 0) {
-            printf("OK: %d records, chain intact\n", nl);
-            return 0;
-        }
-        printf("FAIL: %s\n", err);
-        return 1;
+        int nl; char err[256], rerr[256];
+        if (kai_audit_verify(NULL, &nl, err, sizeof err) != 0) { printf("FAIL: %s\n", err); return 1; }
+        int rot = kai_audit_verify_rotation(rerr, sizeof rerr);
+        if (rot < 0) { printf("FAIL: %s\n", rerr); return 1; }
+        printf("OK: %d records, chain intact%s\n", nl, rot > 0 ? "; continues from audit.log.1 (intact)" : "");
+        return 0;
     }
     if (strcmp(sub, "show") == 0) return kai_cmd_log_show(argc - 1, argv + 1);
+    if (strcmp(sub, "export") == 0) {
+        /* A5: the user's own copy - the rotated file (audit.log.1) then the
+         * current one, as JSON lines, after checking the chain; mode 0600. */
+        if (argc < 2) { fprintf(stderr, "usage: kai log export <file>\n"); return 2; }
+        int nl; char err[256];
+        int intact = kai_audit_verify(NULL, &nl, err, sizeof err) == 0;
+        int fd = open(argv[1], O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+        if (fd < 0) { fprintf(stderr, "kai log export: can't create %s (it may already exist)\n", argv[1]); return 1; }
+        char old[1200]; snprintf(old, sizeof old, "%s.1", kai_audit_path());
+        const char *parts[] = {old, kai_audit_path()};
+        for (int i = 0; i < 2; i++) {
+            size_t n = 0; char *t = kai_read_file(parts[i], 256u << 20, &n);
+            if (t) { if (write(fd, t, n) != (ssize_t)n) { close(fd); free(t); return 1; } free(t); }
+        }
+        close(fd);
+        printf("Exported to %s (%d records in the current log, chain %s)\n", argv[1], nl,
+               intact ? "intact" : "BROKEN - see kai log verify");
+        return intact ? 0 : 1;
+    }
     /* tail: the raw records, one JSON object per line */
     size_t n;
     char *txt = kai_read_file(kai_audit_path(), 16 * 1024 * 1024, &n);
@@ -234,8 +207,17 @@ static void usage(void) {
         "  kai redact                        clean stdin -> stdout\n"
         "  kai init                          write ~/.kai/policy\n"
         "  kai doctor                        check policy and installs\n"
+        "  kai demo [--live]                 prove Kai's hooks work (--live: with a real agent session)\n"
         "  kai status [--json]               same as doctor; --json for scripts/app\n"
         "  kai policy [show|set|add|remove]  view or change the policy safely\n"
+        "  kai allow-file <path> --read|--write --agent A [--for 1h]\n"
+        "  kai allow-fetch <domain> --agent claude [--for 1h]\n"
+        "  kai allow-mcp <server> [<tool>] --agent A [--for 1h]\n"
+        "  kai allow-upload <file> --to <host> --agent A [--for 1h]\n"
+        "  kai allow-capture --app <name> --agent A [--for 15m]  screen and app control\n"
+        "  kai block <host> [--agent A]      keep agents from reaching a host\n"
+        "  kai rules                         what each agent can reach, and why\n"
+        "  kai undo                          reverse the last allow/block\n"
         "  kai gateway [--port N]            run the local AI gateway\n"
         "  kai agent-of <pid>                is this process an agent, or under one?\n"
         "  kai storaged                      preview storage-wall decisions (sudo eslogger open | kai storaged)\n"
@@ -257,9 +239,9 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "scan") == 0) return cmd_scan(rest, restv);
     if (strcmp(cmd, "redact") == 0) return cmd_redact();
     if (strcmp(cmd, "init") == 0) return cmd_init();
-    if (strcmp(cmd, "doctor") == 0) return cmd_doctor();
+    if (strcmp(cmd, "doctor") == 0) return kai_cmd_doctor();
     if (strcmp(cmd, "status") == 0)
-        return (rest > 0 && strcmp(restv[0], "--json") == 0) ? kai_cmd_status_json() : cmd_status();
+        return (rest > 0 && strcmp(restv[0], "--json") == 0) ? kai_cmd_status_json() : kai_cmd_status_text();
     if (strcmp(cmd, "policy") == 0) return kai_cmd_policy(rest, restv);
     if (strcmp(cmd, "gateway") == 0) return cmd_gateway(rest, restv);
     if (strcmp(cmd, "agent-of") == 0) return cmd_agent_of(rest, restv);
@@ -271,10 +253,21 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "grants") == 0) return kai_cmd_grants(rest, restv);
     if (strcmp(cmd, "sessions") == 0) return kai_cmd_sessions(rest, restv);
     if (strcmp(cmd, "snapshot") == 0) return kai_cmd_snapshot(rest, restv);
+    if (strcmp(cmd, "pending") == 0) return kai_cmd_pending(rest, restv);
     if (strcmp(cmd, "session") == 0) return kai_cmd_session(rest, restv);
     if (strcmp(cmd, "agents") == 0) return kai_cmd_agents(rest, restv);
     if (strcmp(cmd, "why") == 0) return kai_cmd_why(rest, restv);
     if (strcmp(cmd, "denials") == 0) return kai_cmd_denials(rest, restv);
+    if (strcmp(cmd, "demo") == 0) return kai_cmd_demo(rest, restv);
+    if (strcmp(cmd, "allow") == 0) return kai_cmd_allow(rest, restv);
+    if (strcmp(cmd, "allow-file") == 0) return kai_cmd_allow_file(rest, restv);
+    if (strcmp(cmd, "allow-fetch") == 0) return kai_cmd_allow_fetch(rest, restv);
+    if (strcmp(cmd, "allow-mcp") == 0) return kai_cmd_allow_mcp(rest, restv);
+    if (strcmp(cmd, "allow-upload") == 0) return kai_cmd_allow_upload(rest, restv);
+    if (strcmp(cmd, "allow-capture") == 0) return kai_cmd_allow_capture(rest, restv);
+    if (strcmp(cmd, "block") == 0) return kai_cmd_block(rest, restv);
+    if (strcmp(cmd, "rules") == 0) return kai_cmd_rules(rest, restv);
+    if (strcmp(cmd, "undo") == 0) return kai_cmd_undo(rest, restv);
     if (strcmp(cmd, "pause") == 0) return kai_cmd_pause(rest, restv);
     if (strcmp(cmd, "resume") == 0) return kai_cmd_resume(rest, restv);
     if (strcmp(cmd, "version") == 0 || strcmp(cmd, "--version") == 0) return cmd_version();

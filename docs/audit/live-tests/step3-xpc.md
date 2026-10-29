@@ -1,5 +1,7 @@
 # v1 Step 3 — one authenticated control path (M1.3)
 
+> **Superseded in v1 (2026-10-28):** see the section at the end. This file is kept as the record of what was built and tested.
+
 ## Goal
 Policy, grants and pending changes have exactly one writer: the signed Kai app.
 The `kai` CLI stops writing those files and becomes a client of the app's XPC
@@ -76,3 +78,23 @@ These can't run without the signed, registered app:
   check. Confirm at signing time.
 - `xpc_connection_get_audit_token` is libxpc SPI (declared in control.c); stable
   and standard for this pattern, but note it for review.
+
+## v1 decision (2026-10-28): CLI writes removed, no control service
+
+The XPC control service, its LaunchAgent and the SMAppService registration
+are **removed in v1**. The Kai app is the only writer of policy and
+permissions, in-process (libkai's `kai_policy_dispatch`; grants are signed in
+the app as before); the storage wall lets only `/Applications/Kai.app` write
+the policy store. The `kai` CLI shows policy and permissions (`policy show`,
+`status`, `sessions`, `agents`, `why`, `denials`) and, for a change
+(`policy set/add/remove`, `grant create/revoke`), prints "Change this in Kai"
+and opens the matching Settings page (`kai://settings/<page>`, only for a
+person at a terminal). MCP approvals are decided in the hook: session from the
+wall's pid map, grant trusted by location (the grants folder is app-write-only).
+
+Why: live, the service's launchd registration pointed at a deleted
+`build/Kai.app` copy (macOS's background-task database kept the app's old
+location, and every agent the app registered inherited it), so every CLI write
+hung, and an old copy had been able to claim the service at all. CLI writes may
+return later, with signature checks in both directions (the CLI verifying the
+service, the service verifying the CLI).

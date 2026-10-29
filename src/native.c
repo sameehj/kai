@@ -13,7 +13,8 @@
  *           "summary":"...","can_override":true}
  *   {"type":"decision","site":"...","action":"redacted|sent_anyway|blocked|cancelled",
  *    "summary":"..."}
- *       -> {"ok":true}   (recorded in the audit log)
+ *       -> {"ok":true}   (recorded in the audit log; "not_a_secret" too, as a
+ *                         false-positive note: it changes no policy)
  *   {"type":"status","sites":[{"site":"claude.ai","open_tabs":2,
  *                              "redactions":3,"overrides":1}, ...]}
  *       -> {"ok":true}   (feeds the "AI chats" section; site only, no URL/text)
@@ -151,11 +152,13 @@ static cJSON *handle_decision(const cJSON *req) {
         strcmp(action, "blocked") == 0 || strcmp(action, "cancelled") == 0 ? "block"
         : strcmp(action, "redacted") == 0                                  ? "redact"
         : strcmp(action, "sent_anyway") == 0                               ? "warn"
+        : strcmp(action, "not_a_secret") == 0                              ? "note"
                                                                            : NULL;
     if (!decision) return error_reply("unknown action");
     char detail[1200];
     snprintf(detail, sizeof detail, "%s%s%s",
              strcmp(action, "sent_anyway") == 0 ? "user sent anyway: "
+             : strcmp(action, "not_a_secret") == 0 ? "user says this was not a secret: "
              : strcmp(action, "redacted") == 0  ? "redacted before sending: "
              : strcmp(action, "cancelled") == 0 ? "user held the message: "
                                                 : "message held: ",
@@ -171,6 +174,10 @@ static cJSON *handle_decision(const cJSON *req) {
  * chat text. Feeds the "AI chats" section (kai agents); it is visibility only
  * and changes no policy. */
 static cJSON *handle_status(const cJSON *req) {
+    /* Release batch 10: the extension's version, so Kai can tell an outdated
+     * copy ("reload the Kai extension in Chrome"). Version and time only. */
+    const cJSON *ver = cJSON_GetObjectItemCaseSensitive(req, "version");
+    if (cJSON_IsString(ver) && ver->valuestring && strlen(ver->valuestring) < 32) kai_chat_record_extension(ver->valuestring);
     const cJSON *sites = cJSON_GetObjectItemCaseSensitive(req, "sites");
     if (cJSON_IsArray(sites)) {
         const cJSON *s;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
 import AppKit
 import SwiftUI
+import KaiCore
 
 /// Phase B item 10: Agent Control (the main page) and Activity, then four
 /// settings pages named for what they protect - Files, Internet, Chats - and
@@ -79,6 +80,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 6) {
                         Text("Kai").font(Theme.display(16))
+                        PreviewBadge()
                         if !KaiInstance.isRelease { DevBadge() }
                     }
                     // Item 4: observed enforcement only, never a blanket "All
@@ -274,7 +276,35 @@ private struct GeneralPage: View {
     var showAgents = true
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if showAgents { agents } else { app }
+            if showAgents { agents } else { app; logCheckCard }
+        }
+    }
+
+    // Release batch 1: the log check lives here, with a one-sentence result.
+    @State private var logCheck: String?
+    private var logCheckCard: some View {
+        Card(padding: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Activity log").font(.system(size: 14, weight: .semibold))
+                    Spacer()
+                    Button("Check activity log for edits") {
+                        Task {
+                            let r = await KaiCLI.run(["log", "verify"])
+                            let out = r.out.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if out.hasPrefix("OK:"), let n = out.split(separator: " ").dropFirst().first {
+                                logCheck = "No edits found in \(n) records. (A program with your permissions could still rewrite the whole log.)"
+                            } else {
+                                logCheck = "Kai found an edit: " + (out.isEmpty ? r.message : String(out.dropFirst(out.hasPrefix("FAIL: ") ? 6 : 0)))
+                            }
+                        }
+                    }.buttonStyle(GhostButtonStyle())
+                    Button("Show in Finder") { model.revealAuditLog() }.buttonStyle(GhostButtonStyle())
+                }
+                if let c = logCheck {
+                    Text(c).font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 
@@ -290,6 +320,9 @@ private struct GeneralPage: View {
         Card(padding: 14) {
             VStack(spacing: 12) {
                 row("Notify me when Kai blocks something", isOn: $model.notifyOnBlock)
+                soundRow("Sound when Kai needs you", key: "soundApprovalNeeded", default: true)
+                soundRow("Sound when a permission is granted", key: "soundPermissionGranted", default: true)
+                soundRow("Sound when Kai blocks something", key: "soundBlocked", default: false)
                 row("Open Kai at login", isOn: Binding(get: { model.launchAtLogin },
                                                        set: { model.launchAtLogin = $0 }))
             }
@@ -309,6 +342,11 @@ private struct GeneralPage: View {
                 Button("Edit Policy File…") { model.openPolicyFile() }.buttonStyle(GhostButtonStyle())
             }
         }
+    }
+
+    private func soundRow(_ title: String, key: String, default on: Bool) -> some View {
+        row(title, isOn: Binding(get: { UserDefaults.standard.object(forKey: key) as? Bool ?? on },
+                                 set: { UserDefaults.standard.set($0, forKey: key) }))
     }
 
     private func row(_ title: String, isOn: Binding<Bool>) -> some View {
@@ -417,6 +455,110 @@ private struct FilesPage: View {
 private struct NetworkPage: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var wall: NetworkWall
+    @StateObject private var grants = GrantManager()
+    @State private var telemetryNote: String?
+
+    // Release batch 11: one row per agent. Kai blocks known telemetry hosts
+    // silently; the documented switch, where the vendor has one.
+    //   Claude Code: DISABLE_TELEMETRY / DISABLE_ERROR_REPORTING (code.claude.com/docs/en/data-usage)
+    //   Codex: analytics.enabled = false (learn.chatgpt.com/docs/config-file/config-reference)
+    //   Cursor: no documented off switch; Privacy Mode reduces it (docs.cursor.com/account/privacy)
+    private var telemetry: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Agent telemetry").font(Theme.display(16, .semibold))
+            telemetryRow("Claude Code", blocks: "usage metrics and error reports (Statsig, Datadog, Sentry)") {
+                if kai_claude_env_is("DISABLE_TELEMETRY", "1") == 1 {
+                    Text("Turned off in Claude Code").font(.system(size: 12)).foregroundStyle(Theme.lime)
+                } else {
+                    Button("Turn off in Claude Code") { turnOffClaudeTelemetry() }.buttonStyle(GhostButtonStyle())
+                        .help("Sets DISABLE_TELEMETRY and DISABLE_ERROR_REPORTING in Claude Code's settings. Claude Code also turns off its feature flags then, which can make Remote Control unavailable.")
+                }
+            }
+            telemetryRow("Codex", blocks: "usage metrics (Statsig)") {
+                if kai_codex_analytics_off(0) == 1 {
+                    Text("Turned off in Codex").font(.system(size: 12)).foregroundStyle(Theme.lime)
+                } else {
+                    Button("Turn off in Codex") { turnOffCodexTelemetry() }.buttonStyle(GhostButtonStyle())
+                        .help("Sets analytics.enabled = false in Codex's config.toml (a backup is kept).")
+                }
+            }
+            telemetryRow("Cursor", blocks: "crash and usage counters (metrics.cursor.sh)") {
+                Text("No setting from Cursor; Kai keeps blocking it.").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    .help("Cursor's Privacy Mode (Cursor Settings → General) reduces it to crash counters.")
+            }
+            if let n = telemetryNote {
+                Text(n).font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func telemetryRow<T: View>(_ agent: String, blocks: String, @ViewBuilder trailing: () -> T) -> some View {
+        Card(padding: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(agent).font(.system(size: 13, weight: .semibold))
+                    Text("Kai blocks its \(blocks) silently.").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                }
+                Spacer()
+                trailing()
+            }
+        }
+    }
+
+    private func turnOffCodexTelemetry() {
+        Task {
+            guard await OwnerAuth.shared.confirm("change Codex's settings to turn off its analytics") else { return }
+            let rc = kai_codex_analytics_off(1)
+            await MainActor.run {
+                telemetryNote = rc == 1 ? "Done. Restart Codex for it to apply. (Kai kept a backup of config.toml.)"
+                    : rc == -2 ? "Codex's config.toml sets analytics in a form Kai doesn't edit; set analytics.enabled = false yourself."
+                    : "Kai couldn't write Codex's config.toml."
+                grants.refresh()
+            }
+        }
+    }
+
+    private func turnOffClaudeTelemetry() {
+        Task {
+            guard await OwnerAuth.shared.confirm("change Claude Code's settings to turn off its telemetry") else { return }
+            let rc = kai_claude_set_env("DISABLE_TELEMETRY", "1")
+            let rc2 = rc == 0 ? kai_claude_set_env("DISABLE_ERROR_REPORTING", "1") : rc
+            await MainActor.run {
+                telemetryNote = rc2 == 0
+                    ? "Done. Restart your Claude Code sessions for it to apply. (Your previous settings are kept in ~/.claude/settings.json.kai-bak.)"
+                    : rc2 == 3 ? "Claude Code's settings file isn't valid JSON, so Kai changed nothing."
+                               : "Kai couldn't write Claude Code's settings."
+                grants.refresh()
+            }
+        }
+    }
+
+    // Fix 5: hosts in one agent's profile; ones Kai added from observed traffic
+    // (not the vendor's docs) are marked for review.
+    private var profileHosts: some View {
+        var rows: [(agent: String, host: String, documented: Bool)] = []
+        var i: Int32 = 0
+        var a: UnsafePointer<CChar>? = nil, h: UnsafePointer<CChar>? = nil
+        var d: Int32 = 0
+        while kai_agent_profile_host(i, &a, &h, &d) == 1, let a, let h {
+            rows.append((String(cString: a), String(cString: h), d == 1)); i += 1
+        }
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Agent profile hosts").font(Theme.display(16, .semibold))
+            Text("Allowed for that agent only.").font(.system(size: 12)).foregroundStyle(Theme.muted)
+            ForEach(rows, id: \.host) { r in
+                HStack(spacing: 8) {
+                    Text(r.host).font(Theme.mono)
+                    Text(r.agent == "cursor" ? "Cursor" : r.agent).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    if !r.documented {
+                        Text("observed, not documented").font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.amber)
+                            .help("Kai added this from traffic it saw, not from the vendor's documentation. Review it.")
+                    }
+                }
+            }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -442,75 +584,34 @@ private struct NetworkPage: View {
                                       ("off", "Off", "Agents reach anything.")],
                             selected: model.policy?.switches["egress"] ?? "log") { model.setSwitch("egress", $0) }
                     .disabled(model.busy || model.policy == nil)
+                HStack(spacing: 10) {
+                    HStack(spacing: 3) { Text("Watch").font(.system(size: 11)).foregroundStyle(Theme.muted); InfoButton(text: InfoText.watch) }
+                    HStack(spacing: 3) { Text("Protect").font(.system(size: 11)).foregroundStyle(Theme.muted); InfoButton(text: InfoText.protect) }
+                }
+                Text("Watch and Protect both turn off QUIC for agents, so Kai can see which sites they reach. "
+                   + "Agents fall back to normal HTTPS; in Watch nothing else is blocked.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             }
-            hosts
             EditableList(kind: "egress_allow", title: "Your allowed destinations",
                          help: "A host (also covers its subdomains), an IP address or range, optionally with :port: "
-                             + "db.yourcompany.com:5432, 10.0.0.0/8, 203.0.113.5:22. This Mac, model APIs, GitHub "
-                             + "and package registries are built in.",
+                             + "db.yourcompany.com:5432, 10.0.0.0/8, 203.0.113.5:22. Built in: this Mac and each agent's model and sign-in hosts. GitHub "
+                             + "and package registries are asked about per host.",
                          items: model.policy?.egressAllow ?? [], placeholder: "artifacts.yourcompany.com or 10.0.0.0/8")
+            telemetry
+            profileHosts
+            // B2 agent profiles: what the built-in model hosts allow, and the limit.
+            Text("Built in for every agent: this Mac and the model and sign-in hosts (anthropic.com, openai.com, "
+               + "cursor.sh and others). Kai can't tell the model connection from other data sent to the same host. "
+               + "Everything else, such as GitHub or a package registry, is asked about per host the first time "
+               + "an agent tries it.")
+                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .onAppear { wall.refresh() }
     }
 
-    private var statusPill: some View {
-        HStack(spacing: 6) {
-            Circle().fill(wall.isOn ? Theme.lime : Theme.muted).frame(width: 8, height: 8)
-            Text(wall.isOn ? "On" : "Off")
-        }
-        .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(wall.isOn ? Theme.lime : Theme.muted)
-        .padding(.horizontal, 12).padding(.vertical, 6)
-        .background((wall.isOn ? Theme.lime : Theme.muted).opacity(0.10), in: Capsule())
-        .overlay(Capsule().stroke(wall.isOn ? Color(hex: 0x3A4420) : Theme.border))
-    }
+    private var statusPill: some View { WallPill(word: wall.stateWord) }
 
-    private var hosts: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Hosts your agents reached").font(Theme.display(16, .semibold))
-                Spacer()
-                Text("Allow the ones you trust before switching to Protect")
-                    .font(.system(size: 11)).foregroundStyle(Theme.muted)
-            }
-            let hosts = model.reachedHosts
-            VStack(spacing: 0) {
-                HStack {
-                    Text("HOST").frame(maxWidth: .infinity, alignment: .leading)
-                    Text("AGENT").frame(width: 150, alignment: .leading)
-                    Text("SEEN").frame(width: 80, alignment: .leading)
-                    Spacer().frame(width: 90)
-                }
-                .font(Theme.label).tracking(1).foregroundStyle(Theme.muted)
-                .padding(.horizontal, 14).padding(.vertical, 9)
-                if hosts.isEmpty {
-                    Text(wall.isOn ? "Nothing yet: every site your agents used is allowed."
-                                   : "Turn Internet protection on to see where your agents connect.")
-                        .font(.system(size: 13)).foregroundStyle(Theme.muted)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(14)
-                }
-                ForEach(hosts) { h in
-                    Divider().overlay(Color(hex: 0x1E2024))
-                    HStack {
-                        Text(h.host).font(Theme.mono).lineLimit(1).truncationMode(.middle)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Text(h.agentList).font(.system(size: 13)).lineLimit(1).frame(width: 150, alignment: .leading)
-                        Text("\(h.count) time\(h.count == 1 ? "" : "s")").font(.system(size: 13))
-                            .foregroundStyle(h.blocked ? Theme.coral : Theme.muted)
-                            .frame(width: 80, alignment: .leading)
-                        Button("Allow") { model.allowHost(h.host) }
-                            .buttonStyle(LimeButtonStyle(subtle: true))
-                            .frame(width: 90)
-                            .disabled(model.busy)
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                }
-            }
-            .background(Theme.sidebar, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color(hex: 0x23252B)))
-        }
-    }
 }
 
 /// The storage wall is implemented (its decision engine is tested) but needs
@@ -520,10 +621,37 @@ private struct StoragePage: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var storage: StorageWall
 
+    // Batch 2: an edition without the Files extension shows a greyed page,
+    // never a toggle that seems to work.
     var body: some View {
+        if StorageWall.included { content } else { unavailable }
+    }
+
+    private var unavailable: some View {
         VStack(alignment: .leading, spacing: 18) {
             PageHeader(icon: "folder", title: "Files",
-                       subtitle: "Agents can't open your keys, passwords and Kai's settings — even from a script. Every agent on this Mac; their own working files stay usable.")
+                       subtitle: "Stops agents opening your keys and passwords, even from a script they wrote.")
+            Card(padding: 14) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Files protection").font(.system(size: 14, weight: .semibold))
+                        Text("Coming in a later release.").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    }
+                    Spacer()
+                }
+            }
+            .opacity(0.5)
+            Text("Until then, Kai's checks inside each agent still stop agents reading protected files "
+               + "with their own tools; a program an agent writes and runs can get around them.")
+                .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            PageHeader(icon: "folder", title: "Files",
+                       subtitle: "Agents can't open your keys, passwords and Kai's settings — even from a script. Every agent on this Mac; their own working files stay usable.",
+                       trailing: AnyView(WallPill(word: storage.stateWord)))
             Card(padding: 14) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -533,7 +661,10 @@ private struct StoragePage: View {
                     }
                     Spacer()
                     Toggle("Files protection", isOn: Binding(get: { storage.isOn },
-                                                         set: { $0 ? storage.turnOn() : storage.turnOff() }))
+                                                         set: { on in
+                                                             if on { storage.turnOn(); return }
+                                                             Task { if await OwnerAuth.shared.confirm("turn off Files protection") { storage.turnOff() } }
+                                                         }))
                         .toggleStyle(KaiToggleStyle()).labelsHidden()
                         .disabled(storage.state == .activating || storage.state == .checking)
                 }
@@ -698,6 +829,7 @@ private struct AgentControlPage: View {
     @StateObject private var grants = GrantManager()
     @State private var selected: String?
     @State private var showEnded = false
+    @AppStorage("agentControlOpen") private var openRequest = ""
 
     /// Working now, then idle; ended sessions live in their own collapsed group.
     private var sorted: [SessionRow] { model.workingNow + model.idle }
@@ -705,7 +837,7 @@ private struct AgentControlPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             PageHeader(icon: "person.2.gobackward", title: "Agent Control",
-                       subtitle: "Every agent session Kai sees, with its permissions. Revoke or pause one session without touching the others.")
+                       subtitle: "Every agent session Kai sees, with its permissions. Revoke one without touching the others.")
             // A plain HStack (not a nested split view, which collapsed inside the
             // Settings window's own split): a fixed-width list + a detail, both
             // filling the height.
@@ -726,20 +858,28 @@ private struct AgentControlPage: View {
                             .foregroundStyle(Theme.muted).padding(10)
                     }
                     List(selection: $selected) {
-                        if !model.workingNow.isEmpty {
-                            Section("Working now") {
-                                ForEach(model.workingNow) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
+                        Section(header: CapsLabel("What each agent can reach")) {
+                            ForEach([("claude", "Claude Code"), ("codex", "Codex"), ("cursor", "Cursor")], id: \.0) { a in
+                                Text(a.1).font(.system(size: 13)).tag("agent:" + a.0)
                             }
+                            Text("Chats").font(.system(size: 13)).tag("chats")
+                        }
+                        if !model.workingNow.isEmpty {
+                            Section {
+                                ForEach(model.workingNow) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
+                            } header: { InfoHeading(title: "Working now", info: InfoText.workingNow) }
                         }
                         if !model.idle.isEmpty {
-                            Section("Idle") {
+                            Section {
                                 ForEach(model.idle) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
-                            }
+                            } header: { InfoHeading(title: "Idle", info: InfoText.idle) }
                         }
                         if !model.endedToday.isEmpty {
-                            DisclosureGroup("Ended today (\(model.endedToday.count))", isExpanded: $showEnded) {
-                                ForEach(model.endedToday) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
-                            }
+                            Section {
+                                DisclosureGroup("\(model.endedToday.count) ended today", isExpanded: $showEnded) {
+                                    ForEach(model.endedToday) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
+                                }
+                            } header: { InfoHeading(title: "Ended", info: InfoText.ended) }
                         }
                         if !model.backgroundServices.isEmpty {
                             Section("Background services") {
@@ -755,10 +895,14 @@ private struct AgentControlPage: View {
                 .frame(width: 300)
                 Divider()
                 Group {
-                    if let id = selected, let s = model.sessions.first(where: { $0.id == id }) {
+                    if let id = selected, id.hasPrefix("agent:") {
+                        AgentReachView(agent: String(id.dropFirst(6)), grants: grants)
+                    } else if selected == "chats" {
+                        ChatsDetail()
+                    } else if let id = selected, let s = model.sessions.first(where: { $0.id == id }) {
                         SessionDetail(session: s, grants: grants)
                     } else {
-                        VStack { Spacer(); Text("Select a session").foregroundStyle(Theme.muted); Spacer() }
+                        VStack { Spacer(); Text("Select a session or an agent").foregroundStyle(Theme.muted); Spacer() }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -769,6 +913,8 @@ private struct AgentControlPage: View {
             .frame(maxWidth: .infinity, minHeight: 470, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear { if !openRequest.isEmpty { selected = openRequest; openRequest = "" } }
+        .onChange(of: openRequest) { r in if !r.isEmpty { selected = r; openRequest = "" } }
         // The data is cached (shared store), so it may not CHANGE when the page
         // opens: pick a session on appear too, not only on a change.
         .onAppear { selectDefault() }
@@ -804,6 +950,43 @@ private struct PermissionsPage: View {
         }
     }
 
+    // B2: rules (every future session) and Keep blocked, by verified agent
+    // identity and exact host. Removing one never lowers protection.
+    @ViewBuilder private var rulesSection: some View {
+        let allow = grants.rules.filter(\.isAllow)
+        let kept = grants.rules.filter { !$0.isAllow }
+        CapsLabel("Rules").padding(.top, 4)
+        if allow.isEmpty {
+            Text("No rules. Make one from a card: More… → Create a rule.")
+                .font(.system(size: 13)).foregroundStyle(Theme.muted)
+        }
+        ForEach(allow) { r in ruleRow(r, line: "\(r.agentTitle) may connect to \(r.dest) \(r.untilLabel)") }
+        if !kept.isEmpty {
+            CapsLabel("Kept blocked").padding(.top, 4)
+            Text("Kai doesn't ask about these again; each attempt is still blocked and recorded.")
+                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+            ForEach(kept) { r in ruleRow(r, line: "\(r.agentTitle) can't connect to \(r.dest)") }
+        }
+    }
+
+    private func ruleRow(_ r: DecisionRule, line: String) -> some View {
+        Card(padding: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(line).font(.system(size: 13))
+                    Text("Signed as \(r.identity)").font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Theme.muted).lineLimit(1).textSelection(.enabled)
+                    Text(r.isAllow ? "Kai can't tell what is sent over this encrypted connection."
+                                   : "Only this host, only this agent.")
+                        .font(.system(size: 11)).foregroundStyle(Theme.muted)
+                }
+                Spacer()
+                Button(r.isAllow ? "Remove" : "Ask again") { grants.removeRule(r) }
+                    .buttonStyle(GhostButtonStyle())
+            }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Every permission you gave, across sessions and projects, and their recent history. Permissions are given only in Kai — never by an agent.")
@@ -824,6 +1007,9 @@ private struct PermissionsPage: View {
                                     .foregroundStyle(Theme.muted).lineLimit(1)
                                 Text(g.status).font(.system(size: 11))
                                     .foregroundStyle(g.status == "expired" ? Theme.muted : Theme.lime)
+                                if let m = g.members.first {
+                                    Text(m.authorityLabel).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                                }
                             }
                             Spacer()
                             Button(g.count > 1 ? "Revoke all" : "Revoke") { grants.revokeGroup(g) }
@@ -832,6 +1018,7 @@ private struct PermissionsPage: View {
                     }
                 }
             }
+            rulesSection
             CapsLabel("Recent history").padding(.top, 4)
             Picker("", selection: $filter) {
                 Text("All").tag("all")
@@ -860,6 +1047,7 @@ private struct PermissionsPage: View {
 
 private struct ActivityPage: View {
     @EnvironmentObject var model: AppModel
+    @StateObject private var grants = GrantManager()
     @State private var verifyResult: String?
     @AppStorage("activityFilter") private var filter = "all"
     @State private var expanded: Set<String> = []
@@ -867,6 +1055,7 @@ private struct ActivityPage: View {
     private var shown: [AuditEvent] {
         model.events.filter { e in
             guard !e.isNote else { return false } // shown under their block
+            if e.isGrant && e.event == "requested" { return false } // one row per block, not two
             switch filter {
             case "agents": return !e.isNetwork
             case "network": return e.isNetwork
@@ -875,25 +1064,26 @@ private struct ActivityPage: View {
         }
     }
 
+    /// Identical decisions (same who, what, rule and target) collapse into ONE
+    /// row with a count - a component retrying the same blocked open becomes
+    /// "×956", not 956 rows. The newest one represents the group.
+    private var grouped: [(event: AuditEvent, count: Int)] {
+        var order: [String] = []
+        var groups: [String: (event: AuditEvent, count: Int)] = [:]
+        for e in shown {
+            let k = "\(e.agentName)|\(e.decision)|\(e.rule)|\(e.excerpt ?? "")|\(e.detail)"
+            if let g = groups[k] { groups[k] = (g.event, g.count + 1) }
+            else { groups[k] = (e, 1); order.append(k) }
+        }
+        return order.compactMap { groups[$0] }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             PageHeader(icon: "waveform.path.ecg", title: "Activity",
                        subtitle: "What Kai blocked, cleaned or noticed, what it was, and what the agent did next. Secrets are never stored.")
-            Card(padding: 14) {
-                HStack(spacing: 10) {
-                    if let a = model.status?.audit {
-                        Image(systemName: a.intact ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                            .foregroundStyle(a.intact ? Theme.lime : Theme.coral)
-                        Text(a.intact ? "Audit log intact · \(a.records) records" : a.error)
-                            .font(.system(size: 13))
-                    }
-                    Spacer()
-                    Button("Verify") { Task { verifyResult = await model.verifyAuditLog() } }
-                        .buttonStyle(GhostButtonStyle())
-                    Button("Show in Finder") { model.revealAuditLog() }.buttonStyle(GhostButtonStyle())
-                }
-            }
-            if let v = verifyResult { Text(v).font(.system(size: 12)).foregroundStyle(Theme.muted) }
+            Text(model.weeklyLine).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
             if let n = model.notice {
                 Card(padding: 12, stroke: Color(hex: 0x3A4420)) {
                     HStack {
@@ -915,8 +1105,10 @@ private struct ActivityPage: View {
                 Text(filter == "network" ? "No connections noticed yet." : "No blocks, warnings or noticed hosts yet.")
                     .font(.system(size: 13)).foregroundStyle(Theme.muted)
             }
-            ForEach(shown.prefix(150)) { e in
-                ActivityRow(event: e, followUp: model.followUp(for: e), expanded: expanded.contains(e.id)) {
+            ForEach(grouped.prefix(150), id: \.event.id) { g in
+                let e = g.event
+                ActivityRow(event: e, followUp: model.followUp(for: e), expanded: expanded.contains(e.id),
+                            count: g.count, grants: grants) {
                     if expanded.contains(e.id) { expanded.remove(e.id) } else { expanded.insert(e.id) }
                 }
             }
@@ -931,6 +1123,8 @@ private struct ActivityRow: View {
     let event: AuditEvent
     let followUp: AuditEvent?
     let expanded: Bool
+    var count: Int = 1
+    @ObservedObject var grants: GrantManager
     let toggle: () -> Void
     @State private var report: ReportInfo?
 
@@ -952,11 +1146,17 @@ private struct ActivityRow: View {
         VStack(alignment: .leading, spacing: 8) {
             Button(action: toggle) { header }.buttonStyle(.plain)
                 .accessibilityHint(expanded ? "Hide details" : "Show details")
-            if let t = event.excerpt { ExcerptView(text: t, match: event.match, expanded: expanded) }
-            if !event.detail.isEmpty {
+            if let t = event.excerpt, !event.isNetwork, !event.isGrant {
+                ExcerptView(text: t, match: event.match, expanded: expanded)
+            }
+            if event.isNetwork || event.isGrant || event.isStorage {
+                Text(event.plainSentence).font(.system(size: 12)).foregroundStyle(Theme.soft)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !event.detail.isEmpty {
                 Text(event.detail).font(.system(size: 12)).foregroundStyle(Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            DecisionSheet(event: event, count: count, showHeader: false, grants: grants)
             if let n = followUp {
                 Label(n.detail, systemImage: "arrow.turn.down.right")
                     .font(.system(size: 12)).foregroundStyle(Theme.soft)
@@ -982,6 +1182,12 @@ private struct ActivityRow: View {
             Text(event.verb).font(.system(size: 13, weight: .semibold))
             + Text(" · \(event.agentName)").font(.system(size: 13))
             + Text(event.actionLabel.map { " · \($0)" } ?? "").font(.system(size: 13)).foregroundColor(Theme.muted)
+            if count > 1 {
+                Text("×\(count)").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ink)
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(Theme.muted, in: Capsule())
+                    .help("\(count) identical records; the latest is shown")
+            }
             Spacer()
             if let d = event.date { Text(ago(d)).font(.system(size: 11)).foregroundStyle(Theme.muted) }
             Image(systemName: expanded ? "chevron.up" : "chevron.down")
@@ -1004,7 +1210,7 @@ private struct ActivityRow: View {
                     .font(.system(size: 11)).foregroundStyle(Theme.muted)
             }
             HStack(spacing: 8) {
-                if event.isBlock || event.decision == "warn" { notAThreat }
+                if (event.isBlock || event.decision == "warn") && !event.isNetwork && !event.isGrant { notAThreat }
                 Button("Copy details") { model.copyDetails(event) }.buttonStyle(GhostButtonStyle())
             }
         }
@@ -1016,7 +1222,7 @@ private struct ActivityRow: View {
                 Text("Kai's own protection can't be switched off from here")
             }
             if event.canExemptCommand {
-                Button("Allow this exact command (\(event.rule) only)") { model.exempt(event) }
+                Button(event.exemptIsTimed ? event.exemptLabel : "Allow this exact command (\(event.rule) only)") { model.exempt(event) }
             }
             if let p = event.allowablePath {
                 Button("Always allow \(p)") { model.allowFile(event) }
@@ -1074,3 +1280,29 @@ private struct ExcerptView: View {
             .background(Theme.ink, in: RoundedRectangle(cornerRadius: 8))
     }
 }
+
+/// B3: a wall's state in one word (not installed · off · starting · watching ·
+/// protecting · unhealthy), from macOS and the measured heartbeat.
+struct WallPill: View {
+    let word: String
+    private var color: Color {
+        switch word {
+        case "protecting": return Theme.lime
+        case "watching", "starting": return Theme.amber
+        case "unhealthy": return Theme.coral
+        default: return Theme.muted
+        }
+    }
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(color).frame(width: 8, height: 8)
+            Text(word.prefix(1).uppercased() + word.dropFirst())
+        }
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(color)
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(color.opacity(0.10), in: Capsule())
+        .overlay(Capsule().stroke(color.opacity(0.4)))
+    }
+}
+

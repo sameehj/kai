@@ -1,0 +1,57 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
+#
+# Kai Preview postinstall (runs as root after the package installs). Registers
+# kai's native host with the browsers of the user signed in at the console, so
+# the Chrome Web Store extension reaches kai without a Terminal step.
+#
+# Only the console user: run as that user (launchctl asuser + sudo -u, with
+# that user's own HOME), never as root and never in root's home. Nobody signed
+# in (login window, setup assistant, a remote install): skip with a note in the
+# installer log (/var/log/install.log). A failure never fails the install.
+#
+# KAI_CONSOLE_USER overrides who is at the console (tests only).
+log() { echo "kai postinstall: $*"; }
+KAI_BIN=/usr/local/bin/kai
+
+if [ "${KAI_CONSOLE_USER+set}" = set ]; then user="$KAI_CONSOLE_USER"
+else user=$(stat -f %Su /dev/console 2>/dev/null); fi
+case "$user" in
+    ""|root|loginwindow|_mbsetupuser)
+        log "nobody is signed in; skipped registering kai with the browser (run later: kai install chrome)"
+        exit 0 ;;
+esac
+uid=$(id -u "$user" 2>/dev/null) || { log "no such user '$user'; skipped"; exit 0; }
+if [ "$uid" -lt 501 ]; then
+    log "console user '$user' is a system account; skipped"
+    exit 0
+fi
+home="${KAI_CONSOLE_HOME:-$(dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null | awk '{print $2}')}"
+case "$home" in
+    ""|/var/root|/private/var/root) log "no home folder for '$user'; skipped"; exit 0 ;;
+esac
+
+as_user() { launchctl asuser "$uid" sudo -u "$user" -H env HOME="$home" "$KAI_BIN" "$@" >/dev/null 2>&1; }
+
+if as_user install chrome; then log "registered kai with $user's browsers"
+else log "kai install chrome failed for $user (run it later: kai install chrome)"; fi
+
+# Refresh the hooks of every agent that already has Kai's: this version's
+# matchers and messages (e.g. Claude Code's web fetch check). kai install keeps
+# the user's original as <file>.kai-bak and the previous state as .kai-bak.prev.
+# Agents without Kai's hooks are left alone.
+sum() { [ -f "$1" ] && shasum -a 256 "$1" | cut -c1-64 || echo none; }
+refresh() {   # name agent file
+    [ -f "$3" ] && grep -q "hook $2" "$3" 2>/dev/null || return 0
+    before=$(sum "$3")
+    if as_user install "$2"; then
+        [ "$(sum "$3")" = "$before" ] && log "$1: hooks already current ($3)" \
+            || log "$1: hooks updated to this version ($3; backups kept: $3.kai-bak, $3.kai-bak.prev)"
+    else
+        log "$1: kai install $2 failed; its previous hooks are unchanged (run later: kai install $2)"
+    fi
+}
+refresh "Claude Code" claude "$home/.claude/settings.json"
+refresh "Codex" codex "${CODEX_HOME:-$home/.codex}/hooks.json"
+refresh "Cursor" cursor "$home/.cursor/hooks.json"
+exit 0
