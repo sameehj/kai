@@ -465,7 +465,14 @@ int kai_upload_parse(const char *cmd, char *file, size_t fn, char *host, size_t 
  * isn't seen here. */
 typedef struct { char what[96]; char app[64]; int osascript; } cap_acc;
 
-static int has_word(const char *s, const char *w) { return s && strcasestr(s, w) != NULL; }
+/* Case-insensitive strstr (strcasestr isn't declared under _POSIX_C_SOURCE on glibc). */
+static const char *ci_find(const char *h, const char *n) {
+    size_t nl = strlen(n);
+    for (; h && *h; h++) if (strncasecmp(h, n, nl) == 0) return h;
+    return NULL;
+}
+
+static int has_word(const char *s, const char *w) { return s && ci_find(s, w) != NULL; }
 
 static int system_audio(const char *s) {
     return has_word(s, "blackhole") || has_word(s, "soundflower") || has_word(s, "loopback");
@@ -474,7 +481,7 @@ static int system_audio(const char *s) {
 /* The quoted name after `mark` (tell application "X", Application('X')). */
 static int quoted_after(const char *text, const char *mark, char *out, size_t n) {
     size_t ml = strlen(mark);
-    for (const char *t = text; t && (t = strcasestr(t, mark)) != NULL; t += ml) {
+    for (const char *t = text; t && (t = ci_find(t, mark)) != NULL; t += ml) {
         const char *q = t + ml;
         while (*q == ' ' || *q == '\\') q++;
         if (*q != '"' && *q != '\'') continue;
@@ -820,8 +827,8 @@ static int owner_auth(const char *why) {
     if (t) return !strcmp(t, "ok");
 #endif
 #ifdef __APPLE__
-    struct passwd *pw = getpwuid(getuid());
-    if (!pw) return 0;
+    struct passwd *acct = getpwuid(getuid());
+    if (!acct) return 0;
     char prompt[300], pass[512];
     snprintf(prompt, sizeof prompt, "%s\nYour login password: ", why);
     if (!readpassphrase(prompt, pass, sizeof pass, RPP_REQUIRE_TTY)) return 0;
@@ -837,12 +844,12 @@ static int owner_auth(const char *why) {
     CFTypeRef *session = h ? (CFTypeRef *)dlsym(h, "kODSessionDefault") : NULL;
     if (mk && cp && vf && users) {
         CFTypeRef node = mk(kCFAllocatorDefault, session ? *session : NULL, 0x2201 /* kODNodeTypeAuthentication */, NULL);
-        CFStringRef name = CFStringCreateWithCString(NULL, pw->pw_name, kCFStringEncodingUTF8);
-        CFStringRef pwd = CFStringCreateWithCString(NULL, pass, kCFStringEncodingUTF8);
+        CFStringRef name = CFStringCreateWithCString(NULL, acct->pw_name, kCFStringEncodingUTF8);
+        CFStringRef cf_typed = CFStringCreateWithCString(NULL, pass, kCFStringEncodingUTF8);
         CFTypeRef rec = node && name ? cp(node, *users, name, NULL, NULL) : NULL;
-        ok = rec && pwd && vf(rec, pwd, NULL);
+        ok = rec && cf_typed && vf(rec, cf_typed, NULL);
         if (rec) CFRelease(rec);
-        if (pwd) CFRelease(pwd);
+        if (cf_typed) CFRelease(cf_typed);
         if (name) CFRelease(name);
         if (node) CFRelease(node);
     }
