@@ -209,6 +209,11 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
         (isBlock || decision == "warn" || decision == "ask") && isShell && excerpt != nil && !rule.isEmpty && !isBuiltinRule
     }
 
+    /// Driving a terminal app runs anything outside Kai's checks: its exact-command
+    /// allow lasts 15 minutes and needs owner authentication.
+    var exemptIsTimed: Bool { rule == "terminal_control" }
+    var exemptLabel: String { exemptIsTimed ? "Allow this exact command for 15 minutes (Touch ID)" : "Allow this exact command" }
+
     /// The glob `kai policy add exempt` gets: the command as recorded, with
     /// hidden parts and cut-off ends as wildcards, so it matches the real
     /// command and little else.

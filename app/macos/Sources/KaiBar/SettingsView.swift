@@ -1222,7 +1222,7 @@ private struct ActivityRow: View {
                 Text("Kai's own protection can't be switched off from here")
             }
             if event.canExemptCommand {
-                Button("Allow this exact command (\(event.rule) only)") { model.exempt(event) }
+                Button(event.exemptIsTimed ? event.exemptLabel : "Allow this exact command (\(event.rule) only)") { model.exempt(event) }
             }
             if let p = event.allowablePath {
                 Button("Always allow \(p)") { model.allowFile(event) }

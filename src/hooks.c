@@ -243,7 +243,14 @@ static void say_upload(char *out, size_t n, const char *cmd, const char *agent, 
 static int capture_stopped(const char *what, const char *app, const char *note, const char *agent,
                            const char *cwd, char *out, size_t n) {
     if (!what || !*what || !app || !*app) return 0;
-    if (kai_cli_grant_allows("capture", agent, app, NULL, cwd, (long long)time(NULL))) return 0;
+    long long now = (long long)time(NULL);
+    if (kai_capture_app_is_terminal(app)) {
+        /* only an allow that ends within 15 minutes counts (one made longer by hand doesn't) */
+        long long u = kai_cli_grant_until("capture", agent, app, now);
+        if (u > now && u - now <= KAI_TERMINAL_ALLOW_MAX) return 0;
+    } else if (kai_cli_grant_allows("capture", agent, app, NULL, cwd, now)) {
+        return 0;
+    }
     const char *title = !strcmp(agent, "claude") ? "Claude Code" : !strcmp(agent, "codex") ? "Codex"
                       : !strcmp(agent, "cursor") ? "Cursor" : agent;
     char shown[80];
@@ -1172,6 +1179,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 kai_strlcpy(rule, "terminal_grant", sizeof rule);
             } else if ((app = command_drives_terminal(cmd, cwd)) &&
                        terminal_stopped(cmd, app, source, cwd, reason, sizeof reason, capapp, sizeof capapp) &&
+                       !kai_cli_command_granted(source, "terminal_control", cmd, KAI_TERMINAL_ALLOW_MAX, (long long)time(NULL)) &&
                        !skip_exempt("terminal_control", &ex)) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, "terminal_control", sizeof rule);
@@ -1465,6 +1473,7 @@ static int hook_cursor(const char *json) {
             /* the user's kai allow-upload for exactly this command */
         } else if (cmd && (app = command_drives_terminal(cmd, cwd)) &&
                    terminal_stopped(cmd, app, "cursor", cwd, reason, sizeof reason, capapp, sizeof capapp) &&
+                   !kai_cli_command_granted("cursor", "terminal_control", cmd, KAI_TERMINAL_ALLOW_MAX, (long long)time(NULL)) &&
                    !skip_exempt("terminal_control", &ex)) {
             deny = 1;
             kai_strlcpy(why, "terminal_control", sizeof why);

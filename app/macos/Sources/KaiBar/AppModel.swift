@@ -322,6 +322,25 @@ final class AppModel: ObservableObject {
     /// "Not a threat": an exception for exactly this command and rule.
     func exempt(_ e: AuditEvent) {
         guard e.canExemptCommand, let pattern = e.exemptPattern else { return }
+        if e.exemptIsTimed {
+            // Driving a terminal app: owner authentication every time, and an
+            // allow for this exact command that ends in 15 minutes (not a
+            // permanent policy exception).
+            Task {
+                guard await OwnerAuth.shared.confirm("allow \(e.agentName) to run this exact command in another app for "
+                                                     + "15 minutes. Commands it runs there aren't checked by Kai",
+                                                     everyTime: true) else { return }
+                let until = Int64(Date().timeIntervalSince1970) + Int64(KAI_TERMINAL_ALLOW_MAX)
+                if kai_cli_grant_add(1, "exact", e.agentKey, pattern, "terminal_control", until, nil, nil, 0) == 0 {
+                    kai_audit("app", "allow-exact", "note", "terminal_control",
+                              "allowed \(e.agentKey) this exact command in another app for 15 minutes (Kai app, owner authenticated)")
+                    notice = "Allowed this exact command for 15 minutes."
+                } else {
+                    errorMessage = "Couldn't save the allow."
+                }
+            }
+            return
+        }
         Task {
             errorMessage = nil
             await perform(["policy", "add", "exempt", e.rule, pattern])

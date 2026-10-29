@@ -677,6 +677,15 @@ int kai_upload_parse(const char *cmd, char *file, size_t fn, char *host, size_t 
  * capturing program, or the tool's MCP server); else 0. */
 int kai_capture_match(const char *cmd, char *what, size_t n, char *app, size_t an);
 int kai_capture_tool(const char *tool, char *what, size_t n, char *app, size_t an);
+/* Terminals and System Events: they run anything outside Kai's checks, so
+ * their allows need owner authentication and last at most 15 minutes. */
+#define KAI_TERMINAL_ALLOW_MAX 900
+int kai_capture_app_is_terminal(const char *app);
+/* The end of agent's live allow for op + target: latest until, -1 = never ends, 0 = none. */
+long long kai_cli_grant_until(const char *op, const char *agent, const char *target, long long now);
+/* An exact-command allow (op "exact", target = glob over the command, to = the
+ * rule it lifts) ending within max_secs (0 = any). */
+int kai_cli_command_granted(const char *agent, const char *rule, const char *cmd, long long max_secs, long long now);
 /* The app a script tells (tell application "X", Application('X')). */
 int kai_told_app(const char *text, char *out, size_t n);
 /* Remove the allow for agent + op + target (the app's Revoke). 0 removed, -1 none. */

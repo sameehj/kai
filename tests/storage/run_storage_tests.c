@@ -2533,6 +2533,22 @@ static void test_capture_grants(void) {
     CHECK(kai_cli_grant_remove("capture", "claude", "SAFARI") == 0, "Remove takes it away");
     CHECK(!kai_cli_grant_allows("capture", "claude", "Safari", NULL, NULL, now), "...and it no longer applies");
     CHECK(kai_cli_grant_remove("capture", "claude", "Safari") == -1, "removing it again: nothing to remove");
+    CHECK(kai_capture_app_is_terminal("Terminal") && kai_capture_app_is_terminal("iTerm2") &&
+          kai_capture_app_is_terminal("Warp") && kai_capture_app_is_terminal("Ghostty") &&
+          kai_capture_app_is_terminal("System Events") && !kai_capture_app_is_terminal("Safari"),
+          "terminals and System Events are terminal-class; Safari isn't");
+    CHECK(kai_cli_grant_add(1, "capture", "claude", "Terminal", NULL, now + 3600, NULL, NULL, 0) == 0 &&
+          kai_cli_grant_until("capture", "claude", "terminal", now) == now + 3600, "an allow's end is read back");
+    const char *cmd1 = "osascript -e 'tell application \"Terminal\" to do script \"make\"'";
+    CHECK(kai_cli_grant_add(1, "exact", "claude", "osascript -e 'tell application \"Terminal\" to do script \"make\"'",
+                            "terminal_control", now + 900, NULL, NULL, 0) == 0, "an exact-command allow for 15 minutes");
+    CHECK(kai_cli_command_granted("claude", "terminal_control", cmd1, KAI_TERMINAL_ALLOW_MAX, now), "...covers that command");
+    CHECK(!kai_cli_command_granted("claude", "terminal_control", "osascript -e 'tell application \"Terminal\" to do script \"rm\"'",
+                                   KAI_TERMINAL_ALLOW_MAX, now), "...not another one");
+    CHECK(!kai_cli_command_granted("claude", "screen_app_control", cmd1, KAI_TERMINAL_ALLOW_MAX, now), "...nor another rule");
+    CHECK(kai_cli_grant_add(1, "exact", "codex", "osascript *", "terminal_control", now + 3600, NULL, NULL, 0) == 0 &&
+          !kai_cli_command_granted("codex", "terminal_control", cmd1, KAI_TERMINAL_ALLOW_MAX, now),
+          "an exact-command allow longer than 15 minutes is ignored for Terminal");
     char app[64], what[96];
     CHECK(kai_capture_match("osascript -e 'tell application \"Google Chrome\" to activate'", what, sizeof what, app, sizeof app)
           && !strcmp(app, "Google Chrome") && !strcmp(what, "control Google Chrome"), "the told app is named as written");

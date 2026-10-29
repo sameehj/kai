@@ -228,8 +228,26 @@ has "...nor screencapture" "$(cap claude "screencapture -x /tmp/s.png")" "deny"
 has "...nor another agent" "$(cap codex "osascript -e 'tell application \\\"Safari\\\" to activate'")" "deny"
 ac --app screencapture --agent claude --for 15m >/dev/null
 [ -z "$(cap claude "screencapture -x /tmp/s.png")" ] && pass "allow-capture --app screencapture: the screenshot goes through" || fail "screencapture still stopped"
-ac --app Terminal --agent claude --for 15m >/dev/null
-[ -z "$(cap claude "osascript -e 'tell application \\\"Terminal\\\" to do script \\\"ls\\\"'")" ] && pass "allow-capture --app Terminal covers driving Terminal" || fail "Terminal still stopped"
+# terminals and System Events run anything outside Kai's checks: owner
+# authentication, at most 15 minutes
+term="osascript -e 'tell application \\\"Terminal\\\" to do script \\\"ls\\\"'"
+o=$(ac --app Terminal --agent claude --for 1h); [ $? = 2 ] && has "Terminal: at most 15 minutes" "$o" "at most 15 minutes" || fail "Terminal 1h: $o"
+o=$(ac --app Terminal --agent claude --for 15m </dev/null); [ $? = 5 ] && has "Terminal: no terminal to ask in, nothing allowed" "$o" "owner authentication" || fail "Terminal without auth: $o"
+o=$(KAI_TEST_OWNER_AUTH=fail ac --app iTerm2 --agent claude); [ $? = 5 ] && pass "iTerm2: failed authentication, nothing allowed" || fail "iTerm2 failed auth: $o"
+has "...so Terminal is still stopped" "$(cap claude "$term")" "wants to control Terminal (commands it runs there aren't checked by Kai)"
+o=$(KAI_TEST_OWNER_AUTH=ok ac --app Terminal --agent claude)
+has "Terminal with owner authentication: allowed, and says what it means" "$o" "control Terminal (commands it runs there aren't checked by Kai)"
+[ -z "$(cap claude "$term")" ] && pass "allow-capture --app Terminal covers driving Terminal" || fail "Terminal still stopped"
+o=$(ac --app 'System Events' --agent codex </dev/null); [ $? = 5 ] && pass "System Events needs owner authentication too" || fail "System Events: $o"
+python3 -I - "$CH/.kai/agent-rules.json" <<'PY'
+import json, sys, time
+p = sys.argv[1]; a = json.load(open(p))
+a.append({"kind": "allow", "op": "capture", "agent": "cursor", "target": "terminal", "to": "", "dev": 0, "ino": 0,
+          "until": time.time() + 3600, "created": time.time()})
+json.dump(a, open(p, "w"))
+PY
+o=$(printf '{"hook_event_name":"beforeShellExecution","command":"osascript -e '"'"'tell application \\"Terminal\\" to activate'"'"'","workspace_roots":["/tmp"]}' | KAI_HOME="$CH/.kai" KAI_NO_APP=1 "$KAI" hook cursor)
+has "a Terminal allow made longer than 15 minutes by hand is ignored" "$o" '"permission":"deny"'
 has "kai rules lists them as screen and app control" "$(KAI_HOME="$CH/.kai" KAI_NO_APP=1 "$KAI" rules)" "screen and app control: safari"
 o=$(ac --app Safari --agent claude --for 2d); [ $? = 2 ] && pass "allow-capture is capped at 1 day" || fail "allow-capture 2d: $o"
 if [ -d /Applications/Kai.app/Contents/Library/SystemExtensions ]; then

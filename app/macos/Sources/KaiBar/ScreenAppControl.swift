@@ -64,8 +64,13 @@ struct ScreenAppControlSection: View {
             }
             ForEach(asked, id: \.app) { a in
                 row(a.app, "\(a.count) attempt\(a.count == 1 ? "" : "s")\(a.last.map { " · " + ago($0) } ?? "")") {
+                    // Terminals and System Events run anything outside Kai's
+                    // checks: 15 minutes at most, owner authentication every time.
+                    let terminal = kai_capture_app_is_terminal(a.app) != 0
                     Menu {
-                        ForEach(Self.durations, id: \.0) { d in Button("Allow \(d.0)") { allow(a.app, for: d.1) } }
+                        ForEach(terminal ? [("15 minutes (Touch ID)", 900.0)] : Self.durations, id: \.0) { d in
+                            Button("Allow \(d.0)") { allow(a.app, for: d.1, authenticate: terminal) }
+                        }
                     } label: { Text("Allow ▾").font(.system(size: 13, weight: .medium)) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                     .padding(.horizontal, 12).frame(minHeight: 32)
@@ -76,7 +81,16 @@ struct ScreenAppControlSection: View {
         .onAppear { allowed = CaptureGrant.load(agent: agent) }
     }
 
-    private func allow(_ app: String, for secs: TimeInterval) {
+    private func allow(_ app: String, for secs: TimeInterval, authenticate: Bool) {
+        guard authenticate else { grant(app, for: secs); return }
+        Task {
+            let ok = await OwnerAuth.shared.confirm("allow \(title) to control \(app) for 15 minutes. Commands it runs "
+                                                    + "there aren't checked by Kai", everyTime: true)
+            if ok { await MainActor.run { grant(app, for: min(secs, TimeInterval(KAI_TERMINAL_ALLOW_MAX))) } }
+        }
+    }
+
+    private func grant(_ app: String, for secs: TimeInterval) {
         let until = Int64(Date().timeIntervalSince1970 + secs)
         if kai_cli_grant_add(1, "capture", agent, app, nil, until, nil, nil, 0) == 0 {
             kai_audit("app", "allow-capture", "note", "screen_app_control",

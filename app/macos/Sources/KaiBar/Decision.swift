@@ -102,12 +102,12 @@ struct DecisionSheet: View {
             ApprovalCard(req: req, manager: grants)
         } else if event.decision == "redact" || event.decision == "replace" {
             Menu("Not a secret") {
-                if event.canExemptCommand { Button("Allow this exact command") { model.exempt(event) } }
+                if event.canExemptCommand { Button(event.exemptLabel) { model.exempt(event) } }
                 Button("Report a false positive…") { Task { _ = await model.report(event) } }
             }
             .menuStyle(.borderlessButton).fixedSize()
         } else if event.isBlock && event.canExemptCommand {
-            Button("Allow this exact command") { model.exempt(event) }.buttonStyle(GhostButtonStyle())
+            Button(event.exemptLabel) { model.exempt(event) }.buttonStyle(GhostButtonStyle())
         }
     }
 

@@ -26,6 +26,7 @@
 #include "cJSON.h"
 
 #include <ctype.h>
+#include <fnmatch.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,6 +35,12 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#include <dlfcn.h>
+#include <pwd.h>
+#include <readpassphrase.h>
+#endif
 
 #define LIMIT_LINE "Preview 1 can't stop a program with your permissions from editing Kai's rules; " \
                    "the app release adds a protected writer."
@@ -142,7 +149,7 @@ int kai_cli_grant_add(int allow, const char *op, const char *agent, const char *
         }
     } else {
         kai_strlcpy(t, target, sizeof t);
-        if (strcmp(op, "mcp") != 0) lower(t);
+        if (strcmp(op, "mcp") != 0 && strcmp(op, "exact") != 0) lower(t);   /* exact: a command glob, as written */
     }
     char tohost[256] = "";
     if (to) { kai_strlcpy(tohost, to, sizeof tohost); if (!strcmp(op, "upload")) lower(tohost); }
@@ -268,6 +275,45 @@ int kai_cli_grant_allows(const char *op, const char *agent, const char *target, 
                 (long long)st.st_ino != (long long)jnum(r, "ino")) continue;
         }
         ok = 1; break;
+    }
+    cJSON_Delete(a);
+    return ok;
+}
+
+/* The end of this agent's live allow for op + target: the latest "until",
+ * -1 for one that never ends, 0 for none. */
+long long kai_cli_grant_until(const char *op, const char *agent, const char *target, long long now) {
+    if (!op || !agent || !target) return 0;
+    char t[256];
+    kai_strlcpy(t, target, sizeof t);
+    lower(t);
+    cJSON *a = load_rules();
+    long long best = 0;
+    cJSON *r;
+    cJSON_ArrayForEach(r, a) {
+        if (strcmp(jstr(r, "kind"), "allow") || strcmp(jstr(r, "op"), op) || !live(r, now)) continue;
+        if (strcmp(jstr(r, "agent"), agent) || strcmp(jstr(r, "target"), t)) continue;
+        long long u = (long long)jnum(r, "until");
+        if (u <= 0) { best = -1; break; }
+        if (u > best) best = u;
+    }
+    cJSON_Delete(a);
+    return best;
+}
+
+/* An exact-command allow (op "exact": target = a glob over the command, to =
+ * the rule it lifts) that ends within max_secs (0 = any end). */
+int kai_cli_command_granted(const char *agent, const char *rule, const char *cmd, long long max_secs, long long now) {
+    if (!agent || !rule || !cmd) return 0;
+    cJSON *a = load_rules();
+    int ok = 0;
+    cJSON *r;
+    cJSON_ArrayForEach(r, a) {
+        if (strcmp(jstr(r, "kind"), "allow") || strcmp(jstr(r, "op"), "exact") || !live(r, now)) continue;
+        if (strcmp(jstr(r, "agent"), agent) || strcmp(jstr(r, "to"), rule)) continue;
+        long long u = (long long)jnum(r, "until");
+        if (max_secs > 0 && (u <= 0 || u - now > max_secs)) continue;   /* longer than allowed: ignored */
+        if (fnmatch(jstr(r, "target"), cmd, 0) == 0) { ok = 1; break; }
     }
     cJSON_Delete(a);
     return ok;
@@ -440,6 +486,20 @@ static int quoted_after(const char *text, const char *mark, char *out, size_t n)
         out[l] = '\0';
         return 1;
     }
+    return 0;
+}
+
+/* Apps that run whatever they're told outside Kai's checks: terminals and
+ * System Events. Their allows need owner authentication and last at most
+ * KAI_TERMINAL_ALLOW_MAX seconds. */
+int kai_capture_app_is_terminal(const char *app) {
+    static const char *const T[] = {
+        "terminal", "com.apple.terminal", "iterm", "iterm2", "com.googlecode.iterm2", "warp", "dev.warp.warp-stable",
+        "ghostty", "com.mitchellh.ghostty", "system events", "com.apple.systemevents", "kitty", "net.kovidgoyal.kitty",
+        "alacritty", "wezterm", "hyper", "tabby",
+    };
+    if (!app) return 0;
+    for (size_t i = 0; i < sizeof T / sizeof T[0]; i++) if (!strcasecmp(app, T[i])) return 1;
     return 0;
 }
 
@@ -751,6 +811,49 @@ int kai_cmd_allow_upload(int argc, char **argv) {
     return finish("allow-upload", what, until);
 }
 
+/* Owner authentication in the terminal (Preview 1, no app): the login
+ * password, read from the terminal without echo and checked by Open
+ * Directory. No terminal (an agent's shell) = refused. 1 ok. */
+static int owner_auth(const char *why) {
+#ifdef KAI_TEST_DIRECT_POLICY
+    const char *t = getenv("KAI_TEST_OWNER_AUTH");   /* test-only binary: ok | fail */
+    if (t) return !strcmp(t, "ok");
+#endif
+#ifdef __APPLE__
+    struct passwd *pw = getpwuid(getuid());
+    if (!pw) return 0;
+    char prompt[300], pass[512];
+    snprintf(prompt, sizeof prompt, "%s\nYour login password: ", why);
+    if (!readpassphrase(prompt, pass, sizeof pass, RPP_REQUIRE_TTY)) return 0;
+    int ok = 0;
+    void *h = dlopen("/System/Library/Frameworks/OpenDirectory.framework/OpenDirectory", RTLD_LAZY);
+    typedef CFTypeRef (*node_fn)(CFAllocatorRef, CFTypeRef, uint32_t, CFErrorRef *);
+    typedef CFTypeRef (*rec_fn)(CFTypeRef, CFStringRef, CFStringRef, CFTypeRef, CFErrorRef *);
+    typedef Boolean (*ver_fn)(CFTypeRef, CFStringRef, CFErrorRef *);
+    node_fn mk = h ? (node_fn)dlsym(h, "ODNodeCreateWithNodeType") : NULL;
+    rec_fn cp = h ? (rec_fn)dlsym(h, "ODNodeCopyRecord") : NULL;
+    ver_fn vf = h ? (ver_fn)dlsym(h, "ODRecordVerifyPassword") : NULL;
+    CFStringRef *users = h ? (CFStringRef *)dlsym(h, "kODRecordTypeUsers") : NULL;
+    CFTypeRef *session = h ? (CFTypeRef *)dlsym(h, "kODSessionDefault") : NULL;
+    if (mk && cp && vf && users) {
+        CFTypeRef node = mk(kCFAllocatorDefault, session ? *session : NULL, 0x2201 /* kODNodeTypeAuthentication */, NULL);
+        CFStringRef name = CFStringCreateWithCString(NULL, pw->pw_name, kCFStringEncodingUTF8);
+        CFStringRef pwd = CFStringCreateWithCString(NULL, pass, kCFStringEncodingUTF8);
+        CFTypeRef rec = node && name ? cp(node, *users, name, NULL, NULL) : NULL;
+        ok = rec && pwd && vf(rec, pwd, NULL);
+        if (rec) CFRelease(rec);
+        if (pwd) CFRelease(pwd);
+        if (name) CFRelease(name);
+        if (node) CFRelease(node);
+    }
+    memset(pass, 0, sizeof pass);
+    return ok;
+#else
+    (void)why;
+    return 0;
+#endif
+}
+
 int kai_cmd_allow_capture(int argc, char **argv) {
     /* --app <name> is this command's own; the rest are the usual options */
     const char *app = NULL;
@@ -771,18 +874,34 @@ int kai_cmd_allow_capture(int argc, char **argv) {
         return 2;
     }
     if (!given) a.secs = 900;
+    int terminal = kai_capture_app_is_terminal(app);
+    if (terminal && a.secs > KAI_TERMINAL_ALLOW_MAX) {
+        fprintf(stderr, "kai allow-capture: %s is allowed for at most 15 minutes: an agent controlling it can run "
+                        "anything outside Kai's checks.\n", app);
+        return 2;
+    }
     if (a.secs > 86400) { fprintf(stderr, "kai allow-capture: --for is at most 1d for screen and app control.\n"); return 2; }
     const char *no = agent_supports("capture", 0, a.agent);
     if (no) { fprintf(stderr, "kai allow-capture: %s.\n", no); return 2; }
     if ((rc = gatekeep("allow-capture"))) return rc;   /* one writer: with the app, the app keeps these */
+    if (terminal) {
+        char why[200];
+        snprintf(why, sizeof why, "Allow %s to control %s for 15 minutes (commands it runs there aren't checked by Kai).",
+                 agent_title(a.agent), app);
+        if (!owner_auth(why)) {
+            fprintf(stderr, "kai allow-capture: owner authentication failed or there was no terminal to ask in. "
+                            "Nothing was allowed.\n");
+            return 5;
+        }
+    }
     long long until = (long long)time(NULL) + a.secs;
     if (kai_cli_grant_add(1, "capture", a.agent, app, NULL, until, NULL, NULL, 0) != 0) {
         fprintf(stderr, "kai allow-capture: couldn't save the grant\n"); return 1;
     }
     char what[400];
-    snprintf(what, sizeof what, "Allowed %s to use or control %s (screen and app control), only through the commands "
+    snprintf(what, sizeof what, "Allowed %s to use or control %s%s (screen and app control), only through the commands "
              "and tools Kai checks; other apps still need their own. macOS still asks for its own permission",
-             agent_title(a.agent), app);
+             agent_title(a.agent), app, terminal ? " (commands it runs there aren't checked by Kai)" : "");
     return finish("allow-capture", what, until);
 }
 
