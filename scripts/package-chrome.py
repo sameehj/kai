@@ -33,7 +33,8 @@ os.makedirs(out_dir, exist_ok=True)
 out = os.path.join(out_dir, f"kai-chrome-{manifest['version']}.zip")
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
     z.writestr("manifest.json", json.dumps(manifest, indent=2) + "\n")
-    for dirpath, _, files in os.walk(src):
+    for dirpath, dirs, files in os.walk(src):
+        dirs[:] = [d for d in dirs if d != "store"]   # the store listing's images, not the extension
         for f in sorted(files):
             if f in skip:
                 continue

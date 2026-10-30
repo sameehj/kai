@@ -61,11 +61,11 @@ holds every message for the user's decision.
 
 **Privacy policy URL:** https://sameehj.github.io/kai/privacy/
 
-**Screenshots (1280×800):** the popup ("Protecting AI chats"); a held message with Redact and send / Send anyway / Edit; the red "!" when Kai isn't running.
+**Screenshots (1280×800) and small promo tile (440×280):** in [`integrations/browser/store/`](../integrations/browser/store/): a held message with Redact and send / Send anyway / Edit; the popup ("Checking AI chats when you open one"); the red "!" when Kai isn't running; the promo tile.
 
 ## 4. Before submitting, check by hand
 
-- [ ] Load the zip's contents unpacked in a clean Chrome profile with Kai running: the popup says "Protecting AI chats", pasting a fake key (`ghp_` + 36 letters) is cleaned.
+- [ ] Load the zip's contents unpacked in a clean Chrome profile with Kai running: the popup says "Checking AI chats when you open one", pasting a fake key (`ghp_` + 36 letters) is cleaned.
 - [ ] Quit or move Kai: the icon turns to a red "!" on the next message, the message is held, and nothing is sent silently.
 - [ ] Reinstall Kai (or move it back) and send again: the "!" clears without reloading the extension.
 - [ ] Each of the nine sites: the paste and send paths still work (chat editors change; see `content.js`).
