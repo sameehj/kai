@@ -3,11 +3,13 @@
 <div align="center">
   <img src="assets/kai-logo.png" alt="Kai shield logo" width="132" />
 
-  # Kai Preview
+  # Kai
 
-  ### Give AI more work, not more access.
+  ### Zero Trust. Zero Wrappers. Zero Friction.
 
-  **macOS** · **Claude Code · Codex · Cursor** · **Chrome AI chats** · **Open source**
+  Give AI more work, not more access.
+
+  **Preview 1 · macOS only** · **Claude Code · Codex · Cursor** · **Chrome AI chats** · **Open source**
 </div>
 
 ## Three steps
@@ -18,9 +20,9 @@
 
 ## The Preview 1 security contract
 
-> **Kai Preview checks supported actions inside Claude Code, Codex and Cursor before they run.** It is an extra safety layer, not isolation or OS-level enforcement: hooks run with your permissions, cover only the actions each agent reports to them, and a program the agent runs can get around them. Codex runs hooks only after you trust them.
+> **The current macOS Preview 1 package checks supported actions inside Claude Code, Codex and Cursor before they run.** It does not include OS-level Files protection. Its file checks run through agent hooks, with your permissions, and cover only actions each agent reports to them; a program the agent runs can get around them. Codex runs hooks only after you trust them.
 
-Kai Preview checks inside your agents. OS-level protection for files and internet comes with the Kai app in an upcoming release.
+Kai's macOS app already has an OS-level **Internet wall** (Network Extension) that has blocked agent connections in live development tests. The current Preview 1 `.pkg` installs the CLI and hooks, **not the app or its Internet wall**. The OS-level **Files wall** (Endpoint Security) is also in private testing and is not in this package. See [what the app has demonstrated](docs/OVERVIEW.md#-macos-app-and-system-protection) and [the coverage matrix](docs/COVERAGE.md).
 
 ## Install
 
@@ -82,7 +84,7 @@ The Kai extension checks what you paste and send on AI chat sites (ChatGPT, Clau
 - Hooks run with your permissions. A program an agent writes and runs, or a detached process, can get around them.
 - Kai checks only what an agent reports to its hooks: not tool results, not the agent's other model traffic.
 - Kai's rules and policy are files a program with your permissions can edit. Kai notices some policy changes made outside Kai (`kai doctor`), never all, and prevents none.
-- No OS-level enforcement in this preview.
+- This preview package does not install either OS wall. OS-level Internet enforcement works in private macOS app builds; OS-level Files enforcement is also being tested privately. The package's protected-file checks are hook-level checks, not a filesystem boundary.
 - Screen and app control: Kai stops the commands and tools it recognizes (`screencapture`, `ffmpeg`/`sox` recording, `osascript` telling any app, computer-use tools) and names the app; you allow them per app. With the Kai app, those allows are made in the app (each agent's page), not with `kai allow-capture`. A program the agent writes can call the capture APIs directly. Kai can't change macOS privacy prompts: macOS grants these permissions per app, so every agent run in Terminal, iTerm or Cursor inherits what that app holds (`kai doctor` lists them where it can read them).
 
 ## Design references
