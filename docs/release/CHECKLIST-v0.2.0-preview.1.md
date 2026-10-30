@@ -12,7 +12,7 @@ Everything here waits on Sameeh. The code side is on `fix/ux-review-phase-a`; `m
 3. **Chrome store ID**: upload `build/kai-chrome-0.2.0.zip` (`make chrome-zip`) as an unlisted item and note its 32-letter ID ([CHROME_STORE.md](../CHROME_STORE.md)).
 4. **Merge to master** through a PR from `fix/ux-review-phase-a` (master is never pushed to directly).
 5. **Tag** the merge commit on a clean tree: `git tag v0.2.0-preview.1 && git push origin v0.2.0-preview.1`.
-6. **Build** (it refuses without all four values, a clean tree and the tag):
+6. **Build** (it refuses without all four values, a clean tree and the tag, and unless the tag is `origin/master` HEAD with every CI check passed on that commit):
    ```sh
    KAI_DEVID_APP="Developer ID Application: <Name> (KD446VDTM2)" \
    KAI_DEVID_INSTALLER="Developer ID Installer: <Name> (KD446VDTM2)" \

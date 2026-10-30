@@ -30,6 +30,18 @@ if [ "$MODE" != "--test" ]; then
     tag="v$VERSION"
     [ "$(git describe --exact-match --tags 2>/dev/null || true)" = "$tag" ] || {
         echo "HEAD must be tagged $tag"; exit 2; }
+    # The tag must be master as published, and CI must have passed on it.
+    git fetch -q origin master --tags || { echo "can't fetch origin to check the tag"; exit 2; }
+    head=$(git rev-parse HEAD); tagc=$(git rev-parse "$tag^{commit}"); masterc=$(git rev-parse origin/master)
+    [ "$tagc" = "$head" ] && [ "$tagc" = "$masterc" ] || {
+        echo "$tag ($tagc) must be origin/master HEAD ($masterc) and checked out"; exit 2; }
+    ci=$(gh api "repos/{owner}/{repo}/commits/$tagc/check-runs?per_page=100" \
+           --jq '[.check_runs[] | select(.app.slug=="github-actions")] | "\(length) \([.[] | select(.conclusion!="success" and .conclusion!="skipped")] | length)"' 2>/dev/null) \
+        || { echo "can't read CI results for $tagc (gh api)"; exit 2; }
+    set -- $ci
+    [ "${1:-0}" -gt 0 ] && [ "${2:-1}" -eq 0 ] || {
+        echo "CI hasn't passed on $tagc: $ci (check runs, not-passed). Wait for green CI on master."; exit 2; }
+    echo "build guard: $tag = origin/master = $tagc, CI passed ($1 check runs)"
 fi
 
 # The store copy of the browser extension talks to kai only if kai's native

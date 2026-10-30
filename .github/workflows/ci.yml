@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
+# Kai is macOS only (macOS 13 or later; Linux and Windows aren't supported),
+# so every job runs on macOS and every job is required.
 name: ci
 on:
   push:
@@ -7,24 +9,14 @@ on:
 
 jobs:
   build-test:
-    name: build + test (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    name: build + test (macos-latest)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: libcurl headers (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
       - name: build
         run: make
       - name: unit + hook tests
         run: make test
-      - name: sanitizer build (Linux only)
-        if: runner.os == 'Linux'
-        run: make asan
 
   macos-app:
     name: macOS app + network extension build
@@ -36,10 +28,9 @@ jobs:
 
   self-scan:
     name: kai scans its own tree for secrets
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
       - run: make
       - name: fail if any tracked file contains a secret
         run: |
