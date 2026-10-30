@@ -22,6 +22,8 @@ CFLAGS  += -I$(SDK)/usr/include
 LDLIBS   = $(SDK)/usr/lib/libcurl.tbd -lpthread -framework Security -framework CoreFoundation
 else
 LDLIBS   = -lcurl -lpthread -lm
+# glibc hides timegm, memmem, flock, futimes under _POSIX_C_SOURCE alone
+CFLAGS  += -D_GNU_SOURCE
 endif
 
 CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
