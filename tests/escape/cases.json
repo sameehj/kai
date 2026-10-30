@@ -721,8 +721,8 @@
           }
         }
       ],
-      "hooks": "gets through",
-      "closed_by": "Network wall when the MCP server is the agent's child (verified for child processes); nothing for remote MCP servers"
+      "hooks": "stopped",
+      "closed_by": "Hooks (Preview 1): an MCP tool whose server has no rule is stopped until the user allows it (kai allow-mcp, or a card in the app); once allowed, what it sends isn't checked beyond secrets. Network wall when the MCP server is the agent's child"
     },
     {
       "id": "readme-injection",

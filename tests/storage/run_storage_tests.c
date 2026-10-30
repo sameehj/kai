@@ -22,6 +22,13 @@
 #include <dirent.h>
 #include <stdint.h>
 
+#ifndef FREAD         /* BSD/macOS kernel file flags; glibc has none (Linux builds) */
+#define FREAD 0x0001
+#endif
+#ifndef FWRITE
+#define FWRITE 0x0002
+#endif
+
 static int failures;
 #define CHECK(cond, msg) do { \
     if (cond) { printf("  ok   %s\n", msg); } \
@@ -2311,6 +2318,13 @@ static void test_channels(void) {
  * stated limit). Malformed, unrecognized and missing are separate states. */
 static void test_policy_integrity(void) {
     printf("policy integrity (spec v2.1 A.6b)\n");
+    /* These drive tests/cli/kai-test, a dev build that honours KAI_HOME (built
+     * first by `make test`). Without it every call fails with "not found" and
+     * the group reads as twelve integrity failures (CI, Oct 2026). */
+    if (system("tests/cli/kai-test version 2>/dev/null | grep -q 'dev build: honours KAI_HOME'") != 0) {
+        CHECK(0, "tests/cli/kai-test exists and is a dev build that honours KAI_HOME (run `make test`, which builds it)");
+        return;
+    }
     char home[] = "/tmp/kai-integXXXXXX";
     if (!mkdtemp(home)) { CHECK(0, "mkdtemp"); return; }
     char cmd[1600], pol[700], fp[700], out[700], err[256], first[64];
