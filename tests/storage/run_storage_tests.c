@@ -4,6 +4,7 @@
  * Its own file so the suite doesn't read tests/run_tests.c (which carries
  * secret fixtures the storage wall itself now guards).
  */
+#include "cJSON.h"
 #include "kai.h"
 #include "../../src/internal.h"
 
@@ -29,11 +30,19 @@
 #define FWRITE 0x0002
 #endif
 
-static int failures;
+static int failures, skipped;
 #define CHECK(cond, msg) do { \
     if (cond) { printf("  ok   %s\n", msg); } \
     else { printf("  FAIL %s\n", msg); failures++; } \
 } while (0)
+/* A check of something that exists only on macOS (launchd, the Endpoint
+ * Security session registry's process start times). Elsewhere it is reported
+ * as SKIP with the reason, never silently passed. */
+#ifdef __APPLE__
+#define MACOS_ONLY(cond, msg, why) CHECK(cond, msg)
+#else
+#define MACOS_ONLY(cond, msg, why) do { printf("  SKIP %s (macOS only: %s)\n", msg, why); skipped++; } while (0)
+#endif
 
 /* allow=1 means "may open"; deny=0. */
 static int may(const kai_policy *p, int agent, const char *path) {
@@ -846,13 +855,14 @@ static void test_s0_hook_errors(void) {
     FILE *f = fopen(polp, "w");
     if (f) { fputs("storage block\n", f); fclose(f); }
     chmod(polp, 0);   /* simulate the wall denying Kai's own policy read */
+    if (geteuid() == 0) { unlink(polp); mkdir(polp, 0700); }   /* root reads a mode-0 file; nobody reads a folder as a policy */
 
     char outp[650]; snprintf(outp, sizeof outp, "%s/out", dir);
     char cmd[1600];
     /* UserPromptSubmit: warn, not block. */
     snprintf(cmd, sizeof cmd,
              "printf '%s' | KAI_HOME='%s' KAI_POLICY='%s' ./kai hook claude > '%s' 2>/dev/null",
-             "{\\\"hook_event_name\\\":\\\"UserPromptSubmit\\\",\\\"prompt\\\":\\\"hi\\\",\\\"cwd\\\":\\\"/tmp\\\"}",
+             "{\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"hi\",\"cwd\":\"/tmp\"}",
              dir, polp, outp);
     (void)system(cmd);
     CHECK(!file_contains(outp, "\"decision\":\"block\""),
@@ -863,8 +873,8 @@ static void test_s0_hook_errors(void) {
     /* PreToolUse: fail closed (deny) with an actionable message. */
     snprintf(cmd, sizeof cmd,
              "printf '%s' | KAI_HOME='%s' KAI_POLICY='%s' ./kai hook claude > '%s' 2>/dev/null",
-             "{\\\"hook_event_name\\\":\\\"PreToolUse\\\",\\\"tool_name\\\":\\\"Bash\\\","
-             "\\\"tool_input\\\":{\\\"command\\\":\\\"ls\\\"},\\\"cwd\\\":\\\"/tmp\\\"}",
+             "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\","
+             "\"tool_input\":{\"command\":\"ls\"},\"cwd\":\"/tmp\"}",
              dir, polp, outp);
     (void)system(cmd);
     CHECK(file_contains(outp, "\"permissionDecision\":\"deny\""),
@@ -1055,7 +1065,8 @@ static void test_session_live(void) {
     s.root_pid = (int)getpid(); s.started_utc = (long long)time(NULL);
     CHECK(kai_session_live(&s) == 1, "root running, started before the session: live");
     s.started_utc = 1;   /* a session from 1970: this process started after it -> reused pid */
-    CHECK(kai_session_live(&s) == 0, "root pid now belongs to a newer process: not live");
+    MACOS_ONLY(kai_session_live(&s) == 0, "root pid now belongs to a newer process: not live",
+               "sessions come from the Endpoint Security wall; the start time from proc_pidinfo");
     s.started_utc = (long long)time(NULL); s.ended_utc = s.started_utc;
     CHECK(kai_session_live(&s) == 0, "ended: not live");
     pid_t c = fork();
@@ -1626,9 +1637,9 @@ static void test_agent_own_state(void) {
     FILE *f = fopen(polp, "w");
     if (f) { fprintf(f, "protect *%s\n", KEY); fclose(f); }
     snprintf(input, sizeof input,
-             "{\\\"hook_event_name\\\":\\\"PreToolUse\\\",\\\"tool_name\\\":\\\"Read\\\","
-             "\\\"tool_input\\\":{\\\"file_path\\\":\\\"%s/.claude/daemon/control%s\\\"},"
-             "\\\"cwd\\\":\\\"/tmp\\\"}", dir, KEY);
+             "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\","
+             "\"tool_input\":{\"file_path\":\"%s/.claude/daemon/control%s\"},"
+             "\"cwd\":\"/tmp\"}", dir, KEY);
     snprintf(shcmd, sizeof shcmd,
              "printf '%s' | HOME='%s' KAI_HOME='%s/kh' KAI_POLICY='%s' ./kai hook claude > '%s' 2>/dev/null",
              input, dir, dir, polp, outp);
@@ -1799,9 +1810,9 @@ static void test_one_session_identity(void) {
     f = fopen(polp, "w");
     if (f) { fprintf(f, "protect *%s\n", KEY); fclose(f); }
     snprintf(input, sizeof input,
-             "{\\\"hook_event_name\\\":\\\"PreToolUse\\\",\\\"tool_name\\\":\\\"Bash\\\","
-             "\\\"session_id\\\":\\\"conv-not-kai\\\","
-             "\\\"tool_input\\\":{\\\"command\\\":\\\"cat %s/a%s\\\"},\\\"cwd\\\":\\\"/tmp\\\"}", dir, KEY);
+             "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\","
+             "\"session_id\":\"conv-not-kai\","
+             "\"tool_input\":{\"command\":\"cat %s/a%s\"},\"cwd\":\"/tmp\"}", dir, KEY);
     snprintf(cmd, sizeof cmd, "printf '%s' | KAI_HOME='%s' KAI_POLICY='%s' ./kai hook claude > '%s' 2>/dev/null",
              input, home, polp, outp);
 
@@ -2098,8 +2109,13 @@ static void test_audit_rotation_chain(void) {
     CHECK(system(cmd) == 0 && file_contains(out, "continues from audit.log.1"),
           "verify: the chain continues across rotation");
     /* tamper with the old file: continuity breaks */
-    snprintf(cmd, sizeof cmd, "sed -i '' 's/up.example.net/up.example.org/' '%s'", old);
-    (void)system(cmd);
+    {   /* edit in place (portable; `sed -i ''` is BSD-only and silently did nothing on GNU) */
+        size_t n = 0; char *t = kai_read_file(old, 1 << 20, &n);
+        char *at = t ? strstr(t, "up.example.net") : NULL;
+        CHECK(at != NULL, "the rotated log holds the record to edit");
+        if (at) { memcpy(at + 11, "org", 3); FILE *wf = fopen(old, "wb"); if (wf) { fwrite(t, 1, n, wf); fclose(wf); } }
+        free(t);
+    }
     snprintf(cmd, sizeof cmd, "KAI_HOME='%s' ./kai log verify > '%s' 2>&1", dir, out);
     CHECK(system(cmd) != 0, "verify: an edited audit.log.1 is detected");
     unlink(old);
@@ -2262,6 +2278,27 @@ static void test_agent_rules(void) {
     unlink(env);
     w = fopen(env, "w"); if (w) { fputs("A=1\n", w); fclose(w); }
     CHECK(!kai_cli_grant_allows("read", "claude", env, NULL, "/", now), "the file replaced by a new one: grant doesn't apply");
+    {   /* A new file on a reused inode number (ext4 does this at once; HFS+, exFAT
+         * and network volumes on macOS can): same device + inode, another birth
+         * time. Simulated by changing the recorded birth time. */
+        char g[700]; snprintf(g, sizeof g, "%s/g.txt", dir);
+        FILE *gw = fopen(g, "w"); if (gw) { fputs("g\n", gw); fclose(gw); }
+        CHECK(kai_cli_grant_add(1, "read", "claude", g, NULL, now + 3600, NULL, NULL, 0) == 0 &&
+              kai_cli_grant_allows("read", "claude", g, NULL, "/", now), "a read grant records the file's birth time and applies");
+        size_t n = 0; char *t = kai_read_file(rp, 1 << 20, &n);
+        cJSON *arr = t ? cJSON_Parse(t) : NULL; free(t);
+        int edited = 0; cJSON *r;
+        cJSON_ArrayForEach(r, arr) {
+            const char *tg = cJSON_GetStringValue(cJSON_GetObjectItem(r, "target"));
+            cJSON *bs = cJSON_GetObjectItem(r, "bsec");
+            if (tg && strstr(tg, "/g.txt") && bs) { cJSON_SetNumberValue(bs, bs->valuedouble - 1); edited = 1; }
+        }
+        char *o = arr ? cJSON_Print(arr) : NULL; cJSON_Delete(arr);
+        if (o) { FILE *rf = fopen(rp, "w"); if (rf) { fputs(o, rf); fclose(rf); } free(o); }
+        CHECK(edited && !kai_cli_grant_allows("read", "claude", g, NULL, "/", now),
+              "same device and inode but another birth time (a reused inode): grant doesn't apply");
+        unlink(g);
+    }
 
     CHECK(kai_cli_grant_add(1, "upload", "claude", env, "up.example.net", now + 3600, NULL, NULL, 0) == 0, "allow-upload");
     CHECK(kai_cli_grant_allows("upload", "claude", env, "UP.example.net", "/", now), "upload grant: that file to that host");
@@ -2716,8 +2753,8 @@ static void test_decision_rules(void) {
               && !kai_host_is_telemetry(NULL), "...and nothing else");
 
     char ident[200];
-    CHECK(kai_pid_code_identity(1, ident, sizeof ident) == 1 && strstr(ident, "(Apple)") != NULL,
-          "launchd's verified identity is Apple's");
+    MACOS_ONLY(kai_pid_code_identity(1, ident, sizeof ident) == 1 && strstr(ident, "(Apple)") != NULL,
+               "launchd's verified identity is Apple's", "pid 1 is launchd, code-signed by Apple");
     CHECK(kai_pid_code_identity(-1, ident, sizeof ident) == 0 && ident[0] == '\0',
           "no process: no identity");
 
@@ -3136,7 +3173,7 @@ int main(void) {
     test_mcp_service();
     test_ai_chats();
 
-    printf("%s (%d failure%s)\n", failures ? "FAILED" : "all passed",
-           failures, failures == 1 ? "" : "s");
+    printf("%s (%d failure%s%s)\n", failures ? "FAILED" : "all passed",
+           failures, failures == 1 ? "" : "s", skipped ? ", some macOS-only checks skipped" : "");
     return failures ? 1 : 0;
 }

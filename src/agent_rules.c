@@ -26,6 +26,7 @@
 #include "cJSON.h"
 
 #include <ctype.h>
+#include <fcntl.h>
 #include <fnmatch.h>
 #include <limits.h>
 #include <stdio.h>
@@ -108,6 +109,28 @@ static double jnum(const cJSON *o, const char *k) { return cJSON_GetNumberValue(
 /* Canonical path: relative to base (or the current directory), symlinks
  * resolved. For a path that doesn't exist yet (a write), the folder is
  * resolved and the name appended. 1 ok. */
+/* When this file was created: device + inode alone don't identify a file,
+ * since a freed inode number can come straight back for a new file (ext4 does
+ * at once; on macOS, HFS+, exFAT, FAT and network volumes can; APFS numbers
+ * rarely). macOS: st_birthtimespec. Linux: statx btime. Neither: ctime, which
+ * is stricter (an edit also ends the grant). */
+static void file_birth(const char *path, const struct stat *st, long long *sec, long long *nsec) {
+#if defined(__APPLE__)
+    (void)path;
+    *sec = (long long)st->st_birthtimespec.tv_sec; *nsec = (long long)st->st_birthtimespec.tv_nsec;
+#else
+#if defined(__linux__) && defined(STATX_BTIME)
+    struct statx sx;
+    if (statx(AT_FDCWD, path, 0, STATX_BTIME, &sx) == 0 && (sx.stx_mask & STATX_BTIME)) {
+        *sec = (long long)sx.stx_btime.tv_sec; *nsec = (long long)sx.stx_btime.tv_nsec; return;
+    }
+#else
+    (void)path;
+#endif
+    *sec = (long long)st->st_ctim.tv_sec; *nsec = (long long)st->st_ctim.tv_nsec;
+#endif
+}
+
 static int canonical(const char *path, const char *base, char *out, size_t n) {
     char joined[PATH_MAX * 2];
     if (!path || !*path) return 0;
@@ -140,12 +163,13 @@ int kai_cli_grant_add(int allow, const char *op, const char *agent, const char *
     int file = !strcmp(op, "read") || !strcmp(op, "write") || !strcmp(op, "upload");
     char t[PATH_MAX];
     struct stat st;
-    long long dev = 0, ino = 0;
+    long long dev = 0, ino = 0, bsec = 0, bnsec = 0;
     if (file) {
         if (!canonical(target, base, t, sizeof t)) { if (err) snprintf(err, errlen, "can't find %s", target); return -1; }
         if (strcmp(op, "write") != 0) {
             if (stat(t, &st) != 0) { if (err) snprintf(err, errlen, "%s doesn't exist", t); return -1; }
             dev = (long long)st.st_dev; ino = (long long)st.st_ino;
+            file_birth(t, &st, &bsec, &bnsec);
         }
     } else {
         kai_strlcpy(t, target, sizeof t);
@@ -170,6 +194,10 @@ int kai_cli_grant_add(int allow, const char *op, const char *agent, const char *
     cJSON_AddStringToObject(r, "to", tohost);
     cJSON_AddNumberToObject(r, "dev", (double)dev);
     cJSON_AddNumberToObject(r, "ino", (double)ino);
+    if (bsec || bnsec) {   /* seconds and nanoseconds apart: a double can't hold ns since 1970 exactly */
+        cJSON_AddNumberToObject(r, "bsec", (double)bsec);
+        cJSON_AddNumberToObject(r, "bnsec", (double)bnsec);
+    }
     cJSON_AddNumberToObject(r, "until", (double)until);
     cJSON_AddNumberToObject(r, "created", (double)time(NULL));
     cJSON_AddItemToArray(a, r);
@@ -273,6 +301,11 @@ int kai_cli_grant_allows(const char *op, const char *agent, const char *target, 
         if (file && strcmp(op, "write") != 0) {               /* the same file it was granted on */
             if (!have_st || (long long)st.st_dev != (long long)jnum(r, "dev") ||
                 (long long)st.st_ino != (long long)jnum(r, "ino")) continue;
+            if (cJSON_GetObjectItem(r, "bsec")) {               /* ...and born when it was: not a new file on a reused inode */
+                long long bs = 0, bn = 0;
+                file_birth(t, &st, &bs, &bn);
+                if (bs != (long long)jnum(r, "bsec") || bn != (long long)jnum(r, "bnsec")) continue;
+            }
         }
         ok = 1; break;
     }
