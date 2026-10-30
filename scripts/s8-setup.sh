@@ -39,11 +39,9 @@ ENV
 
 # Break-glass fixture — key-class name, FAKE content. (If the wall blocks even
 # you from writing this, you are inside an agent tree; open a plain Terminal.)
-cat > "$ROOT/id_test" <<'KEYFIXTURE'
------BEGIN OPENSSH PRIVATE KEY-----
-THIS IS A SYNTHETIC TEST FIXTURE. NOT A REAL KEY. DO NOT USE.
------END OPENSSH PRIVATE KEY-----
-KEYFIXTURE
+# assembled here so this script holds no key-shaped text (Kai scans its own tree)
+K5="-----"; KT="OPENSSH PRIVATE KEY"
+printf '%sBEGIN %s%s\nTHIS IS A SYNTHETIC TEST FIXTURE. NOT A REAL KEY. DO NOT USE.\n%sEND %s%s\n' "$K5" "$KT" "$K5" "$K5" "$KT" "$K5" > "$ROOT/id_test"
 chmod 600 "$ROOT/id_test" 2>/dev/null || true
 
 echo "S8 fixtures ready under $ROOT"

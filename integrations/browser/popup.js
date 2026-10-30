@@ -46,13 +46,13 @@ chrome.storage.local.get(["kaiToday", "kaiLast"], ({ kaiToday: t, kaiLast: last 
   $("lastText").append(b, last.action === "redacted" ? ": a secret was redacted before sending."
                                                     : ": a message with a secret was held before sending.");
   $("lastAgo").textContent = ago(last.ts);
-  if (last.reported) { $("notSecret").textContent = "Reported"; $("notSecret").disabled = true; }
+  if (last.reported) { $("notSecretBtn").textContent = "Reported"; $("notSecretBtn").disabled = true; }
 });
 
-$("notSecret").addEventListener("click", () => {
+$("notSecretBtn").addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "not_secret" }, (r) => {
-    $("notSecret").textContent = r && r.ok ? "Reported" : "Couldn't report";
-    $("notSecret").disabled = !!(r && r.ok);
+    $("notSecretBtn").textContent = r && r.ok ? "Reported" : "Couldn't report";
+    $("notSecretBtn").disabled = !!(r && r.ok);
     if (r && r.ok) $("lastAgo").textContent = "Thanks. Kai keeps checking it; use Send anyway when it's safe.";
   });
 });

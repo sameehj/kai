@@ -22,6 +22,8 @@ CFLAGS  += -I$(SDK)/usr/include
 LDLIBS   = $(SDK)/usr/lib/libcurl.tbd -lpthread -framework Security -framework CoreFoundation
 else
 LDLIBS   = -lcurl -lpthread -lm
+# glibc hides timegm, memmem, flock, futimes under _POSIX_C_SOURCE alone
+CFLAGS  += -D_GNU_SOURCE
 endif
 
 CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
@@ -64,7 +66,13 @@ asan: clean kai test
 # manage.c), so it links the app sources too, minus main.c (it has its own).
 STORAGE_TEST_SRC = $(CORE) $(filter-out src/main.c,$(APP))
 
-test: kai
+# The test-only binary: a dev build (honours KAI_HOME / KAI_POLICY) with the
+# policy seam. Built before every suite that runs it: the storage suite drives
+# it, and on a clean checkout (CI) it didn't exist yet when that suite ran.
+tests/cli/kai-test: $(CORE) $(APP) include/kai.h src/internal.h
+	$(CC) $(CFLAGS) -DKAI_TEST_DIRECT_POLICY -o tests/cli/kai-test $(CORE) $(APP) $(LDLIBS)
+
+test: kai tests/cli/kai-test
 	$(CC) $(CFLAGS) -o tests/run_tests tests/run_tests.c $(CORE) $(LDLIBS)
 	./tests/run_tests
 	$(CC) $(CFLAGS) -o tests/storage/run_storage_tests tests/storage/run_storage_tests.c $(STORAGE_TEST_SRC) $(LDLIBS)
@@ -79,7 +87,7 @@ test: kai
 	# refusal + pending-hold (correctly) block. The seam is never in the product
 	# or signed build; the refusal and pending-hold are covered by
 	# run_storage_tests. Suites that don't touch policy use the real ./kai.
-	$(CC) $(CFLAGS) -DKAI_TEST_DIRECT_POLICY -o tests/cli/kai-test $(CORE) $(APP) $(LDLIBS)
+	# (tests/cli/kai-test is a prerequisite of this target, built first.)
 	sh tests/cli/run_cli_tests.sh tests/cli/kai-test
 	sh tests/gateway/run_gateway_tests.sh tests/cli/kai-test
 	sh tests/gateway/run_tls_tests.sh tests/cli/kai-test

@@ -18,6 +18,10 @@
 #include <sys/fcntl.h>
 #include <sys/stat.h>
 
+#ifndef FWRITE        /* BSD/macOS kernel file flag; glibc has none (Linux builds) */
+#define FWRITE 0x0002
+#endif
+
 int kai_open_is_write(int fflag) {
     /* Endpoint Security's open event carries `fflag` in the kernel's file-flags
      * convention (FREAD/FWRITE), where the access mode is the open(2) mode + 1:

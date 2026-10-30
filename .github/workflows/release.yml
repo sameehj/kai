@@ -1,70 +1,27 @@
 # SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
-# Push a tag like v0.1.0 to build binaries + the macOS app and publish a
-# GitHub release. install.sh downloads these assets and checks SHA256SUMS.
+# On a version tag: build and test the tagged commit on macOS (Kai is macOS
+# only: macOS 13 or later; Linux and Windows aren't supported). This workflow
+# doesn't publish: the release is the Developer ID signed, notarized package
+# from scripts/release/build-preview-pkg.sh, published with `gh release create`
+# (docs/release/CHECKLIST-v0.2.0-preview.1.md). An automatic release here would
+# race it with an unsigned build.
 name: release
 on:
   push:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  linux:
-    strategy:
-      matrix:
-        include:
-          - runner: ubuntu-22.04
-            arch: x86_64
-          - runner: ubuntu-22.04-arm
-            arch: arm64
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
-      - run: make && make test
-      - name: package
-        run: |
-          tar -czf "kai-${GITHUB_REF_NAME}-linux-${{ matrix.arch }}.tar.gz" kai LICENSE
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linux-${{ matrix.arch }}
-          path: kai-*.tar.gz
-
   macos:
+    name: tagged commit builds and tests (macOS, universal)
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - name: universal CLI
         run: make CC="cc -arch x86_64 -arch arm64" && make test
-      - name: menu-bar app (universal, ad-hoc signed until Developer ID is set up)
+      - name: menu-bar app (universal)
         run: |
           brew install xcodegen
           make app XCODE_EXTRA="ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO"
-      - name: package
-        run: |
-          tar -czf "kai-${GITHUB_REF_NAME}-darwin-universal.tar.gz" kai LICENSE
-          (cd build && ditto -c -k --keepParent Kai.app "../Kai-${GITHUB_REF_NAME}-macos.zip")
-      - uses: actions/upload-artifact@v4
-        with:
-          name: macos
-          path: |
-            kai-*.tar.gz
-            Kai-*.zip
-
-  publish:
-    needs: [linux, macos]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      - name: checksums
-        run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
-      - name: create release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
-            --repo "$GITHUB_REPOSITORY" --title "Kai $GITHUB_REF_NAME" --generate-notes

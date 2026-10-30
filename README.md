@@ -24,6 +24,8 @@ Kai Preview checks inside your agents. OS-level protection for files and interne
 
 ## Install
 
+**macOS 13 or later; Linux and Windows aren't supported.**
+
 Download `Kai-Preview-<version>.pkg` from [Releases](https://github.com/sameehj/kai/releases), check it, and open it:
 
 ```sh

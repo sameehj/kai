@@ -12,7 +12,7 @@ Everything here waits on Sameeh. The code side is on `fix/ux-review-phase-a`; `m
 3. **Chrome store ID**: upload `build/kai-chrome-0.2.0.zip` (`make chrome-zip`) as an unlisted item and note its 32-letter ID ([CHROME_STORE.md](../CHROME_STORE.md)).
 4. **Merge to master** through a PR from `fix/ux-review-phase-a` (master is never pushed to directly).
 5. **Tag** the merge commit on a clean tree: `git tag v0.2.0-preview.1 && git push origin v0.2.0-preview.1`.
-6. **Build** (it refuses without all four values, a clean tree and the tag):
+6. **Build** (it refuses without all four values, a clean tree and the tag, and unless the tag is `origin/master` HEAD with every CI check passed on that commit):
    ```sh
    KAI_DEVID_APP="Developer ID Application: <Name> (KD446VDTM2)" \
    KAI_DEVID_INSTALLER="Developer ID Installer: <Name> (KD446VDTM2)" \
@@ -27,7 +27,7 @@ Everything here waits on Sameeh. The code side is on `fix/ux-review-phase-a`; `m
 
 | # | Check | How | Result |
 |---|---|---|---|
-| 1a | Live checks, release build, your account | From a checkout of the tag, in your own Terminal: `sh scripts/live-checks-preview1.sh`. It refuses unless both the `kai` it runs and Claude Code's Kai hook are release builds. Real `claude -p` sessions in a new temp project with fake `.env` and `id_test`; grants from the release `kai` for exact temp paths, `--for 1m`. Checks: stop · the agent relays the command · allow · retry works · upload still stopped · expiry · policy missing (here: the same commit's dev build against a temp copy of your policy, since release builds ignore `KAI_POLICY`; yours is never moved). It fingerprints `~/.kai/policy`, `policy.sha256` and `agent-rules.json` first, asks before appending to the activity log (the one thing it can't undo), removes only its own grants, deletes the temp folder and the run's Claude Code transcripts, and prints a results table with the fingerprint check. Paste the table here. Uses model quota | |
+| 1a | Live checks, release build, your account | From a checkout of the tag, in your own Terminal: `sh scripts/live-checks-preview1.sh`. It refuses unless both the `kai` it runs and Claude Code's Kai hook are release builds. Real `claude -p` sessions in a new temp project with fake `.env` and `id_test`; grants from the release `kai` for exact temp paths, `--for 1m`. Checks: stop · the agent relays the command · allow · retry works · upload still stopped · expiry · policy missing (here: the same commit's dev build against a temp copy of your policy, since release builds ignore `KAI_POLICY`; yours is never moved). It fingerprints `~/.kai/policy`, `policy.sha256` and `agent-rules.json` first, asks before appending to the activity log (the one thing it can't undo), removes only its own grants, deletes the temp folder and the run's Claude Code transcripts, and prints a results table with the fingerprint check. Paste the table here. Uses model quota || **PASS 9/9** (2026-10-30, commit 5c6b1bd, release build, your Terminal); table in B.1 results below |
 | 1b | Live checks in a fresh macOS user account | System Settings → Users & Groups → Add User (a Standard account just for this). Log in to it, install the Kai package (and the app, if testing with it), run `claude` once to sign in, then `/usr/local/bin/kai install claude` (or let the app install the hooks). From a checkout of the tag: `sh scripts/live-checks-preview1.sh --fresh-user`. It refuses if the account has `~/.ssh/id_*` or `~/.aws/credentials`, and asks you to type the account name. It runs the same checks, plus the policy-missing check for real with the release hook: that account's policy is moved aside, then restored byte for byte (also on Ctrl-C). Delete the account afterwards if you like | |
 | 2 | Product acceptance | Install the RC, run an ordinary multi-step Claude Code task, hit a legitimate stop, recover with the command from the message, finish without disabling Kai | |
 | 3 | Untrusted Codex | Untrust Kai's hooks in Codex (`/hooks`), then `kai status` (Codex: Not checking), `kai demo` (self-test passes), `kai demo --live --agent codex` (fails and says why) | |
@@ -40,6 +40,25 @@ Everything here waits on Sameeh. The code side is on `fix/ux-review-phase-a`; `m
 | 10 | Copy review | `kai status`, `kai doctor`, the stop messages, the release notes | |
 | 11 | Chrome extension version | chrome://extensions → Kai → Reload, then reload open chat tabs. The `kai status` Chats line must not say "reload"; the popover row reads "Chats · N open: …" | |
 | 12 | Screenshots | `/Applications/Kai.app/Contents/MacOS/Kai --snapshot ~/Desktop/kai-shots` renders popover, Agent Control, Activity and Internet with live data | |
+
+### B.1 results: live checks, release build (2026-10-30T14:36:58Z)
+
+`sh scripts/live-checks-preview1.sh` at commit **5c6b1bd**, run by the owner in their own Terminal against the installed release build (`kai 0.2.0-preview.1 (release build)`, Claude Code 2.1.312). Fingerprint at start and end: policy `9b57d9b8435db0fc`, policy.sha256 `b1d19abecc47424b`, agent-rules.json absent.
+
+| # | Check | Result | Evidence |
+|---|---|---|---|
+| 1 | stop: the .env read is stopped | PASS | audit record, no secret in the reply |
+| 2 | the agent relays the exact command | PASS | kai allow-file /private/tmp/kai-live-p1.xuXw8X/proj/.env --read --agent claude --for 1h |
+| 3 | allow: release kai allow-file, exact path, 1 minute | PASS | "This grant follows this exact file: if …/proj/.env is replaced or re-linked, it stops applying. Allowed Claude Code to r…" |
+| 4 | retry works within the minute | PASS | the reply has the fake value |
+| 5 | upload still stopped despite the read grant (release hook, direct) | PASS | permissionDecision deny: "Kai stopped a command that uses `.env`: it…" |
+| 6 | expiry: after the minute, stopped again | PASS | audit record |
+| 7 | policy missing: every tool check fails closed (release hook, sandbox copy) | PASS | 12/12 tool events denied (Claude Code Read, Write, Edit, Bash, Grep, WebFetch, MCP; Codex shell, apply_patch; Cursor read, shell, MCP): "Kai can't read its rules, so it stopped th…" |
+| 7b | policy missing: a prompt is let through with a warning (documented) | NOTE | systemMessage: "Kai can't read its rules, so this prompt wasn't checked. Run `kai doctor`. (Kai is not stopping your work.)" |
+| 8 | cleanup: temp folder deleted | PASS | /tmp/kai-live-p1.xuXw8X |
+| 9 | policy and rules fingerprint matches the start | PASS | policy 9b57d9b8435db0fc · policy.sha256 b1d19abecc47424b · agent-rules.json absent |
+
+0 failed. Rules restored byte for byte.
 
 ## C. Release batch items (2026-10-29): check each in the installed build
 
