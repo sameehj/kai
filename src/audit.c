@@ -151,14 +151,23 @@ static int append_record(int fd, const kai_audit_entry *e) {
 
 /* Size at which the log is rotated to audit.log.1 (one old file is kept). */
 static off_t max_log_bytes(void) {
+#ifdef KAI_RELEASE
+    /* Step 8: a hook runs with the agent's environment; it must not be able
+     * to force rotations that push history out of the log. */
+    const char *e = NULL;
+#else
     const char *e = getenv("KAI_AUDIT_MAX_BYTES");
+#endif
     long v = e ? strtol(e, NULL, 10) : 0;
     return v > 0 ? (off_t)v : (off_t)8 * 1024 * 1024;
 }
 
 static int open_locked(const char *path) {
     int fd = open(path, O_RDWR | O_CREAT | O_APPEND, 0600);
-    if (fd >= 0) flock(fd, LOCK_EX);
+    if (fd >= 0) {
+        flock(fd, LOCK_EX);
+        (void)fchmod(fd, 0600);   /* Step 8: also a log an older Kai left 0644 */
+    }
     return fd;
 }
 
@@ -264,6 +273,7 @@ static void daily_count(const kai_audit_entry *e) {
     daily_path(NULL, fp, sizeof fp);
     int fd = open(fp, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW, 0600);
     if (fd < 0) return;
+    (void)fchmod(fd, 0600);
     if (write(fd, &k, 1) != 1) { /* best effort: the log itself is the record */ }
     if (geteuid() == 0) {               /* a wall running as root: keep it the user's */
         struct stat hs;

@@ -32,6 +32,22 @@ printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Read","session_id":"r"
     && pass "release hook: the record goes to the real home, never to KAI_HOME" \
     || fail "release hook logged to KAI_HOME"
 
+# Step 8: an agent's environment can't shrink the rotation size to push
+# history out of the log (only one rotated file is kept).
+H3="$TMP/h3"; mkdir -p "$H3/.kai"
+for i in 1 2 3 4 5 6 7 8; do
+    printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Read","session_id":"r","tool_input":{"file_path":"'"$H3"'/.ssh/id_rsa"},"cwd":"/tmp"}' \
+        | HOME="$H3" KAI_AUDIT_MAX_BYTES=300 KAI_NO_APP=1 "$REL" hook claude >/dev/null 2>&1
+done
+[ -f "$H3/.kai/audit.log" ] && [ ! -e "$H3/.kai/audit.log.1" ] \
+    && pass "release: KAI_AUDIT_MAX_BYTES is ignored (no forced rotation)" || fail "release honoured KAI_AUDIT_MAX_BYTES"
+H4="$TMP/h4"; mkdir -p "$H4/.kai"
+for i in 1 2 3 4 5 6 7 8; do
+    printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Read","session_id":"r","tool_input":{"file_path":"'"$H4"'/.ssh/id_rsa"},"cwd":"/tmp"}' \
+        | HOME="$H4" KAI_HOME="$H4/.kai" KAI_AUDIT_MAX_BYTES=300 KAI_NO_APP=1 "$DEV" hook claude >/dev/null 2>&1
+done
+[ -e "$H4/.kai/audit.log.1" ] && pass "dev: KAI_AUDIT_MAX_BYTES is honoured (tests use it)" || fail "dev ignored KAI_AUDIT_MAX_BYTES"
+
 # Where the policy fingerprint lands: the release binary never in KAI_HOME,
 # the test binary (tests/cli/kai-test, which the suites drive) always there.
 # CI once ran the integrity tests before kai-test existed; this pins both sides.
