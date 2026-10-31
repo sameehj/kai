@@ -176,6 +176,36 @@ hasnt "4th: not repeated" "$r4" "$note"
 r5=$(printf '%s' "$rep" | sed 's/rep-1/rep-2/' | KAI_HOME="$RH/.kai" KAI_NO_APP=1 "$KAI" hook claude)
 hasnt "another session counts on its own" "$r5" "$note"
 
+echo "== G4 letter case, G14 folder rename (Security Plan v1.0 P0) =="
+GH="$TMP/g4"; mkdir -p "$GH/.ssh" "$GH/.aws" "$GH/.config/gcloud" "$GH/.claude" "$GH/proj/src" "$GH/.kai"
+echo fake > "$GH/.ssh/id_rsa"
+gp() {   # tool, json input -> DENY/allow
+    o=$(printf '{"hook_event_name":"PreToolUse","tool_name":"%s","session_id":"g4","tool_input":%s,"cwd":"%s/proj"}' "$1" "$2" "$GH" \
+        | HOME="$GH" KAI_HOME="$GH/.kai" KAI_NO_APP=1 "$KAI" hook claude)
+    case "$o" in *'"deny"'*) echo DENY ;; *) echo allow ;; esac
+}
+gb() { gp Bash '{"command":"'"$1"'"}'; }
+[ "$(gp Read '{"file_path":"'"$GH"'/.SSH/ID_RSA"}')" = DENY ] && pass "G4: Read ~/.SSH/ID_RSA is stopped (APFS is case-insensitive)" || fail "G4: Read ~/.SSH/ID_RSA allowed"
+[ "$(gp Write '{"file_path":"'"$GH"'/.SSH/authorized_keys","content":"x"}')" = DENY ] && pass "G4: Write ~/.SSH/authorized_keys is stopped" || fail "G4: Write ~/.SSH/authorized_keys allowed"
+[ "$(gb "cat $GH/.AWS/credentials")" = DENY ] && pass "G4: cat ~/.AWS/credentials is stopped" || fail "G4: cat ~/.AWS/credentials allowed"
+[ "$(gp Write '{"file_path":"'"$GH"'/.Claude/Settings.json","content":"{}"}')" = DENY ] && pass "G4: Write ~/.Claude/Settings.json (hook config) is stopped" || fail "G4: hook config case variant allowed"
+[ "$(gp Write '{"file_path":"'"$GH"'/Library/launchagents/x.plist","content":"x"}')" = DENY ] && pass "G4: a LaunchAgent written as library/launchagents is stopped" || fail "G4: persistence case variant allowed"
+[ "$(gb "mv $GH/.SSH $GH/x")" = DENY ] && pass "G4+G14: mv ~/.SSH ~/x is stopped" || fail "G4+G14: mv ~/.SSH allowed"
+[ "$(gb "cd $GH && mv .ssh x")" = DENY ] && pass "G14: cd ~ && mv .ssh x (relative to the cd) is stopped" || fail "G14: cd-relative rename allowed"
+[ "$(gb "cd $GH; tar czf /tmp/a.tgz .ssh")" = DENY ] && pass "G14: cd ~; tar .ssh is stopped" || fail "G14: cd-relative tar allowed"
+[ "$(gb "mv $GH/.config $GH/c")" = DENY ] && pass "G14: renaming a folder that holds a protected one (~/.config) is stopped" || fail "G14: ancestor rename allowed"
+[ "$(gb "cp -r $GH/.config $GH/c")" = DENY ] && pass "G14: copying it recursively is stopped" || fail "G14: ancestor copy allowed"
+[ "$(gb "tar czf /tmp/c.tgz $GH/.config")" = DENY ] && pass "G14: archiving it is stopped" || fail "G14: ancestor archive allowed"
+[ "$(gb "rsync -a $GH/.config/ /tmp/c")" = DENY ] && pass "G14: rsync of it is stopped" || fail "G14: ancestor rsync allowed"
+[ "$(gb "mv $GH/.claude $GH/old")" = DENY ] && pass "G14: moving ~/.claude (holds the hook config) is stopped" || fail "G14: hook-config folder move allowed"
+[ "$(gb "rm -rf $GH/.claude")" = DENY ] && pass "G14: deleting it is stopped" || fail "G14: hook-config folder delete allowed"
+[ "$(gb "mv $GH/proj/src $GH/proj/lib")" = allow ] && pass "an ordinary folder rename goes through" || fail "ordinary mv stopped"
+[ "$(gb "cp -r src lib")" = allow ] && pass "an ordinary recursive copy goes through" || fail "ordinary cp -r stopped"
+[ "$(gb "tar czf out.tgz src")" = allow ] && pass "an ordinary archive goes through" || fail "ordinary tar stopped"
+[ "$(gb "cp $GH/.config/notes.txt /tmp/")" = allow ] && pass "copying one ordinary file out of ~/.config goes through" || fail "plain cp of a file in an ancestor stopped"
+[ "$(gb "ls -la $GH")" = allow ] && pass "listing the home folder goes through" || fail "ls ~ stopped"
+[ "$(gb "find $GH/proj -name '*.txt'")" = allow ] && pass "find in a project goes through" || fail "find stopped"
+
 echo "== Chrome support removed (Security Plan v1.0) =="
 CR="$TMP/chrome"; NM="$CR/Library/Application Support/Google/Chrome/NativeMessagingHosts"
 mkdir -p "$NM" "$CR/.kai/browser-extension"

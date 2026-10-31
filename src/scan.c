@@ -191,7 +191,16 @@ int kai_plausible_password_value(const char *match, size_t len) {
 
 /* ---- path matching ---- */
 
-/* fnmatch-like, '*' matches within a path segment only (no '/'). */
+/* G4: macOS volumes are case-insensitive by default (APFS), so ~/.SSH/ID_RSA
+ * opens ~/.ssh/id_rsa. Every protected-path comparison ignores letter case: on
+ * a case-sensitive volume that over-matches (stricter), never under-matches. */
+static const char *ci_strstr(const char *h, const char *n) {
+    size_t nl = strlen(n);
+    for (; h && *h; h++) if (strncasecmp(h, n, nl) == 0) return h;
+    return NULL;
+}
+
+/* fnmatch-like, '*' matches within a path segment only (no '/'); no case. */
 static int seg_match(const char *pat, const char *str) {
     while (*pat) {
         if (*pat == '*') {
@@ -201,7 +210,7 @@ static int seg_match(const char *pat, const char *str) {
                 if (seg_match(pat, str)) return 1;
             return seg_match(pat, str);
         }
-        if (*str == '\0' || *pat != *str) return 0;
+        if (*str == '\0' || tolower((unsigned char)*pat) != tolower((unsigned char)*str)) return 0;
         pat++; str++;
     }
     return *str == '\0';
@@ -213,7 +222,7 @@ static int seg_match(const char *pat, const char *str) {
 static int path_matches(const char *pat, const char *np) {
     if (strchr(pat, '/')) {
         size_t pl = strlen(pat);
-        if (strncmp(np, pat, pl) == 0 && (np[pl] == '\0' || np[pl] == '/'))
+        if (strncasecmp(np, pat, pl) == 0 && (np[pl] == '\0' || np[pl] == '/'))
             return 1;
         /* also allow glob on the full path */
         return seg_match(pat, np);
@@ -251,7 +260,7 @@ static int agent_control_path(const char *np, char *why, size_t whylen) {
     size_t n = strlen(np);
     for (size_t i = 0; i < sizeof AGENT_CONTROL / sizeof AGENT_CONTROL[0]; i++) {
         size_t l = strlen(AGENT_CONTROL[i]);
-        if (n >= l && strcmp(np + n - l, AGENT_CONTROL[i]) == 0) {
+        if (n >= l && strcasecmp(np + n - l, AGENT_CONTROL[i]) == 0) {
             if (why) kai_strlcpy(why, AGENT_CONTROL[i] + 1, whylen);
             return 1;
         }
@@ -263,8 +272,8 @@ static int agent_control_path(const char *np, char *why, size_t whylen) {
         if (!roots[i] || !*roots[i]) continue;
         char *r = kai_normalize_path(roots[i], NULL);
         size_t rl = r ? strlen(r) : 0;
-        int hit = r && strncmp(np, r, rl) == 0 && (np[rl] == '\0' || np[rl] == '/') &&
-                  (i == 0 || strstr(np + rl, "hooks.json") || strstr(np + rl, "config.toml"));
+        int hit = r && strncasecmp(np, r, rl) == 0 && (np[rl] == '\0' || np[rl] == '/') &&
+                  (i == 0 || ci_strstr(np + rl, "hooks.json") || ci_strstr(np + rl, "config.toml"));
         if (hit && why) kai_strlcpy(why, i == 0 ? "~/.kai" : np, whylen);
         free(r);
         if (hit) return 1;
@@ -282,16 +291,16 @@ static int trust_store_path(const char *np, char *why, size_t whylen) {
     const char *base = strrchr(np, '/');
     base = base ? base + 1 : np;
     int hit = 0;
-    if (strstr(np, "/ca-certificates/"))                       /* Homebrew bundle dir */
+    if (ci_strstr(np, "/ca-certificates/"))                    /* Homebrew bundle dir */
         hit = 1;
-    else if (strncmp(np, "/etc/ssl/", 9) == 0 ||
-             strncmp(np, "/private/etc/ssl/", 17) == 0)          /* system OpenSSL */
+    else if (strncasecmp(np, "/etc/ssl/", 9) == 0 ||
+             strncasecmp(np, "/private/etc/ssl/", 17) == 0)      /* system OpenSSL */
         hit = 1;
-    else if (strstr(np, "/etc/openssl") && !strcmp(base, "cert.pem")) /* brew openssl */
+    else if (ci_strstr(np, "/etc/openssl") && !strcasecmp(base, "cert.pem")) /* brew openssl */
         hit = 1;
-    else if (!strcmp(base, "cacert.pem"))                        /* certifi bundle, anywhere */
+    else if (!strcasecmp(base, "cacert.pem"))                    /* certifi bundle, anywhere */
         hit = 1;
-    else if (strstr(np, "/Keychains/") && strstr(base, "TrustSettings")) /* keychain trust */
+    else if (ci_strstr(np, "/Keychains/") && ci_strstr(base, "TrustSettings")) /* keychain trust */
         hit = 1;
     if (hit && why) kai_strlcpy(why, "trust-store", whylen);
     return hit;
@@ -309,12 +318,12 @@ static int persistence_path(const char *np, char *why, size_t whylen) {
     int hit = 0;
     for (size_t i = 0; !hit && i < sizeof SYS / sizeof SYS[0]; i++) {
         size_t l = strlen(SYS[i]);
-        hit = !strncmp(np, SYS[i], l) && (np[l] == '\0' || np[l] == '/');
+        hit = !strncasecmp(np, SYS[i], l) && (np[l] == '\0' || np[l] == '/');
     }
     if (!hit) {
         char *u = kai_normalize_path("~/Library/LaunchAgents", NULL);
         size_t l = u ? strlen(u) : 0;
-        hit = u && !strncmp(np, u, l) && (np[l] == '\0' || np[l] == '/');
+        hit = u && !strncasecmp(np, u, l) && (np[l] == '\0' || np[l] == '/');
         free(u);
     }
     if (hit && why) kai_strlcpy(why, "persistence", whylen);
@@ -556,6 +565,7 @@ typedef struct {
     kai_skip_fn skip;
     void *skip_ud;
     const char *agent;          /* the requesting agent: its own state is exempt */
+    char cwdbuf[4096];          /* G14: the folder after a `cd` earlier in the command */
 } path_scan_t;
 
 /* A protected path was found: it counts unless the user exempted its rule. */
@@ -590,8 +600,94 @@ static void scan_string(path_scan_t *ps, const char *w) {
     }
 }
 
+/* G14: a command that moves, copies, archives or deletes a whole folder
+ * carries everything inside it. Renaming ~/.config takes ~/.config/gcloud
+ * along unseen; a later read of ~/c/gcloud names no protected path. */
+static int tree_command(char **argv, int argc, int i) {
+    const char *b = strrchr(argv[i], '/') ? strrchr(argv[i], '/') + 1 : argv[i];
+    if (!strcmp(b, "mv") || !strcmp(b, "rsync") || !strcmp(b, "tar") || !strcmp(b, "ditto") ||
+        !strcmp(b, "gtar") || !strcmp(b, "bsdtar"))
+        return 1;
+    if (strcmp(b, "cp") && strcmp(b, "rm") && strcmp(b, "scp") && strcmp(b, "zip")) return 0;
+    for (int k = i + 1; k < argc; k++) {   /* only when recursive */
+        const char *a = argv[k];
+        if (!strcmp(a, "--recursive") || !strcmp(a, "--archive")) return 1;
+        if (a[0] == '-' && a[1] != '-' && (strchr(a, 'r') || strchr(a, 'R') || (!strcmp(b, "cp") && strchr(a, 'a'))))
+            return 1;
+    }
+    return 0;
+}
+
+/* Is `dir` a folder that holds (or is) something protected? Checks the
+ * policy's absolute protect entries, Kai's home, the agents' hook configs
+ * and login items; reports through path_hit (same exemptions). */
+static int holds_protected(path_scan_t *ps, const char *dir) {
+    size_t dl = strlen(dir);
+    if (!dl) return 0;
+    char cand[4400];
+    const char *base = strrchr(dir, '/') ? strrchr(dir, '/') + 1 : dir;
+    static const char *const HOOK_DIRS[] = {".claude", ".cursor", ".codex"};
+    for (size_t i = 0; i < sizeof HOOK_DIRS / sizeof HOOK_DIRS[0]; i++)
+        if (!strcasecmp(base, HOOK_DIRS[i])) {
+            snprintf(cand, sizeof cand, "%s/%s", dir, i == 0 ? "settings.json" : i == 1 ? "hooks.json" : "hooks.json");
+            if (path_hit(ps, cand)) return 1;
+        }
+    const char *home = getenv("HOME");
+    const char *fixed[] = {"~/.claude/settings.json", "~/.cursor/hooks.json", "~/.codex/hooks.json",
+                           "~/Library/LaunchAgents/x.plist", NULL};
+    for (int i = 0; fixed[i]; i++) {
+        char *ex = kai_expand_home(fixed[i]);
+        int under = ex && home && strncasecmp(ex, dir, dl) == 0 && ex[dl] == '/';
+        if (under && path_hit(ps, ex)) { free(ex); return 1; }
+        free(ex);
+    }
+    char *kh = kai_normalize_path(kai_home(), NULL);
+    int kunder = kh && (strcasecmp(kh, dir) == 0 || (strncasecmp(kh, dir, dl) == 0 && kh[dl] == '/'));
+    if (kunder && path_hit(ps, kh)) { free(kh); return 1; }
+    free(kh);
+    for (int i = 0; i < ps->p->nprotect; i++) {
+        const char *pat = ps->p->protect[i];
+        if (!strchr(pat, '/') || strchr(pat, '*')) continue;      /* absolute entries only */
+        char *ex = kai_expand_home(pat);
+        char *pn = ex ? kai_normalize_path(ex, NULL) : NULL;
+        free(ex);
+        int under = pn && strncasecmp(pn, dir, dl) == 0 && pn[dl] == '/';
+        if (under && path_hit(ps, pn)) { free(pn); return 1; }
+        free(pn);
+    }
+    return 0;
+}
+
 static void scan_cmd_words(char **argv, int argc, void *ud) {
+    path_scan_t *ps = ud;
+    int start = kai_shell_command_start(argv, argc);
+    if (start < argc) {
+        const char *b = strrchr(argv[start], '/') ? strrchr(argv[start], '/') + 1 : argv[start];
+        if (!strcmp(b, "cd") || !strcmp(b, "pushd")) {   /* G14: later paths are relative to it */
+            const char *to = NULL;
+            for (int k = start + 1; k < argc && !to; k++) if (argv[k][0] != '-' || !argv[k][1]) to = argv[k];
+            char *ex = kai_expand_home(to && strcmp(to, "-") ? to : "~");
+            char *n = ex ? kai_normalize_path(ex, ps->cwd) : NULL;
+            if (n) { kai_strlcpy(ps->cwdbuf, n, sizeof ps->cwdbuf); ps->cwd = ps->cwdbuf; }
+            free(ex); free(n);
+            return;
+        }
+    }
     for (int i = 0; i < argc; i++) scan_string(ud, argv[i]);
+    if (ps->hit || start >= argc || !tree_command(argv, argc, start)) return;
+    for (int k = start + 1; k < argc && !ps->hit; k++) {
+        const char *a = argv[k];
+        if (a[0] == '-' || strchr(a, '=') || strstr(a, "://")) continue;
+        char *ex = kai_expand_home(a);
+        char *n = ex ? kai_normalize_path(ex, ps->cwd) : NULL;
+        free(ex);
+        if (n) {
+            size_t l = strlen(n);
+            while (l > 1 && n[l - 1] == '/') n[--l] = '\0';   /* rsync's dir/ */
+            if (holds_protected(ps, n)) ps->hit = 1;
+        }
+        free(n);
+    }
 }
 
 static void scan_text_paths(const char *text, void *ud) {
@@ -617,7 +713,7 @@ int kai_command_touches_protected_as(const kai_policy *p, const char *agent, con
     if (!p || !cmd) return 0;
     char scratch[256];
     if (!why || !whylen) { why = scratch; whylen = sizeof scratch; } /* path_hit reads it */
-    path_scan_t ps = {p, cwd, why, whylen, 0, skip, ud, agent};
+    path_scan_t ps = {p, cwd, why, whylen, 0, skip, ud, agent, ""};
     kai_shell_walk(cmd, scan_cmd_words, scan_text_paths, &ps);
     if (!ps.hit) why[0] = '\0';
     return ps.hit;

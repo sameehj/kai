@@ -21,6 +21,8 @@ Evidence: each agent's hook event, in that agent's format, sent to the real `kai
 | Network upload command (`curl -d @file`) | PreToolUse (Bash) | command text (parsed) | before it runs | Yes | Uploads by a script or an unrecognized tool, or to an allowed host, aren't recognized. | live 2026-10-28, Claude Code 2.1.312 (manual run: curl -d @notes.txt stopped); synthetic 2026-10-31: stopped |
 | MCP tool call (no rule for the server) | PreToolUse (mcp__server__tool) | server, tool, argument keys and values | before the call | Yes | Claude Code / Codex: stopped until you allow the server (kai allow-mcp; in the app, a card). Cursor: its MCP event doesn't name the server, so only the arguments are scanned for secrets. | synthetic 2026-10-31: stopped |
 | The agent's own web fetch (secret in the URL) | PreToolUse (WebFetch) | the URL | before the fetch | Yes | Only the URL is checked; by default fetches are allowed (on_fetch allow). Connections made any other way aren't governed. | synthetic 2026-10-31: stopped |
+| Read a protected file through a letter-case variant (G4) | PreToolUse (Read) | the path as written (matched without letter case) | before it runs | Yes | Protected paths match without letter case (macOS volumes are case-insensitive by default). | synthetic 2026-10-31: stopped |
+| Rename a folder holding a protected one, cd-relative (G14) | PreToolUse (Bash) | command text (parsed; cd followed) | before it runs | Yes | Moving, copying, archiving or deleting a folder that holds a protected path is stopped, also after a cd. A script the agent writes that renames it isn't seen (escape case script-renames-folder). | synthetic 2026-10-31: stopped |
 | Screen and app control (screencapture, ffmpeg/sox, osascript) | PreToolUse (Bash) | command text (parsed) | before it runs | Yes | Recognized commands only: screencapture, ffmpeg/sox/rec from a live device, imagesnap, cliclick, osascript that tells an app; allowed per app (kai allow-capture --app, or the agent's page in the app). A program the agent writes can call the capture APIs directly. | synthetic 2026-10-31: stopped |
 | The agent's own screenshot or computer-use tool | PreToolUse (mcp__computer-use__…) | tool name | before the call | Yes | Recognized by tool name (screenshot, computer). A web page screenshot in a browser tool isn't counted as the screen. | synthetic 2026-10-31: stopped |
 
@@ -36,6 +38,8 @@ Evidence: each agent's hook event, in that agent's format, sent to the real `kai
 | Network upload command (`curl -d @file`) | PreToolUse (shell) | argv (parsed) | before it runs | Yes | Uploads by a script or an unrecognized tool, or to an allowed host, aren't recognized. | synthetic 2026-10-31: stopped |
 | MCP tool call (no rule for the server) | PreToolUse (MCP tool) | server, tool, arguments | before the call | Yes | Claude Code / Codex: stopped until you allow the server (kai allow-mcp; in the app, a card). Cursor: its MCP event doesn't name the server, so only the arguments are scanned for secrets. | synthetic 2026-10-31: stopped |
 | The agent's own web fetch (secret in the URL) | none (no fetch event) | n/a | n/a | No | Only the URL is checked; by default fetches are allowed (on_fetch allow). Connections made any other way aren't governed. | not applicable |
+| Read a protected file through a letter-case variant (G4) | PreToolUse (shell) | the path as written (matched without letter case) | before it runs | Yes | Protected paths match without letter case (macOS volumes are case-insensitive by default). | synthetic 2026-10-31: stopped |
+| Rename a folder holding a protected one, cd-relative (G14) | PreToolUse (shell) | command text (parsed; cd followed) | before it runs | Yes | Moving, copying, archiving or deleting a folder that holds a protected path is stopped, also after a cd. A script the agent writes that renames it isn't seen (escape case script-renames-folder). | synthetic 2026-10-31: stopped |
 | Screen and app control (screencapture, ffmpeg/sox, osascript) | PreToolUse (shell) | argv (parsed) | before it runs | Yes | Recognized commands only: screencapture, ffmpeg/sox/rec from a live device, imagesnap, cliclick, osascript that tells an app; allowed per app (kai allow-capture --app, or the agent's page in the app). A program the agent writes can call the capture APIs directly. | synthetic 2026-10-31: stopped |
 | The agent's own screenshot or computer-use tool | PreToolUse (MCP tool) | tool name | before the call | Yes | Recognized by tool name (screenshot, computer). A web page screenshot in a browser tool isn't counted as the screen. | synthetic 2026-10-31: stopped |
 
@@ -51,8 +55,27 @@ Evidence: each agent's hook event, in that agent's format, sent to the real `kai
 | Network upload command (`curl -d @file`) | beforeShellExecution | command text (parsed) | before it runs | Yes | Uploads by a script or an unrecognized tool, or to an allowed host, aren't recognized. | synthetic 2026-10-31: stopped |
 | MCP tool call (no rule for the server) | beforeMCPExecution | tool name and arguments, not the server | before the call | No | Claude Code / Codex: stopped until you allow the server (kai allow-mcp; in the app, a card). Cursor: its MCP event doesn't name the server, so only the arguments are scanned for secrets. | synthetic 2026-10-31: allowed |
 | The agent's own web fetch (secret in the URL) | none (no fetch event) | n/a | n/a | No | Only the URL is checked; by default fetches are allowed (on_fetch allow). Connections made any other way aren't governed. | not applicable |
+| Read a protected file through a letter-case variant (G4) | beforeReadFile | the path as written (matched without letter case) | before it runs | Yes | Protected paths match without letter case (macOS volumes are case-insensitive by default). | synthetic 2026-10-31: stopped |
+| Rename a folder holding a protected one, cd-relative (G14) | beforeShellExecution | command text (parsed; cd followed) | before it runs | Yes | Moving, copying, archiving or deleting a folder that holds a protected path is stopped, also after a cd. A script the agent writes that renames it isn't seen (escape case script-renames-folder). | synthetic 2026-10-31: stopped |
 | Screen and app control (screencapture, ffmpeg/sox, osascript) | beforeShellExecution | command text (parsed) | before it runs | Yes | Recognized commands only: screencapture, ffmpeg/sox/rec from a live device, imagesnap, cliclick, osascript that tells an app; allowed per app (kai allow-capture --app, or the agent's page in the app). A program the agent writes can call the capture APIs directly. | synthetic 2026-10-31: stopped |
 | The agent's own screenshot or computer-use tool | beforeMCPExecution | tool name | before the call | Yes | Recognized by tool name (screenshot, computer). A web page screenshot in a browser tool isn't counted as the screen. | synthetic 2026-10-31: stopped |
+
+## Enforcement and attribution (Preview 1, configuration A)
+
+What enforces each decision, and how Kai knows who is acting. Preview 1 is **configuration A** of the replay gate in [security/RECONCILED-PLAN.md](security/RECONCILED-PLAN.md): hooks only.
+
+| Question | Preview 1 answer |
+|---|---|
+| What enforces a stop | The agent itself, honouring its hook's answer before the tool call runs. Nothing at the OS level. |
+| Which actions | Only the tool calls each agent reports to its hooks (rows above). |
+| How Kai knows the agent | By which agent's hook configuration ran `kai hook <agent>`. No process attribution. |
+| An agent's child process or a script it writes | Not attributed and not checked: the hook sees only the command that starts it. |
+| A detached or background process | Not attributed and not checked. |
+| An editor extension host (Cursor, VS Code) acting on its own | Not attributed and not checked: it runs no agent hooks. |
+| An unknown process | Not checked. Host-wide asset protection (Layer 1) needs Endpoint Security, not in Preview 1. |
+| Status words | `kai status` reports measured hook state per agent (Installed, Configured, Trusted, Self-test, Live verification); never "Protected". |
+
+The replay records for each configuration are in `tests/replay/records/`; NOT COVERED rows there are listed here, never claimed.
 
 ## Not checked by any agent's hooks
 

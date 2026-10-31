@@ -132,6 +132,13 @@ def claude_like(sb, agent, op, cmd_as_argv=False):
     if op == "mcp":
         return sb.hook(agent, {"hook_event_name": "PreToolUse", "tool_name": "mcp__github__create_issue",
                                "session_id": "cov", "tool_input": {"title": "x"}, "cwd": h})
+    if op == "case_variant":
+        if agent == "codex":
+            return sb.hook(agent, bash("cat " + h + "/.SSH/ID_RSA"))
+        return sb.hook(agent, {"hook_event_name": "PreToolUse", "tool_name": "Read",
+                               "session_id": "cov", "tool_input": {"file_path": h + "/.SSH/ID_RSA"}, "cwd": h})
+    if op == "folder_rename":
+        return sb.hook(agent, bash("cd " + h + " && mv .ssh x"))
     if op == "capture":
         return sb.hook(agent, bash("screencapture -x " + h + "/s.png"))
     if op == "capture_tool":
@@ -162,6 +169,10 @@ def cursor(sb, op):
     if op == "mcp":
         return sb.hook("cursor", dict(base, hook_event_name="beforeMCPExecution", tool_name="create_issue",
                                       tool_input="{\"title\":\"x\"}"))
+    if op == "case_variant":
+        return sb.hook("cursor", dict(base, hook_event_name="beforeReadFile", file_path=h + "/.SSH/ID_RSA"))
+    if op == "folder_rename":
+        return sb.hook("cursor", dict(base, hook_event_name="beforeShellExecution", command="cd " + h + " && mv .ssh x"))
     if op == "capture":
         return sb.hook("cursor", dict(base, hook_event_name="beforeShellExecution",
                                       command="screencapture -x " + h + "/s.png"))
@@ -183,6 +194,8 @@ META = {
         "upload": ("PreToolUse (Bash)", "command text (parsed)", "before it runs"),
         "mcp": ("PreToolUse (mcp__server__tool)", "server, tool, argument keys and values", "before the call"),
         "web_fetch": ("PreToolUse (WebFetch)", "the URL", "before the fetch"),
+        "case_variant": ("PreToolUse (Read)", "the path as written (matched without letter case)", "before it runs"),
+        "folder_rename": ("PreToolUse (Bash)", "command text (parsed; cd followed)", "before it runs"),
         "capture": ("PreToolUse (Bash)", "command text (parsed)", "before it runs"),
         "capture_tool": ("PreToolUse (mcp__computer-use__…)", "tool name", "before the call"),
     },
@@ -195,6 +208,8 @@ META = {
         "upload": ("PreToolUse (shell)", "argv (parsed)", "before it runs"),
         "mcp": ("PreToolUse (MCP tool)", "server, tool, arguments", "before the call"),
         "web_fetch": ("none (no fetch event)", "", ""),
+        "case_variant": ("PreToolUse (shell)", "the path as written (matched without letter case)", "before it runs"),
+        "folder_rename": ("PreToolUse (shell)", "command text (parsed; cd followed)", "before it runs"),
         "capture": ("PreToolUse (shell)", "argv (parsed)", "before it runs"),
         "capture_tool": ("PreToolUse (MCP tool)", "tool name", "before the call"),
     },
@@ -207,6 +222,8 @@ META = {
         "upload": ("beforeShellExecution", "command text (parsed)", "before it runs"),
         "mcp": ("beforeMCPExecution", "tool name and arguments, not the server", "before the call"),
         "web_fetch": ("none (no fetch event)", "", ""),
+        "case_variant": ("beforeReadFile", "the path as written (matched without letter case)", "before it runs"),
+        "folder_rename": ("beforeShellExecution", "command text (parsed; cd followed)", "before it runs"),
         "capture": ("beforeShellExecution", "command text (parsed)", "before it runs"),
         "capture_tool": ("beforeMCPExecution", "tool name", "before the call"),
     },
@@ -233,6 +250,8 @@ OPS = [
     ("upload", "Network upload command (`curl -d @file`)"),
     ("mcp", "MCP tool call (no rule for the server)"),
     ("web_fetch", "The agent's own web fetch (secret in the URL)"),
+    ("case_variant", "Read a protected file through a letter-case variant (G4)"),
+    ("folder_rename", "Rename a folder holding a protected one, cd-relative (G14)"),
     ("capture", "Screen and app control (screencapture, ffmpeg/sox, osascript)"),
     ("capture_tool", "The agent's own screenshot or computer-use tool"),
 ]
@@ -249,6 +268,9 @@ BYPASS = {
                  "any other way aren't governed.",
     "prompt_secret": "Only the prompt as you submit it: not tool results, not files the agent reads later.",
     "file_tool": "Reads through the shell or a script are separate rows.",
+    "case_variant": "Protected paths match without letter case (macOS volumes are case-insensitive by default).",
+    "folder_rename": "Moving, copying, archiving or deleting a folder that holds a protected path is stopped, also after a cd. "
+                     "A script the agent writes that renames it isn't seen (escape case script-renames-folder).",
     "capture": "Recognized commands only: screencapture, ffmpeg/sox/rec from a live device, imagesnap, cliclick, "
                "osascript that tells an app; allowed per app (kai allow-capture --app, or the agent's page in "
                "the app). A program the agent writes can call the capture APIs directly.",
@@ -327,6 +349,21 @@ def main():
                 evid = "live " + live[key][op] + "; " + evid
             lines.append("| %s | %s | %s | %s | %s | %s | %s |" % (label, ev, inp, stage, can, BYPASS.get(op, ""), evid))
         lines.append("")
+    lines += ["## Enforcement and attribution (Preview 1, configuration A)", "",
+              "What enforces each decision, and how Kai knows who is acting. Preview 1 is **configuration A** of the "
+              "replay gate in [security/RECONCILED-PLAN.md](security/RECONCILED-PLAN.md): hooks only.", "",
+              "| Question | Preview 1 answer |", "|---|---|",
+              "| What enforces a stop | The agent itself, honouring its hook's answer before the tool call runs. Nothing at the OS level. |",
+              "| Which actions | Only the tool calls each agent reports to its hooks (rows above). |",
+              "| How Kai knows the agent | By which agent's hook configuration ran `kai hook <agent>`. No process attribution. |",
+              "| An agent's child process or a script it writes | Not attributed and not checked: the hook sees only the command that starts it. |",
+              "| A detached or background process | Not attributed and not checked. |",
+              "| An editor extension host (Cursor, VS Code) acting on its own | Not attributed and not checked: it runs no agent hooks. |",
+              "| An unknown process | Not checked. Host-wide asset protection (Layer 1) needs Endpoint Security, not in Preview 1. |",
+              "| Status words | `kai status` reports measured hook state per agent (Installed, Configured, Trusted, Self-test, Live verification); never \"Protected\". |",
+              "",
+              "The replay records for each configuration are in `tests/replay/records/`; NOT COVERED rows there are "
+              "listed here, never claimed.", ""]
     lines += ["## Not checked by any agent's hooks", "", "| What | Why | Status |", "|---|---|---|"]
     for what, why, st in NOT_CHECKED:
         lines.append("| %s | %s | %s |" % (what, why, st))
@@ -349,7 +386,7 @@ def main():
     bad = []
     for name, key, ver in agents:
         r = results[key]
-        for op in ("shell_read", "prompt_secret", "upload", "capture", "capture_tool"):
+        for op in ("shell_read", "prompt_secret", "upload", "capture", "capture_tool", "case_variant", "folder_rename"):
             if r.get(op) and not r[op]["denied"]:
                 bad.append(name + ": " + op)
         if r.get("file_tool") and not r["file_tool"]["denied"]:
