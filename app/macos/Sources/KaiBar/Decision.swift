@@ -53,6 +53,11 @@ struct DecisionSheet: View {
                      + "see what is sent over the encrypted connection. Kai doesn't know why this was requested.")
                     .font(.system(size: 11)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             }
+            // Step 6 / NEVER-RERUN card: the triggering command (a redacted excerpt).
+            if !event.isNetwork, let cmd = event.target, !cmd.isEmpty {
+                Text("While running: \(cmd)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.soft)
+                    .lineLimit(3).truncationMode(.middle).textSelection(.enabled)
+            }
             if let d = done { result(d) } else { options }
             if showWhy {
                 VStack(alignment: .leading, spacing: 2) {
@@ -89,7 +94,7 @@ struct DecisionSheet: View {
             let signed = event.identity != nil
             // Action-only labels (the title names the agent and the site);
             // stacked full width when they don't fit, never truncated.
-            CardActions(actions: (sessionLive ? [CardAction(title: "Allow this session", info: InfoText.thisSession) {
+            CardActions(actions: (sessionLive ? [CardAction(title: "Allow for this task", info: InfoText.thisSession) {
                                       grants.allowForSession(event); done = .session }] : [])
                                  + (signed ? [CardAction(title: "Allow 1 hour", info: InfoText.oneHour) {
                                       grants.allowForHour(grants.request(from: event)); done = .hour(Date().addingTimeInterval(3600)) },

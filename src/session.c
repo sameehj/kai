@@ -310,7 +310,7 @@ int kai_session_busy(const char *sid, long long now) {
     cJSON *i = o ? cJSON_GetObjectItem(o, "inflight") : NULL;
     long long since = cJSON_IsNumber(i) ? (long long)i->valuedouble : 0;
     cJSON_Delete(o);
-    return since > 0 && now - since < 6 * 3600;   /* a crashed agent's call doesn't count forever */
+    return since > 0 && now - since < 4 * 3600;   /* Step 6: idle 4 h+ leaves Working now, a stuck call too */
 }
 
 long long kai_session_last_active(const char *sid, const char *workspace) {
@@ -367,6 +367,14 @@ const char *kai_status_sentence(int files, int internet, int agents, int paused,
                                 char *out, size_t n) {
     if (!out || !n) return "";
     if (paused) snprintf(out, n, "Kai is paused");
+    else if (files == KAI_FILES_NOT_INCLUDED) {   /* the header adds "Files: not included in this release" */
+        if (internet < 0) snprintf(out, n, "Internet: not verified");
+        else if (internet == 0) snprintf(out, n, "Internet protection is off");
+        else if (internet == 1) snprintf(out, n, "Internet: watching only");
+        else if (agents > 0)
+            snprintf(out, n, "Internet protected \xC2\xB7 %d agent%s working", agents, agents == 1 ? "" : "s");
+        else snprintf(out, n, "Internet protected");
+    }
     /* Internet not verified: left out of the headline, which speaks for Files. */
     else if (internet < 0 && files <= 0) snprintf(out, n, "Files protection is off");
     else if (internet < 0 && files == 1) snprintf(out, n, "Files: watching only");

@@ -26,17 +26,13 @@ extension AppModel {
 
     /// Spec §2: Activity's weekly line, from the per-day counters (last 7 days).
     var weeklyLine: String {
-        var secrets = 0, blocked = 0, paused = 0
+        var stopped = 0
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
         for d in 0..<7 {
             let day = f.string(from: Date().addingTimeInterval(-Double(d) * 86400))
-            secrets += Int(kai_daily_count(day, CChar(UInt8(ascii: "s")))) + Int(kai_daily_count(day, CChar(UInt8(ascii: "c"))))
-            blocked += Int(kai_daily_count(day, CChar(UInt8(ascii: "b"))))
-            paused += Int(kai_daily_count(day, CChar(UInt8(ascii: "p"))))
+            stopped += Int(kai_daily_count(day, CChar(UInt8(ascii: "s")))) + Int(kai_daily_count(day, CChar(UInt8(ascii: "b"))))
         }
-        _ = paused
-        return "This week: \(secrets) secret\(secrets == 1 ? "" : "s") kept private · \(blocked) action"
-            + "\(blocked == 1 ? "" : "s") stopped"
+        return "This week: \(stopped) action\(stopped == 1 ? "" : "s") stopped"
     }
 
     /// What deserves a line in the menu: things Kai stopped or cleaned.
@@ -71,12 +67,23 @@ extension AppModel {
     var valueLine: String {
         // Fix 1: from the per-day counter written with each audit record, not
         // the 300-event buffer this app keeps for display.
+        let n = stoppedTodayCount
+        // Step 6: "N actions stopped today" (a redaction is cleaned, not stopped)
+        return n == 0 ? "Nothing stopped today" : "\(n) action\(n == 1 ? "" : "s") stopped today"
+    }
+
+    var stoppedTodayCount: Int {
         var s: Int32 = 0, b: Int32 = 0
         kai_daily_counts(nil, &s, &b)
-        let secrets = Int(s), other = Int(b)
-        // "N secrets kept private · M actions stopped today"
-        if secrets == 0 && other == 0 { return "Nothing stopped today" }
-        return "\(secrets) secret\(secrets == 1 ? "" : "s") kept private · \(other) action\(other == 1 ? "" : "s") stopped today"
+        return Int(s + b)
+    }
+
+    /// Today's stops, repeats collapsed, newest first: the list the value line
+    /// opens (from the events this app holds; older ones are in Activity).
+    var stoppedTodayGroups: [EventGroup] {
+        importantEventGroups.filter { g in
+            g.event.isBlock && (g.event.date.map { Calendar.current.isDateInToday($0) } ?? false)
+        }
     }
 
     /// Today's most repeated stopped item, when it repeated (exact, from the log).

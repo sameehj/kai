@@ -84,7 +84,9 @@ final class AppModel: ObservableObject {
     enum ObservedProtection { case protected, partial, notProtected }
 
     func levels(storageOn: Bool, networkOn: Bool) -> (files: Int32, internet: Int32, paused: Bool) {
-        let files = storageOn ? max(kai_wall_observed_level("storage"), 0) : 0
+        // Step 6: an edition without the Files extension says so, never "Files off".
+        let files: Int32 = !StorageWall.included ? KAI_FILES_NOT_INCLUDED
+                         : storageOn ? max(kai_wall_observed_level("storage"), 0) : 0
         let internet: Int32 = networkOn ? kai_wall_observed_level("network") : 0   // -1 = not verified
         let paused = kai_wall_paused("storage", Int64(Date().timeIntervalSince1970)) != 0
         return (files, internet, paused)
@@ -105,8 +107,9 @@ final class AppModel: ObservableObject {
 
     func observedProtection(storageOn: Bool, networkOn: Bool) -> ObservedProtection {
         let l = levels(storageOn: storageOn, networkOn: networkOn)
-        if l.files == 2 && l.internet == 2 && !l.paused { return .protected }
-        if l.files == 0 && l.internet == 0 { return .notProtected }
+        let none = l.files == KAI_FILES_NOT_INCLUDED
+        if (l.files == 2 || none) && l.internet == 2 && !l.paused { return .protected }
+        if (l.files == 0 || none) && l.internet == 0 { return .notProtected }
         return .partial
     }
 

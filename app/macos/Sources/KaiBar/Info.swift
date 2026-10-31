@@ -12,14 +12,13 @@ enum InfoText {
     static let internetOnly = "Kai checks this agent's connections. Files protection is off."
     static let watch = "Kai shows what would be blocked, but blocks nothing."
     static let protect = "Kai stops anything you haven't allowed."
-    static let thisSession = "Until this agent session ends."
+    static let thisSession = "For this task: until this agent session ends. Durable rules stay in Settings."
     static let oneHour = "For one hour, even if the session ends sooner."
     static let always = "Until you remove it. Needs Touch ID."
     static let askedRecently = "Sites this agent tried that you haven't decided on."
     static let screenAppControl = "Screenshots, recording from the microphone or camera, and scripts that control "
         + "other apps (osascript). Kai asks per app: allowing Safari doesn't allow Terminal or screencapture. macOS "
         + "still asks for its own permission, and a program the agent writes can use these directly."
-    static let secretsKept = "Secrets Kai removed or stopped before they were sent."
     static let actionsStopped = "Actions Kai stopped before they ran."
 
     /// The ⓘ for a session's coverage word, if there is one.
@@ -63,6 +62,6 @@ struct PreviewBadge: View {
         Text("Preview").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.muted)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .overlay(Capsule().stroke(Theme.border))
-            .help("Kai Preview. Some protections come in a later release.")
+            .help("Kai Preview. Files protection: not included in this release.")
     }
 }

@@ -225,9 +225,9 @@ long long kai_hook_last_seen(const char *agent) {
 /* Fix 1: the per-day counter behind "Kai kept 3 secrets private today". One
  * byte per meaningful record, appended to <kai home>/daily/<local date> (an
  * O_APPEND write this small is atomic, so hooks and walls can share it). It is
- * independent of the log, so rotation doesn't reset it. 's' = a secret kept
- * private (a redaction, or a block of a protected file or a secret), 'b' =
- * another block. Telemetry, a remembered Keep blocked, the QUIC fallback and
+ * independent of the log, so rotation doesn't reset it. 's' = a stop that
+ * kept a secret (a block of a protected file or a secret), 'b' = another
+ * block, 'c' = a redaction (cleaned, not stopped). Telemetry, a remembered Keep blocked, the QUIC fallback and
  * grant bookkeeping are never counted. */
 static char daily_kind(const kai_audit_entry *e) {
     const char *d = e->decision ? e->decision : "", *det = e->detail ? e->detail : "";
@@ -236,7 +236,7 @@ static char daily_kind(const kai_audit_entry *e) {
         (!strcmp(src, "network") && e->target && !strcmp(e->target, "QUIC")))
         return 0;
     if (!strcmp(src, "pause") && !strcmp(d, "paused")) return 'p';   /* you had to stop Kai */
-    if (!strcmp(d, "redact") || !strcmp(d, "replace")) return 's';
+    if (!strcmp(d, "redact") || !strcmp(d, "replace")) return 'c';
     if (strcmp(d, "block") != 0) return 0;
     if (!strcmp(src, "storage") || !strncmp(rule, "secret", 6) ||
         strstr(det, "protected")) return 's';

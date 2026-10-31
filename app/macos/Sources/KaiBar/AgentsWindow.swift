@@ -106,15 +106,7 @@ final class AgentsModel: ObservableObject {
         do {
             let s = snap
             var rows = s.sessions
-            // Two live sessions with the same agent + project: tell them apart.
-            let keyOf = { (r: SessionRow) in r.displayAgent + "|" + r.project }
-            let dup = Dictionary(grouping: rows.filter { $0.isActive && $0.workspaces == nil }, by: keyOf)
-                .filter { $0.value.count > 1 }
-            for i in rows.indices where rows[i].isActive && dup[keyOf(rows[i])] != nil {
-                let r = rows[i]
-                rows[i].nameSuffix = !r.topic.isEmpty ? String(r.topic.prefix(30))
-                                   : !r.tty.isEmpty ? r.tty : "started \(r.startedClock)"
-            }
+            SessionRow.assignNames(&rows, topic: { $0.topicLine })   // Step 6: one unique name per session
             if rows != sessions { sessions = rows }
             agents = s.agents
             loaded = true
@@ -251,9 +243,8 @@ struct SessionRowView: View {
                 if !session.topicLine.isEmpty {   // hook-reported topic, or hidden
                     Text(session.topicLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-                HStack(spacing: 6) {          // project once, window/tab, time
-                    Text(session.projectName)
-                    Text("· \(session.window)")
+                HStack(spacing: 6) {          // Step 6: its unique name and time; ids are in Details
+                    Text(session.name.isEmpty ? session.projectName : session.name)
                     if !session.activeLabel.isEmpty { Text("· \(session.activeLabel)") }
                 }.font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
             }
@@ -270,7 +261,10 @@ struct SessionDetail: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text(session.displayAgent).font(.title2).fontWeight(.semibold)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(session.displayAgent).font(.title2).fontWeight(.semibold)
+                        if !session.name.isEmpty { Text(session.name).font(.callout).foregroundStyle(.secondary) }
+                    }
                     Spacer()
                     if session.isActive {
                         // Item 4: pause acts through the storage wall by ES session
@@ -303,14 +297,19 @@ struct SessionDetail: View {
                               session.isIDE ? (session.workspaces ?? []).map { "\($0.name) (\($0.activity))" }
                                                   .joined(separator: ", ")
                                             : session.project)
-                    detailRow("Window", session.window)
-                    detailRow("Host app", session.hostApp.isEmpty ? "-" : session.hostApp)
                     detailRow("Started", session.startedClock)
                     detailRow("Activity", session.activeLabel.isEmpty ? session.state : session.activeLabel)
-                    detailRow("Processes", "\(session.childCount + 1)")
-                    detailRow("State", session.state)
-                    detailRow("Session id", session.id)
                 }.font(.callout)
+                // Step 6: the identifiers behind a disclosure.
+                DisclosureGroup("Details") {
+                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
+                        detailRow("Session id", session.id)
+                        detailRow("Host app", session.hostApp.isEmpty ? "-" : session.hostApp)
+                        detailRow("Terminal (tty)", session.tty.isEmpty ? "-" : session.tty)
+                        detailRow("Processes", "\(session.childCount + 1)")
+                        detailRow("State", session.state)
+                    }.font(.callout).padding(.top, 4)
+                }
 
                 Text("Permissions").font(.headline)
                 if sessionGrants.isEmpty {

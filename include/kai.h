@@ -382,7 +382,7 @@ const char *kai_enforcement_from_levels(int files, int internet);
 #define KAI_WORKING_WINDOW 900
 int kai_session_working(long long last_active, long long now);
 /* A tool call in progress (allowed PreToolUse seen, PostToolUse not yet).
- * since 0 clears. kai_session_busy: in progress for under 6 hours. */
+ * since 0 clears. kai_session_busy: in progress for under 4 hours. */
 int kai_session_inflight_set(const char *sid, long long since);
 int kai_session_busy(const char *sid, long long now);
 const char *kai_session_activity_dir(void);
@@ -396,6 +396,8 @@ int kai_sessions_prune_delegated(void);
  * "Files protection is off", ...). files/internet: 0 off, 1 watch, 2 protect;
  * internet -1 = not verified (left out of the headline); agents < 0 = unknown.
  * Writes into out and returns it. */
+/* files = KAI_FILES_NOT_INCLUDED: this build ships no Files wall (Step 6). */
+#define KAI_FILES_NOT_INCLUDED (-2)
 const char *kai_status_sentence(int files, int internet, int agents, int paused,
                                 char *out, size_t n);
 /* The Kai app group (Team-ID-prefixed; matches the entitlements). */

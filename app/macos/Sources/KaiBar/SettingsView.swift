@@ -86,6 +86,10 @@ struct SettingsView: View {
                     Text(model.health == .problem ? model.headline
                          : model.statusSentence(storageOn: storage.isOn, networkOn: wall.isOn))
                         .font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(1)
+                    if !StorageWall.included {
+                        Text(ProtectionText.filesNotIncluded).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             .padding(.horizontal, 8).padding(.bottom, 18).padding(.top, 8)
@@ -640,7 +644,7 @@ private struct StoragePage: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Files protection").font(.system(size: 14, weight: .semibold))
-                        Text("Coming in a later release.").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        Text(ProtectionText.filesNotIncluded).font(.system(size: 12)).foregroundStyle(Theme.muted)
                     }
                     Spacer()
                 }

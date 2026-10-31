@@ -23,6 +23,7 @@ struct MenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
+            needsYou   // Step 6: a waiting connection comes first
             if let msg = model.errorMessage { ErrorBanner(message: msg) { model.errorMessage = nil } }
             if let b = alert {
                 BlockNotice(event: b,
@@ -33,7 +34,6 @@ struct MenuView: View {
             pausedBanner
             if DevFlags.perSessionPause { pauseBanner }
             migratedConfirm
-            needsYou
             activeNow
             protectionsLine
             permissions
@@ -76,9 +76,21 @@ struct MenuView: View {
                 }
             }
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(model.valueLine).font(.system(size: 12)).foregroundStyle(Theme.muted)
-                    .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
-                InfoButton(text: InfoText.secretsKept + " " + InfoText.actionsStopped)
+                // Step 6: "N actions stopped today" opens the list (reason, command, choices).
+                if model.stoppedTodayCount > 0 {
+                    Button { openDecision = openDecision == "stopped" ? nil : "stopped" } label: {
+                        Text(model.valueLine + " ›").font(.system(size: 12)).foregroundStyle(Theme.soft)
+                            .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: Binding(get: { openDecision == "stopped" },
+                                                  set: { if !$0 { openDecision = nil } }), arrowEdge: .leading) {
+                        StoppedTodayList(grants: grantManager, open: { open(.activity) }).environmentObject(model)
+                    }
+                } else {
+                    Text(model.valueLine).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                }
+                InfoButton(text: InfoText.actionsStopped)
             }
             // The most repeated stop today (exact, from the log), with Review.
             if let m = model.topToday {
@@ -247,12 +259,10 @@ struct MenuView: View {
         let l = model.levels(storageOn: storage.isOn, networkOn: wall.isOn)
         return Button { open(.files) } label: {
             HStack(spacing: 6) {
-                if StorageWall.included {
+                if StorageWall.included {   // otherwise the header says Files isn't included
                     Text(ProtectionText.mark("Files", level: storage.isOn ? (l.files > 0 ? l.files : -1) : 0))
-                } else {
-                    Text("Files: later release").foregroundStyle(Theme.muted)
+                    Text("·").foregroundStyle(Theme.muted)
                 }
-                Text("·").foregroundStyle(Theme.muted)
                 Text(ProtectionText.mark("Internet", level: l.internet))
                 Spacer()
                 Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(Theme.muted)
@@ -269,7 +279,7 @@ struct MenuView: View {
         let paused = agents.pausedSessions
         ForEach(paused) { s in
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(s.displayAgent)\(s.projectName.isEmpty ? "" : " · \(s.projectName)")")
+                Text("\(s.displayAgent) · \(s.name)")
                     .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.muted)
                 PauseControl(state: grantManager.pauseState(s.id), until: grantManager.pauseEnds(s.id),
                              pause: { grantManager.pauseSession(s.id, minutes: 15) },
@@ -314,9 +324,14 @@ struct MenuView: View {
                 if let note = model.internetUnverifiedNote(networkOn: wall.isOn) {
                     Text(note).font(.system(size: 11)).foregroundStyle(Theme.amber)
                 }
+                if !StorageWall.included {
+                    Text(ProtectionText.filesNotIncluded).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-            PreviewBadge()
-            if !KaiInstance.isRelease { DevBadge() }
+            .layoutPriority(1)   // the status lines wrap rather than truncate
+            PreviewBadge().fixedSize()
+            if !KaiInstance.isRelease { DevBadge().fixedSize() }
             Spacer()
             if model.busy { ProgressView().controlSize(.small) }
             Button { open(.files) } label: {
@@ -460,6 +475,41 @@ struct StatusHero: View {
 /// Phase A item 3: a hook block, as a card with a next step, never a dead
 /// end. (Wall blocks stage their own decision card in Needs you.) The rule and
 /// excerpt live behind "Why?"; "Open Activity" is where "Not a threat" lives.
+/// Step 6: what "N actions stopped today" opens. Each stop with its reason,
+/// the command that triggered it, and the choices Kai has for it (Allow for
+/// this task / Keep blocked for a connection; a tool call's own way out).
+struct StoppedTodayList: View {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject var grants: GrantManager
+    let open: () -> Void
+
+    var body: some View {
+        let groups = model.stoppedTodayGroups
+        let listed = groups.reduce(0) { $0 + $1.count }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(model.valueLine).font(.system(size: 13, weight: .semibold))
+                ForEach(groups) { g in
+                    VStack(alignment: .leading, spacing: 4) {
+                        DecisionSheet(event: g.event, count: g.count, grants: grants).environmentObject(model)
+                        if !g.event.isNetwork && !g.event.isStorage && !g.event.detail.isEmpty {
+                            Text(g.event.detail).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        }
+                    }
+                    Divider()
+                }
+                if listed < model.stoppedTodayCount {
+                    Button("\(model.stoppedTodayCount - listed) more in Activity ›", action: open)
+                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
+                }
+            }
+            .padding(14)
+        }
+        .frame(width: 360).frame(maxHeight: 480)
+    }
+}
+
 struct BlockNotice: View {
     let event: AuditEvent
     let dismiss: () -> Void
@@ -681,21 +731,13 @@ struct PopoverSessionRow: View {
     let session: SessionRow
     var grants: Int = 0
     var expectedCoverage = "Files + Internet"
-    /// Spec §4: never empty, never the agent's name twice. Topic, else the
-    /// workspace or project; for an app (Cursor), the workspace name.
-    private var topic: String { session.topicLine }
-    private var title: String {
-        if !topic.isEmpty { return topic }
-        if let w = session.workspaces, let first = w.first {
-            return w.count > 1 ? "\(first.name) +\(w.count - 1)" : first.name
-        }
-        let p = session.projectBase
-        return (p.isEmpty || p == "—" || p == session.hostApp) ? session.displayAgent : p
-    }
+    /// Step 6: the session's unique name (topic or project, plus the tab);
+    /// session id, host app and tty are on its details page.
+    private var title: String { session.name.isEmpty ? session.projectBase : session.name }
     private var secondLine: String {
-        if session.workspaces != nil { return session.activeLabel }   // an app: just its activity
-        return [topic.isEmpty ? "" : session.projectBase, session.window, session.activeLabel]
-            .filter { !$0.isEmpty && $0 != "—" && $0 != title }.joined(separator: " · ")
+        if session.workspaces != nil || session.topicLine.isEmpty { return session.activeLabel }
+        return [session.projectBase, session.activeLabel]
+            .filter { !$0.isEmpty && $0 != "—" && !title.hasPrefix($0) }.joined(separator: " · ")
     }
     private var badge: Color {
         session.enforcementShort == "Files + Internet" ? Theme.lime
@@ -865,6 +907,8 @@ enum PauseText {
 }
 
 enum ProtectionText {
+    /// Step 6: this release ships the Internet wall only.
+    static let filesNotIncluded = "Files: not included in this release"
     /// "Files ✓", "Files: watching", "Files: off", "Files: not running".
     static func mark(_ name: String, level: Int32) -> String {
         switch level {

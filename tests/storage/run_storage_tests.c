@@ -1262,6 +1262,17 @@ static void test_enforcement_labels(void) {
           "internet unverified, files off");
     CHECK(strstr(kai_status_sentence(2, -1, 3, 0, st, sizeof st), "Internet") == NULL,
           "unverified Internet never appears in the headline");
+    /* Step 6: Files isn't in this release. The headline speaks for Internet
+     * alone and never says "Files protection is off" or "Not protected". */
+    int NI = KAI_FILES_NOT_INCLUDED;
+    CHECK(!strcmp(kai_status_sentence(NI, 2, 2, 0, st, sizeof st), "Internet protected \xC2\xB7 2 agents working"),
+          "Files not included: Internet protected with the agent count");
+    CHECK(!strcmp(kai_status_sentence(NI, 2, 0, 0, st, sizeof st), "Internet protected"), "...without agents");
+    CHECK(!strcmp(kai_status_sentence(NI, 1, 0, 0, st, sizeof st), "Internet: watching only"), "...Internet watching");
+    CHECK(!strcmp(kai_status_sentence(NI, 0, 0, 0, st, sizeof st), "Internet protection is off"), "...Internet off");
+    CHECK(!strcmp(kai_status_sentence(NI, -1, 1, 0, st, sizeof st), "Internet: not verified"), "...Internet unverified");
+    CHECK(!strcmp(kai_status_sentence(NI, 2, 1, 1, st, sizeof st), "Kai is paused"), "...paused still wins");
+    CHECK(strstr(kai_status_sentence(NI, 0, 0, 0, st, sizeof st), "Files") == NULL, "...and never names Files");
 
     /* Fix 3: a heartbeat counts only if it is fresh, names the wall, is owned
      * by the expected uid (root in production) and isn't group/world-writable,
@@ -2152,6 +2163,7 @@ static void test_daily_counter(void) {
     printf("daily counter for the value line (fix 1)\n");
     int s0 = 0, b0 = 0, s1 = 0, b1 = 0;
     kai_daily_counts(NULL, &s0, &b0);
+    int c0 = kai_daily_count(NULL, 'c');
     audit_one("storage", "claude", "block", "protected_resource", "agent open of a protected file", "/u/.ssh/id_ed25519");
     audit_one("claude", "PreToolUse", "redact", "secret:aws_key", "cleaned", NULL);
     audit_one("claude", "PreToolUse", "block", "secret:github_token", "secret in command", NULL);
@@ -2164,7 +2176,9 @@ static void test_daily_counter(void) {
     audit_one("claude", "PreToolUse", "allow", "", "", NULL);
     audit_one("claude", "PreToolUse", "warn", "upload", "warned", NULL);
     kai_daily_counts(NULL, &s1, &b1);
-    CHECK(s1 - s0 == 3 && b1 - b0 == 1, "3 secrets kept, 1 other block; telemetry, kept-blocked, QUIC and grants don't count");
+    CHECK(s1 - s0 == 2 && b1 - b0 == 1, "2 secret stops, 1 other block; telemetry, kept-blocked, QUIC and grants don't count");
+    CHECK(kai_daily_count(NULL, 'c') - c0 == 1,
+          "a redaction counts as cleaned, not as an action stopped (Step 6: \"N actions stopped today\")");
 
     /* a busy day across rotations: 1500 counted events with a tiny log cap */
     setenv("KAI_AUDIT_MAX_BYTES", "20000", 1);
@@ -2530,8 +2544,12 @@ static void test_working_inflight(void) {
           "...although its last event alone would say idle");
     kai_session_inflight_set(sid, 0);                        /* PostToolUse */
     CHECK(kai_session_busy(sid, now) == 0, "after PostToolUse, no longer in progress");
+    kai_session_inflight_set(sid, now - 3 * 3600);
+    CHECK(kai_session_busy(sid, now) == 1, "a call in progress for 3 hours still counts");
+    kai_session_inflight_set(sid, now - 4 * 3600 - 60);
+    CHECK(kai_session_busy(sid, now) == 0, "a call left in progress for over 4 hours leaves Working now (Step 6)");
     kai_session_inflight_set(sid, now - 7 * 3600);
-    CHECK(kai_session_busy(sid, now) == 0, "a call left in progress for over 6 hours (agent crashed) doesn't count");
+    CHECK(kai_session_busy(sid, now) == 0, "a call left in progress for 7 hours (agent crashed) doesn't count");
     kai_session_activity_touch(sid, NULL, now - 60);
     CHECK(kai_session_working(kai_session_last_active(sid, NULL), now), "an event a minute ago: working");
 }

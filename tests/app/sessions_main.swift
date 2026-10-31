@@ -52,5 +52,44 @@ do {
 do { _ = try SessionSnapshot.decode(Data("{\"agents\":[]}".utf8)); check(false, "no sessions list is a failed source") }
 catch { check(true, "no sessions list at all is reported as a failed source, not as 0 sessions") }
 
+// Step 6: session names. What the session is about (topic, else project
+// folder, else workspaces) plus the terminal tab; never two identical names,
+// never the agent's own name ("Cursor · Cursor").
+print("sessions: names")
+func row(_ id: String, _ agent: String, project: String = "", tty: String = "", topic: String = "",
+         host: String = "", started: Int = 0, ws: [String]? = nil) -> SessionRow {
+    var r = SessionRow(id: id, agent: agent)
+    r.project = project; r.tty = tty; r.topic = topic; r.hostApp = host; r.startedUtc = started
+    if let ws {
+        let j = "[" + ws.map { "{\"path\":\"\($0)\"}" }.joined(separator: ",") + "]"
+        r.workspaces = try! JSONDecoder().decode([SessionRow.Workspace].self, from: Data(j.utf8))
+    }
+    return r
+}
+var named = [
+    row("c1", "claude", project: "/u/src/kai", tty: "/dev/ttys001"),
+    row("c2", "claude", project: "/u/src/kai", tty: "/dev/ttys002"),
+    row("c3", "claude", project: "/u/src/web", tty: "ttys004", topic: "Fix the login page"),
+    row("c4", "claude", project: "/u/src/api", started: 1_700_000_000),
+    row("c5", "claude", project: "/u/src/api", started: 1_700_003_600),
+    row("c6", "claude", project: "/u/src/same"),
+    row("c7", "claude", project: "/u/src/same"),
+    row("u1", "cursor", host: "Cursor", ws: []),
+    row("u2", "cursor", host: "Cursor", ws: ["/u/src/kai", "/u/src/web"]),
+    row("x1", "codex"),
+]
+SessionRow.assignNames(&named, topic: { $0.topic })
+let byId = Dictionary(uniqueKeysWithValues: named.map { ($0.id, $0.name) })
+check(byId["c1"] == "kai · ttys001" && byId["c2"] == "kai · ttys002",
+      "project folder plus terminal tab: \(byId["c1"]!), \(byId["c2"]!)")
+check(byId["c3"] == "Fix the login page · ttys004", "the topic, when the agent reported one: \(byId["c3"]!)")
+check(byId["c4"] != byId["c5"] && byId["c4"]!.hasPrefix("api · started "),
+      "same project, no tab: told apart by start time: \(byId["c4"]!), \(byId["c5"]!)")
+check(byId["c6"] != byId["c7"], "identical sessions still get different names: \(byId["c6"]!), \(byId["c7"]!)")
+check(Set(named.map(\.name)).count == named.count, "no two names are the same")
+check(!byId["u1"]!.contains("Cursor"), "a Cursor app with no workspace isn't called \"Cursor\": \(byId["u1"]!)")
+check(byId["u2"] == "kai +1", "a Cursor app named by its workspaces: \(byId["u2"]!)")
+check(!byId["x1"]!.isEmpty && !byId["x1"]!.contains("Codex"), "a session with nothing known still has a name: \(byId["x1"]!)")
+
 print(fails == 0 ? "sessions tests: all passed" : "sessions tests: \(fails) failed")
 exit(fails == 0 ? 0 : 1)

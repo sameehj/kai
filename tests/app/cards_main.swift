@@ -48,7 +48,7 @@ struct TestCard: View {
     return placed
 }
 
-let popover = [CardAction(title: "Allow this session", info: "i", primary: true) {},
+let popover = [CardAction(title: "Allow for this task", info: "i", primary: true) {},
                CardAction(title: "Allow 1 hour", info: "i") {},
                CardAction(title: "Keep blocked") {}]
 let more = [CardAction(title: "Always allow (Touch ID)") {}, CardAction(title: "Allow 1 day") {}]
@@ -70,7 +70,7 @@ MainActor.assumeIsolated {
     check(!RowOrStack.fitsRow([150, 120, 120, 90, 40], spacing: 8, in: cardInner), "popover width: these labels stack")
     check(RowOrStack.fitsRow([100, 100], spacing: 8, in: 208), "exact fit stays on one row")
 }
-for label in ["Allow this session", "Allow 1 hour", "Keep blocked", "More ▾"] {
+for label in ["Allow for this task", "Allow 1 hour", "Keep blocked", "More ▾"] {
     check(!label.contains(agent) && !label.contains("Claude"), "action-only label: \(label)")
 }
 print(fails == 0 ? "card tests: all passed" : "card tests: \(fails) failed")

@@ -109,12 +109,6 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
         }
         return (isNetwork || isStorage) ? event : source
     }
-    /// A secret kept private: a redaction, or a block of a protected file or a secret.
-    var isSecretKept: Bool {
-        guard !isSilent && !isGrant else { return false }
-        if decision == "redact" || decision == "replace" { return true }
-        return isBlock && (isStorage || rule.lowercased().hasPrefix("secret") || detail.contains("protected"))
-    }
 
     private static func title(_ key: String) -> String {
         switch key {
