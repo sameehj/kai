@@ -759,6 +759,19 @@ kai_policy *kai_policy_from_string(const char *text, char *err, size_t errlen) {
     return parse(text, "string", err, errlen);
 }
 
+/* G5: what the Internet wall runs when no policy can be loaded (unreadable,
+ * malformed, missing after Kai wrote it, or not configured yet): the built-in
+ * defaults in Protect, so agent flows are never allowed silently. Bare IPs and
+ * unknown hosts are denied; known hosts only on web ports. */
+kai_policy *kai_policy_builtin_failsafe(void) {
+    char err[128];
+    kai_policy *p = parse(DEFAULT_POLICY, "built-in (no loadable policy)", err, sizeof err);
+    if (p) { p->egress_mode = KAI_EGRESS_BLOCK; p->failsafe = 1; }
+    return p;
+}
+
+int kai_policy_is_failsafe(const kai_policy *p) { return p && p->failsafe; }
+
 void kai_sha256_hex(const void *data, size_t n, char out[65]);
 
 static const char *fingerprint_path(void) {

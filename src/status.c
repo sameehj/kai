@@ -190,12 +190,17 @@ int kai_cmd_status_text(void) {
 
 
     int files = kai_wall_observed_level("storage"), internet = kai_wall_observed_level("network");
+    (void)files;   /* Files protection is not included in this release */
+    char pstate[16] = "";
+    kai_heartbeat_field("network", "policy_state", pstate, sizeof pstate);
     if (!app)
-        printf("%-16s %s\n", "OS enforcement", "Not included in Preview 1");
+        printf("%-16s Internet: not installed (comes with the Kai app) · Files: not included in this release\n",
+               "OS enforcement");
     else
-        printf("%-16s Files: %s · Internet: %s%s\n", "OS enforcement", wall_word(files, 1),
+        printf("%-16s Internet: %s%s%s · Files: not included in this release\n", "OS enforcement",
                internet < 0 ? "not verified" : wall_word(internet, 1),
-               kai_wall_paused("storage", (long long)time(NULL)) ? " (Kai is paused)" : "");
+               !strcmp(pstate, "builtin") ? " (running without a policy: built-in defaults)" : "",
+               kai_wall_paused("network", (long long)time(NULL)) ? " (Kai is paused)" : "");
 
     printf("%-16s %s\n", "Not checked", "what a program the agent runs does on its own, tool results, other "
                                           "model traffic, and actions an agent doesn't report to its hooks "

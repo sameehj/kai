@@ -126,7 +126,7 @@ has "status opens with the contract" "$o" "It is an extra safety layer, not isol
 has "status: a working hook reads Checking" "$o" "Claude Code  Checking"
 has "status: each item separately" "$o" "Installed: yes · Configured: yes · Trusted: not needed · Self-test:"
 has "status: live verification never, with how" "$o" "Live verification: never. Run kai demo --live"
-has "status: OS enforcement not in Preview 1" "$o" "Not included in Preview 1"
+has "status: Files is not included in this release" "$o" "Files: not included in this release"
 hasnt "status never says Protected" "$o" "Protected"
 python3 -I -c 'import json,sys; p=sys.argv[1]; o=json.load(open(p)); o["disableAllHooks"]=True; json.dump(o,open(p,"w"))' "$D/.claude/settings.json"
 o=$(dk status)

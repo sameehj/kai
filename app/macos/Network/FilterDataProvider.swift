@@ -45,7 +45,7 @@ final class FilterDataProvider: NEFilterDataProvider {
         var fp = [CChar](repeating: 0, count: 16)
         kai_policy_fingerprint(&fp, fp.count)
         let json = "{\"wall\":\"network\",\"mode\":\"\(mode)\",\"enforcing\":\(m == KAI_EGRESS_BLOCK),"
-                 + "\"policy\":\"\(String(cString: fp))\","
+                 + "\"policy\":\"\(String(cString: fp))\",\"policy_state\":\"\(engine.policyState)\","
                  + "\"flows\":\(st.flows),\"agent_flows\":\(st.agentFlows),\"blocked\":\(st.blocked),"
                  + "\"paused\":\(st.paused),\"audit_writable\":\(st.auditWritable),\"policy_agents\":\(st.policyAgents),"
                  + "\"running\":true,\"ts\":\(Int(Date().timeIntervalSince1970))}"
@@ -238,6 +238,12 @@ final class Engine {
         }
     }
 
+    /// G5: "loaded", or "builtin" when running without a loadable policy.
+    var policyState: String {
+        lock.lock(); defer { lock.unlock() }
+        return policy.map { kai_policy_is_failsafe($0) != 0 ? "builtin" : "loaded" } ?? "none"
+    }
+
     var mode: kai_egress_mode {
         lock.lock(); defer { lock.unlock() }
         reloadLocked(force: false)
@@ -266,6 +272,13 @@ final class Engine {
         guard let p = kai_policy_load(nil, &err, err.count) else {
             // Keep the last good policy; a typo must not switch the wall off.
             log.error("policy error: \(String(cString: err), privacy: .public)")
+            // G5: no good policy at all: never allow agent flows silently. Run
+            // the built-in defaults in Protect and say so in the heartbeat.
+            if policy == nil, let fs = kai_policy_builtin_failsafe() {
+                policy = fs
+                agentCache.removeAll()
+                log.error("no loadable policy: running on built-in defaults (Protect)")
+            }
             return
         }
         if let old = policy { kai_policy_free(old) }

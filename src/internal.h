@@ -149,6 +149,7 @@ struct kai_policy {
     size_t max_scan;
     /* network wall */
     kai_egress_mode egress_mode;
+    int failsafe;        /* G5: built-in defaults because no policy could be loaded */
     char *egress_allow[KAI_MAX_LIST];
     int negress;
     /* storage wall */

@@ -2333,6 +2333,29 @@ static void test_channels(void) {
     kai_policy *p = kai_policy_from_string("egress block\nchannel claude/code-hosting\n", err, sizeof err);
     CHECK(p && kai_policy_unknown(p, first, sizeof first) == 1 && !strcmp(first, "channel"),
           "a leftover channel line grants nothing and shows as unrecognized");
+    {   /* G5 (network): with no loadable policy the Internet wall runs on built-in
+         * defaults in Protect, never allowing agent flows silently */
+        kai_policy *fs = kai_policy_builtin_failsafe();
+        char w2[256];
+        CHECK(fs && kai_policy_is_failsafe(fs) && kai_policy_egress_mode(fs) == KAI_EGRESS_BLOCK,
+              "G5: the fail-safe policy runs the Internet wall in Protect");
+        CHECK(fs && kai_egress_endpoint_allowed(fs, NULL, "192.0.2.10", 22, w2, sizeof w2) != 1,
+              "G5: ...a bare IP is denied");
+        CHECK(fs && kai_egress_endpoint_allowed(fs, "files.example.dev", "203.0.113.5", 443, w2, sizeof w2) != 1,
+              "G5: ...an unknown host is denied");
+        CHECK(fs && kai_egress_endpoint_allowed(fs, "api.anthropic.com", "203.0.113.6", 443, w2, sizeof w2) == 1,
+              "G5: ...an agent's model host on 443 is allowed");
+        CHECK(fs && kai_egress_endpoint_allowed(fs, "api.anthropic.com", "203.0.113.6", 22, w2, sizeof w2) != 1,
+              "G5: ...but not on a non-web port");
+        CHECK(fs && kai_egress_endpoint_allowed(fs, NULL, "127.0.0.1", 8080, w2, sizeof w2) == 1,
+              "G5: ...this Mac (loopback) stays reachable");
+        CHECK(!kai_policy_is_failsafe(p), "G5: a loaded policy isn't the fail-safe one");
+        kai_policy_free(fs);
+        char e2[256];
+        CHECK(kai_policy_from_string("egress maybe-not\n", e2, sizeof e2) == NULL ||
+              kai_policy_load("/nonexistent/dir/policy", e2, sizeof e2) == NULL,
+              "G5: an unreadable policy loads as NULL (the wall then uses the fail-safe one)");
+    }
     /* G8: Google's API domain is not a blanket allow, only the Gemini hosts */
     CHECK(p && kai_egress_endpoint_allowed(p, "storage.googleapis.com", "1.2.3.4", 443, why, sizeof why) != 1,
           "G8: storage.googleapis.com is not allowed by default");

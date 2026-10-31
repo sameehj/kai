@@ -174,6 +174,11 @@ int kai_egress_endpoint_allowed(const kai_policy *p, const char *host, const cha
         if (why) kai_strlcpy(why, "this Mac (loopback)", whylen);
         return 1;
     }
+    /* G5: running without a policy, known hosts only on web ports */
+    if (p->failsafe && port != 443 && port != 80) {
+        if (why) kai_strlcpy(why, "running without a policy: only web ports", whylen);
+        return 0;
+    }
     for (int i = 0; i < p->negress; i++) {
         egress_entry e;
         if (!parse_entry(p->egress_allow[i], &e)) continue;

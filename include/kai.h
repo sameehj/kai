@@ -62,6 +62,9 @@ int kai_policy_integrity(char *detail, size_t n);
 /* Directives this version doesn't know: count, and the first one's name. */
 int kai_policy_unknown(const kai_policy *p, char *first, size_t n);
 kai_policy *kai_policy_from_string(const char *text, char *err, size_t errlen);
+/* G5: built-in defaults in Protect, for a wall with no loadable policy. */
+kai_policy *kai_policy_builtin_failsafe(void);
+int kai_policy_is_failsafe(const kai_policy *p);
 void kai_policy_free(kai_policy *p);
 const char *kai_policy_source(const kai_policy *p); /* file path or "built-in" */
 

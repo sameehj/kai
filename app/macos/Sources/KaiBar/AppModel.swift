@@ -93,7 +93,14 @@ final class AppModel: ObservableObject {
     /// "Internet: on (not verified)" while the network extension is on but no
     /// verified heartbeat has arrived; nil otherwise.
     func internetUnverifiedNote(networkOn: Bool) -> String? {
-        networkOn && kai_wall_observed_level("network") < 0 ? "Internet: on (not verified)" : nil
+        guard networkOn else { return nil }
+        if kai_wall_observed_level("network") < 0 { return "Internet: on (not verified)" }
+        // G5: the wall couldn't load a policy and runs on built-in defaults (Protect).
+        var buf = [CChar](repeating: 0, count: 16)
+        if kai_heartbeat_field("network", "policy_state", &buf, buf.count) == 1, String(cString: buf) == "builtin" {
+            return "Internet: running without a policy (built-in defaults)"
+        }
+        return nil
     }
 
     func observedProtection(storageOn: Bool, networkOn: Bool) -> ObservedProtection {
