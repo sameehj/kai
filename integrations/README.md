@@ -88,32 +88,11 @@ through — the right default for a security hook. The handler returns
 `{"permission":"deny",…}` (or `{"continue":false}` for a prompt) to block, and
 `{"permission":"allow"}` otherwise.
 
-## Browsers (Chrome, Brave, Edge, Chromium)
+## Browsers
 
-`kai install chrome` writes a native-messaging host manifest into each browser
-that's present, e.g. on macOS
-`~/Library/Application Support/Google/Chrome/NativeMessagingHosts/io.github.sameehj.kai.json`:
-
-```json
-{
-  "name": "io.github.sameehj.kai",
-  "description": "Kai: checks AI chat messages for secrets and company data",
-  "path": "/usr/local/bin/kai",
-  "type": "stdio",
-  "allowed_origins": ["chrome-extension://bfefkchkkleigcefbgligmkknhmdnhee/"]
-}
-```
-
-Only the Kai extension (its ID comes from the public key in
-`browser/manifest.json`) may start the host. The browser runs
-`kai chrome-extension://…/` and exchanges length-prefixed JSON on stdin and
-stdout (`src/native.c`): `ping`, `scan` (returns the worst action, the cleaned
-text, and whether the user may override) and `decision` (logs what the user
-chose). The host can't change the policy.
-
-The extension (`browser/`) runs on the chat sites listed in its manifest,
-checks pastes and sends, and shows its prompts in a shadow DOM so the page's
-styles can't interfere. `kai uninstall chrome` removes the host manifests.
+Kai no longer includes a Chrome extension (removed in 0.2.0-preview.1, Security Plan v1.0). `kai uninstall chrome`
+removes the native-messaging host manifests and the extension copy an earlier Kai installed; the installer does
+this for the signed-in user.
 
 ## Other agents
 

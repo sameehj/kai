@@ -118,8 +118,6 @@ targets:
       - path: ../../src/manage.c
       - path: ../../src/grant_cli.c
       - path: ../../src/install.c
-      - path: ../../src/browser.c
-      - path: ../../src/native.c
       - path: ../../src/report.c
       - path: ../../src/health.c
     dependencies:
@@ -181,15 +179,11 @@ targets:
           # Notification sounds must be top-level app resources; NSSound uses
           # the same files for in-app approval feedback and previews.
           cp "$SRCROOT/../../kai-sfx/"*.wav "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/"
-          # The browser extension, so `kai install chrome` can point at it.
-          ext="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/browser"
-          rm -rf "$ext" && mkdir -p "$ext/icons"
-          cp "$SRCROOT/../../integrations/browser/"*.js "$SRCROOT/../../integrations/browser/"*.json \
-             "$SRCROOT/../../integrations/browser/popup.html" "$ext/"
+          # Chrome support was removed: drop a browser folder an older build left.
+          rm -rf "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/browser"
           # v1 has no control service: remove a LaunchAgents folder an older
           # build left in the product.
           rm -rf "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchAgents"
-          cp "$SRCROOT/../../integrations/browser/icons/"*.png "$ext/icons/"
           if [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
             codesign --force --options runtime --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$dest"
           else

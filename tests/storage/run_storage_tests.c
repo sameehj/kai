@@ -1379,7 +1379,8 @@ static void test_agent_catalog(void) {
     CHECK(kai_agent_product_kind("zed") == KAI_AGENT_IDE, "zed is an IDE");
     CHECK(kai_agent_product_kind("claude") == KAI_AGENT_CLI, "claude is a CLI");
     CHECK(kai_agent_product_kind("aider") == KAI_AGENT_CLI, "aider is a CLI");
-    CHECK(kai_agent_product_kind("chrome") == KAI_AGENT_BROWSER, "chrome is a browser");
+    CHECK(kai_agent_product_kind("chrome") < 0 || kai_agent_product_kind("chrome") != 3,
+          "chrome isn't an agent product (Chrome support was removed)");
     CHECK(kai_agent_product_kind("mystery") == KAI_AGENT_CLI, "unknown behaves like a CLI");
     CHECK(kai_agent_catalog_verified("claude") == 1, "claude is verified");
     CHECK(kai_agent_catalog_verified("zed") == 0, "zed is unverified (no install checked)");
@@ -2609,27 +2610,6 @@ static void test_capture_grants(void) {
     char cmd[800]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", d); (void)system(cmd);
 }
 
-/* Release batch: today's redactions per chat site (10). */
-static void test_chat_site_today(void) {
-    printf("chats: today's redactions per site\n");
-    char d[] = "/tmp/kai-chXXXXXX";
-    if (!mkdtemp(d)) { CHECK(0, "mkdtemp"); return; }
-    char log[700]; snprintf(log, sizeof log, "%s/audit.log", d);
-    char ts[32]; time_t now = time(NULL); struct tm tmv; gmtime_r(&now, &tmv);
-    strftime(ts, sizeof ts, "%Y-%m-%dT%H:%M:%SZ", &tmv);
-    FILE *f = fopen(log, "w");
-    for (int i = 0; f && i < 3; i++)
-        fprintf(f, "{\"ts\":\"%s\",\"source\":\"browser\",\"event\":\"claude.ai\",\"decision\":\"redact\",\"rule\":\"prompt\",\"detail\":\"x\"}\n", ts);
-    if (f) fprintf(f, "{\"ts\":\"%s\",\"source\":\"browser\",\"event\":\"chatgpt.com\",\"decision\":\"block\",\"rule\":\"prompt\",\"detail\":\"x\"}\n", ts);
-    if (f) fprintf(f, "{\"ts\":\"%s\",\"source\":\"browser\",\"event\":\"claude.ai\",\"decision\":\"warn\",\"rule\":\"prompt\",\"detail\":\"sent anyway\"}\n", ts);
-    if (f) fprintf(f, "{\"ts\":\"2001-01-01T00:00:00Z\",\"source\":\"browser\",\"event\":\"claude.ai\",\"decision\":\"redact\",\"rule\":\"prompt\",\"detail\":\"x\"}\n");
-    if (f) fclose(f);
-    CHECK(kai_daily_site_in(log, "claude.ai") == 3, "claude.ai: 3 redacted before sending today (not the old one, not sent-anyway)");
-    CHECK(kai_daily_site_in(log, "chatgpt.com") == 1, "chatgpt.com: 1 held");
-    CHECK(kai_daily_site_in(log, "gemini.google.com") == 0, "a site with none: 0");
-    char cmd[800]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", d); (void)system(cmd);
-}
-
 static void test_claude_env(void) {
     printf("Claude Code env switch (telemetry off)\n");
     char dir[] = "/tmp/kai-envXXXXXX";
@@ -2998,34 +2978,6 @@ static void test_mcp_service(void) {
     CHECK(rc == 72, "a caller with no Kai session is denied");
 }
 
-static void test_ai_chats(void) {
-    printf("AI chats (item 3; extension-sourced)\n");
-    CHECK(kai_host_is_ai_chat("claude.ai") == 1, "claude.ai is an AI chat");
-    CHECK(kai_host_is_ai_chat("chatgpt.com") == 1, "chatgpt.com is an AI chat");
-    CHECK(kai_host_is_ai_chat("gemini.google.com") == 1, "gemini is an AI chat");
-    CHECK(kai_host_is_ai_chat("api.anthropic.com") == 0, "the API endpoint is not a chat UI");
-    CHECK(kai_host_is_ai_chat("example.com") == 0, "a random host is not");
-    CHECK(kai_chat_record("claude.ai", 2, 3, 1) == 0, "record a chat site from the extension");
-    CHECK(kai_chat_record("example.com", 1, 0, 0) == -1, "a non-chat site is not recorded");
-    kai_chat *c = NULL; int nc = 0;
-    kai_chat_load(&c, &nc);
-    int found = 0;
-    for (int i = 0; i < nc; i++)
-        if (strcmp(c[i].site, "claude.ai") == 0 && c[i].open_tabs == 2 &&
-            c[i].redactions == 3 && c[i].overrides == 1) found = 1;
-    CHECK(found, "the recorded chat loads back with its counts");
-    /* Re-reporting the same site updates in place, not a second row. */
-    kai_chat_record("claude.ai", 1, 5, 2);
-    free(c); c = NULL; nc = 0;
-    kai_chat_load(&c, &nc);
-    int rows = 0, updated = 0;
-    for (int i = 0; i < nc; i++)
-        if (strcmp(c[i].site, "claude.ai") == 0) { rows++; if (c[i].redactions == 5) updated = 1; }
-    CHECK(rows == 1, "one row per site");
-    CHECK(updated, "re-report updates counts in place");
-    free(c);
-}
-
 /* S0: the dev-sandbox guard predicate. */
 static void test_s0_sandbox_guard(void) {
     printf("dev-sandbox guard (S0)\n");
@@ -3137,7 +3089,6 @@ int main(void) {
     test_topic_clean();
     test_codex_analytics();
     test_capture_grants();
-    test_chat_site_today();
     test_daily_top();
     test_working_inflight();
     test_switch_migration();
@@ -3171,7 +3122,6 @@ int main(void) {
     test_mcp_policy();
     test_mcp_grants();
     test_mcp_service();
-    test_ai_chats();
 
     printf("%s (%d failure%s%s)\n", failures ? "FAILED" : "all passed",
            failures, failures == 1 ? "" : "s", skipped ? ", some macOS-only checks skipped" : "");

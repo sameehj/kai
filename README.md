@@ -7,12 +7,12 @@
 
   ### Give AI more work, not more access.
 
-  **macOS** · **Claude Code · Codex · Cursor** · **Chrome AI chats** · **Open source**
+  **macOS** · **Claude Code · Codex · Cursor** · **Open source**
 </div>
 
 ## Three steps
 
-1. **Install Kai.** One package installs the `kai` command and adds its checks to Claude Code, Codex and Cursor, and to Chrome for AI chats.
+1. **Install Kai.** One package installs the `kai` command and adds its checks to Claude Code, Codex and Cursor.
 2. **Kai checks your agents and stops unwanted moves before they run**: reading your keys, sending files out, secrets in the prompts you submit. Each stop says what happened, why it matters, and what you can do.
 3. **You decide what they can do, narrowly.** When Kai stops something legitimate, its message gives the exact command to run in your own terminal: one agent, one operation, one target, with an expiry.
 
@@ -33,10 +33,10 @@ shasum -a 256 -c Kai-Preview-0.2.0-preview.1.pkg.sha256
 spctl --assess --type install -vv Kai-Preview-0.2.0-preview.1.pkg   # "source=Notarized Developer ID"
 ```
 
-The installer adds Kai's checks to the agents that already have them and registers Kai with Chrome. For another agent:
+The installer refreshes Kai's checks in the agents that already have them. For another agent:
 
 ```sh
-kai install claude      # or codex, cursor, chrome, all
+kai install claude      # or codex, cursor, all
 kai status              # what's checked, per agent
 ```
 
@@ -73,16 +73,13 @@ Every grant is one agent, one operation, one target, with an expiry. A file gran
 
 Exactly what each agent reports to Kai, at which stage, whether Kai can stop it, the known bypasses, and the evidence (live or synthetic): **[docs/COVERAGE.md](docs/COVERAGE.md)**. `kai status` shows the same per agent: Installed, Configured, Trusted, Self-test and Live verification.
 
-## Chrome extension
-
-The Kai extension checks what you paste and send on AI chat sites (ChatGPT, Claude.ai, Gemini and others) against the same local policy. A secret is redacted before sending, or the message is held for your choice. The extension talks to `kai` on your Mac through Chrome's native messaging. It keeps no URLs and no chat text, only the site name. No site has been verified end to end yet; see the Chats table in [docs/COVERAGE.md](docs/COVERAGE.md).
-
 ## Known limits
 
 - Hooks run with your permissions. A program an agent writes and runs, or a detached process, can get around them.
 - Kai checks only what an agent reports to its hooks: not tool results, not the agent's other model traffic.
 - Kai's rules and policy are files a program with your permissions can edit. Kai notices some policy changes made outside Kai (`kai doctor`), never all, and prevents none.
 - No OS-level enforcement in this preview.
+- No browser coverage: Kai doesn't check AI chat sites in a browser (the Chrome extension was removed). `kai uninstall chrome` removes one an earlier Kai installed.
 - Screen and app control: Kai stops the commands and tools it recognizes (`screencapture`, `ffmpeg`/`sox` recording, `osascript` telling any app, computer-use tools) and names the app; you allow them per app. With the Kai app, those allows are made in the app (each agent's page), not with `kai allow-capture`. A program the agent writes can call the capture APIs directly. Kai can't change macOS privacy prompts: macOS grants these permissions per app, so every agent run in Terminal, iTerm or Cursor inherits what that app holds (`kai doctor` lists them where it can read them).
 
 ## Design references
@@ -100,7 +97,7 @@ Kai is designed with reference to, and does not claim compliance with:
 - **With the app: capture inside agent process trees.** Blocking screen, microphone and camera capture tools started inside an agent's process tree through Endpoint Security, and a notice when an agent host app's privacy permissions change, where macOS provides the event on the target version.
 - Later: team policy, Linux, and Windows.
 
-Roadmap items are plans, not delivered guarantees. More detail on how Kai works, other agents and the optional local AI gateway: [docs/OVERVIEW.md](docs/OVERVIEW.md).
+Roadmap items are plans, not delivered guarantees. The historical overview (pre-v0.2, including since-removed features): [docs/OVERVIEW.md](docs/OVERVIEW.md).
 
 ## Contribute
 

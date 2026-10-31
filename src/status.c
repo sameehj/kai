@@ -188,35 +188,6 @@ int kai_cmd_status_text(void) {
     printf("Agents\n%s", buf ? buf : "");
     free(buf);
 
-    int cdet = 0, con = kai_browser_installed(&cdet);
-    const char *chats;
-    char chatbuf[300], want[32] = "", have[32] = "";
-    {   /* the version Kai ships vs the one Chrome last reported */
-        char mf[1300];
-        snprintf(mf, sizeof mf, "%s/manifest.json", kai_browser_ext_dir());
-        size_t ml = 0;
-        char *mt = kai_read_file(mf, 1 << 16, &ml);
-        cJSON *mo = mt ? cJSON_Parse(mt) : NULL;
-        free(mt);
-        const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(mo, "version"));
-        if (v) kai_strlcpy(want, v, sizeof want);
-        cJSON_Delete(mo);
-        kai_chat_extension_version(have, sizeof have, NULL);
-    }
-    if (!con) chats = cdet ? "Not checking: Kai isn't set up for Chrome (kai install chrome)" : "Not detected";
-    else if (!kai_browser_extension_loaded()) chats = "Not checking: the Kai extension isn't loaded in Chrome";
-    else if (want[0] && strcmp(have, want) != 0) {
-        snprintf(chatbuf, sizeof chatbuf, "Not checking reliably: reload the Kai extension in Chrome (Kai has %s; "
-                 "Chrome runs %s)", want, have[0] ? have : "an older copy that doesn't report its version");
-        chats = chatbuf;
-    }
-    else {
-        char *exe = kai_browser_host_exe();
-        kai_health h; kai_health_chrome(exe, &h); free(exe);
-        if (h.ok) chats = "Checking (sites not yet verified: see docs/COVERAGE.md)";
-        else { snprintf(chatbuf, sizeof chatbuf, "Not checking: %s", h.problem); chats = chatbuf; }
-    }
-    printf("%-16s %s\n", "Chats (Chrome)", chats);
 
     int files = kai_wall_observed_level("storage"), internet = kai_wall_observed_level("network");
     if (!app)
@@ -389,17 +360,9 @@ int kai_cmd_doctor(void) {
     }
     free(codex);
 
-    int cdet = 0;
-    if (kai_browser_installed(&cdet)) {
-        char *exe = kai_browser_host_exe();
-        kai_health h; kai_health_chrome(exe, &h);
-        if (h.ok) printf("✓ Chrome native host answers (%s)\n", exe ? exe : "?");
-        else { printf("✗ Chrome native host: %s\n", h.problem); problems++; }
-        printf("%s Chrome extension %s\n", kai_browser_extension_loaded() ? "✓" : "!",
-               kai_browser_extension_loaded() ? "loaded" : "not loaded (Load unpacked from kai install chrome's folder)");
-        free(exe);
-    } else {
-        printf("· Chats: Chrome native host not installed%s\n", cdet ? " (Chrome is here: kai install chrome)" : "");
+    if (kai_browser_legacy_present()) {
+        printf("! an earlier Kai's Chrome helper is still registered (Chrome support was removed): kai uninstall chrome\n");
+        problems++;
     }
 
     int nl = 0; char verr[256] = "";

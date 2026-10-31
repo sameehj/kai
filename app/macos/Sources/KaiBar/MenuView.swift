@@ -35,7 +35,6 @@ struct MenuView: View {
             migratedConfirm
             needsYou
             activeNow
-            chatsRow
             protectionsLine
             permissions
             recent
@@ -246,8 +245,6 @@ struct MenuView: View {
     // (Watch, Off) live in Settings, behind owner authentication.
     private var protectionsLine: some View {
         let l = model.levels(storageOn: storage.isOn, networkOn: wall.isOn)
-        let chrome = model.agentInfo(.chrome)
-        let chats = chrome.installed && chrome.extensionLoaded != false
         return Button { open(.files) } label: {
             HStack(spacing: 6) {
                 if StorageWall.included {
@@ -257,15 +254,13 @@ struct MenuView: View {
                 }
                 Text("·").foregroundStyle(Theme.muted)
                 Text(ProtectionText.mark("Internet", level: l.internet))
-                Text("·").foregroundStyle(Theme.muted)
-                Text(!chats ? "Chats: off" : ChatSite.extensionOutdated ? "Chats: reload" : "Chats ✓")
                 Spacer()
                 Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(Theme.muted)
             }
             .font(.system(size: 12)).foregroundStyle(Theme.soft).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Open Settings to change Files, Internet or Chats.")
+        .help("Open Settings to change Files or Internet.")
     }
 
     // Item 1: a persistent banner while any session is paused, with Resume.
@@ -296,37 +291,6 @@ struct MenuView: View {
         return Theme.soft
     }
 
-    // Spec §6: chats are a protection surface like agents.
-    @ViewBuilder private var chatsRow: some View {
-        let chrome = model.agentInfo(.chrome)
-        if chrome.installed {
-            if ChatSite.extensionOutdated || model.chromeNeedsExtension {
-                Button { model.openExtensionSetup() } label: {
-                    Text("Chats: reload the Kai extension in Chrome").font(.system(size: 12)).foregroundStyle(Theme.amber)
-                }.buttonStyle(.plain)
-            } else {
-                let openSites = ChatSite.load().filter { $0.openTabs > 0 }
-                let red = openSites.reduce(0) { $0 + $1.redactedToday }
-                if !openSites.isEmpty {
-                    Button { agentControlOpen = "chats"; open(.agentControl) } label: {
-                        VStack(alignment: .leading, spacing: 1) {
-                            HStack(spacing: 4) {
-                                Text("Chats · \(openSites.count) open: " + openSites.prefix(2).map(\.site).joined(separator: ", ")
-                                     + (openSites.count > 2 ? "…" : ""))
-                                    .font(.system(size: 13, weight: .medium)).lineLimit(1)
-                                InfoButton(text: InfoText.chats)
-                            }
-                            Text(red == 0 ? "Nothing redacted today" : "\(red) redacted before sending today")
-                                .font(.system(size: 11)).foregroundStyle(Theme.muted)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(Theme.sidebar, in: RoundedRectangle(cornerRadius: 8))
-                    }.buttonStyle(.plain)
-                }
-            }
-        }
-    }
 
     private var background: some View {
         ZStack {
@@ -566,7 +530,6 @@ struct AgentBadge: View {
         case "claude": return ("C", Color(hex: 0x2B2420), Color(hex: 0xF0A27A))
         case "cursor": return ("Cu", Theme.raised, .white)
         case "codex": return ("Cx", Color(hex: 0x1E2A26), Color(hex: 0x7FE0B8))
-        case "chrome": return ("Ch", Color(hex: 0x1E2638), Color(hex: 0x8AB4FF))
         default: return (String(agent.title.prefix(1)), Theme.raised, .white)
         }
     }
@@ -583,7 +546,7 @@ struct AgentCard: View {
 
     private func subtitle(_ info: KaiStatus.Agent) -> String {
         if info.broken { return "Not working: " + (info.problem ?? "check failed") }
-        if info.installed { return agent == .chrome ? "Checking chats" : "Protected" }
+        if info.installed { return "Protected" }
         return info.detected ? "Not protected" : "Not found on this Mac"
     }
 
@@ -594,17 +557,11 @@ struct AgentCard: View {
                 AgentBadge(agent: agent)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(agent.title).font(.system(size: 14, weight: .semibold))
-                    if agent == .chrome && model.chromeNeedsExtension {
-                        Button("Load the extension to finish") { model.openExtensionSetup() }
-                            .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.amber)
-                            .help("Shows the extension folder (path copied) and opens chrome://extensions: turn on Developer mode, click Load unpacked, paste the path.")
-                    } else {
-                        Text(subtitle(info))
-                            .font(.system(size: 12))
-                            .foregroundStyle(info.broken || (!info.installed && info.detected) ? Theme.amber : Theme.muted)
-                            .lineLimit(2)
-                            .help(info.problem ?? "")
-                    }
+                    Text(subtitle(info))
+                        .font(.system(size: 12))
+                        .foregroundStyle(info.broken || (!info.installed && info.detected) ? Theme.amber : Theme.muted)
+                        .lineLimit(2)
+                        .help(info.problem ?? "")
                 }
                 Spacer()
                 Toggle(agent.title, isOn: Binding(get: { info.installed },

@@ -131,10 +131,10 @@ static const struct {
  * finds its sessions) and whether Kai has a hook integration for it. `verified`
  * is 1 only for entries checked against an installed copy. Shipped with Kai; a
  * user can add entries through `kai policy add agent` (the "Add agent" button).
- * kind: 0=cli, 1=ide, 2=ide-extension, 3=browser. */
+ * kind: 0=cli, 1=ide, 2=ide-extension. */
 static const struct { const char *name; int kind; int hooks; int verified; } AGENT_CATALOG[] = {
     {"claude", 0, 1, 1}, {"codex", 0, 1, 1}, {"gemini", 0, 0, 1},
-    {"cursor", 1, 1, 1}, {"chrome", 3, 1, 1},
+    {"cursor", 1, 1, 1},
     {"aider", 0, 0, 0}, {"opencode", 0, 0, 0}, {"goose", 0, 0, 0},
     {"antigravity", 1, 0, 0}, {"windsurf", 1, 0, 0}, {"kiro", 1, 0, 0}, {"zed", 1, 0, 0},
     /* ide-extension agents run INSIDE the editor's process, so there is no safe
@@ -211,8 +211,6 @@ const char *kai_agent_coverage_note(const char *name) {
     case KAI_AGENT_IDE_EXTENSION:
         return "Runs inside your editor — Kai covers only the shells it starts, "
                "not your own editing.";
-    case KAI_AGENT_BROWSER:
-        return "Browser extension: Files and Internet protection don't apply.";
     default:
         return kai_agent_catalog_verified(name) ? NULL
              : "Profile not yet verified against an installed copy.";

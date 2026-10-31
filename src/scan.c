@@ -256,7 +256,7 @@ static int agent_control_path(const char *np, char *why, size_t whylen) {
             return 1;
         }
     }
-    /* Kai's own home (policy, audit log, browser extension) and a custom
+    /* Kai's own home (policy, audit log) and a custom
      * CODEX_HOME's hooks */
     const char *roots[] = {kai_home(), getenv("CODEX_HOME")};
     for (size_t i = 0; i < sizeof roots / sizeof roots[0]; i++) {

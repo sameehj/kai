@@ -100,9 +100,7 @@ final class FilterDataProvider: NEFilterDataProvider {
         engine.countFlow(agent: agentName != nil)
         guard let agent = agentName else {
             // The network wall is agent-only: a process Kai doesn't recognize as
-            // an agent is never inspected, recorded, or gated here. AI-chat
-            // visibility comes from the browser extension over native messaging,
-            // not from watching non-agent flows.
+            // an agent is never inspected, recorded, or gated here.
             return .allow()
         }
         let pidv = Engine.pidVersion(fromAuditToken: token)

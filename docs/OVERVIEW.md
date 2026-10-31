@@ -2,6 +2,8 @@
 
 # Kai: the full overview
 
+> **Historical overview** (the pre-v0.2 README, kept as a record). It describes features that have since been removed, including the Chrome extension, `kai install chrome` and Chats (removed Oct 31, 2026). For current Kai see the [README](../README.md), [COVERAGE.md](COVERAGE.md) and the spec, [security/RECONCILED-PLAN.md](security/RECONCILED-PLAN.md).
+
 > **Build order superseded by [`docs/security/RECONCILED-PLAN.md`](security/RECONCILED-PLAN.md)** (Security Plan v1.0, frozen Oct 31, 2026). This document keeps its specs and tests; where it conflicts with the spec, the spec wins.
 
 The detailed reference that used to be the README: how Kai works, other agents, the optional gateway, the macOS app and the CLI reference. Start with the [README](../README.md).
@@ -196,6 +198,8 @@ In the menu-bar app, Activity shows the same timeline. **Not a threat** on a blo
 The log rotates at 8 MB and appending stays fast however long it gets. The chain helps detect some unauthorized changes, but it is **not tamper-proof** against an attacker who controls the log and its verification state.
 
 ## 💬 AI chats in your browser
+
+> **Removed (Oct 31, 2026, Security Plan v1.0):** Kai no longer includes the Chrome extension or its native-messaging host. This section is kept as a record; nothing in it applies to current Kai. `kai uninstall chrome` removes what an earlier Kai installed.
 
 The Kai extension checks what you paste and send on ChatGPT, Claude.ai, Gemini, DeepSeek, Perplexity, Copilot, Mistral, Grok and Poe, using the same local policy as everything else.
 

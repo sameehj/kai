@@ -4,8 +4,7 @@
  * settings mention Kai. Health runs what the agent would run: for each of
  * Kai's hook commands it checks that the program exists, that the hook fails
  * closed, and that a synthetic request for a path Kai always protects comes
- * back denied. For the browser it starts the native host the way Chrome does
- * and pings it. Probes are marked so the hook doesn't record them.
+ * back denied. Probes are marked so the hook doesn't record them.
  */
 #include "cJSON.h"
 #include "internal.h"
@@ -239,22 +238,3 @@ int kai_health_run_hook(const char *agent, const char *config, const char *input
     return run_probe(cmd, input, strlen(input), out, outlen, NULL);
 }
 
-/* Native messaging: 4-byte native-endian length, then JSON. */
-void kai_health_chrome(const char *exe, kai_health *h) {
-    memset(h, 0, sizeof *h);
-    h->ok = 1;
-    if (!exe || !executable(exe)) { set_problem(h, "Kai's program is missing (%s)", exe); return; }
-    char cmd[1400];
-    snprintf(cmd, sizeof cmd, "'%s' chrome-extension://%s/", exe, KAI_EXTENSION_ID);
-    if (strchr(exe, '\'')) { set_problem(h, "unusual program path (%s)", exe); return; }
-    const char *msg = "{\"type\":\"ping\"}";
-    unsigned int len = (unsigned int)strlen(msg);
-    char in[64];
-    memcpy(in, &len, 4);
-    memcpy(in + 4, msg, len);
-    char out[512];
-    size_t got = 0;
-    run_probe(cmd, in, 4 + len, out, sizeof out, &got);
-    if (got < 4 || !memmem(out + 4, got - 4, "\"ok\":true", 9))
-        set_problem(h, "the browser helper didn't answer (%s)", exe);
-}

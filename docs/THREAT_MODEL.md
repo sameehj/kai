@@ -31,8 +31,9 @@ mistake with the developer's full privileges.
   the pattern match. The OS-level **network and file walls** on the roadmap are
   what make exfiltration structurally impossible, not just pattern-detected.
 - **Apps Kai doesn't hook.** GUI chat apps (ChatGPT desktop, Claude Desktop
-  chat). Browser chats are covered by the browser extension (preview); the
-  network wall sees GUI apps' connections only when an agent starts them.
+  chat) and AI chat sites in a browser (the Chrome extension was removed in
+  0.2.0-preview.1, Security Plan v1.0); the network wall sees GUI apps'
+  connections only when an agent starts them.
   A decrypting proxy that would read their prompts is on hold.
 - **Cloud agents.** Cursor background agents and Codex cloud run on vendor
   servers; their traffic never reaches this machine.

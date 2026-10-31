@@ -200,8 +200,8 @@ static void usage(void) {
     fprintf(stderr,
         "kai %s — security layer for AI agents\n\n"
         "Usage:\n"
-        "  kai install [claude|cursor|codex|chrome|all]   add Kai to an agent or browser\n"
-        "  kai uninstall [claude|cursor|codex|chrome|all] remove it\n"
+        "  kai install [claude|cursor|codex|all]   add Kai to an agent\n"
+        "  kai uninstall [claude|cursor|codex|all] remove it (chrome: an earlier Kai's Chrome helper)\n"
         "  kai hook claude|cursor|codex            (run by the agent; reads JSON)\n"
         "  kai scan [file...]                report secrets/terms (stdin if none)\n"
         "  kai redact                        clean stdin -> stdout\n"
@@ -229,8 +229,6 @@ static void usage(void) {
 int main(int argc, char **argv) {
     if (argc < 2) { usage(); return 2; }
     const char *cmd = argv[1];
-    /* A browser starts the native-messaging host with the extension origin. */
-    if (strncmp(cmd, "chrome-extension://", 19) == 0) return kai_native_host(cmd);
     int rest = argc - 2;
     char **restv = argv + 2;
     if (strcmp(cmd, "hook") == 0) return kai_cmd_hook(rest, restv);

@@ -7,6 +7,7 @@
 #include "cJSON.h"
 #include "internal.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -600,7 +601,11 @@ int kai_cmd_install(int argc, char **argv) {
     if (strcmp(which, "claude") == 0) { if ((rc = install_claude(exe)) == 0) try_it("Claude Code"); return rc; }
     if (strcmp(which, "cursor") == 0) { if ((rc = install_cursor(exe)) == 0) try_it("Cursor"); return rc; }
     if (strcmp(which, "codex") == 0) { if ((rc = install_codex(exe)) == 0) try_it("Codex"); return rc; }
-    if (strcmp(which, "chrome") == 0 || strcmp(which, "browser") == 0) return kai_browser_install(exe);
+    if (strcmp(which, "chrome") == 0 || strcmp(which, "browser") == 0) {
+        fprintf(stderr, "kai install chrome: Kai no longer includes a Chrome extension (removed in 0.2.0-preview.1).\n"
+                        "`kai uninstall chrome` removes one an earlier Kai installed.\n");
+        return 2;
+    }
     if (strcmp(which, "all") == 0 || !*which) {
         int a = install_claude(exe), b = install_cursor(exe);
         int has_codex = codex_present();
@@ -608,8 +613,58 @@ int kai_cmd_install(int argc, char **argv) {
         if (!a && !b && !c) try_it(has_codex ? "Claude Code, Codex and Cursor" : "Claude Code and Cursor");
         return (a || b || c) ? 1 : 0;
     }
-    fprintf(stderr, "kai install: expected claude | cursor | codex | chrome | all\n");
+    fprintf(stderr, "kai install: expected claude | cursor | codex | all\n");
     return 1;
+}
+
+/* Chrome support was removed in 0.2.0-preview.1. An earlier Kai registered a
+ * native-messaging host in each Chromium browser and copied the extension to
+ * <kai home>/browser-extension; an upgrade must leave no manifest pointing at
+ * a program that no longer answers. */
+static const char *const LEGACY_BROWSER_ROOTS[] = {
+#ifdef __APPLE__
+    "~/Library/Application Support/Google/Chrome", "~/Library/Application Support/Google/Chrome Beta",
+    "~/Library/Application Support/BraveSoftware/Brave-Browser", "~/Library/Application Support/Microsoft Edge",
+    "~/Library/Application Support/Chromium", "~/Library/Application Support/Arc/User Data",
+#else
+    "~/.config/google-chrome", "~/.config/google-chrome-beta", "~/.config/BraveSoftware/Brave-Browser",
+    "~/.config/microsoft-edge", "~/.config/chromium",
+#endif
+};
+#define LEGACY_HOST "io.github.sameehj.kai"
+
+static int remove_tree(const char *path);
+
+/* 1 if an earlier Kai's Chrome host is still registered anywhere. */
+int kai_browser_legacy_present(void) {
+    for (size_t i = 0; i < sizeof LEGACY_BROWSER_ROOTS / sizeof LEGACY_BROWSER_ROOTS[0]; i++) {
+        char *root = kai_expand_home(LEGACY_BROWSER_ROOTS[i]);
+        char p[1400];
+        snprintf(p, sizeof p, "%s/NativeMessagingHosts/%s.json", root ? root : "", LEGACY_HOST);
+        free(root);
+        if (access(p, F_OK) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Remove the earlier Kai's host manifests and extension copy. 0 ok. */
+int kai_browser_legacy_remove(int verbose) {
+    int rc = 0;
+    for (size_t i = 0; i < sizeof LEGACY_BROWSER_ROOTS / sizeof LEGACY_BROWSER_ROOTS[0]; i++) {
+        char *root = kai_expand_home(LEGACY_BROWSER_ROOTS[i]);
+        char p[1400];
+        snprintf(p, sizeof p, "%s/NativeMessagingHosts/%s.json", root ? root : "", LEGACY_HOST);
+        free(root);
+        if (unlink(p) == 0) { if (verbose) printf("Removed an earlier Kai's Chrome helper: %s\n", p); }
+        else if (errno != ENOENT) rc = 1;
+    }
+    char ext[1300];
+    snprintf(ext, sizeof ext, "%s/browser-extension", kai_home());
+    struct stat st;
+    if (lstat(ext, &st) == 0) {
+        if (remove_tree(ext) == 0) { if (verbose) printf("Removed %s\n", ext); } else rc = 1;
+    }
+    return rc;
 }
 
 /* rm -rf for --purge (Kai's own home only). */
@@ -642,7 +697,7 @@ int kai_cmd_uninstall(int argc, char **argv) {
     if (strcmp(which, "codex") == 0 || strcmp(which, "all") == 0)
         rc |= uninstall_codex();
     if (strcmp(which, "chrome") == 0 || strcmp(which, "browser") == 0 || strcmp(which, "all") == 0)
-        rc |= kai_browser_uninstall();
+        rc |= kai_browser_legacy_remove(1);
     /* Hooks first (no hook may call a missing binary); the user's policy and
      * logs stay unless they ask for --purge, explicitly. */
     if (purge) {

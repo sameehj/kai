@@ -9,15 +9,14 @@ Everything here waits on Sameeh. The code side is on `fix/ux-review-phase-a`; `m
    - `Developer ID Installer: <Name> (KD446VDTM2)`
    Check with `security find-identity -v -p basic | grep "Developer ID"`.
 2. **Notary profile** (once): `xcrun notarytool store-credentials kai-notary --apple-id <id> --team-id KD446VDTM2` (app-specific password).
-3. **Chrome store ID**: upload `build/kai-chrome-0.2.0.zip` (`make chrome-zip`) as an unlisted item and note its 32-letter ID ([CHROME_STORE.md](../CHROME_STORE.md)).
+3. ~~Chrome store ID~~: not needed. The Chrome extension was removed (Security Plan v1.0, Oct 31, 2026).
 4. **Merge to master** through a PR from `fix/ux-review-phase-a` (master is never pushed to directly).
 5. **Tag** the merge commit on a clean tree: `git tag v0.2.0-preview.1 && git push origin v0.2.0-preview.1`.
-6. **Build** (it refuses without all four values, a clean tree and the tag, and unless the tag is `origin/master` HEAD with every CI check passed on that commit):
+6. **Build** (it refuses without the three values, a clean tree and the tag, and unless the tag is `origin/master` HEAD with every CI check passed on that commit):
    ```sh
    KAI_DEVID_APP="Developer ID Application: <Name> (KD446VDTM2)" \
    KAI_DEVID_INSTALLER="Developer ID Installer: <Name> (KD446VDTM2)" \
    KAI_NOTARY_PROFILE=kai-notary \
-   KAI_STORE_EXTENSION_ID=<store id> \
    sh scripts/release/build-preview-pkg.sh 0.2.0-preview.1
    ```
    It builds a Universal `kai` (macOS 13+), signs it and the package, notarizes, staples, checks with `spctl`, and writes the `.sha256`.
@@ -31,14 +30,14 @@ Everything here waits on Sameeh. The code side is on `fix/ux-review-phase-a`; `m
 | 1b | Live checks in a fresh macOS user account | System Settings → Users & Groups → Add User (a Standard account just for this). Log in to it, install the Kai package (and the app, if testing with it), run `claude` once to sign in, then `/usr/local/bin/kai install claude` (or let the app install the hooks). From a checkout of the tag: `sh scripts/live-checks-preview1.sh --fresh-user`. It refuses if the account has `~/.ssh/id_*` or `~/.aws/credentials`, and asks you to type the account name. It runs the same checks, plus the policy-missing check for real with the release hook: that account's policy is moved aside, then restored byte for byte (also on Ctrl-C). Delete the account afterwards if you like | |
 | 2 | Product acceptance | Install the RC, run an ordinary multi-step Claude Code task, hit a legitimate stop, recover with the command from the message, finish without disabling Kai | |
 | 3 | Untrusted Codex | Untrust Kai's hooks in Codex (`/hooks`), then `kai status` (Codex: Not checking), `kai demo` (self-test passes), `kai demo --live --agent codex` (fails and says why) | |
-| 4 | Chats rows | Fill `tests/coverage/chats_manual.json` per site (paste, Enter, button, attach); then `VERIFIED_SITES` in `integrations/browser/popup.js` lists the proven ones | |
-| 5 | Chrome popup and disconnected state | Load the extension; open two chat sites; check the popup sentence and counts; quit Kai's helper (rename `kai` briefly) and check "Not checking: Kai isn't connected" | |
+| 4 | ~~Chats rows~~ | Removed with the Chrome extension (Security Plan v1.0, Oct 31, 2026) | n/a |
+| 5 | ~~Chrome popup and disconnected state~~ | Removed with the Chrome extension (Security Plan v1.0, Oct 31, 2026) | n/a |
 | 6 | Installer pages and postinstall | Open the signed `.pkg`: welcome and readme show the contract and three steps; afterwards `grep "kai postinstall" /var/log/install.log` lists the refreshed agents | |
 | 7 | Clean Mac / macOS 13 | Install on a Mac without Kai, and on macOS 13: `kai status`, `kai demo` | |
 | 8 | Upgrade from 0.1.0 | Install 0.1.0, then the RC: hooks refreshed, backups present, no older-over-newer refusal | |
 | 9 | Escape case `mcp-send-data` | Decide: fix, or record as a known gap in ESCAPES.md | |
 | 10 | Copy review | `kai status`, `kai doctor`, the stop messages, the release notes | |
-| 11 | Chrome extension version | chrome://extensions → Kai → Reload, then reload open chat tabs. The `kai status` Chats line must not say "reload"; the popover row reads "Chats · N open: …" | |
+| 11 | ~~Chrome extension version~~ | Removed with the Chrome extension (Security Plan v1.0, Oct 31, 2026) | n/a |
 | 12 | Screenshots | `/Applications/Kai.app/Contents/MacOS/Kai --snapshot ~/Desktop/kai-shots` renders popover, Agent Control, Activity and Internet with live data | |
 
 ### B.1 results: live checks, release build (2026-10-30T14:36:58Z)
@@ -73,10 +72,11 @@ Everything here waits on Sameeh. The code side is on `fix/ux-review-phase-a`; `m
 | A7 | Agent Control | No global pause; subtitle without "pause"; Working now / Idle / Ended are headings; no row starts with an empty line | |
 | A8 | Topics | A session started with pasted text or markup shows its first real sentence | |
 | A9 | Repeated stops | 3rd identical blocked attempt in one session: the message ends once with "This is waiting for the user's decision in Kai. Don't retry until they allow it." | |
-| A10 | Chats | Popover "Chats · N open: …" with today's redactions; Agent Control → Chats lists sites, tabs and today's redactions, no titles; "Chats: reload the Kai extension in Chrome" when missing or outdated | |
+| A10 | ~~Chats~~ | Removed with the Chrome extension (Security Plan v1.0, Oct 31, 2026) | n/a |
 | A11 | Telemetry | Settings → Internet → Agent telemetry: Claude Code and Codex "Turn off in <agent>"; Cursor "No setting from Cursor; Kai keeps blocking it." | |
 | B12 | ⓘ buttons | Each opens its copy (value line, Working now, Idle, Watch, Protect, 1 hour, this session, always, coverage) | |
 | B13 | Preview labels | "Preview" badge in popover and Settings; Preview sentence in README, installer welcome, `kai status` | |
+| 18 | Chrome removed | `kai install chrome` is refused; `kai status` has no Chats line; the app has no Chats page, row or Agent Control entry; after installing over a build that had the Chrome helper, `ls ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/` shows no `io.github.sameehj.kai.json` and `kai doctor` doesn't flag one | |
 | 16a | Screen and app control, without the app (Preview 1) | Ask Claude Code to tell Safari something with osascript: "Claude Code wants to control Safari. If this was intended: kai allow-capture --app Safari --agent claude --for 15m."; run it in your own terminal (prints the lower-assurance note) and retry: Safari goes through, Music and `screencapture` are still stopped. A screenshot names `--app screencapture`. Terminal reads "…control Terminal (commands it runs there aren't checked by Kai)". `kai doctor` → "Privacy permissions of agent host apps" (apps, or "not measured" without Full Disk Access) | |
 | 16b | Screen and app control, with the app (one writer) | `kai allow-capture --app Safari --agent claude` answers "Change this in Kai". The stop says "allow it in Kai: Claude Code's page, Screen and app control". On Agent Control → Claude Code → Screen and app control: the stopped app under recent asks with Allow ▾ (15 minutes, 1 hour, 1 day); after allowing, it's listed with its end time and Remove; Remove stops it again. The Activity card offers "Allow this exact command" | |
 | 16c | Terminals and System Events (run anything outside Kai's checks) | Without the app: `kai allow-capture --app Terminal --agent claude --for 1h` is refused (at most 15 minutes); `--for 15m` asks for your login password in the terminal; a wrong password allows nothing. The stop and the allow both say "(commands it runs there aren't checked by Kai)". With the app: Claude Code's page offers only "Allow 15 minutes (Touch ID)" for Terminal, iTerm, Warp, Ghostty, System Events, and asks every time; the Activity card reads "Allow this exact command for 15 minutes (Touch ID)" and asks too; after 15 minutes the command is stopped again | |

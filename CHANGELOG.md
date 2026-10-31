@@ -1,6 +1,10 @@
 # Changelog
 
 ## 0.2.0-preview.1 (release candidate, 2026-10-29)
+- Removed (Security Plan v1.0, 2026-10-31): the Chrome extension, its native-messaging
+  host, `kai install chrome`, the Chats lines in `kai status`, `kai doctor` and the app,
+  and the Chats coverage matrix. `kai uninstall chrome` and the installer remove what an
+  earlier Kai registered, so no browser manifest points at a missing helper.
 Kai Preview checks supported actions inside Claude Code, Codex and Cursor before
 they run. It is an extra safety layer, not isolation or OS-level enforcement.
 Release notes: docs/release/v0.2.0-preview.1.md.

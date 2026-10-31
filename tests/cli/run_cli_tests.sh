@@ -176,17 +176,19 @@ hasnt "4th: not repeated" "$r4" "$note"
 r5=$(printf '%s' "$rep" | sed 's/rep-1/rep-2/' | KAI_HOME="$RH/.kai" KAI_NO_APP=1 "$KAI" hook claude)
 hasnt "another session counts on its own" "$r5" "$note"
 
-echo "== Chrome extension version (release batch 10) =="
-EH="$TMP/ext"; mkdir -p "$EH/.kai"
-python3 -I - "$KAI" "$EH/.kai" <<'PY'
-import json, os, struct, subprocess, sys
-kai, home = sys.argv[1], sys.argv[2]
-def frame(o):
-    b = json.dumps(o).encode(); return struct.pack("=I", len(b)) + b
-m = frame({"type": "status", "version": "0.2.1", "sites": [{"site": "claude.ai", "open_tabs": 2, "redactions": 0, "overrides": 0}]})
-subprocess.run([kai, "chrome-extension://x/"], input=m, capture_output=True, env=dict(os.environ, KAI_HOME=home), timeout=20)
-PY
-has "the extension's version is recorded from its status report" "$(cat "$EH/.kai/chats/_extension.json" 2>/dev/null)" '"version":"0.2.1"'
+echo "== Chrome support removed (Security Plan v1.0) =="
+CR="$TMP/chrome"; NM="$CR/Library/Application Support/Google/Chrome/NativeMessagingHosts"
+mkdir -p "$NM" "$CR/.kai/browser-extension"
+printf '{"name":"io.github.sameehj.kai","path":"/usr/local/bin/kai"}' > "$NM/io.github.sameehj.kai.json"
+o=$(HOME="$CR" KAI_HOME="$CR/.kai" "$KAI" install chrome 2>&1); rc=$?
+[ "$rc" = 2 ] && has "kai install chrome is refused, and says how to clean up" "$o" "kai uninstall chrome" || fail "install chrome: rc=$rc $o"
+has "kai doctor flags an earlier Kai's Chrome helper" "$(HOME="$CR" KAI_HOME="$CR/.kai" "$KAI" doctor 2>&1)" "an earlier Kai's Chrome helper is still registered"
+HOME="$CR" KAI_HOME="$CR/.kai" "$KAI" uninstall chrome >/dev/null 2>&1
+[ ! -e "$NM/io.github.sameehj.kai.json" ] && [ ! -e "$CR/.kai/browser-extension" ] \
+    && pass "kai uninstall chrome removes the earlier host manifest and extension copy (no dangling manifest)" \
+    || fail "earlier Chrome helper left behind"
+hasnt "...and doctor no longer flags it" "$(HOME="$CR" KAI_HOME="$CR/.kai" "$KAI" doctor 2>&1)" "Chrome helper is still registered"
+hasnt "kai status has no Chats line" "$(HOME="$CR" KAI_HOME="$CR/.kai" KAI_NO_APP=1 "$KAI" status 2>&1)" "Chats"
 
 echo "== screen and app control (release batch 16) =="
 CH="$TMP/capture"; mkdir -p "$CH/.kai"

@@ -33,15 +33,6 @@ char *kai_normalize_path(const char *path, const char *cwd); /* absolute, no . /
 void kai_strlcpy(char *dst, const char *src, size_t n);
 const char *kai_exe_path(void);
 const char *kai_policy_file(void); /* $KAI_POLICY or <kai home>/policy */
-/* Browser extension (browser.c, native.c) */
-#define KAI_NATIVE_HOST "io.github.sameehj.kai"
-#define KAI_EXTENSION_ID "bfefkchkkleigcefbgligmkknhmdnhee" /* unpacked: manifest "key" */
-/* The Chrome Web Store gives the published extension its own ID (shown in the
- * developer dashboard after the first upload). Put it here so Kai's helper
- * also answers the store-installed extension. Empty = not published yet. */
-#ifndef KAI_STORE_EXTENSION_ID /* set at build time: make KAI_STORE_ID=<32 letters a-p> */
-#define KAI_STORE_EXTENSION_ID ""
-#endif
 
 /* Release builds (make kai-release, the Preview package, the app's Release
  * configuration) ignore KAI_HOME and KAI_POLICY from the environment; dev and
@@ -61,12 +52,9 @@ int kai_cmd_allow_capture(int argc, char **argv);
 int kai_cmd_block(int argc, char **argv);
 int kai_cmd_rules(int argc, char **argv);
 int kai_cmd_undo(int argc, char **argv);
-int kai_browser_install(const char *exe);
-int kai_browser_uninstall(void);
-int kai_browser_installed(int *detected);
-const char *kai_browser_ext_dir(void);
-int kai_browser_extension_loaded(void);
-int kai_native_host(const char *origin);
+/* An earlier Kai's Chrome helper (Chrome support was removed in 0.2.0-preview.1). */
+int kai_browser_legacy_present(void);
+int kai_browser_legacy_remove(int verbose);
 
 char *kai_codex_home(void);       /* $CODEX_HOME or ~/.codex; caller frees */
 char *kai_codex_hooks_path(void); /* <codex home>/hooks.json; caller frees */
@@ -122,8 +110,6 @@ typedef struct {
     char problem[300];
 } kai_health;
 void kai_health_agent(const char *agent, const char *config, kai_health *h);
-void kai_health_chrome(const char *exe, kai_health *h);
-char *kai_browser_host_exe(void); /* program the browser starts as Kai's helper */
 char *kai_redact_for_log(const kai_policy *p, const char *text);
 /* Kai's own protection (its settings, the agents' hook files): never exempt. */
 int kai_rule_is_builtin(const char *rule);

@@ -188,9 +188,8 @@ int kai_policy_agent_count(const kai_policy *p);
 /* Agent product kind, from the shipped catalog: how Kai finds its sessions. */
 typedef enum {
     KAI_AGENT_CLI = 0,          /* one root process per terminal (Aider, Codex, …) */
-    KAI_AGENT_IDE = 1,          /* an app hosting many chats/windows (Cursor, Zed, …) */
+    KAI_AGENT_IDE = 1,          /* an app hosting many windows (Cursor, Zed, …) */
     KAI_AGENT_IDE_EXTENSION = 2,/* an agent inside an editor extension (Cline, Copilot) */
-    KAI_AGENT_BROWSER = 3       /* a browser extension (Chrome AI chats) */
 } kai_agent_kind;
 int kai_agent_product_kind(const char *name);  /* kai_agent_kind; CLI if unknown */
 int kai_agent_catalog_verified(const char *name); /* 1 only if checked vs an install */
@@ -441,24 +440,6 @@ int kai_discovery_record(const char *exe, const char *host);
 int kai_discovery_load(kai_discovery **out, int *n);   /* caller frees *out */
 void kai_pid_exe(int pid, char *out, size_t n);        /* a pid's executable path */
 
-/* ---- AI chats (item 3) ----
- * Browser AI chats (claude.ai, chatgpt.com, gemini, …) are not CLI agents and
- * the walls don't apply to them; Kai still SHOWS them so the user sees where AI
- * is used. The data comes only from the Kai browser extension over native
- * messaging (src/native.c) — the network wall stays agent-only and never
- * records a non-agent flow. Site only: no full URL, no chat text is stored.
- * Records live under <home>/chats, keyed by site. Visibility only. */
-typedef struct {
-    char site[256];      /* site only, e.g. "claude.ai" — never a full URL      */
-    long long last_utc;  /* last time the extension reported this site          */
-    int open_tabs;       /* tabs currently open on this site                    */
-    int redactions;      /* redactions Kai applied before sending, on this site */
-    int overrides;       /* times the user chose to send anyway                 */
-} kai_chat;
-int kai_host_is_ai_chat(const char *site);     /* claude.ai/chatgpt.com/gemini/… */
-/* Record/update the browser extension's status for one chat site. */
-int kai_chat_record(const char *site, int open_tabs, int redactions, int overrides);
-int kai_chat_load(kai_chat **out, int *n);     /* caller frees *out */
 
 /* Create or update a session record (idempotent on id). Returns 0 on success.
  * Called by Kai components only; the control store keeps agents out. */
@@ -708,11 +689,6 @@ int kai_codex_analytics_off_at(const char *path, int set);
 /* Session topic from the first prompt: the first real sentence, without
  * pasted-content placeholders or markup; "" if none. */
 void kai_topic_clean(const char *raw, char *out, size_t n);
-/* Chats: today's redactions/holds for a site; the extension's reported version. */
-int kai_daily_site(const char *site);
-int kai_daily_site_in(const char *log, const char *site);
-int kai_chat_record_extension(const char *version);
-int kai_chat_extension_version(char *out, size_t n, long long *last);
 /* The verified code-signing identity of a running process: "<signing id>
  * (<team>)", or "<signing id> (Apple)" for Apple's own. 1 when the signature
  * is valid (anchored to Apple), else 0 and out = "". */

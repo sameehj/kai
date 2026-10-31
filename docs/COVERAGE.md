@@ -7,22 +7,22 @@ What Kai Preview's checks (hooks inside each agent) receive and can stop, per ag
 - **Stage**: when the hook runs. **Can block?**: whether Kai's answer stops the action.
 - **Evidence**: *live* = a real agent session invoked the hook and honoured the answer (date, version); *synthetic* = the agent's hook event, in its format, sent to the real `kai hook`; *not applicable* = the agent reports no such event.
 
-Evidence: each agent's hook event, in that agent's format, sent to the real `kai hook` with the default policy in a throwaway home (`python3 -I tests/coverage/run_coverage.py ./kai`). Generated 2026-10-30.
+Evidence: each agent's hook event, in that agent's format, sent to the real `kai hook` with the default policy in a throwaway home (`python3 -I tests/coverage/run_coverage.py ./kai`). Generated 2026-10-31.
 
 ## Claude Code (2.1.312 (Claude Code))
 
 | Action | Event or hook | Input available | Stage | Can block? | Known bypasses and limits | Evidence |
 |---|---|---|---|---|---|---|
-| Read a protected file with the agent's file tool | PreToolUse (Read) | file path | before the read | Yes | Reads through the shell or a script are separate rows. | live 2026-10-29, Claude Code 2.1.312 (kai demo --live: Read of a fake .env stopped, session 939530bf); synthetic 2026-10-30: stopped |
-| Write a protected file with the agent's file tool | PreToolUse (Write, Edit, MultiEdit, NotebookEdit) | file path and new content | before the write | Yes | A script or shell command that writes the file isn't a file-tool write. | synthetic 2026-10-30: stopped |
-| Read it via a shell command | PreToolUse (Bash) | command text (parsed) | before it runs | Yes | Paths built at run time (variables, globs, base64) aren't recognized; see ESCAPES.md. | live 2026-10-28, Claude Code 2.1.312 (manual run: cat .env stopped); synthetic 2026-10-30: stopped |
-| Read it via a script the agent writes and runs | PreToolUse (Write, then Bash) | the script text, then `python3 read.py` | before each step | No | **Yes, by design**: the hook sees `python3 read.py`, not what the script opens. Closed only by OS-level Files protection (not in Preview 1). | synthetic 2026-10-30: allowed |
-| Secret in a prompt | UserPromptSubmit | the prompt you submit | before the agent processes it | Yes | Only the prompt as you submit it: not tool results, not files the agent reads later. | synthetic 2026-10-30: stopped |
-| Network upload command (`curl -d @file`) | PreToolUse (Bash) | command text (parsed) | before it runs | Yes | Uploads by a script or an unrecognized tool, or to an allowed host, aren't recognized. | live 2026-10-28, Claude Code 2.1.312 (manual run: curl -d @notes.txt stopped); synthetic 2026-10-30: stopped |
-| MCP tool call (no rule for the server) | PreToolUse (mcp__server__tool) | server, tool, argument keys and values | before the call | Yes | Claude Code / Codex: stopped until you allow the server (kai allow-mcp; in the app, a card). Cursor: its MCP event doesn't name the server, so only the arguments are scanned for secrets. | synthetic 2026-10-30: stopped |
-| The agent's own web fetch (secret in the URL) | PreToolUse (WebFetch) | the URL | before the fetch | Yes | Only the URL is checked; by default fetches are allowed (on_fetch allow). Connections made any other way aren't governed. | synthetic 2026-10-30: stopped |
-| Screen and app control (screencapture, ffmpeg/sox, osascript) | PreToolUse (Bash) | command text (parsed) | before it runs | Yes | Recognized commands only: screencapture, ffmpeg/sox/rec from a live device, imagesnap, cliclick, osascript that tells an app; allowed per app (kai allow-capture --app, or the agent's page in the app). A program the agent writes can call the capture APIs directly. | synthetic 2026-10-30: stopped |
-| The agent's own screenshot or computer-use tool | PreToolUse (mcp__computer-use__…) | tool name | before the call | Yes | Recognized by tool name (screenshot, computer). A web page screenshot in a browser tool isn't counted as the screen. | synthetic 2026-10-30: stopped |
+| Read a protected file with the agent's file tool | PreToolUse (Read) | file path | before the read | Yes | Reads through the shell or a script are separate rows. | live 2026-10-29, Claude Code 2.1.312 (kai demo --live: Read of a fake .env stopped, session 939530bf); synthetic 2026-10-31: stopped |
+| Write a protected file with the agent's file tool | PreToolUse (Write, Edit, MultiEdit, NotebookEdit) | file path and new content | before the write | Yes | A script or shell command that writes the file isn't a file-tool write. | synthetic 2026-10-31: stopped |
+| Read it via a shell command | PreToolUse (Bash) | command text (parsed) | before it runs | Yes | Paths built at run time (variables, globs, base64) aren't recognized; see ESCAPES.md. | live 2026-10-28, Claude Code 2.1.312 (manual run: cat .env stopped); synthetic 2026-10-31: stopped |
+| Read it via a script the agent writes and runs | PreToolUse (Write, then Bash) | the script text, then `python3 read.py` | before each step | No | **Yes, by design**: the hook sees `python3 read.py`, not what the script opens. Closed only by OS-level Files protection (not in Preview 1). | synthetic 2026-10-31: allowed |
+| Secret in a prompt | UserPromptSubmit | the prompt you submit | before the agent processes it | Yes | Only the prompt as you submit it: not tool results, not files the agent reads later. | synthetic 2026-10-31: stopped |
+| Network upload command (`curl -d @file`) | PreToolUse (Bash) | command text (parsed) | before it runs | Yes | Uploads by a script or an unrecognized tool, or to an allowed host, aren't recognized. | live 2026-10-28, Claude Code 2.1.312 (manual run: curl -d @notes.txt stopped); synthetic 2026-10-31: stopped |
+| MCP tool call (no rule for the server) | PreToolUse (mcp__server__tool) | server, tool, argument keys and values | before the call | Yes | Claude Code / Codex: stopped until you allow the server (kai allow-mcp; in the app, a card). Cursor: its MCP event doesn't name the server, so only the arguments are scanned for secrets. | synthetic 2026-10-31: stopped |
+| The agent's own web fetch (secret in the URL) | PreToolUse (WebFetch) | the URL | before the fetch | Yes | Only the URL is checked; by default fetches are allowed (on_fetch allow). Connections made any other way aren't governed. | synthetic 2026-10-31: stopped |
+| Screen and app control (screencapture, ffmpeg/sox, osascript) | PreToolUse (Bash) | command text (parsed) | before it runs | Yes | Recognized commands only: screencapture, ffmpeg/sox/rec from a live device, imagesnap, cliclick, osascript that tells an app; allowed per app (kai allow-capture --app, or the agent's page in the app). A program the agent writes can call the capture APIs directly. | synthetic 2026-10-31: stopped |
+| The agent's own screenshot or computer-use tool | PreToolUse (mcp__computer-use__…) | tool name | before the call | Yes | Recognized by tool name (screenshot, computer). A web page screenshot in a browser tool isn't counted as the screen. | synthetic 2026-10-31: stopped |
 
 ## Codex (codex-cli 0.162.1)
 
@@ -30,29 +30,29 @@ Evidence: each agent's hook event, in that agent's format, sent to the real `kai
 |---|---|---|---|---|---|---|
 | Read a protected file with the agent's file tool | none (no file tool) | n/a | n/a | No | Reads through the shell or a script are separate rows. | not applicable |
 | Write a protected file with the agent's file tool | none (apply_patch is checked as a patch) | n/a | n/a | No | A script or shell command that writes the file isn't a file-tool write. | not applicable |
-| Read it via a shell command | PreToolUse (shell) | argv, e.g. ["bash","-lc","..."] (parsed) | before it runs | Yes | Paths built at run time (variables, globs, base64) aren't recognized; see ESCAPES.md. | live 2026-10-29, codex-cli 0.162.1 (kai demo --live: cat of a fake .env stopped, session 01a18738); synthetic 2026-10-30: stopped |
-| Read it via a script the agent writes and runs | PreToolUse (shell) | `python3 read.py` only | before it runs | No | **Yes, by design**: the hook sees `python3 read.py`, not what the script opens. Closed only by OS-level Files protection (not in Preview 1). | synthetic 2026-10-30: allowed |
-| Secret in a prompt | UserPromptSubmit | the prompt you submit | before the agent processes it | Yes | Only the prompt as you submit it: not tool results, not files the agent reads later. | synthetic 2026-10-30: stopped |
-| Network upload command (`curl -d @file`) | PreToolUse (shell) | argv (parsed) | before it runs | Yes | Uploads by a script or an unrecognized tool, or to an allowed host, aren't recognized. | synthetic 2026-10-30: stopped |
-| MCP tool call (no rule for the server) | PreToolUse (MCP tool) | server, tool, arguments | before the call | Yes | Claude Code / Codex: stopped until you allow the server (kai allow-mcp; in the app, a card). Cursor: its MCP event doesn't name the server, so only the arguments are scanned for secrets. | synthetic 2026-10-30: stopped |
+| Read it via a shell command | PreToolUse (shell) | argv, e.g. ["bash","-lc","..."] (parsed) | before it runs | Yes | Paths built at run time (variables, globs, base64) aren't recognized; see ESCAPES.md. | live 2026-10-29, codex-cli 0.162.1 (kai demo --live: cat of a fake .env stopped, session 01a18738); synthetic 2026-10-31: stopped |
+| Read it via a script the agent writes and runs | PreToolUse (shell) | `python3 read.py` only | before it runs | No | **Yes, by design**: the hook sees `python3 read.py`, not what the script opens. Closed only by OS-level Files protection (not in Preview 1). | synthetic 2026-10-31: allowed |
+| Secret in a prompt | UserPromptSubmit | the prompt you submit | before the agent processes it | Yes | Only the prompt as you submit it: not tool results, not files the agent reads later. | synthetic 2026-10-31: stopped |
+| Network upload command (`curl -d @file`) | PreToolUse (shell) | argv (parsed) | before it runs | Yes | Uploads by a script or an unrecognized tool, or to an allowed host, aren't recognized. | synthetic 2026-10-31: stopped |
+| MCP tool call (no rule for the server) | PreToolUse (MCP tool) | server, tool, arguments | before the call | Yes | Claude Code / Codex: stopped until you allow the server (kai allow-mcp; in the app, a card). Cursor: its MCP event doesn't name the server, so only the arguments are scanned for secrets. | synthetic 2026-10-31: stopped |
 | The agent's own web fetch (secret in the URL) | none (no fetch event) | n/a | n/a | No | Only the URL is checked; by default fetches are allowed (on_fetch allow). Connections made any other way aren't governed. | not applicable |
-| Screen and app control (screencapture, ffmpeg/sox, osascript) | PreToolUse (shell) | argv (parsed) | before it runs | Yes | Recognized commands only: screencapture, ffmpeg/sox/rec from a live device, imagesnap, cliclick, osascript that tells an app; allowed per app (kai allow-capture --app, or the agent's page in the app). A program the agent writes can call the capture APIs directly. | synthetic 2026-10-30: stopped |
-| The agent's own screenshot or computer-use tool | PreToolUse (MCP tool) | tool name | before the call | Yes | Recognized by tool name (screenshot, computer). A web page screenshot in a browser tool isn't counted as the screen. | synthetic 2026-10-30: stopped |
+| Screen and app control (screencapture, ffmpeg/sox, osascript) | PreToolUse (shell) | argv (parsed) | before it runs | Yes | Recognized commands only: screencapture, ffmpeg/sox/rec from a live device, imagesnap, cliclick, osascript that tells an app; allowed per app (kai allow-capture --app, or the agent's page in the app). A program the agent writes can call the capture APIs directly. | synthetic 2026-10-31: stopped |
+| The agent's own screenshot or computer-use tool | PreToolUse (MCP tool) | tool name | before the call | Yes | Recognized by tool name (screenshot, computer). A web page screenshot in a browser tool isn't counted as the screen. | synthetic 2026-10-31: stopped |
 
 ## Cursor (Cursor 3.27.22)
 
 | Action | Event or hook | Input available | Stage | Can block? | Known bypasses and limits | Evidence |
 |---|---|---|---|---|---|---|
-| Read a protected file with the agent's file tool | beforeReadFile | file path | before the read | Yes | Reads through the shell or a script are separate rows. | synthetic 2026-10-30: stopped |
+| Read a protected file with the agent's file tool | beforeReadFile | file path | before the read | Yes | Reads through the shell or a script are separate rows. | synthetic 2026-10-31: stopped |
 | Write a protected file with the agent's file tool | none (no write event) | n/a | n/a | No | A script or shell command that writes the file isn't a file-tool write. | not applicable |
-| Read it via a shell command | beforeShellExecution | command text (parsed) | before it runs | Yes | Paths built at run time (variables, globs, base64) aren't recognized; see ESCAPES.md. | synthetic 2026-10-30: stopped |
-| Read it via a script the agent writes and runs | beforeShellExecution | `python3 read.py` only (the write isn't reported) | before it runs | No | **Yes, by design**: the hook sees `python3 read.py`, not what the script opens. Closed only by OS-level Files protection (not in Preview 1). | synthetic 2026-10-30: allowed |
-| Secret in a prompt | beforeSubmitPrompt | the prompt you submit | before the agent processes it | Yes | Only the prompt as you submit it: not tool results, not files the agent reads later. | synthetic 2026-10-30: stopped |
-| Network upload command (`curl -d @file`) | beforeShellExecution | command text (parsed) | before it runs | Yes | Uploads by a script or an unrecognized tool, or to an allowed host, aren't recognized. | synthetic 2026-10-30: stopped |
-| MCP tool call (no rule for the server) | beforeMCPExecution | tool name and arguments, not the server | before the call | No | Claude Code / Codex: stopped until you allow the server (kai allow-mcp; in the app, a card). Cursor: its MCP event doesn't name the server, so only the arguments are scanned for secrets. | synthetic 2026-10-30: allowed |
+| Read it via a shell command | beforeShellExecution | command text (parsed) | before it runs | Yes | Paths built at run time (variables, globs, base64) aren't recognized; see ESCAPES.md. | synthetic 2026-10-31: stopped |
+| Read it via a script the agent writes and runs | beforeShellExecution | `python3 read.py` only (the write isn't reported) | before it runs | No | **Yes, by design**: the hook sees `python3 read.py`, not what the script opens. Closed only by OS-level Files protection (not in Preview 1). | synthetic 2026-10-31: allowed |
+| Secret in a prompt | beforeSubmitPrompt | the prompt you submit | before the agent processes it | Yes | Only the prompt as you submit it: not tool results, not files the agent reads later. | synthetic 2026-10-31: stopped |
+| Network upload command (`curl -d @file`) | beforeShellExecution | command text (parsed) | before it runs | Yes | Uploads by a script or an unrecognized tool, or to an allowed host, aren't recognized. | synthetic 2026-10-31: stopped |
+| MCP tool call (no rule for the server) | beforeMCPExecution | tool name and arguments, not the server | before the call | No | Claude Code / Codex: stopped until you allow the server (kai allow-mcp; in the app, a card). Cursor: its MCP event doesn't name the server, so only the arguments are scanned for secrets. | synthetic 2026-10-31: allowed |
 | The agent's own web fetch (secret in the URL) | none (no fetch event) | n/a | n/a | No | Only the URL is checked; by default fetches are allowed (on_fetch allow). Connections made any other way aren't governed. | not applicable |
-| Screen and app control (screencapture, ffmpeg/sox, osascript) | beforeShellExecution | command text (parsed) | before it runs | Yes | Recognized commands only: screencapture, ffmpeg/sox/rec from a live device, imagesnap, cliclick, osascript that tells an app; allowed per app (kai allow-capture --app, or the agent's page in the app). A program the agent writes can call the capture APIs directly. | synthetic 2026-10-30: stopped |
-| The agent's own screenshot or computer-use tool | beforeMCPExecution | tool name | before the call | Yes | Recognized by tool name (screenshot, computer). A web page screenshot in a browser tool isn't counted as the screen. | synthetic 2026-10-30: stopped |
+| Screen and app control (screencapture, ffmpeg/sox, osascript) | beforeShellExecution | command text (parsed) | before it runs | Yes | Recognized commands only: screencapture, ffmpeg/sox/rec from a live device, imagesnap, cliclick, osascript that tells an app; allowed per app (kai allow-capture --app, or the agent's page in the app). A program the agent writes can call the capture APIs directly. | synthetic 2026-10-31: stopped |
+| The agent's own screenshot or computer-use tool | beforeMCPExecution | tool name | before the call | Yes | Recognized by tool name (screenshot, computer). A web page screenshot in a browser tool isn't counted as the screen. | synthetic 2026-10-31: stopped |
 
 ## Not checked by any agent's hooks
 
@@ -78,19 +78,3 @@ The same operations attempted by a live Claude Code session against a dummy fixt
 | A Python script the agent wrote opens `.env` | **Not stopped**: the hook saw `python3 read.py`; the script read the file |
 
 Not covered at all in Preview 1: anything the agent does without a hook event (a script's own file and network access, background processes). OS-level protection (Files, Internet) is in private testing.
-
-## Chats: AI chat sites in Chrome (browser extension)
-
-Manual runs with a dummy key, recorded in `tests/coverage/chats_manual.json`. The extension checks pastes and sends. Outcomes are kept apart: redacted before sending, not checked (Kai unreachable, unsupported site, inspection failed), and noticed after sending, which this version never does. It does not look at attached files, so an attachment is a known bypass on every site.
-
-| Site | Tested | Paste | Typed + Enter | Send button | Attached file |
-|---|---|---|---|---|---|
-| chatgpt.com | not tested | not tested | not tested | not tested | not checked (known bypass) |
-| claude.ai | not tested | not tested | not tested | not tested | not checked (known bypass) |
-| gemini.google.com | not tested | not tested | not tested | not tested | not checked (known bypass) |
-| chat.deepseek.com | not tested | not tested | not tested | not tested | not checked (known bypass) |
-| www.perplexity.ai | not tested | not tested | not tested | not tested | not checked (known bypass) |
-| copilot.microsoft.com | not tested | not tested | not tested | not tested | not checked (known bypass) |
-| chat.mistral.ai | not tested | not tested | not tested | not tested | not checked (known bypass) |
-| grok.com | not tested | not tested | not tested | not tested | not checked (known bypass) |
-| poe.com | not tested | not tested | not tested | not tested | not checked (known bypass) |

@@ -164,24 +164,6 @@ int kai_cmd_status_json(void) {
         free(cfg);
     }
     free(codex);
-    {
-        int detected = 0;
-        int on = kai_browser_installed(&detected);
-        cJSON *b = cJSON_AddObjectToObject(o, "chrome");
-        cJSON_AddBoolToObject(b, "installed", on);
-        cJSON_AddBoolToObject(b, "detected", detected);
-        const char *ext = kai_browser_ext_dir();
-        cJSON_AddStringToObject(b, "config", ext ? ext : "");
-        cJSON_AddBoolToObject(b, "extension_loaded", kai_browser_extension_loaded());
-        if (on) {
-            char *exe = kai_browser_host_exe();
-            kai_health h;
-            kai_health_chrome(exe, &h);
-            cJSON_AddBoolToObject(b, "working", h.ok);
-            cJSON_AddStringToObject(b, "problem", h.problem);
-            free(exe);
-        }
-    }
 
     cJSON *au = cJSON_AddObjectToObject(o, "audit");
     cJSON_AddStringToObject(au, "path", kai_audit_path());
@@ -313,28 +295,6 @@ int kai_cmd_agents(int argc, char **argv) {
         }
     }
     free(disc);
-    /* AI chats (item 3): chat sites the Kai browser extension reports as open.
-     * Browser extension · walls don't apply. Site only; no URL, no chat text. */
-    kai_chat *chats = NULL; int nchats = 0;
-    kai_chat_load(&chats, &nchats);
-    for (int i = 0; i < nchats; i++) {
-        if (json) {
-            cJSON *a = cJSON_CreateObject();
-            cJSON_AddStringToObject(a, "name", chats[i].site);
-            cJSON_AddStringToObject(a, "kind", "ai-chat");
-            cJSON_AddStringToObject(a, "source", "browser extension");
-            cJSON_AddStringToObject(a, "coverage", "Files and Internet protection don't apply");
-            cJSON_AddNumberToObject(a, "open_tabs", chats[i].open_tabs);
-            cJSON_AddNumberToObject(a, "redactions", chats[i].redactions);
-            cJSON_AddNumberToObject(a, "overrides", chats[i].overrides);
-            cJSON_AddItemToArray(arr, a);
-        } else {
-            if (i == 0) printf("\nChats (browser extension - Files and Internet protection don't apply):\n");
-            printf("  %-22s %d open, %d redacted, %d sent anyway\n",
-                   chats[i].site, chats[i].open_tabs, chats[i].redactions, chats[i].overrides);
-        }
-    }
-    free(chats);
     free(codex); kai_policy_free(p); free(sess);
     if (json) print_json(arr);
     return 0;

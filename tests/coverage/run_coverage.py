@@ -277,25 +277,6 @@ def cell(r, op):
     return (obs, den, BYPASS.get(op, ""))
 
 
-def chats_section():
-    # A5b: AI chat sites in the browser. These are manual runs (a real browser,
-    # real sites), recorded by hand in chats_manual.json; nothing here is measured
-    # by this script, and an unrun cell says "not tested".
-    with open(os.path.join(ROOT, "tests", "coverage", "chats_manual.json")) as f:
-        sites = json.load(f)["sites"]
-    lines = ["## Chats: AI chat sites in Chrome (browser extension)", "",
-             "Manual runs with a dummy key, recorded in `tests/coverage/chats_manual.json`. "
-             "The extension checks pastes and sends. Outcomes are kept apart: redacted before sending, not checked (Kai unreachable, unsupported site, inspection failed), and noticed after sending, which this version never does. It does not look at attached files, so "
-             "an attachment is a known bypass on every site.", "",
-             "| Site | Tested | Paste | Typed + Enter | Send button | Attached file |",
-             "|---|---|---|---|---|---|"]
-    for site, r in sites.items():
-        attach = r["attach"] if r["attach"] != "not tested" else "not checked (known bypass)"
-        lines.append("| %s | %s | %s | %s | %s | %s |" % (site, r.get("tested") or "not tested",
-                     r["paste"], r["enter"], r["button"], attach))
-    return lines + [""]
-
-
 def main():
     claude_bin = shutil.which("claude") or os.path.expanduser("~/.claude/local/claude")
     agents = [("Claude Code", "claude", version([claude_bin, "--version"])),
@@ -362,7 +343,6 @@ def main():
               "Not covered at all in Preview 1: anything the agent does without a hook event (a script's "
               "own file and network access, background processes). OS-level protection (Files, Internet) "
               "is in private testing.", ""]
-    lines += chats_section()
     with open(OUT, "w") as f:
         f.write("\n".join(lines))
     # Console summary + a non-zero exit if a row that must hold doesn't.

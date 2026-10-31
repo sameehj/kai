@@ -8,7 +8,6 @@
 #   KAI_DEVID_APP="Developer ID Application: Name (TEAMID)" \
 #   KAI_DEVID_INSTALLER="Developer ID Installer: Name (TEAMID)" \
 #   KAI_NOTARY_PROFILE=kai-notary \
-#   KAI_STORE_EXTENSION_ID=<the Chrome Web Store ID, 32 letters a-p> \
 #   sh scripts/release/build-preview-pkg.sh 0.2.0-preview.1
 #
 # Without the Developer ID identities and a notarytool keychain profile
@@ -44,15 +43,6 @@ if [ "$MODE" != "--test" ]; then
     echo "build guard: $tag = origin/master = $tagc, CI passed ($1 check runs)"
 fi
 
-# The store copy of the browser extension talks to kai only if kai's native
-# host lists its ID. A release must have it; a test package may leave it out.
-STORE_ID="${KAI_STORE_EXTENSION_ID:-}"
-if [ -n "$STORE_ID" ]; then
-    printf '%s' "$STORE_ID" | grep -Eq '^[a-p]{32}$' || { echo "KAI_STORE_EXTENSION_ID isn't a Chrome extension ID"; exit 2; }
-elif [ "$MODE" != "--test" ]; then
-    echo "release needs KAI_STORE_EXTENSION_ID (upload the extension unlisted first: docs/CHROME_STORE.md)"; exit 2
-fi
-
 grep -q "#define KAI_VERSION \"$VERSION\"" include/kai.h || {
     echo "include/kai.h KAI_VERSION isn't \"$VERSION\""; [ "$MODE" = "--test" ] || exit 2; }
 
@@ -60,17 +50,12 @@ rm -rf "$OUT" && mkdir -p "$STAGE/usr/local/bin" "$STAGE/usr/local/share/kai" "$
 
 # Universal, macOS 13+ (remove only the objects: `make clean` would also wipe build/)
 rm -f src/*.o third_party/cjson/*.o kai libkai.a
-make CC="cc -arch arm64 -arch x86_64 -mmacosx-version-min=13.0" KAI_STORE_ID="$STORE_ID" kai-release >/dev/null
+make CC="cc -arch arm64 -arch x86_64 -mmacosx-version-min=13.0" kai-release >/dev/null
 K=build/kai-release   # a release build: ignores KAI_HOME / KAI_POLICY
-[ -z "$STORE_ID" ] || strings "$K" | grep -q "$STORE_ID" || { echo "the store ID didn't make it into kai"; exit 1; }
 lipo -info "$K" | grep -q "x86_64 arm64\|arm64 x86_64" || { echo "kai isn't universal"; exit 1; }
 "$K" version | grep -q "(release build)" || { echo "kai isn't a release build"; exit 1; }
 cp "$K" "$STAGE/usr/local/bin/kai"
 cp policy/default.policy "$STAGE/usr/local/share/kai/default.policy"
-mkdir -p "$STAGE/usr/local/share/kai/browser/icons"
-cp integrations/browser/*.js integrations/browser/*.json integrations/browser/popup.html \
-   "$STAGE/usr/local/share/kai/browser/"
-cp integrations/browser/icons/*.png "$STAGE/usr/local/share/kai/browser/icons/"
 
 # preinstall: never install an older kai over a newer one (A4)
 cat > "$OUT/scripts/preinstall" <<EOF
@@ -88,8 +73,8 @@ exit 0
 EOF
 chmod +x "$OUT/scripts/preinstall"
 
-# postinstall: register kai's native host with the signed-in user's browsers,
-# so the store extension can reach kai right away (no Terminal step).
+# postinstall: for the signed-in user, remove an earlier Kai's Chrome helper (no
+# dangling browser manifest after an upgrade) and refresh existing agent hooks.
 # Console user only; nobody signed in: skipped with a note in the installer log
 # (tests/release/run_postinstall_tests.sh).
 cp scripts/release/postinstall "$OUT/scripts/postinstall"

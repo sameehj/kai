@@ -21,7 +21,6 @@ enum InfoText {
         + "still asks for its own permission, and a program the agent writes can use these directly."
     static let secretsKept = "Secrets Kai removed or stopped before they were sent."
     static let actionsStopped = "Actions Kai stopped before they ran."
-    static let chats = "AI chat sites the Kai extension is checking in Chrome."
 
     /// The ⓘ for a session's coverage word, if there is one.
     static func coverage(_ short: String) -> String? {
