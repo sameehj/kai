@@ -28,7 +28,7 @@ a flag or delete. They stay deferred (RECONCILED-PLAN, "Still deferred").
 | Step 4: MCP rules | kai-v1-plan.md | done | `kai_mcp_decide` (src/policy.c); `kai allow-mcp`; CLI tests "MCP without the app"; COVERAGE MCP rows; escape case `mcp-send-data` stopped (7dcc112) | Cursor's MCP event doesn't name the server: arguments scanned for secrets only |
 | Step 5: TLS validation | kai-v1-plan.md | done (optional gateway) | `tests/gateway/run_tls_tests.sh` (3 checks, in `make test`) | Applies to the optional local gateway only |
 | Step 6: S8 acceptance | kai-v1-plan.md | partial | `docs/audit/live-tests/S8.md`, `scripts/s8-setup.sh` (621d76c) | Runbook written; its Result column is empty: never run |
-| Step 7: make release | kai-v1-plan.md | partial | `make kai-release`, `scripts/release/build-preview-pkg.sh` with build guard (1cc50c1) | No `make release` target yet; app signing/notarization not in one command (this task, Step 7) |
+| Step 7: make release | kai-v1-plan.md | partial | 8113370 (`make release`: app + network extension Developer ID signing, entitlement and codesign/spctl checks, notarize, staple; `tests/release/run_sign_tests.sh`) | Not run with real credentials: the signed, notarized build is NOT COVERED until the owner runs `make release` |
 
 ## kai-preview-release-plan.md, Gates A, B1, B2 (document not in repository)
 
@@ -56,9 +56,9 @@ a flag or delete. They stay deferred (RECONCILED-PLAN, "Still deferred").
 | G1: sticky lineage tags on fork, pidversion-checked; network wall uses the same record | Oct 30 audit; RECONCILED Phase 4 | not started | — | Full-protection edition |
 | G2, G3 | Oct 30 audit | not assessable | — | |
 | G4: letter-case bypass in hooks | Oct 30 audit | done | 008c0c8; CLI checks; escape case `key-letter-case` | All protected-path matchers ignore case |
-| G5: built-ins never fail open; storage wall subscribes once a policy appears; status Degraded | Oct 30 audit | partial | — | Network part: this task, Step 4 (found: with no policy loaded, the Internet wall allows every agent flow). Storage part: Files not in this release |
+| G5: built-ins never fail open; storage wall subscribes once a policy appears; status Degraded | Oct 30 audit | partial | 21c18c7 (fail-safe policy; 8 storage checks; status "running without a policy") | Network part done in code and tests; live health case NOT COVERED (needs the extension reactivated, v29). Storage part: Files not in this release |
 | G6, G7 | Oct 30 audit | not assessable | — | |
-| G8: `googleapis.com` too broad in built-in egress | Oct 30 audit (named in this task) | not started | src/policy.c:225 lists `googleapis.com` | This task, Step 4 |
+| G8: `googleapis.com` too broad in built-in egress | Oct 30 audit (named in this task) | done | 4332c80 (only generativelanguage, cloudcode-pa, oauth2 .googleapis.com; storage checks) | |
 | G9–G13 | Oct 30 audit | not assessable | — | |
 | G14: folder-rename bypass in hooks | Oct 30 audit | done | 008c0c8; escape cases `rename-parent-folder`, `cd-relative-rename`; `script-renames-folder` recorded as gets-through | |
 | §8 order of work | Oct 30 audit | dropped (superseded) | cf6744c | Order now in RECONCILED-PLAN |
@@ -67,7 +67,7 @@ a flag or delete. They stay deferred (RECONCILED-PLAN, "Still deferred").
 
 | Item | Source doc | Status | Evidence | Notes |
 |---|---|---|---|---|
-| P0 Truthful wall health and policy initialization (G5) | RECONCILED-PLAN | partial | — | Hooks: missing policy fails closed (done). Internet wall: Step 4 of this task |
+| P0 Truthful wall health and policy initialization (G5) | RECONCILED-PLAN | partial | 21c18c7 | Hooks: missing policy fails closed. Internet wall: built-in defaults in Protect, said in status and app; live check NOT COVERED |
 | P0 Documented enforcement coverage and attribution behavior | RECONCILED-PLAN | done | 008c0c8 (COVERAGE "Enforcement and attribution") | Internet wall rows come from the Step 3 replay |
 | P0 Remove Chrome integration and claims | RECONCILED-PLAN | done | a8231dc | |
 | P0 release.yml doesn't publish on tags; traceable build | RECONCILED-PLAN | done | 1cc50c1 (release.yml), 549864c (commit in `kai version`, BUILDINFO.txt, THIRD_PARTY.md) | Step 2 re-confirms |
@@ -93,3 +93,17 @@ a flag or delete. They stay deferred (RECONCILED-PLAN, "Still deferred").
 | Read cloud credentials | RECONCILED-PLAN | not started | — | Step 3 |
 | Restart Kai or disable a wall | RECONCILED-PLAN | not started | — | Step 3 health case (needs the owner) |
 | Tamper resistance rows | RECONCILED-PLAN | not started | — | Full-protection gate only |
+
+## This task (release plan, Steps 1–10)
+
+| Step | Status | Evidence | Notes |
+|---|---|---|---|
+| 1 Inventory | done | 40beebb | This file |
+| 2 Release integrity | done | earlier commits; BUILDINFO.txt | |
+| 3 `make replay` | not started | — | Handed back to the owner: the harness work was stopped by a safety check twice |
+| 4 G5 network, G8, pause | partial | 21c18c7, 4332c80, a2a649f | Pause/resume not live-tested (extension v29 not reactivated); timing of git/curl/npm under a pause NOT COVERED |
+| 5 Tell the agent why | done | ea066c1 | Claude Code shows the reason (live); Codex and Cursor: documented fields, not observed |
+| 6 App fixes | done | 32b3d83 | Popover/Agent Control snapshots; the stopped-today list and Needs-you-at-top not rendered (popovers aren't drawn by the snapshot mode) |
+| 7 Signed build, checks, clean-Mac checklist | partial | 8113370, docs/release/CLEAN-MAC-CHECKLIST.md | Needs the owner's Developer ID identities, profiles and notary profile; the clean-Mac run is the owner's |
+| 8 Audit privacy | done | 3983ceb, docs/security/AUDIT-LOG.md | Two fixes: 0644 log made 0600; rotation size ignored in release builds |
+| 9 Release wording | done | 65d7657 | Replay records don't exist yet; texts say NOT COVERED |
