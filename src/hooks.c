@@ -287,6 +287,14 @@ static int terminal_stopped(const char *cmd, const char *hit, const char *agent,
     return capture_stopped(what, name, " (commands it runs there aren't checked by Kai)", agent, cwd, out, n);
 }
 
+/* NEVER-RERUN fix 5: what the agent should do after a Kai denial. */
+#define KAI_ASK_USER " Don't retry another way; ask the user."
+static void add_ask_user(char *msg, size_t n) {
+    if (strstr(msg, "Don't retry")) return;   /* the repeat note already says it */
+    size_t l = strlen(msg);
+    if (l + sizeof KAI_ASK_USER < n) memcpy(msg + l, KAI_ASK_USER, sizeof KAI_ASK_USER);
+}
+
 /* The stop already reads as a sentence to the user: no "Kai stopped this:". */
 static int own_words(const char *reason) {
     return !strncmp(reason, "Kai ", 4) || strstr(reason, "kai allow-capture --app") != NULL ||
@@ -1336,6 +1344,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 snprintf(msg, sizeof msg, "%s", reason);
             else
                 snprintf(msg, sizeof msg, "Kai stopped this: %s", reason);
+            if (!ask) add_ask_user(msg, sizeof msg);
             cJSON_AddStringToObject(h, "permissionDecisionReason", msg);
             cJSON_AddItemToObject(o, "hookSpecificOutput", h);
             char *s = cJSON_PrintUnformatted(o);
@@ -1404,6 +1413,7 @@ static void cursor_deny(const char *user_msg) {
     if (own_words(user_msg)) snprintf(msg, sizeof msg, "%s", user_msg);
     else snprintf(msg, sizeof msg, "Kai stopped this: %s", user_msg);
     cJSON_AddStringToObject(o, "user_message", msg);
+    add_ask_user(msg, sizeof msg);
     cJSON_AddStringToObject(o, "agent_message", msg);
     char *s = cJSON_PrintUnformatted(o);
     printf("%s\n", s);

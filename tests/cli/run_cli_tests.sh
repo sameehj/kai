@@ -212,6 +212,30 @@ gb() { gp Bash '{"command":"'"$1"'"}'; }
 [ "$(gb "ls -la $GH")" = allow ] && pass "listing the home folder goes through" || fail "ls ~ stopped"
 [ "$(gb "find $GH/proj -name '*.txt'")" = allow ] && pass "find in a project goes through" || fail "find stopped"
 
+echo "== tell the agent why (NEVER-RERUN fix 5) =="
+WH="$TMP/why"; mkdir -p "$WH/.claude" "$WH/.codex" "$WH/.kai" "$WH/proj"; printf 'A=1\n' > "$WH/proj/.env"
+wy() { printf '%s' "$2" | HOME="$WH" KAI_HOME="$WH/.kai" KAI_NO_APP=1 "$KAI" hook "$1"; }
+o=$(wy claude '{"hook_event_name":"PreToolUse","tool_name":"Read","session_id":"w","tool_input":{"file_path":"'"$WH"'/proj/.env"},"cwd":"'"$WH"'/proj"}')
+has "Claude Code deny tells the agent not to work around it" "$o" "Don't retry another way; ask the user."
+o=$(wy codex '{"hook_event_name":"PreToolUse","tool_name":"shell","session_id":"w","tool_input":{"command":["bash","-lc","cat .env"]},"cwd":"'"$WH"'/proj"}')
+has "Codex deny too" "$o" "Don't retry another way; ask the user."
+o=$(wy cursor '{"hook_event_name":"beforeShellExecution","command":"cat '"$WH"'/proj/.env","workspace_roots":["'"$WH"'/proj"]}')
+has "Cursor's agent_message too" "$o" "Don't retry another way; ask the user."
+printf '# my own notes\nkeep this line\n' > "$WH/.claude/CLAUDE.md"
+HOME="$WH" KAI_HOME="$WH/.kai" "$KAI" install claude >/dev/null 2>&1
+HOME="$WH" KAI_HOME="$WH/.kai" "$KAI" install claude >/dev/null 2>&1
+c=$(cat "$WH/.claude/CLAUDE.md")
+has "kai install writes Kai's agent instructions into ~/.claude/CLAUDE.md" "$c" "<!-- kai:agent-instructions:start -->"
+has "...saying a Kai denial means ask, not work around" "$c" "don't retry it another way"
+has "...keeping the user's own text" "$c" "keep this line"
+[ "$(grep -c 'kai:agent-instructions:start' "$WH/.claude/CLAUDE.md")" = 1 ] && pass "...once, however often kai install runs" || fail "instructions block duplicated"
+HOME="$WH" KAI_HOME="$WH/.kai" "$KAI" install codex >/dev/null 2>&1
+has "kai install codex writes them into ~/.codex/AGENTS.md" "$(cat "$WH/.codex/AGENTS.md" 2>/dev/null)" "<!-- kai:agent-instructions:start -->"
+HOME="$WH" KAI_HOME="$WH/.kai" "$KAI" uninstall claude >/dev/null 2>&1
+c=$(cat "$WH/.claude/CLAUDE.md")
+hasnt "kai uninstall removes them" "$c" "kai:agent-instructions"
+has "...and leaves the user's text" "$c" "keep this line"
+
 echo "== Chrome support removed (Security Plan v1.0) =="
 CR="$TMP/chrome"; NM="$CR/Library/Application Support/Google/Chrome/NativeMessagingHosts"
 mkdir -p "$NM" "$CR/.kai/browser-extension"
