@@ -2356,6 +2356,16 @@ static void test_channels(void) {
               kai_policy_load("/nonexistent/dir/policy", e2, sizeof e2) == NULL,
               "G5: an unreadable policy loads as NULL (the wall then uses the fail-safe one)");
     }
+    /* NEVER-RERUN fix 4: a held (paused) agent connection resumes on Allow,
+     * drops on Keep blocked, a dismissed card or the timeout, else waits */
+    CHECK(kai_pause_verdict(1, 0, 1, 3.0, KAI_PAUSE_TIMEOUT) == 1, "pause: a grant arrives: resume (allow)");
+    CHECK(kai_pause_verdict(1, 0, 0, 3.0, KAI_PAUSE_TIMEOUT) == 1, "pause: granted and the card is gone: resume (allow)");
+    CHECK(kai_pause_verdict(0, 1, 0, 3.0, KAI_PAUSE_TIMEOUT) == 0, "pause: Keep blocked: drop");
+    CHECK(kai_pause_verdict(0, 0, 0, 3.0, KAI_PAUSE_TIMEOUT) == 0, "pause: the card was dismissed without a grant: drop");
+    CHECK(kai_pause_verdict(0, 0, 1, 3.0, KAI_PAUSE_TIMEOUT) == -1, "pause: still waiting for a decision: wait");
+    CHECK(kai_pause_verdict(0, 0, 1, KAI_PAUSE_TIMEOUT + 0.1, KAI_PAUSE_TIMEOUT) == 0, "pause: no decision before the timeout: drop");
+    CHECK(kai_pause_verdict(1, 1, 1, 3.0, KAI_PAUSE_TIMEOUT) == 0, "pause: Keep blocked wins over a stale grant");
+    CHECK(kai_pause_verdict(1, 0, 1, 0.1, KAI_PAUSE_TIMEOUT) == -1, "pause: never resumed within 250 ms of pausing (the pause/resume race)");
     /* G8: Google's API domain is not a blanket allow, only the Gemini hosts */
     CHECK(p && kai_egress_endpoint_allowed(p, "storage.googleapis.com", "1.2.3.4", 443, why, sizeof why) != 1,
           "G8: storage.googleapis.com is not allowed by default");

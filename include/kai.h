@@ -62,6 +62,12 @@ int kai_policy_integrity(char *detail, size_t n);
 /* Directives this version doesn't know: count, and the first one's name. */
 int kai_policy_unknown(const kai_policy *p, char *first, size_t n);
 kai_policy *kai_policy_from_string(const char *text, char *err, size_t errlen);
+/* NEVER-RERUN fix 4: an agent's TCP connection that needs a decision is held
+ * (paused), not dropped, while the card waits. 1 resume (allow), 0 drop,
+ * -1 keep waiting. Keep blocked wins; a dismissed card or the timeout drops;
+ * never resumed within 250 ms of pausing (Apple's pause/resume race). */
+#define KAI_PAUSE_TIMEOUT 120.0
+int kai_pause_verdict(int grant_allows, int kept_blocked, int pending_exists, double waited, double timeout);
 /* G5: built-in defaults in Protect, for a wall with no loadable policy. */
 kai_policy *kai_policy_builtin_failsafe(void);
 int kai_policy_is_failsafe(const kai_policy *p);

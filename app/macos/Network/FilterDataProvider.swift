@@ -23,6 +23,48 @@ private let log = Logger(subsystem: "io.github.sameehj.kai.network", category: "
 final class FilterDataProvider: NEFilterDataProvider {
     private let engine = Engine()
     private var healthTimer: DispatchSourceTimer?
+
+    // NEVER-RERUN fix 4: agent TCP connections waiting for a card, held with a
+    // pause verdict and resumed (allow) or dropped from this timer.
+    private struct Held { let flow: NEFilterFlow; let id: String; let agent: String; let target: String
+                          let pid: pid_t; let pidv: UInt32; let since: Date; let newFlow: Bool }
+    private var held: [UUID: Held] = [:]
+    private let heldLock = NSLock()
+    private var heldTimer: DispatchSourceTimer?
+
+    private func hold(_ flow: NEFilterFlow, id: String, agent: String, target: String,
+                      pid: pid_t, pidv: UInt32, newFlow: Bool) {
+        heldLock.lock(); defer { heldLock.unlock() }
+        held[flow.identifier] = Held(flow: flow, id: id, agent: agent, target: target, pid: pid, pidv: pidv,
+                                     since: Date(), newFlow: newFlow)
+        if heldTimer == nil {
+            let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "kai.held"))
+            t.schedule(deadline: .now() + 0.5, repeating: 0.5)
+            t.setEventHandler { [weak self] in self?.checkHeld() }
+            heldTimer = t
+            t.resume()
+        }
+    }
+
+    private func checkHeld() {
+        heldLock.lock()
+        let snapshot = held
+        heldLock.unlock()
+        for (key, h) in snapshot {
+            let waited = Date().timeIntervalSince(h.since)
+            let st = engine.heldState(pending: h.id, pid: h.pid, pidv: h.pidv, agent: h.agent, target: h.target)
+            let v = kai_pause_verdict(st.grant ? 1 : 0, st.kept ? 1 : 0, st.pending ? 1 : 0, waited, KAI_PAUSE_TIMEOUT)
+            if v < 0 { continue }
+            heldLock.lock(); held[key] = nil; heldLock.unlock()
+            let allow = v == 1
+            if h.newFlow {
+                resumeFlow(h.flow, with: allow ? NEFilterNewFlowVerdict.allow() : NEFilterNewFlowVerdict.drop())
+            } else {
+                resumeFlow(h.flow, with: allow ? NEFilterDataVerdict.allow() : NEFilterDataVerdict.drop())
+            }
+            engine.noteHeldOutcome(agent: h.agent, target: h.target, allowed: allow, waited: waited)
+        }
+    }
     /// Fix 3: the extension is sandboxed and can't write /tmp, so the heartbeat
     /// goes in the console user's app-group container (libkai's path; HOME is
     /// set to the console user's home at start). Readers verify it is
@@ -134,14 +176,24 @@ final class FilterDataProvider: NEFilterDataProvider {
         }
         if port == "53" { return .allow() } // DNS answers are not exfiltration by themselves
         if let hint { // not web traffic, but the flow named its host
-            return engine.decide(host: hint, agent: agent, ip: ip, port: port,
-                                 pid: pid, pidv: pidv) ? .allow() : .drop()
+            let d = engine.decideHold(host: hint, agent: agent, ip: ip, port: port, pid: pid, pidv: pidv)
+            if d.allow { return .allow() }
+            if proto == IPPROTO_TCP, let id = d.pending {
+                hold(flow, id: id, agent: agent, target: d.target, pid: pid, pidv: pidv, newFlow: true)
+                return .pause()
+            }
+            return .drop()   // UDP can't stay paused past 10 s: dropped
         }
         // Other ports (ssh, databases, ...) with no name: only the address can
         // decide. Allow it with `egress_allow <ip>[:port]` or a range.
-        return engine.decide(host: nil, agent: agent, ip: ip, port: port,
-                             what: "Port \(port) connection", pid: pid, pidv: pidv)
-            ? .allow() : .drop()
+        let d = engine.decideHold(host: nil, agent: agent, ip: ip, port: port,
+                                  what: "Port \(port) connection", pid: pid, pidv: pidv)
+        if d.allow { return .allow() }
+        if proto == IPPROTO_TCP, let id = d.pending {
+            hold(flow, id: id, agent: agent, target: d.target, pid: pid, pidv: pidv, newFlow: true)
+            return .pause()
+        }
+        return .drop()
     }
 
     override func handleOutboundData(from flow: NEFilterFlow, readBytesStartOffset offset: Int,
@@ -153,8 +205,14 @@ final class FilterDataProvider: NEFilterDataProvider {
             engine.forget(flow)
             // allowed if either the requested name or the flow's name is listed
             if let h = ctx.hint, engine.isAllowed(host: h, ip: ctx.ip, port: ctx.port) { return .allow() }
-            return engine.decide(host: host, agent: ctx.agent, ip: ctx.ip, port: ctx.port,
-                                 pid: ctx.pid, pidv: ctx.pidv) ? .allow() : .drop()
+            let d = engine.decideHold(host: host, agent: ctx.agent, ip: ctx.ip, port: ctx.port,
+                                      pid: ctx.pid, pidv: ctx.pidv)
+            if d.allow { return .allow() }
+            if let id = d.pending {   // web flows here are TCP
+                hold(flow, id: id, agent: ctx.agent, target: d.target, pid: ctx.pid, pidv: ctx.pidv, newFlow: false)
+                return .pause()
+            }
+            return .drop()
         case .needMore where offset + readBytes.count < 16384:
             return NEFilterDataVerdict(passBytes: 0, peekBytes: offset + readBytes.count + 4096)
         default:
@@ -205,6 +263,7 @@ final class Engine {
     private var grantStore: OpaquePointer?     // kai_approval_store*
     private var approvalKeyInstalled = false
     private var pendingSeen: [String: Date] = [:]
+    private var pendingIds: [String: String] = [:]
     private var paused = false                 // refreshed on the reload cadence
 
     // MARK: configuration
@@ -352,7 +411,25 @@ final class Engine {
     /// true = allow. host nil means we could not learn a hostname.
     func decide(host: String?, agent: String, ip: String, port: String, what: String? = nil,
                 pid: pid_t = 0, pidv: UInt32 = 0) -> Bool {
-        lock.lock(); defer { lock.unlock() }
+        decideHold(host: host, agent: agent, ip: ip, port: port, what: what, pid: pid, pidv: pidv).allow
+    }
+
+    /// The decision plus the card it raised (its pending id), so an agent's TCP
+    /// connection can be held while the card waits (NEVER-RERUN fix 4).
+    func decideHold(host: String?, agent: String, ip: String, port: String, what: String? = nil,
+                    pid: pid_t = 0, pidv: UInt32 = 0) -> (allow: Bool, pending: String?, target: String) {
+        lock.lock(); defer { lock.unlock() }   // one critical section: decision and its card id
+        lastPending = nil
+        let allow = decideCore(host: host, agent: agent, ip: ip, port: port, what: what, pid: pid, pidv: pidv)
+        let id = allow ? nil : lastPending
+        lastPending = nil
+        return (allow, id, host ?? "\(ip):\(port)")
+    }
+    private var lastPending: String?   // set by decideCore, read under the same lock
+
+    /// Caller holds `lock`.
+    private func decideCore(host: String?, agent: String, ip: String, port: String, what: String? = nil,
+                            pid: pid_t = 0, pidv: UInt32 = 0) -> Bool {
         guard let p = policy else { return true }
         let mode = kai_policy_egress_mode(p)
         if mode == KAI_EGRESS_OFF { return true }
@@ -401,8 +478,8 @@ final class Engine {
             : "connection to \(host!) (\(ip):\(port)) is not on the allowlist"
         auditLocked(agent: agent, decision: block ? "block" : "log", target: target, detail: detail,
                     session: sessionFor(pid: pid, pidv: pidv).sid, identity: ident)
-        if block { requestEgressApproval(pid: pid, pidv: pidv, agent: agent, dest: target,
-                                         identity: ident, hostKnown: host != nil) }
+        if block { lastPending = requestEgressApproval(pid: pid, pidv: pidv, agent: agent, dest: target,
+                                                       identity: ident, hostKnown: host != nil) }
         return !block
     }
 
@@ -514,11 +591,12 @@ final class Engine {
 
     /// Stage an async approval request for a blocked destination (deduped), so
     /// the user can approve it instead of the agent only seeing a dead socket.
+    @discardableResult
     private func requestEgressApproval(pid: pid_t, pidv: UInt32, agent: String, dest: String,
-                                       identity: String, hostKnown: Bool) {
+                                       identity: String, hostKnown: Bool) -> String? {
         let key = "\(pid):\(dest)"
-        if let last = pendingSeen[key], Date().timeIntervalSince(last) < 600 { return }
-        if pendingSeen.count > 4096 { pendingSeen.removeAll() }
+        if let last = pendingSeen[key], Date().timeIntervalSince(last) < 600 { return pendingIds[key] }
+        if pendingSeen.count > 4096 { pendingSeen.removeAll(); pendingIds.removeAll() }
         pendingSeen[key] = Date()
         let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
         let dir = home + "/.kai/pending"
@@ -545,6 +623,37 @@ final class Engine {
         if let o = owner { chown(fp, o.uid, o.gid); chown(dir, o.uid, o.gid) }
         kai_grant_audit("requested", id, agent, dest, Int32(KAI_OP_CONNECT.rawValue),
                         "request", "egress awaiting approval")
+        pendingIds[key] = id
+        return id
+    }
+
+    /// A held connection's state: granted (a rule or an endpoint grant), kept
+    /// blocked, and whether its card is still pending.
+    func heldState(pending id: String, pid: pid_t, pidv: UInt32, agent: String, target: String)
+        -> (grant: Bool, kept: Bool, pending: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        let pending = FileManager.default.fileExists(atPath: home + "/.kai/pending/" + id + ".json")
+        var grant = false, kept = false
+        let ident = identityLocked(pid: pid)
+        if !ident.isEmpty, let gs = grantStore {
+            var rid = [CChar](repeating: 0, count: 40)
+            switch kai_approval_store_rule(gs, ident, target, Int32(KAI_OP_CONNECT.rawValue), &rid, rid.count) {
+            case Int32(KAI_RULE_ALLOW): grant = true
+            case Int32(KAI_RULE_KEEP_BLOCKED): kept = true
+            default: break
+            }
+        }
+        if !grant && !kept { grant = endpointGrantAllows(pid: pid, pidv: pidv, agent: agent, dest: target) }
+        return (grant, kept, pending)
+    }
+
+    /// The outcome of a held connection, with how long it waited.
+    func noteHeldOutcome(agent: String, target: String, allowed: Bool, waited: TimeInterval) {
+        lock.lock(); defer { lock.unlock() }
+        auditLocked(agent: agent, decision: allowed ? "allow" : "block", target: target,
+                    detail: allowed ? String(format: "held %.1f s, then continued after your approval", waited)
+                                    : String(format: "held %.1f s with no approval, then dropped", waited))
     }
 
     /// One audit record per agent+target+decision every 10 minutes, so a
