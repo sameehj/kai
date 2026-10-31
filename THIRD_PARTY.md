@@ -1,7 +1,14 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial -->
 # Third-party code
 
-Everything Kai builds from that it didn't write. Release builds compile these exact files.
+Everything Kai builds from that it didn't write. Release builds compile these exact files. Third-party code isn't
+covered by Kai's CLA; its own license applies.
+
+SHA-256 in `src/sha256.c` is an original, from-scratch implementation of the FIPS 180-4 algorithm, written for this
+project and covered by Kai's own license.
+
+When adding third-party code, it must be under a permissive license (MIT, BSD, Apache-2.0), recorded here with its
+upstream commit and hashes, and kept in `third_party/` with its original license file.
 
 ## cJSON
 
