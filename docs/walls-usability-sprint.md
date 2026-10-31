@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial -->
 # Kai Walls — Usability Sprint Plan (U0–U6)
 
+> **Build order superseded by [`docs/security/RECONCILED-PLAN.md`](security/RECONCILED-PLAN.md)** (Security Plan v1.0, frozen Oct 31, 2026). This document keeps its specs and tests; where it conflicts with the spec, the spec wins.
+
 *October 23, 2026. Branch base: `fix/approval-key-and-ux` (bf1a3e1, f25c9c7,
 38f67b6). Companion to `docs/walls-action-plan.md` (rules, phases M0–M3) and
 `docs/walls-ux-evaluation.md` (problems #1–#23).*
@@ -305,6 +307,9 @@ exceptions beyond its profile.
 ---
 
 ## Sprint exit checklist
+
+> *Superseded (order of work): see `docs/security/RECONCILED-PLAN.md`. Kept as a record.*
+
 
 - [ ] U0 policy writer identified; agent writes to Kai policy proven impossible
 - [ ] U1 configured and observed state agree for both walls

@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial -->
 # Kai — Agents, Sessions and Permissions: Build Instructions
 
+> **Build order superseded by [`docs/security/RECONCILED-PLAN.md`](security/RECONCILED-PLAN.md)** (Security Plan v1.0, frozen Oct 31, 2026). This document keeps its specs and tests; where it conflicts with the spec, the spec wins.
+
 *October 25, 2026. For Claude Code. Builds on `docs/walls-usability-sprint.md` (U0–U6), `docs/walls-action-plan.md` (rules) and `docs/walls-ux-evaluation.md` (problems #1–#23).*
 
 ## What we are building

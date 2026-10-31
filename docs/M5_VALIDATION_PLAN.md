@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial -->
 # Scoped Approvals — M5 Live Validation Plan (NOT YET AUTHORIZED)
 
+> **Build order superseded by [`docs/security/RECONCILED-PLAN.md`](security/RECONCILED-PLAN.md)** (Security Plan v1.0, frozen Oct 31, 2026). This document keeps its specs and tests; where it conflicts with the spec, the spec wins.
+
 **This is a plan. Do not execute any step without explicit, separate human
 authorization.** M5 is the first time grant enforcement runs under the live OS
 extension; everything through M4 is compile-verified only. Activation, reload,

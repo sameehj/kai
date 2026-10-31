@@ -2,6 +2,8 @@
 
 # Kai: the full overview
 
+> **Build order superseded by [`docs/security/RECONCILED-PLAN.md`](security/RECONCILED-PLAN.md)** (Security Plan v1.0, frozen Oct 31, 2026). This document keeps its specs and tests; where it conflicts with the spec, the spec wins.
+
 The detailed reference that used to be the README: how Kai works, other agents, the optional gateway, the macOS app and the CLI reference. Start with the [README](../README.md).
 
 ## How it works, in three steps

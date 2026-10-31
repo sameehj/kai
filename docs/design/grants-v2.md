@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial -->
 # Grants v2 — design note (M1.1)
 
+> **Build order superseded by [`docs/security/RECONCILED-PLAN.md`](../security/RECONCILED-PLAN.md)** (Security Plan v1.0, frozen Oct 31, 2026). This document keeps its specs and tests; where it conflicts with the spec, the spec wins.
+
 **Status: awaiting human approval (the M1.1 checkpoint).** No v2 code is written
 until this is approved. It extends the grant engine already built in M0–M4
 (`src/grant.c`, `src/approval_store.c`) rather than replacing it.

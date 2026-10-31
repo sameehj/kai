@@ -1,5 +1,7 @@
 # Kai Walls: macOS system extensions (storage + network)
 
+> **Build order superseded by [`docs/security/RECONCILED-PLAN.md`](security/RECONCILED-PLAN.md)** (Security Plan v1.0, frozen Oct 31, 2026). This document keeps its specs and tests; where it conflicts with the spec, the spec wins.
+
 *Design, October 2026. Decision: no `kai run` wrapper. Enforcement is
 system-wide through Apple system extensions, approved once in System Settings,
 then invisible. You start `claude`, `cursor` or anything else the usual way.*

@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial -->
 # KAI Scoped Approvals — Audit & Design
 
+> **Build order superseded by [`docs/security/RECONCILED-PLAN.md`](security/RECONCILED-PLAN.md)** (Security Plan v1.0, frozen Oct 31, 2026). This document keeps its specs and tests; where it conflicts with the spec, the spec wins.
+
 **Status: DESIGN PHASE.** No enforcement code has been changed to produce this
 document, and no running system extension was restarted, deactivated, or
 modified. Everything below is either (a) a citation of code that exists today,
@@ -16,6 +18,9 @@ independently enforced.
 ---
 
 ## A. Current-state audit (Phase 0)
+
+> *Superseded (order of work): see `docs/security/RECONCILED-PLAN.md`. Kept as a record.*
+
 
 Grounded in a six-part read-only audit of the repo. Each capability is
 classified:
@@ -331,6 +336,9 @@ re-read the store. Revocation deletes/ tombstones the grant file; the engine
 treats missing/tombstoned as no-grant.
 
 ### C4. Interactive approval without holding the ES callback (Phase 3)
+
+> *Superseded (order of work): see `docs/security/RECONCILED-PLAN.md`. Kept as a record.*
+
 **The ES AUTH callback must never block on the UI.** `main.swift:9-11` already
 warns a slow handler stalls machine-wide I/O, and there is no deadline-extension
 in the handler today. Therefore:
@@ -367,6 +375,9 @@ expiry (C3) is the primary guarantee; reload is how revocation and new grants
 ---
 
 ## D. UX proposal (Phase 4)
+
+> *Superseded (order of work): see `docs/security/RECONCILED-PLAN.md`. Kept as a record.*
+
 
 A native KAI approval card (new), shown only on a real grant-eligible BLOCK, in
 a KAI-owned focusable window — never spoofable by agent text because every field
@@ -408,6 +419,9 @@ Rules:
 ---
 
 ## E. Implementation plan (milestones, ranked by security value)
+
+> *Superseded (order of work): see `docs/security/RECONCILED-PLAN.md`. Kept as a record.*
+
 
 Each milestone has acceptance criteria; none changes the active extension until
 a milestone explicitly gated on human authorization. **Do not restart/deactivate
@@ -451,6 +465,9 @@ enterprise policy, per-session cryptographic identity, SSH operation-specific
 authorization beyond the file-read grant (see Phase 2 below).
 
 ### Phase 2 — the SSH scenario, honestly scoped
+
+> *Superseded (order of work): see `docs/security/RECONCILED-PLAN.md`. Kept as a record.*
+
 Desired: Claude Code pushes a commit; KAI prompts; human approves a *narrow*
 operation; push succeeds; grant expires; other `~/.ssh` stays protected; another
 session can't reuse it.
@@ -550,6 +567,9 @@ negative tests.
 ---
 
 ## Open technical questions (Phase 6 / F)
+
+> *Superseded (order of work): see `docs/security/RECONCILED-PLAN.md`. Kept as a record.*
+
 1. Is `audit_token` (pid+pidversion) reliably available for the responsible
    process in every storage AUTH event we gate, or only `process`? Grant binding
    strength depends on it.

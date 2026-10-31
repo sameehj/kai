@@ -1,5 +1,7 @@
 # Kai threat model
 
+> **Build order superseded by [`docs/security/RECONCILED-PLAN.md`](security/RECONCILED-PLAN.md)** (Security Plan v1.0, frozen Oct 31, 2026). This document keeps its specs and tests; where it conflicts with the spec, the spec wins.
+
 **Assumption:** no model, router, or agent is trustworthy. The developer is
 trusted; the agent acting on their behalf is not, because it can be hijacked by
 content it reads (a README, a web page, an MCP tool result) or simply make a

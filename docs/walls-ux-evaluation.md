@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial -->
 # Kai Walls — UX Evaluation & Problem Inventory
 
+> **Build order superseded by [`docs/security/RECONCILED-PLAN.md`](security/RECONCILED-PLAN.md)** (Security Plan v1.0, frozen Oct 31, 2026). This document keeps its specs and tests; where it conflicts with the spec, the spec wins.
+
 Oct 23, 2026 · @Sameeh Jubran
 
 Kai can be technically correct and operationally unsuccessful: on October 22 it
@@ -282,6 +284,9 @@ each distinct from its configured counterpart:
 - Gateway configured versus model traffic actually passing through it.
 
 ## Milestones
+
+> *Superseded (order of work): see `docs/security/RECONCILED-PLAN.md`. Kept as a record.*
+
 
 Audit what M0–M4 already built before writing anything new; close the gap between
 tested grant logic and live macOS enforcement rather than rebuilding it.

@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial -->
 # Kai Walls — Action Plan for Claude Code
 
+> **Build order superseded by [`docs/security/RECONCILED-PLAN.md`](security/RECONCILED-PLAN.md)** (Security Plan v1.0, frozen Oct 31, 2026). This document keeps its specs and tests; where it conflicts with the spec, the spec wins.
+
 Claude Code runs one phase per session: audit first, then M0 visibility, M1
 grants, M2 profiles, M3 onboarding, each ending at a human checkpoint with
 live-versus-unit test evidence. Problem numbers (#1–#23) refer to
@@ -66,6 +68,9 @@ only. Follow the Rules section. Stop at the phase's human checkpoint and report.
 
 ## Rules (apply to every phase)
 
+> *Superseded (order of work): see `docs/security/RECONCILED-PLAN.md`. Kept as a record.*
+
+
 1. **Audit before building.** M0–M4 already produced a permission engine, CLI,
    grant store, UI wiring and tests. Extend them; rebuild only if the audit shows
    they cannot meet a requirement, and say why.
@@ -88,6 +93,9 @@ only. Follow the Rules section. Stop at the phase's human checkpoint and report.
    docs leave open.
 
 ## Phase 0 — Audit (no behaviour changes)
+
+> *Superseded (order of work): see `docs/security/RECONCILED-PLAN.md`. Kept as a record.*
+
 
 Output: `docs/audit/walls-audit.md`.
 
@@ -117,6 +125,9 @@ Output: `docs/audit/walls-audit.md`.
 
 ## Phase M0 — Make failure visible (#1, #2, #3, #4, #18)
 
+> *Superseded (order of work): see `docs/security/RECONCILED-PLAN.md`. Kept as a record.*
+
+
 - [ ] M0.1 Denial record schema: event id, time, agent, session id, project,
   resource, operation, verdict, and a reason code from a fixed enum
   (`not_on_allowlist`, `rule_denied:<id>`, `protected_resource:<class>`,
@@ -137,6 +148,9 @@ grouped notice and Activity entry, and health shows both walls enforcing with
 matching policy versions.
 
 ## Phase M1 — Make legitimate access possible (#9, #10, #11, #15, #19, #22, #23)
+
+> *Superseded (order of work): see `docs/security/RECONCILED-PLAN.md`. Kept as a record.*
+
 
 - [ ] M1.1 Design note `docs/design/grants-v2.md`: grant schema (subject session,
   project, resource, operation, scope, expiry, creator, generation); protected
@@ -165,6 +179,9 @@ spoofed-session, grant-forgery and expiry tests pass on live extensions.
 
 ## Phase M2 — Make secure defaults usable (#5, #6, #7, #13, #20, #21)
 
+> *Superseded (order of work): see `docs/security/RECONCILED-PLAN.md`. Kept as a record.*
+
+
 - [ ] M2.1 Profile format: versioned, read-only files in the app bundle per agent:
   signing identity, core channels, optional channels, resource classes; named
   hosts over wildcards.
@@ -185,6 +202,9 @@ spoofed-session, grant-forgery and expiry tests pass on live extensions.
 walls on.
 
 ## Phase M3 — Make it pleasant (#2, #8, #12, #14, #16, #17)
+
+> *Superseded (order of work): see `docs/security/RECONCILED-PLAN.md`. Kept as a record.*
+
 
 - [ ] M3.1 Observe-first onboarding (#8), stating plainly that observe mode
   protects nothing.
