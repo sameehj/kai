@@ -222,7 +222,11 @@ const char *kai_agent_coverage_note(const char *name) {
 static const char *const BUILTIN_EGRESS[] = {
     /* model providers and agent backends */
     "anthropic.com", "claude.ai", "claude.com", "openai.com", "chatgpt.com",
-    "openrouter.ai", "googleapis.com", "cursor.sh", "cursor.com",
+    "openrouter.ai",
+    /* G8: only Google's Gemini hosts, never all of googleapis.com (which also
+     * serves Cloud Storage, Drive and every other Google API) */
+    "generativelanguage.googleapis.com", "cloudcode-pa.googleapis.com", "oauth2.googleapis.com",
+    "cursor.sh", "cursor.com",
     "cursorapi.com", "cursor-cdn.com",
     /* Code hosting, package registries and the like are asked about per host
      * (spec v2.1 B.4: no fixed categories); the catalog below only describes. */

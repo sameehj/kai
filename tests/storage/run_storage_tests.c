@@ -2333,6 +2333,15 @@ static void test_channels(void) {
     kai_policy *p = kai_policy_from_string("egress block\nchannel claude/code-hosting\n", err, sizeof err);
     CHECK(p && kai_policy_unknown(p, first, sizeof first) == 1 && !strcmp(first, "channel"),
           "a leftover channel line grants nothing and shows as unrecognized");
+    /* G8: Google's API domain is not a blanket allow, only the Gemini hosts */
+    CHECK(p && kai_egress_endpoint_allowed(p, "storage.googleapis.com", "1.2.3.4", 443, why, sizeof why) != 1,
+          "G8: storage.googleapis.com is not allowed by default");
+    CHECK(p && kai_egress_endpoint_allowed(p, "www.googleapis.com", "1.2.3.4", 443, why, sizeof why) != 1,
+          "G8: www.googleapis.com is not allowed by default");
+    CHECK(p && kai_egress_endpoint_allowed(p, "generativelanguage.googleapis.com", "1.2.3.4", 443, why, sizeof why) == 1,
+          "G8: the Gemini API host is allowed");
+    CHECK(p && kai_egress_endpoint_allowed(p, "cloudcode-pa.googleapis.com", "1.2.3.4", 443, why, sizeof why) == 1,
+          "G8: Gemini CLI's Code Assist host is allowed");
     CHECK(p && kai_egress_endpoint_allowed(p, "github.com", "1.2.3.4", 443, why, sizeof why) != 1,
           "...github.com is still asked about");
     kai_policy_free(p);
