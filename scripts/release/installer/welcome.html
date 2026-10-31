@@ -2,19 +2,28 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial -->
 <html lang="en"><head><meta charset="utf-8"><title>Kai Preview</title>
 <style>body{font:13px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;margin:18px;color:#1d1d1f}
-h1{font-size:18px;margin:0 0 6px} .contract{border-left:3px solid #8a9a2a;padding:6px 12px;background:#f5f6ef}
+h1{font-size:18px;margin:0 0 6px} h2{font-size:14px;margin:12px 0 4px} .contract{border-left:3px solid #8a9a2a;padding:6px 12px;background:#f5f6ef}
 ol{padding-left:20px} li{margin:4px 0}</style></head>
 <body>
-<h1>Kai Preview: give AI more work, not more access.</h1>
-<p class="contract"><b>Kai Preview checks supported actions inside Claude Code, Codex and Cursor before they run.</b>
-It is an extra safety layer, not isolation or OS-level enforcement: hooks run with your permissions, cover only the
-actions each agent reports to them, and a program the agent runs can get around them. Codex runs hooks only after
-you trust them.</p>
-<p>Kai Preview checks inside your agents. OS-level protection for files and internet comes with the
-Kai app in an upcoming release.</p>
+<h1>Kai Preview</h1>
+<p class="contract"><b>Turn off your agent&rsquo;s permission prompts. Kai stops it reading your secrets or sending data where it shouldn&rsquo;t.</b></p>
+<h2>What Kai stops</h2>
+<ul>
+<li><b>Your agent's own secret reads and uploads</b>: Claude Code, Codex and Cursor reading your keys, <code>.env</code> files and credentials, or sending them out, stopped before the tool call runs.</li>
+<li><b>Agent traffic to unknown hosts, bare IPs and odd ports</b>: the Kai app's Internet wall checks each connection an agent opens and asks you about one it doesn't know.</li>
+</ul>
+<h2>What it doesn&rsquo;t stop in this release</h2>
+<ul>
+<li>Files read or written by scripts the agent writes.</li>
+<li>Planted SSH keys or login items.</li>
+<li>Untagged editors such as VS Code.</li>
+<li>Exfiltration through allowed services like GitHub or npm.</li>
+</ul>
+<p><b>Files protection: not included in this release.</b></p>
 <ol>
-<li><b>Install Kai.</b> This package installs the <code>kai</code> command and adds Kai's checks to the agents that
-already use them. Run <code>kai install</code> afterwards for any other agent.</li>
+<li><b>Install Kai.</b> This package installs the Kai app (with its Internet wall) and the <code>kai</code> command,
+and refreshes Kai's checks in the agents that already use them.</li>
+<li><b>Approve the Internet wall</b> when macOS asks, then run <code>kai install all</code> and <code>kai doctor</code>.</li>
 <li><b>Kai checks your agents and stops unwanted moves before they run</b>: reading your keys, sending files out, secrets in
 prompts. Each stop says what happened, why it matters, and what you can do.</li>
 <li><b>You decide what they can do, narrowly.</b> When Kai stops something legitimate, its message gives the exact
