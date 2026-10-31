@@ -86,6 +86,7 @@ test: kai tests/cli/kai-test
 	sh tests/release/run_postinstall_tests.sh
 	sh tests/app/run_app_tests.sh
 	sh tests/release/run_release_env_tests.sh
+	sh tests/release/run_sign_tests.sh
 	# Suites that SET UP policy via `kai policy ...` use a throwaway binary built
 	# with the test seam (KAI_TEST_DIRECT_POLICY): the suites run inside the
 	# dev's agent tree and set loosening switches, both of which the production
@@ -199,4 +200,14 @@ build/kai-universal: $(CORE) $(APP) include/kai.h src/internal.h src/kai_commit.
 
 kai-universal: build/kai-universal
 
-.PHONY: FORCE kai-universal kai-release all asan fuzz test escape validation app app-dev app-storage try-app-storage try-app install-app install uninstall clean
+# Step 7: the release package (Kai.app + network extension + CLI), Developer ID
+# signed, notarized and stapled; fails on any check. Needs the variables at the
+# top of scripts/release/build-preview-pkg.sh. `make release-test` builds the
+# unsigned test package.
+KAI_VERSION_STR = $(shell sed -n 's/^\#define KAI_VERSION "\(.*\)"/\1/p' include/kai.h)
+release:
+	sh scripts/release/build-preview-pkg.sh $(KAI_VERSION_STR)
+release-test:
+	sh scripts/release/build-preview-pkg.sh $(KAI_VERSION_STR) --test
+
+.PHONY: FORCE kai-universal kai-release release release-test all asan fuzz test escape validation app app-dev app-storage try-app-storage try-app install-app install uninstall clean

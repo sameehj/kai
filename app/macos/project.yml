@@ -24,7 +24,7 @@ settings:
     # it in the developer portal: that needs a live login and makes Xcode
     # report "profile doesn't support the App Groups capability" when it can't.
     REGISTER_APP_GROUPS: NO
-    MARKETING_VERSION: "0.1.0"
+    MARKETING_VERSION: "0.2.0"   # the release without its pre-release suffix (checked by make release)
     # The app's build number. Bump freely for app changes (menu bar, signing);
     # this does NOT touch the network extension, so app updates never replace
     # it and never drop agents' live connections.

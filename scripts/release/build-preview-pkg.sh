@@ -1,14 +1,18 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
 #
-# Kai Preview 1 package (Release Plan v2.1, A3): a Universal (arm64 + x86_64),
-# macOS 13+ `kai` CLI in a signed, notarized and stapled .pkg, plus SHA-256
-# checksums. One tagged commit in, one artifact out.
+# Kai release package: Kai.app with its network system extension (Developer
+# ID signed, notarized, stapled; Step 7) and a Universal (arm64 + x86_64),
+# macOS 13+ `kai` CLI, in a signed, notarized and stapled .pkg, plus SHA-256
+# checksums. One tagged commit in, one artifact out. Every check is fatal.
 #
+#   KAI_TEAM=TEAMID \
 #   KAI_DEVID_APP="Developer ID Application: Name (TEAMID)" \
 #   KAI_DEVID_INSTALLER="Developer ID Installer: Name (TEAMID)" \
+#   KAI_APP_PROFILE=Kai_DeveloperID.provisionprofile \
+#   KAI_EXT_PROFILE=KaiNetwork_DeveloperID.provisionprofile \
 #   KAI_NOTARY_PROFILE=kai-notary \
-#   sh scripts/release/build-preview-pkg.sh 0.2.0-preview.1
+#   make release            # = sh scripts/release/build-preview-pkg.sh <version>
 #
 # Without the Developer ID identities and a notarytool keychain profile
 # (xcrun notarytool store-credentials kai-notary ...) it REFUSES to make a
@@ -23,8 +27,9 @@ STAGE="$OUT/stage"
 cd "$ROOT"
 
 if [ "$MODE" != "--test" ]; then
-    [ -n "${KAI_DEVID_APP:-}" ] && [ -n "${KAI_DEVID_INSTALLER:-}" ] && [ -n "${KAI_NOTARY_PROFILE:-}" ] || {
-        echo "release needs KAI_DEVID_APP, KAI_DEVID_INSTALLER and KAI_NOTARY_PROFILE (or --test)"; exit 2; }
+    for v in KAI_TEAM KAI_DEVID_APP KAI_DEVID_INSTALLER KAI_APP_PROFILE KAI_EXT_PROFILE KAI_NOTARY_PROFILE; do
+        eval "[ -n \"\${$v:-}\" ]" || { echo "release needs $v (see the top of this script), or --test"; exit 2; }
+    done
     [ -z "$(git status --porcelain)" ] || { echo "release needs a clean tree (one tagged commit)"; exit 2; }
     tag="v$VERSION"
     [ "$(git describe --exact-match --tags 2>/dev/null || true)" = "$tag" ] || {
@@ -46,7 +51,37 @@ fi
 grep -q "#define KAI_VERSION \"$VERSION\"" include/kai.h || {
     echo "include/kai.h KAI_VERSION isn't \"$VERSION\""; [ "$MODE" = "--test" ] || exit 2; }
 
-rm -rf "$OUT" && mkdir -p "$STAGE/usr/local/bin" "$STAGE/usr/local/share/kai" "$OUT/scripts"
+rm -rf "$OUT" && mkdir -p "$STAGE/usr/local/bin" "$STAGE/usr/local/share/kai" "$STAGE/Applications" "$OUT/scripts"
+
+# notarytool exits 0 for a rejected submission too: require "status: Accepted".
+notarize() {
+    xcrun notarytool submit "$1" --keychain-profile "$KAI_NOTARY_PROFILE" --wait > "$OUT/notary.log" 2>&1 || true
+    cat "$OUT/notary.log"
+    grep -q "status: Accepted" "$OUT/notary.log" || { echo "notarization of $(basename "$1") wasn't accepted"; exit 1; }
+}
+
+# Kai.app and its network extension (Step 7): built unsigned for the release
+# team, then Developer ID signed, checked, notarized, stapled and checked again.
+( cd app/macos && KAI_APP_ID=io.github.sameehj.kai KAI_TEAM="${KAI_TEAM:-}" xcodegen generate --quiet )
+xcodebuild -project app/macos/Kai.xcodeproj -scheme Kai -configuration Release -derivedDataPath "$OUT/dd" \
+    DEVELOPMENT_TEAM="${KAI_TEAM:-}" CODE_SIGNING_ALLOWED=NO -quiet build
+APP="$STAGE/Applications/Kai.app"
+cp -R "$OUT/dd/Build/Products/Release/Kai.app" "$APP"
+[ -d "$APP/Contents/Library/SystemExtensions/io.github.sameehj.kai.network.systemextension" ] || {
+    echo "Kai.app has no network extension"; exit 1; }
+appv=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
+[ "$appv" = "${VERSION%%-*}" ] || { echo "Kai.app is version $appv, not ${VERSION%%-*} (project.yml MARKETING_VERSION)"; exit 1; }
+if [ "$MODE" = "--test" ]; then
+    codesign --force --deep --sign - "$APP"   # unsigned test package: ad hoc, the extension won't activate
+else
+    sh scripts/release/sign-app.sh sign "$APP"
+    sh scripts/release/sign-app.sh check "$APP"
+    ditto -c -k --keepParent "$APP" "$OUT/Kai-notarize.zip"
+    notarize "$OUT/Kai-notarize.zip"
+    rm -f "$OUT/Kai-notarize.zip"
+    xcrun stapler staple "$APP"
+    sh scripts/release/sign-app.sh check "$APP" --notarized
+fi
 
 # Universal, macOS 13+ (remove only the objects: `make clean` would also wipe build/)
 rm -f src/*.o third_party/cjson/*.o kai libkai.a
@@ -59,6 +94,7 @@ lipo -info "$K" | grep -q "x86_64 arm64\|arm64 x86_64" || { echo "kai isn't univ
 cp "$K" "$STAGE/usr/local/bin/kai"
 {   # traceable build: what this package was built from, and with what
     echo "kai: $("$K" version)"
+    echo "app: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist") build $(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist"), network extension build $(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Library/SystemExtensions/io.github.sameehj.kai.network.systemextension/Contents/Info.plist")"
     echo "commit: $(git rev-parse HEAD)"
     echo "compiler: $(cc --version | head -1)"
     echo "xcode: $(xcodebuild -version 2>/dev/null | tr '\n' ' ')"
@@ -121,10 +157,12 @@ else
     productbuild --distribution "$DIST" --resources "$RES" --package-path "$OUT" \
                  --sign "$KAI_DEVID_INSTALLER" --timestamp "$PKG" >/dev/null
     rm -f "$COMP"
-    xcrun notarytool submit "$PKG" --keychain-profile "$KAI_NOTARY_PROFILE" --wait
+    pkgutil --check-signature "$PKG" | grep -q "Developer ID Installer" || { echo "package isn't Developer ID Installer signed"; exit 1; }
+    notarize "$PKG"
     xcrun stapler staple "$PKG"
     xcrun stapler validate "$PKG"
-    spctl --assess --type install -vv "$PKG"
+    spctl --assess --type install -vv "$PKG" 2>&1 | tee "$OUT/spctl.log"
+    grep -q "source=Notarized Developer ID" "$OUT/spctl.log" || { echo "spctl didn't accept the package as notarized"; exit 1; }
 fi
 ( cd "$OUT" && shasum -a 256 "$(basename "$PKG")" > "$(basename "$PKG").sha256" )
 cat "$OUT/$(basename "$PKG").sha256"
