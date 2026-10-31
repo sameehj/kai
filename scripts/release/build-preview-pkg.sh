@@ -54,7 +54,18 @@ make CC="cc -arch arm64 -arch x86_64 -mmacosx-version-min=13.0" kai-release >/de
 K=build/kai-release   # a release build: ignores KAI_HOME / KAI_POLICY
 lipo -info "$K" | grep -q "x86_64 arm64\|arm64 x86_64" || { echo "kai isn't universal"; exit 1; }
 "$K" version | grep -q "(release build)" || { echo "kai isn't a release build"; exit 1; }
+"$K" version | grep -q "commit $(git rev-parse --short=12 HEAD)$" || [ "$MODE" = "--test" ] || {
+    echo "kai doesn't carry this commit: $("$K" version)"; exit 1; }
 cp "$K" "$STAGE/usr/local/bin/kai"
+{   # traceable build: what this package was built from, and with what
+    echo "kai: $("$K" version)"
+    echo "commit: $(git rev-parse HEAD)"
+    echo "compiler: $(cc --version | head -1)"
+    echo "xcode: $(xcodebuild -version 2>/dev/null | tr '\n' ' ')"
+    echo "sdk: macOS $(xcrun --show-sdk-version 2>/dev/null)"
+    echo "host: macOS $(sw_vers -productVersion)"
+    echo "cJSON: v1.7.19 (c859b25) + kai-patches.diff; see THIRD_PARTY.md"
+} > "$OUT/BUILDINFO.txt"
 cp policy/default.policy "$STAGE/usr/local/share/kai/default.policy"
 
 # preinstall: never install an older kai over a newer one (A4)

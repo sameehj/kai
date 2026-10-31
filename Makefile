@@ -45,6 +45,16 @@ kai: $(OBJ)
 libkai.a: $(COREOBJ)
 	$(AR) rcs $@ $(COREOBJ)
 
+# Traceable build: the commit (with -dirty for uncommitted changes) goes into
+# `kai version` and `kai status --json`. Rewritten only when it changes.
+src/kai_commit.h: FORCE
+	@c=$$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown); \
+	 git diff --quiet HEAD -- 2>/dev/null || c="$$c-dirty"; \
+	 l="#define KAI_COMMIT \"$$c\""; \
+	 [ -f $@ ] && [ "$$(cat $@)" = "$$l" ] || echo "$$l" > $@
+FORCE:
+src/main.o src/manage.o: src/kai_commit.h
+
 %.o: %.c include/kai.h src/internal.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -64,7 +74,7 @@ STORAGE_TEST_SRC = $(CORE) $(filter-out src/main.c,$(APP))
 # The test-only binary: a dev build (honours KAI_HOME / KAI_POLICY) with the
 # policy seam. Built before every suite that runs it: the storage suite drives
 # it, and on a clean checkout (CI) it didn't exist yet when that suite ran.
-tests/cli/kai-test: $(CORE) $(APP) include/kai.h src/internal.h
+tests/cli/kai-test: $(CORE) $(APP) include/kai.h src/internal.h src/kai_commit.h
 	$(CC) $(CFLAGS) -DKAI_TEST_DIRECT_POLICY -o tests/cli/kai-test $(CORE) $(APP) $(LDLIBS)
 
 test: kai tests/cli/kai-test
@@ -173,7 +183,7 @@ clean:
 
 # A release kai: ignores KAI_HOME / KAI_POLICY. Built from the sources into its
 # own file, so dev objects (built without the flag) are never mixed in.
-kai-release:
+kai-release: src/kai_commit.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -DKAI_RELEASE -o build/kai-release $(CORE) $(APP) $(LDLIBS)
 
@@ -181,7 +191,7 @@ kai-release:
 # and a release build. Built independently of the host-native objects above:
 # compiling the sources in one invocation gives both slices the same macOS 13
 # deployment target and never reuses stale single-arch .o files.
-build/kai-universal: $(CORE) $(APP) include/kai.h src/internal.h
+build/kai-universal: $(CORE) $(APP) include/kai.h src/internal.h src/kai_commit.h
 	mkdir -p build
 	$(CC) $(CFLAGS) -DKAI_RELEASE -DKAI_PRODUCT_BUILD=1 -arch x86_64 -arch arm64 \
 	  -mmacosx-version-min=13.0 -o $@ $(CORE) $(APP) $(LDLIBS)
@@ -189,4 +199,4 @@ build/kai-universal: $(CORE) $(APP) include/kai.h src/internal.h
 
 kai-universal: build/kai-universal
 
-.PHONY: kai-universal kai-release all asan fuzz test escape validation app app-dev app-storage try-app-storage try-app install-app install uninstall clean
+.PHONY: FORCE kai-universal kai-release all asan fuzz test escape validation app app-dev app-storage try-app-storage try-app install-app install uninstall clean

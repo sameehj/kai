@@ -21,6 +21,12 @@ has "status is json with version" "$out" '"version"'
 has "status: built-in policy before init" "$out" '"source":	"built-in"'
 has "status: claude not installed" "$out" '"installed":	false'
 
+echo "== traceable build (Security Plan v1.0 P0) =="
+head=$(git -C "$(dirname "$KAI")/../.." rev-parse --short=12 HEAD 2>/dev/null)
+v=$("$KAI" version)
+case "$v" in *"commit $head"*) pass "kai version names the commit it was built from ($head)" ;; *) fail "kai version: $v (HEAD $head)" ;; esac
+has "kai status --json carries the commit" "$("$KAI" status --json)" "\"commit\":	\"$head"
+
 echo "== status (measured, A2) =="
 st=$("$KAI" status)
 has "status: agents section" "$st" "Agents"
