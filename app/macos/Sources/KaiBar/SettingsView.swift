@@ -956,9 +956,10 @@ private struct PermissionsPage: View {
         ForEach(allow) { r in ruleRow(r, line: "\(r.agentTitle) may connect to \(r.dest) \(r.untilLabel)") }
         if !kept.isEmpty {
             CapsLabel("Kept blocked").padding(.top, 4)
-            Text("Kai doesn't ask about these again; each attempt is still blocked and recorded.")
-                .font(.system(size: 12)).foregroundStyle(Theme.muted)
-            ForEach(kept) { r in ruleRow(r, line: "\(r.agentTitle) can't connect to \(r.dest)") }
+            Text("Kai doesn't ask about these again while they last; each attempt is still blocked and recorded. "
+                 + "Keep blocked lasts for the session it was chosen in; Block always makes it permanent.")
+                .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            ForEach(kept) { r in ruleRow(r, line: "\(r.agentTitle) can't connect to \(r.dest) \(r.untilLabel)") }
         }
     }
 
@@ -974,6 +975,10 @@ private struct PermissionsPage: View {
                         .font(.system(size: 11)).foregroundStyle(Theme.muted)
                 }
                 Spacer()
+                if !r.isAllow && (r.isSessionOnly || r.isTemporary) {
+                    Button("Block always") { grants.blockAlways(r) }.buttonStyle(GhostButtonStyle())
+                        .help("Block \(r.dest) for \(r.agentTitle) in every session, until you remove it.")
+                }
                 Button(r.isAllow ? "Remove" : "Ask again") { grants.removeRule(r) }
                     .buttonStyle(GhostButtonStyle())
             }

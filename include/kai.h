@@ -593,6 +593,7 @@ typedef struct {
     long long expires_utc;      /* 0 = until removed; else a temporary allow */
     int migrated;               /* from an old category switch: ends unless confirmed */
     int authenticated;
+    char session[64];           /* "" = every session; else a Keep blocked for that session only */
     char hmac[65];
 } kai_decision_rule;
 const char *kai_rules_dir(void);          /* <kai home>/rules */
@@ -607,10 +608,18 @@ int kai_rule_from_json(const char *json, kai_decision_rule *out);
 char *kai_rule_build_json_until(const char *id, int kind, const char *identity, const char *agent,
                                 const char *dest, int op, long long created, long long expires,
                                 int authenticated, const unsigned char *key, size_t keylen);
+/* Dogfood: a Keep blocked for one agent session (the default choice). Keep
+ * blocked only; the session is signed into the rule. */
+char *kai_rule_build_json_session(const char *id, int kind, const char *identity, const char *agent,
+                                  const char *dest, int op, long long created, long long expires,
+                                  const char *session, const unsigned char *key, size_t keylen);
 /* KAI_RULE_ALLOW, KAI_RULE_KEEP_BLOCKED (wins over an Allow) or 0. Only
- * verified rules count. dir NULL = kai_rules_dir(). */
+ * verified rules count. dir NULL = kai_rules_dir(). A session-bound rule
+ * matches only when the caller passes that session (never via kai_rule_lookup). */
 int kai_rule_lookup(const char *dir, const char *identity, const char *dest, int op,
                     const unsigned char *key, size_t keylen, char *id_out, size_t idn);
+int kai_rule_lookup_session(const char *dir, const char *identity, const char *dest, int op, const char *session,
+                            const unsigned char *key, size_t keylen, char *id_out, size_t idn);
 /* Known telemetry/crash-report hosts (B2): denied silently, audited, one
  * passive hint per agent instead of a card. */
 int kai_host_is_telemetry(const char *host);
@@ -818,6 +827,8 @@ int kai_approval_store_protected(kai_approval_store *s, const char *path,
 /* B2: the user's Keep blocked / Allow rule for (verified identity, dest, op),
  * read from the "rules" folder beside the grants folder and verified with the
  * store's key. KAI_RULE_ALLOW, KAI_RULE_KEEP_BLOCKED or 0. */
+int kai_approval_store_rule_session(kai_approval_store *s, const char *identity, const char *dest, int op,
+                                    const char *session, char *id_out, size_t idn);
 int kai_approval_store_rule(kai_approval_store *s, const char *identity, const char *dest, int op,
                             char *id_out, size_t idn);
 

@@ -340,6 +340,11 @@ int kai_approval_store_decide_endpoint(kai_approval_store *s, const char *dest,
 
 int kai_approval_store_rule(kai_approval_store *s, const char *identity, const char *dest, int op,
                             char *id_out, size_t idn) {
+    return kai_approval_store_rule_session(s, identity, dest, op, NULL, id_out, idn);
+}
+
+int kai_approval_store_rule_session(kai_approval_store *s, const char *identity, const char *dest, int op,
+                                    const char *session, char *id_out, size_t idn) {
     if (id_out && idn) id_out[0] = '\0';
     if (!s) return 0;
     char dir[PATH_MAX];
@@ -348,7 +353,8 @@ int kai_approval_store_rule(kai_approval_store *s, const char *identity, const c
     if (!slash) return 0;
     kai_strlcpy(slash + 1, "rules", sizeof dir - (size_t)(slash + 1 - dir));
     pthread_rwlock_rdlock(&s->lock);
-    int r = kai_rule_lookup(dir, identity, dest, op, s->keylen ? s->key : NULL, s->keylen, id_out, idn);
+    int r = kai_rule_lookup_session(dir, identity, dest, op, session, s->keylen ? s->key : NULL, s->keylen,
+                                    id_out, idn);
     pthread_rwlock_unlock(&s->lock);
     return r;
 }

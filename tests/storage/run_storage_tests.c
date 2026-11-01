@@ -2247,6 +2247,59 @@ static void test_daily_counter(void) {
 
 /* Fix 2: with no session to bind to, "Allow <agent> to reach <host> for 1
  * hour" is a signed rule bound to the verified identity that expires. */
+/* Dogfood 2026-11-01: Keep blocked lasts for the agent session it was chosen
+ * in (a session-bound, signed rule); without a session it ends after an hour.
+ * A permanent Keep blocked is the separate, session-less rule. */
+static void test_session_keep_blocked(void) {
+    printf("Keep blocked: this session only by default (dogfood)\n");
+    char dir[] = "/tmp/kai-skbXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    const unsigned char key[] = "session-keep-blocked-key-0123456";
+    const char *claude = "com.anthropic.claude-code (Q6L2SF6YDW)";
+    char id[40];
+    long long now = (long long)time(NULL);
+    char *kb = kai_rule_build_json_session("kb1", KAI_RULE_KEEP_BLOCKED, claude, "claude", "registry.example.org",
+                                           KAI_OP_CONNECT, now, 0, "sessA", key, sizeof key - 1);
+    CHECK(kb != NULL && strstr(kb, "\"session\":\"sessA\"") != NULL, "a session-bound Keep blocked is built and names its session");
+    write_rule(dir, "kb1", kb);
+    CHECK(kai_rule_lookup_session(dir, claude, "registry.example.org", KAI_OP_CONNECT, "sessA", key, sizeof key - 1,
+                                  id, sizeof id) == KAI_RULE_KEEP_BLOCKED, "...it blocks in its own session");
+    CHECK(kai_rule_lookup_session(dir, claude, "registry.example.org", KAI_OP_CONNECT, "sessB", key, sizeof key - 1,
+                                  id, sizeof id) == 0, "...not in the next session (asks again)");
+    CHECK(kai_rule_lookup(dir, claude, "registry.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "...and never for a caller that doesn't know the session");
+    /* tampering with the session moves nothing: the signature covers it */
+    if (kb) {
+        char *t = strdup(kb), *at = strstr(t, "sessA");
+        if (at) at[4] = 'B';
+        write_rule(dir, "kb1", t);
+        CHECK(kai_rule_lookup_session(dir, claude, "registry.example.org", KAI_OP_CONNECT, "sessB", key, sizeof key - 1,
+                                      id, sizeof id) == 0, "...an edited session doesn't verify");
+        free(t);
+        write_rule(dir, "kb1", kb);
+    }
+    free(kb);
+    char *al = kai_rule_build_json_session("al9", KAI_RULE_ALLOW, claude, "claude", "registry.example.org",
+                                           KAI_OP_CONNECT, now, 0, "sessA", key, sizeof key - 1);
+    CHECK(al == NULL, "an Allow can't be session-bound this way (session allows are grants)");
+    free(al);
+    /* no session known: an hour */
+    char *kh = kai_rule_build_json_until("kh1", KAI_RULE_KEEP_BLOCKED, claude, "claude", "other.example.org",
+                                         KAI_OP_CONNECT, now - 4000, now - 400, 0, key, sizeof key - 1);
+    write_rule(dir, "kh1", kh);
+    free(kh);
+    CHECK(kai_rule_lookup_session(dir, claude, "other.example.org", KAI_OP_CONNECT, "sessA", key, sizeof key - 1,
+                                  id, sizeof id) == 0, "a Keep blocked with no session ends after its hour");
+    /* the permanent one, from Settings */
+    char *kp = kai_rule_build_json("kp1", KAI_RULE_KEEP_BLOCKED, claude, "claude", "perm.example.org",
+                                   KAI_OP_CONNECT, now, 0, key, sizeof key - 1);
+    write_rule(dir, "kp1", kp);
+    free(kp);
+    CHECK(kai_rule_lookup_session(dir, claude, "perm.example.org", KAI_OP_CONNECT, "sessZ", key, sizeof key - 1,
+                                  id, sizeof id) == KAI_RULE_KEEP_BLOCKED, "a permanent Keep blocked applies in every session");
+    char cmd[200]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
 static void test_temporary_rule(void) {
     printf("1-hour allow by verified identity (fix 2)\n");
     char dir[] = "/tmp/kai-trXXXXXX";
@@ -3274,6 +3327,7 @@ int main(void) {
     test_channels();
     test_agent_rules();
     test_temporary_rule();
+    test_session_keep_blocked();
     test_daily_counter();
     test_revocation_reaches_ro_store();
     test_audit_no_prompts();

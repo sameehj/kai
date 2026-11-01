@@ -370,10 +370,18 @@ struct MenuView: View {
             }
             // Spec §5.1: every row opens its decision sheet.
             ForEach(recentItems) { g in
-                Button { openDecision = openDecision == g.event.id ? nil : g.event.id } label: {
-                    EventLine(event: g.event, count: g.count, plain: true).contentShape(Rectangle())
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Button { openDecision = openDecision == g.event.id ? nil : g.event.id } label: {
+                        EventLine(event: g.event, count: g.count, plain: true).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    // dogfood: a kept-blocked host is one click from asking again
+                    if g.event.isKeptBlocked, let r = grantManager.keptBlockedRule(g.event) {
+                        Button("Unblock") { grantManager.removeRule(r) }
+                            .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
+                            .help("Kai asks about \(r.dest) again next time.")
+                    }
                 }
-                .buttonStyle(.plain)
                 .popover(isPresented: Binding(get: { openDecision == g.event.id },
                                               set: { if !$0 { openDecision = nil } }), arrowEdge: .leading) {
                     DecisionSheet(event: g.event, count: g.count, grants: grantManager)

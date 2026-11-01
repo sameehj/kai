@@ -455,7 +455,8 @@ final class Engine {
         let ident = host == nil ? "" : identityLocked(pid: pid)
         if !ident.isEmpty, let gs = grantStore {
             var rid = [CChar](repeating: 0, count: 40)
-            switch kai_approval_store_rule(gs, ident, target, Int32(KAI_OP_CONNECT.rawValue), &rid, rid.count) {
+            switch kai_approval_store_rule_session(gs, ident, target, Int32(KAI_OP_CONNECT.rawValue),
+                                                   sessionFor(pid: pid, pidv: pidv).sid, &rid, rid.count) {
             case Int32(KAI_RULE_ALLOW):
                 kai_grant_audit("used", String(cString: rid), agent, target, Int32(KAI_OP_CONNECT.rawValue),
                                 "allow", "your rule for \(ident)")
@@ -640,7 +641,8 @@ final class Engine {
         let ident = identityLocked(pid: pid)
         if !ident.isEmpty, let gs = grantStore {
             var rid = [CChar](repeating: 0, count: 40)
-            switch kai_approval_store_rule(gs, ident, target, Int32(KAI_OP_CONNECT.rawValue), &rid, rid.count) {
+            switch kai_approval_store_rule_session(gs, ident, target, Int32(KAI_OP_CONNECT.rawValue),
+                                                   sessionFor(pid: pid, pidv: pidv).sid, &rid, rid.count) {
             case Int32(KAI_RULE_ALLOW): grant = true
             case Int32(KAI_RULE_KEEP_BLOCKED): kept = true
             default: break

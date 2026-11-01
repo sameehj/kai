@@ -464,14 +464,17 @@ final class GrantManager: ObservableObject {
                                               attributes: [.posixPermissions: 0o600])
     }
 
-    /// B2: Keep blocked. For a verified agent and a real hostname it is
-    /// remembered (a signed rule): later attempts are audited, not carded.
-    /// Reversible in Settings → Permissions. Otherwise it just dismisses.
+    /// B2 + dogfood: Keep blocked lasts for the agent session it was chosen in
+    /// (an hour when there is no session); a permanent block is a separate
+    /// choice in Settings (Block always). Later attempts in that session are
+    /// audited, not carded, and show in Recent with Unblock.
     func keepBlocked(_ req: PendingRequest) {
+        let sess = req.session ?? ""
         if req.rememberable, let ident = req.verifiedIdentity,
-           writeRule(kind: Int32(KAI_RULE_KEEP_BLOCKED), req: req, identity: ident, authenticated: false) {
+           writeRule(kind: Int32(KAI_RULE_KEEP_BLOCKED), req: req, identity: ident, authenticated: false,
+                     ttl: sess.isEmpty ? 3600 : 0, session: sess.isEmpty ? nil : sess) {
             kai_grant_audit("denied", req.id, req.agent, req.resource, 2, "deny",
-                            "kept blocked by user; remembered for \(ident)")
+                            "kept blocked by user for \(sess.isEmpty ? "1 hour" : "this session"); remembered for \(ident)")
             for r in pending where r.op == "connect" && r.resource == req.resource && r.identity == req.identity {
                 clearPending(r)
             }
@@ -519,15 +522,24 @@ final class GrantManager: ObservableObject {
     }
 
     private func writeRule(kind: Int32, req: PendingRequest, identity: String, authenticated: Bool,
-                           ttl: Int = 0) -> Bool {
+                           ttl: Int = 0, session: String? = nil) -> Bool {
+        writeRule(kind: kind, agent: req.agent, dest: req.resource, identity: identity,
+                  authenticated: authenticated, ttl: ttl, session: session)
+    }
+
+    private func writeRule(kind: Int32, agent: String, dest: String, identity: String, authenticated: Bool,
+                           ttl: Int = 0, session: String? = nil) -> Bool {
         guard let key = KaiApprovalKey.ensure() else { return false }
         let rid = UUID().uuidString
         let now = Int64(Date().timeIntervalSince1970)
         let json: String? = key.withUnsafeBytes { raw -> String? in
-            guard let base = raw.bindMemory(to: UInt8.self).baseAddress,
-                  let c = kai_rule_build_json_until(rid, kind, identity, req.agent, req.resource, 2,
-                                                    now, ttl > 0 ? now + Int64(ttl) : 0, authenticated ? 1 : 0,
-                                              base, key.count) else { return nil }
+            guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return nil }
+            let exp = ttl > 0 ? now + Int64(ttl) : 0
+            let c = session.map { kai_rule_build_json_session(rid, kind, identity, agent, dest, 2, now, exp, $0,
+                                                              base, key.count) }
+                ?? kai_rule_build_json_until(rid, kind, identity, agent, dest, 2, now, exp, authenticated ? 1 : 0,
+                                             base, key.count)
+            guard let c else { return nil }
             defer { free(c) }
             return String(cString: c)
         }
@@ -536,6 +548,18 @@ final class GrantManager: ObservableObject {
                                                  attributes: [.posixPermissions: 0o700])
         return FileManager.default.createFile(atPath: rulesDir + "/" + rid + ".json", contents: Data(json.utf8),
                                               attributes: [.posixPermissions: 0o600])
+    }
+
+    /// Settings: make a session (or hourly) Keep blocked permanent for this
+    /// agent and host, in every session until removed.
+    func blockAlways(_ r: DecisionRule) {
+        guard !r.isAllow else { return }
+        if writeRule(kind: Int32(KAI_RULE_KEEP_BLOCKED), agent: r.agent, dest: r.dest, identity: r.identity,
+                     authenticated: false) {
+            kai_grant_audit("denied", r.id, r.agent, r.dest, 2, "deny", "blocked always by user for \(r.identity)")
+            try? FileManager.default.removeItem(atPath: rulesDir + "/" + r.id + ".json")
+        }
+        refresh()
     }
 
     /// Removing a rule never lowers protection (an Allow goes away, or a Keep
@@ -1137,6 +1161,8 @@ struct DecisionRule: Decodable, Identifiable {
     var expires_utc: String? = nil
     var authenticated: Int? = 0
     var migrated: Int? = 0
+    var session: String? = nil
+    var isSessionOnly: Bool { !(session ?? "").isEmpty }
     var created: Int { Int(created_utc) ?? 0 }
     var expires: Int { Int(expires_utc ?? "") ?? 0 }
     var isTemporary: Bool { expires > 0 }
@@ -1146,6 +1172,7 @@ struct DecisionRule: Decodable, Identifiable {
             return "until " + Date(timeIntervalSince1970: TimeInterval(expires)).formatted(date: .abbreviated, time: .omitted)
                 + " unless you confirm (from the old switch)"
         }
+        if isSessionOnly { return "for this session" }
         return isTemporary ? "until " + Date(timeIntervalSince1970: TimeInterval(expires)).formatted(date: .omitted, time: .shortened)
                     : "in every session"
     }

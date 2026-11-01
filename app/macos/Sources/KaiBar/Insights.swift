@@ -39,7 +39,9 @@ extension AppModel {
     /// Prompt-injection suspicions and noticed hosts are signals, not
     /// incidents; they stay on the Activity page.
     var importantEvents: [AuditEvent] {
-        events.filter { ($0.isBlock || $0.decision == "redact" || $0.decision == "replace") && !$0.isSilent && !$0.isGrant }
+        // a block of a kept-blocked host shows too (with Unblock); telemetry and the QUIC fallback don't
+        events.filter { ($0.isBlock || $0.decision == "redact" || $0.decision == "replace")
+            && (!$0.isSilent || $0.isKeptBlocked) && !$0.isGrant }
     }
 
     /// Identical incidents collapsed with a count, for the menu's Recent list.

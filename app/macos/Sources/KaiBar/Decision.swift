@@ -132,7 +132,7 @@ struct DecisionSheet: View {
         switch d {
         case .hour(let end): return "Allowed for 1 hour · ends \(end.formatted(date: .omitted, time: .shortened))"
         case .session: return "Allowed for this session"
-        case .kept: return "Kept blocked · Kai won't ask again"
+        case .kept: return "Kept blocked for this session · permanent blocks are in Settings"
         case .always:
             return ruleFor(allow: true, temporary: false) == nil ? "Waiting for Touch ID…" : "Always allowed"
         }
