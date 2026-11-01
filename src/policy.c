@@ -353,7 +353,8 @@ int kai_tool_profile_allows(const char *exe, const char *const *argv, int argc, 
     if (!strcmp(b, "git") || !strcmp(b, "git-remote-https") || !strcmp(b, "git-remote-http") || !strcmp(b, "gh"))
         return host_listed(GITHUB_HOSTS, host);
     if (!strcmp(b, "npm") ||
-        (!strncmp(b, "node", 4) && a1 && in_tool_dir(a1) && fnmatch("*/npm/bin/np[mx]-cli.js", a1, 0) == 0))
+        (!strncmp(b, "node", 4) && a1 && in_tool_dir(a1) &&
+         (fnmatch("*/npm/bin/np[mx]-cli.js", a1, 0) == 0 || fnmatch("*/np[mx]", a1, 0) == 0)))
         return host_listed(NPM_HOSTS, host);
     if (!strncmp(b, "pip", 3) ||
         (!strncmp(b, "python", 6) && a1 && ((!strcmp(a1, "-m") && a2 && !strcmp(a2, "pip")) ||

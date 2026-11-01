@@ -101,7 +101,17 @@ lipo -info "$K" | grep -q "x86_64 arm64\|arm64 x86_64" || { echo "kai isn't univ
 "$K" version | grep -q "commit $(git rev-parse --short=12 HEAD)$" || [ "$MODE" = "--test" ] || {
     echo "kai doesn't carry this commit: $("$K" version)"; exit 1; }
 cp "$K" "$STAGE/usr/local/bin/kai"
-{   # traceable build: what this package was built from, and with what
+if [ "$MODE" != "--test" ]; then
+    # one clean, tagged commit everywhere: the generated header, the CLI and the
+    # kai bundled in Kai.app, with no -dirty suffix; the build left the tree clean
+    want="commit $(git rev-parse --short=12 HEAD)"
+    grep -q "^#define KAI_COMMIT \"$(git rev-parse --short=12 HEAD)\"$" src/kai_commit.h || {
+        echo "src/kai_commit.h doesn't name $(git rev-parse --short=12 HEAD): $(cat src/kai_commit.h)"; exit 1; }
+    "$APP/Contents/Resources/kai" version | grep -q "$want$" || {
+        echo "the bundled kai in Kai.app doesn't carry this commit: $("$APP/Contents/Resources/kai" version)"; exit 1; }
+    [ -z "$(git status --porcelain)" ] || { echo "the tree is dirty after the build:"; git status --porcelain; exit 1; }
+fi
+{   # traceable build: what this package was built from, and with what (BUILDINFO.txt)
     echo "kai: $("$K" version)"
     echo "app: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist") build $(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist"), network extension build $(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Library/SystemExtensions/io.github.sameehj.kai.network.systemextension/Contents/Info.plist")"
     echo "commit: $(git rev-parse HEAD)"
@@ -111,6 +121,7 @@ cp "$K" "$STAGE/usr/local/bin/kai"
     echo "host: macOS $(sw_vers -productVersion)"
     echo "cJSON: v1.7.19 (c859b25) + kai-patches.diff; see THIRD_PARTY.md"
 } > "$OUT/BUILDINFO.txt"
+[ "$MODE" = "--test" ] || ! grep -q -- "-dirty" "$OUT/BUILDINFO.txt" || { echo "BUILDINFO.txt names a dirty build"; exit 1; }
 cp policy/default.policy "$STAGE/usr/local/share/kai/default.policy"
 
 # preinstall: never install an older kai over a newer one (A4)

@@ -2475,6 +2475,17 @@ static void test_channels(void) {
         CHECK(kai_tool_profile_allows("/opt/homebrew/bin/node", evil_node, 3, "registry.npmjs.org") == 0,
               "tools: a node script that merely names npm-cli.js doesn't");
         CHECK(kai_tool_profile_allows("/opt/homebrew/bin/node", npm, 3, "github.com") == 0, "tools: npm doesn't get GitHub");
+        /* npx and npm started through their symlink (#!/usr/bin/env node): node's
+         * first argument is the symlink path, e.g. /usr/local/bin/npx */
+        const char *npx_link[] = {"node", "/usr/local/bin/npx", "-y", "@gravitykit/block-mcp"};
+        const char *npm_link[] = {"node", "/opt/homebrew/bin/npm", "install"};
+        const char *fake_npx[] = {"node", "/tmp/x/npx", "-y", "pkg"};
+        CHECK(kai_tool_profile_allows("/usr/local/Cellar/node/23.10.0_1/bin/node", npx_link, 4, "registry.npmjs.org") == 1,
+              "tools: npx run through its symlink reaches the npm registry");
+        CHECK(kai_tool_profile_allows("/opt/homebrew/bin/node", npm_link, 3, "registry.npmjs.org") == 1,
+              "tools: npm run through its symlink too");
+        CHECK(kai_tool_profile_allows("/opt/homebrew/bin/node", fake_npx, 4, "registry.npmjs.org") == 0,
+              "tools: a script named npx outside the install folders doesn't");
         CHECK(kai_tool_profile_allows("/usr/bin/python3", pipm, 5, "pypi.org") == 1, "tools: python -m pip reaches pypi.org");
         CHECK(kai_tool_profile_allows(pips[0], pips, 4, "files.pythonhosted.org") == 1,
               "tools: the pip script reaches files.pythonhosted.org");
