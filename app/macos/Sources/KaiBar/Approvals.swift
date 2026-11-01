@@ -273,6 +273,11 @@ struct PendingPolicyChange: Decodable, Identifiable {
 }
 
 final class GrantManager: ObservableObject {
+    /// The one manager that posts card notifications (the popover uses it too):
+    /// created at launch, so a card notifies even if the popover was never opened.
+    static let shared: GrantManager = { let g = GrantManager(); g.postsNotifications = true; return g }()
+    private var postsNotifications = false
+    private var notifyPlan = NotifyPlan()
     @Published private(set) var pending: [PendingRequest] = []
     @Published private(set) var grants: [ActiveGrant] = []
     @Published private(set) var pendingPolicy: [PendingPolicyChange] = []
@@ -339,6 +344,15 @@ final class GrantManager: ObservableObject {
         }
         let fresh = live.filter { r in !seenPending.contains(r.id) }
         if primed && !fresh.isEmpty { KaiSounds.approvalNeeded() }
+        if postsNotifications {
+            // Dogfood: a waiting card notifies (it used to only play a sound), one
+            // per agent and host, with Allow for this task / Keep blocked on it.
+            let cards = live.map { NotifyPlan.Card(id: $0.id, agent: $0.agent, host: $0.resource) }
+            let post = notifyPlan.cardsToNotify(cards)
+            if primed { for c in post { if let r = live.first(where: { $0.id == c.id }) { Notifier.card(r) } } }
+            let gone = pending.filter { r in !live.contains { $0.agent == r.agent && $0.resource == r.resource } }
+            Notifier.withdraw(gone.map { NotifyPlan.cardID(agent: $0.agent, host: $0.resource) })
+        }
         seenPending.formUnion(live.map(\.id)); primed = true
         pending = live
         grants = loadJSON(dir: grantsDir).compactMap { try? JSONDecoder().decode(ActiveGrant.self, from: $0) }
@@ -794,6 +808,22 @@ final class GrantManager: ObservableObject {
 
     private func clearPending(_ req: PendingRequest) {
         try? FileManager.default.removeItem(atPath: pendingDir + "/" + req.id + ".json")
+        Notifier.withdraw([NotifyPlan.cardID(agent: req.agent, host: req.resource)])
+    }
+
+    /// A button on a card notification: Allow for this task (the session; an
+    /// hour by verified identity when there is none; this one connection for an
+    /// unknown host) or Keep blocked.
+    func answerFromNotification(pendingID: String, allow: Bool) {
+        refresh()
+        guard let req = pending.first(where: { $0.id == pendingID }) else { return }
+        notifyPlan.answered(agent: req.agent, host: req.resource)
+        if !allow { keepBlocked(req); return }
+        if req.unknownHost { approveOnce(req) }
+        else if !(req.session ?? "").isEmpty { approve(req, duration: .session) }
+        else if req.rememberable { allowForHour(req) }
+        else { approve(req, duration: .hour1) }
+        refresh()
     }
 
     // ---- Item 5: group pending cards, collapse temp paths, dismiss all ----

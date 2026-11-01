@@ -30,6 +30,8 @@ final class AppModel: ObservableObject {
     @Published var errorMessage: String?
     /// A short confirmation ("Exception added …"), shown on the Activity page.
     @Published var notice: String?
+    /// Dogfood: shown in the popover header with a link to System Settings.
+    @Published var notificationsOff = false
     @Published var notifyOnBlock: Bool {
         didSet {
             UserDefaults.standard.set(notifyOnBlock, forKey: "notifyOnBlock")
@@ -262,6 +264,7 @@ final class AppModel: ObservableObject {
 
     private func pollAudit() {
         guard let tail else { return }
+        Notifier.checkOff { off in DispatchQueue.main.async { if self.notificationsOff != off { self.notificationsOff = off } } }
         let fresh = tail.poll()
         if tail.recent != events { events = tail.recent }
         let blocks = fresh.filter { $0.isBlock && !$0.isSilent }
@@ -278,8 +281,9 @@ final class AppModel: ObservableObject {
     private func notify(_ blocks: [AuditEvent]) {
         var groups: [String: [AuditEvent]] = [:]
         var order: [String] = []
-        for e in blocks {
-            let key = e.agentName + "|" + e.rule
+        // A network block raises a card, and the card notifies (with buttons).
+        for e in blocks where !e.isNetwork {
+            let key = NotifyPlan.blockKey(agent: e.agentName, rule: e.rule, target: e.target ?? "")
             if groups[key] == nil { order.append(key) }
             groups[key, default: []].append(e)
         }
@@ -500,6 +504,54 @@ final class AppModel: ObservableObject {
 enum Notifier {
     /// Notifications need a real app bundle; running the bare binary skips them.
     private static var available: Bool { Bundle.main.bundleIdentifier != nil }
+    static let cardCategory = "KAI_CARD"
+
+    /// The card notification's buttons, registered once at launch.
+    static func registerCategories() {
+        guard available else { return }
+        let allow = UNNotificationAction(identifier: "ALLOW", title: "Allow for this task", options: [])
+        let keep = UNNotificationAction(identifier: "KEEP", title: "Keep blocked", options: [])
+        UNUserNotificationCenter.current().setNotificationCategories(
+            [UNNotificationCategory(identifier: cardCategory, actions: [allow, keep], intentIdentifiers: [], options: [])])
+    }
+
+    /// Dogfood: one notification per waiting card per agent and host.
+    static func card(_ r: PendingRequest) {
+        guard available else { return }
+        let c = UNMutableNotificationContent()
+        c.title = "\(r.agentTitle) wants to \(r.verb) \(r.thing)"
+        c.body = r.op == "connect" && !r.unknownHost
+            ? HostCatalog.line(r.resource) + " If it is still waiting, it continues when you choose."
+            : "Kai stopped it until you choose."
+        c.categoryIdentifier = cardCategory
+        c.userInfo = ["pending": r.id]
+        let req = UNNotificationRequest(identifier: NotifyPlan.cardID(agent: r.agent, host: r.resource), content: c, trigger: nil)
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            if granted { UNUserNotificationCenter.current().add(req) }
+        }
+    }
+
+    /// Answered or gone: take its notification down.
+    static func withdraw(_ ids: [String]) {
+        guard available, !ids.isEmpty else { return }
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids)
+    }
+
+    /// System Settings → Notifications (Kai's page where macOS supports it).
+    static func openSettings() {
+        let id = Bundle.main.bundleIdentifier ?? "io.github.sameehj.kai"
+        let urls = ["x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(id)",
+                    "x-apple.systempreferences:com.apple.preference.notifications"]
+        for s in urls { if let u = URL(string: s), NSWorkspace.shared.open(u) { return } }
+    }
+
+    /// Off: not authorized, or alerts disabled for Kai.
+    static func checkOff(_ done: @escaping (Bool) -> Void) {
+        guard available else { done(false); return }
+        UNUserNotificationCenter.current().getNotificationSettings { s in
+            done(s.authorizationStatus == .denied || s.alertSetting == .disabled)
+        }
+    }
 
     static func requestPermission() {
         guard available else { return }

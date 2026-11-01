@@ -136,6 +136,9 @@ targets:
         LSUIElement: true
         LSMinimumSystemVersion: "13.0"
         NSHumanReadableCopyright: GPL-3.0 · The Kai Authors
+        # Card notifications stay on screen until answered (macOS may still let
+        # the user pick banners).
+        NSUserNotificationAlertStyle: alert
         # kai://settings/<page>: the CLI's "Change this in Kai" opens the page.
         CFBundleURLTypes:
           - CFBundleURLName: io.github.sameehj.kai

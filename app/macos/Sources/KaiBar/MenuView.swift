@@ -12,7 +12,7 @@ struct MenuView: View {
     @State private var dismissedBlock: String?
     @State private var showPermissions = false
     @State private var openDecision: String?
-    @StateObject private var grantManager = GrantManager()
+    @ObservedObject private var grantManager = GrantManager.shared
     @ObservedObject private var agents = AgentsModel.shared
 
     private var alert: AuditEvent? {
@@ -327,6 +327,12 @@ struct MenuView: View {
                 if !StorageWall.included {
                     Text(ProtectionText.filesNotIncluded).font(.system(size: 11)).foregroundStyle(Theme.muted)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+                if model.notificationsOff {   // dogfood: cards you'd never see
+                    Button { Notifier.openSettings() } label: {
+                        Text("Notifications are off for Kai · Turn on ›").font(.system(size: 11)).foregroundStyle(Theme.amber)
+                    }.buttonStyle(.plain)
+                    .help("Kai can't tell you when an agent waits for you. Opens System Settings → Notifications.")
                 }
             }
             .layoutPriority(1)   // the status lines wrap rather than truncate
