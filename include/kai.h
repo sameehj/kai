@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define KAI_VERSION "0.2.0-preview.1"
+#define KAI_VERSION "0.2.0-preview.2"
 /* MAJOR.MINOR.PATCH[-preview.N]; a pre-release is older than its release. */
 int kai_version_cmp(const char *a, const char *b);
 
@@ -617,6 +617,11 @@ int kai_host_is_telemetry(const char *host);
 /* Hosts in one agent's own profile (e.g. Cursor's sign-in), allowed for that
  * agent only. Each covers its subdomains. */
 int kai_agent_profile_allows(const char *agent, const char *host);
+/* Tool profiles: git/gh -> GitHub's hosts, npm -> registry.npmjs.org, pip ->
+ * PyPI, for those tools installed in system or package-manager folders. 1 =
+ * allowed without a card. kai_pid_tool_allows reads the process. */
+int kai_tool_profile_allows(const char *exe, const char *const *argv, int argc, const char *host);
+int kai_pid_tool_allows(int pid, const char *host);
 /* Spec v2.1 B.3: what a host is, in plain words, and its group, or NULL.
  * Explanation only: it never allows anything. */
 const char *kai_host_describe(const char *host, const char **group);

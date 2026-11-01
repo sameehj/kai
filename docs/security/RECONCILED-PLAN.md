@@ -52,6 +52,7 @@ The Preview 1 → Preview 2 → Preview 3 → Private Pilot progression stays; t
 - **Removed:** the Chrome extension, its native-messaging host, `kai install chrome`, the Chats coverage matrix (A5b), and the Gate A item that depends on it. Any Chats claim leaves the README, installer and `kai status`.
 - **Preview 1 ships hooks only** and never waits on the entitlement-free experiment.
 - **Excluded until the replay proves otherwise:** any claim of file protection without Endpoint Security authorization; any "network protected" status that hasn't passed the allowed-HTTPS exfiltration row.
+- **Merge bar:** CI green on macOS (Kai is macOS only; there is no Ubuntu job).
 - **Still deferred:** OAuth/PKCE, signed grants or policies, DPoP, RFC 9421, an MCP proxy, automatic updates, Teams features.
 
 ## The frozen plan (the order of work)

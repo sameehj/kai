@@ -2443,6 +2443,51 @@ static void test_channels(void) {
           "G8: Gemini CLI's Code Assist host is allowed");
     CHECK(p && kai_egress_endpoint_allowed(p, "github.com", "1.2.3.4", 443, why, sizeof why) != 1,
           "...github.com is still asked about");
+    /* 0.2.0-preview.2: tool profiles. git and gh reach GitHub's hosts, npm the
+     * npm registry, pip PyPI, without a card; the agent itself, a script it
+     * runs through node or python, or a binary it built named "git" don't. */
+    {
+        const char *git[] = {"git", "push", "origin", "main"};
+        const char *rh[] = {"git-remote-https", "origin", "https://github.com/x/y.git"};
+        const char *gh[] = {"gh", "api", "user"};
+        const char *npm[] = {"node", "/opt/homebrew/lib/node_modules/npm/bin/npm-cli.js", "install"};
+        const char *evil_node[] = {"node", "/tmp/up.js", "/opt/homebrew/lib/node_modules/npm/bin/npm-cli.js"};
+        const char *pipm[] = {"python3", "-m", "pip", "install", "requests"};
+        const char *pips[] = {"/opt/homebrew/opt/python@3.12/bin/python3.12", "/opt/homebrew/bin/pip3", "install", "x"};
+        const char *evil_py[] = {"python3", "/tmp/up.py", "pip"};
+        const char *claude[] = {"claude"};
+        CHECK(kai_tool_profile_allows("/usr/bin/git", git, 4, "github.com") == 1, "tools: git reaches github.com");
+        CHECK(kai_tool_profile_allows("/Library/Developer/CommandLineTools/usr/libexec/git-core/git-remote-https", rh, 3,
+                                      "github.com") == 1, "tools: git's https helper reaches github.com");
+        CHECK(kai_tool_profile_allows("/opt/homebrew/bin/gh", gh, 3, "api.github.com") == 1, "tools: gh reaches api.github.com");
+        CHECK(kai_tool_profile_allows("/opt/homebrew/bin/gh", gh, 3, "uploads.github.com") == 1, "tools: ...uploads.github.com");
+        CHECK(kai_tool_profile_allows("/usr/bin/git", git, 4, "codeload.github.com") == 1, "tools: ...codeload.github.com");
+        CHECK(kai_tool_profile_allows("/usr/bin/git", git, 4, "objects.githubusercontent.com") == 1,
+              "tools: ...objects.githubusercontent.com");
+        CHECK(kai_tool_profile_allows("/usr/bin/git", git, 4, "gist.githubusercontent.com") == 0,
+              "tools: exact hosts only (not every githubusercontent.com host)");
+        CHECK(kai_tool_profile_allows("/usr/bin/git", git, 4, "registry.npmjs.org") == 0, "tools: git doesn't get npm's registry");
+        CHECK(kai_tool_profile_allows("/Users/u/.local/share/claude/versions/2.1/claude", claude, 1, "github.com") == 0,
+              "tools: the agent itself still asks for github.com");
+        CHECK(kai_tool_profile_allows("/tmp/build/git", git, 4, "github.com") == 0,
+              "tools: a binary named git outside the install folders doesn't count");
+        CHECK(kai_tool_profile_allows("/opt/homebrew/bin/node", npm, 3, "registry.npmjs.org") == 1, "tools: npm reaches its registry");
+        CHECK(kai_tool_profile_allows("/opt/homebrew/bin/node", evil_node, 3, "registry.npmjs.org") == 0,
+              "tools: a node script that merely names npm-cli.js doesn't");
+        CHECK(kai_tool_profile_allows("/opt/homebrew/bin/node", npm, 3, "github.com") == 0, "tools: npm doesn't get GitHub");
+        CHECK(kai_tool_profile_allows("/usr/bin/python3", pipm, 5, "pypi.org") == 1, "tools: python -m pip reaches pypi.org");
+        CHECK(kai_tool_profile_allows(pips[0], pips, 4, "files.pythonhosted.org") == 1,
+              "tools: the pip script reaches files.pythonhosted.org");
+        CHECK(kai_tool_profile_allows("/usr/bin/python3", evil_py, 3, "pypi.org") == 0,
+              "tools: a python script that isn't pip doesn't");
+        CHECK(kai_tool_profile_allows("/usr/bin/git", git, 4, NULL) == 0 && kai_tool_profile_allows(NULL, git, 4, "github.com") == 0,
+              "tools: no host or no program: no");
+        /* the old allowlist alone never allowed these (they were cards) */
+        kai_policy *bp = kai_policy_builtin_failsafe();
+        CHECK(bp && kai_egress_endpoint_allowed(bp, "api.github.com", "1.2.3.4", 443, why, sizeof why) != 1,
+              "tools: the allowlist itself still doesn't list GitHub (the profile is per program)");
+        kai_policy_free(bp);
+    }
     kai_policy_free(p);
     const char *group = NULL;
     const char *desc = kai_host_describe("developerservices2.apple.com", &group);

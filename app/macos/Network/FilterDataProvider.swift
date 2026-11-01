@@ -437,6 +437,8 @@ final class Engine {
         var why = [CChar](repeating: 0, count: 256)
         if kai_egress_endpoint_allowed(p, host, ip, Int32(port) ?? 0, &why, why.count) == 1 { return true }
         if let h = host, kai_agent_profile_allows(agent, h) == 1 { return true }   // e.g. Cursor's sign-in
+        // git/gh -> GitHub, npm -> its registry, pip -> PyPI: the tool opening the socket, by name
+        if let h = host, pid > 0, kai_pid_tool_allows(Int32(pid), h) == 1 { return true }
         let target = host ?? "\(ip):\(port)"
         let block = mode == KAI_EGRESS_BLOCK
         // B2: telemetry and crash reports are an optional channel: denied

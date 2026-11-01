@@ -317,6 +317,61 @@ static const struct { const char *agent, *host; int documented; } AGENT_PROFILE_
     {"cursor", "auth.grok.com", 1}, {"cursor", "auth.grokusercontent.com", 1}, {"cursor", "auth.grokipedia.com", 1},
 };
 
+/* 0.2.0-preview.2: tool profiles. A known developer tool, installed where
+ * system and package-manager tools live, may reach the exact hosts its job
+ * needs without a card: git and gh GitHub, npm its registry, pip PyPI. The
+ * agent itself, a script it runs through node or python, or a program it
+ * built and named "git" in another folder are not the tool and still ask.
+ * Pushing to GitHub or publishing a package is exfiltration through an
+ * allowed service, which this release doesn't stop (documented). */
+static const char *const TOOL_DIRS[] = {
+    "/usr/bin/*", "/Library/Developer/CommandLineTools/*", "/Applications/Xcode*.app/Contents/Developer/*",
+    "/opt/homebrew/*", "/usr/local/*", "*/.nvm/versions/node/*", "/Library/Frameworks/Python.framework/*",
+};
+static const char *const GITHUB_HOSTS[] = {
+    "github.com", "api.github.com", "uploads.github.com", "codeload.github.com", "objects.githubusercontent.com", NULL};
+static const char *const NPM_HOSTS[] = {"registry.npmjs.org", NULL};
+static const char *const PIP_HOSTS[] = {"pypi.org", "files.pythonhosted.org", NULL};
+
+static int in_tool_dir(const char *path) {
+    if (!path || path[0] != '/') return 0;
+    for (size_t i = 0; i < sizeof TOOL_DIRS / sizeof TOOL_DIRS[0]; i++)
+        if (fnmatch(TOOL_DIRS[i], path, 0) == 0) return 1;
+    return 0;
+}
+
+static int host_listed(const char *const *list, const char *host) {
+    for (int i = 0; list[i]; i++) if (!strcasecmp(list[i], host)) return 1;
+    return 0;
+}
+
+int kai_tool_profile_allows(const char *exe, const char *const *argv, int argc, const char *host) {
+    if (!exe || !host || !*host || !in_tool_dir(exe)) return 0;
+    const char *b = strrchr(exe, '/');
+    b = b ? b + 1 : exe;
+    const char *a1 = argc > 1 && argv ? argv[1] : NULL, *a2 = argc > 2 && argv ? argv[2] : NULL;
+    if (!strcmp(b, "git") || !strcmp(b, "git-remote-https") || !strcmp(b, "git-remote-http") || !strcmp(b, "gh"))
+        return host_listed(GITHUB_HOSTS, host);
+    if (!strcmp(b, "npm") ||
+        (!strncmp(b, "node", 4) && a1 && in_tool_dir(a1) && fnmatch("*/npm/bin/np[mx]-cli.js", a1, 0) == 0))
+        return host_listed(NPM_HOSTS, host);
+    if (!strncmp(b, "pip", 3) ||
+        (!strncmp(b, "python", 6) && a1 && ((!strcmp(a1, "-m") && a2 && !strcmp(a2, "pip")) ||
+                                            (in_tool_dir(a1) && fnmatch("*/pip[0-9.]*", a1, 0) == 0) ||
+                                            (in_tool_dir(a1) && fnmatch("*/pip", a1, 0) == 0))))
+        return host_listed(PIP_HOSTS, host);
+    return 0;
+}
+
+int kai_pid_tool_allows(int pid, const char *host) {
+    if (pid <= 0 || !host) return 0;
+    kai_proc pr;
+    if (kai_proc_read_fast(pid, &pr) != 0) return 0;
+    int ok = kai_tool_profile_allows(pr.exe, (const char *const *)pr.argv, pr.argc, host);
+    kai_proc_free(&pr);
+    return ok;
+}
+
 int kai_agent_profile_host(int i, const char **agent, const char **host, int *documented) {
     if (i < 0 || (size_t)i >= sizeof AGENT_PROFILE_EGRESS / sizeof AGENT_PROFILE_EGRESS[0]) return 0;
     if (agent) *agent = AGENT_PROFILE_EGRESS[i].agent;

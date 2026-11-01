@@ -13,7 +13,7 @@
 ## What Kai stops
 
 - **Your agent's own secret reads and uploads**: Claude Code, Codex and Cursor reading your keys, `.env` files and credentials, or sending them out, stopped before the tool call runs.
-- **Agent traffic to unknown hosts, bare IPs and odd ports**: the Kai app's Internet wall checks each connection an agent opens and asks you about one it doesn't know.
+- **Agent traffic to unknown hosts, bare IPs and odd ports**, once you turn on Protect: the Kai app's Internet wall checks each connection an agent opens and asks you about one it doesn't know. Kai starts in Watch, which records these connections and blocks none.
 
 ## What it doesn't stop in this release
 
@@ -26,10 +26,10 @@
 
 Evidence for this release: the agent checks were verified live with Claude Code 2.1.312 (9 of 9 checks PASS, 2026-10-30) and with synthetic hook events for Codex and Cursor ([docs/COVERAGE.md](docs/COVERAGE.md)); the Internet wall's decisions (unknown host, bare IP, non-web port, no loadable policy) by tests. The end-to-end replay of attack cases has not run for this release: NOT COVERED.
 
-## Three steps
+## First steps
 
-1. **Install Kai.** One package installs the Kai app (with its Internet wall) and the `kai` command, and refreshes Kai's checks in Claude Code, Codex and Cursor.
-2. **Approve the Internet wall** when macOS asks (System Settings → Privacy & Security), then run `kai install all` and `kai doctor`.
+1. **Turn on Protect in Kai → Internet.** Kai starts in Watch: it records agent connections but blocks none until you do. (First install the package and approve the Internet wall when macOS asks: see [Install](#install).)
+2. **Check it:** `kai install all`, then `kai doctor` and `kai status`.
 3. **You decide, narrowly.** When Kai stops something legitimate, it tells you why and what to do: one agent, one operation, one target, with an expiry. The agent is told why, and to ask you instead of trying another way.
 
 Kai is an extra safety layer, not isolation: the agent checks run with your permissions and cover the actions each agent reports to them; the Internet wall sees connections, not what a program does with your files.
@@ -41,11 +41,11 @@ Kai is an extra safety layer, not isolation: the agent checks run with your perm
 Download `Kai-Preview-<version>.pkg` from [Releases](https://github.com/sameehj/kai/releases), check it, and open it:
 
 ```sh
-shasum -a 256 -c Kai-Preview-0.2.0-preview.1.pkg.sha256
-spctl --assess --type install -vv Kai-Preview-0.2.0-preview.1.pkg   # "source=Notarized Developer ID"
+shasum -a 256 -c SHA256SUMS
+spctl --assess --type install -vv Kai-Preview-0.2.0-preview.2.pkg   # "source=Notarized Developer ID"
 ```
 
-The installer refreshes Kai's checks in the agents that already have them. For another agent:
+It installs the Kai app (with its Internet wall) and the `kai` command. Open Kai, approve the Internet wall when macOS asks (System Settings → Privacy & Security, or General → Login Items & Extensions → Network Extensions), then **turn on Protect in Kai → Internet**. The installer refreshes Kai's checks in the agents that already have them. For another agent:
 
 ```sh
 kai install claude      # or codex, cursor, all

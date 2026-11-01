@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0-preview.2 (2026-11-01)
+
+First public pre-release: agent hooks plus the Kai app's Internet wall. Files protection: not included in
+this release. Notes: [docs/release/0.2.0-preview.2.md](docs/release/0.2.0-preview.2.md).
+
+- Internet wall: tool profiles (git and gh reach GitHub, npm its registry, pip PyPI, without a card);
+  built-in defaults in Protect when no policy loads; googleapis.com narrowed to Gemini's hosts; an
+  agent's connection waits for your decision instead of failing.
+- Agents are told why Kai stopped them, and to ask you rather than retry another way.
+- App: "N actions stopped today" opens the list; Allow for this task; unique session names; Needs you
+  first; "Files: not included in this release".
+- Release: Developer ID signed and notarized app, extension and package (`make release`).
+- Audit log: 0600 always; rotation size fixed in release builds.
+
 ## 0.2.0-preview.1 (release candidate, 2026-10-29)
 - Removed (Security Plan v1.0, 2026-10-31): the Chrome extension, its native-messaging
   host, `kai install chrome`, the Chats lines in `kai status`, `kai doctor` and the app,

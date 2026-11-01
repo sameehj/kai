@@ -164,7 +164,7 @@ else
     spctl --assess --type install -vv "$PKG" 2>&1 | tee "$OUT/spctl.log"
     grep -q "source=Notarized Developer ID" "$OUT/spctl.log" || { echo "spctl didn't accept the package as notarized"; exit 1; }
 fi
-( cd "$OUT" && shasum -a 256 "$(basename "$PKG")" > "$(basename "$PKG").sha256" )
+( cd "$OUT" && shasum -a 256 "$(basename "$PKG")" > "$(basename "$PKG").sha256" && cp "$(basename "$PKG").sha256" SHA256SUMS )
 cat "$OUT/$(basename "$PKG").sha256"
 [ "$MODE" = "--test" ] || \
-    echo "next (a person publishes): gh release create v$VERSION --prerelease \"$PKG\" \"$PKG.sha256\""
+    echo "next: gh release create v$VERSION --prerelease \"$PKG\" \"$OUT/SHA256SUMS\""
