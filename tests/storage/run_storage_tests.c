@@ -2493,6 +2493,15 @@ static void test_channels(void) {
               "tools: a python script that isn't pip doesn't");
         CHECK(kai_tool_profile_allows("/usr/bin/git", git, 4, NULL) == 0 && kai_tool_profile_allows(NULL, git, 4, "github.com") == 0,
               "tools: no host or no program: no");
+        /* dogfood 2026-11-01: the npm registry is allowed for every agent process
+         * (node/npx started by an agent or its MCP servers), not only npm itself */
+        kai_policy *np = kai_policy_builtin_failsafe();
+        CHECK(np && kai_egress_endpoint_allowed(np, "registry.npmjs.org", "104.16.1.1", 443, why, sizeof why) == 1,
+              "npm registry: allowed for agent processes by default");
+        CHECK(np && kai_egress_endpoint_allowed(np, "www.npmjs.com", "104.16.1.1", 443, why, sizeof why) != 1 &&
+                    kai_egress_endpoint_allowed(np, "npmjs.com", "104.16.1.1", 443, why, sizeof why) != 1,
+              "npm registry: ...only the registry host, not the npm website");
+        kai_policy_free(np);
         /* the old allowlist alone never allowed these (they were cards) */
         kai_policy *bp = kai_policy_builtin_failsafe();
         CHECK(bp && kai_egress_endpoint_allowed(bp, "api.github.com", "1.2.3.4", 443, why, sizeof why) != 1,

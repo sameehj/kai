@@ -5,7 +5,8 @@
 First public pre-release: agent hooks plus the Kai app's Internet wall. Files protection: not included in
 this release. Notes: [docs/release/0.2.0-preview.2.md](docs/release/0.2.0-preview.2.md).
 
-- Internet wall: tool profiles (git and gh reach GitHub, npm its registry, pip PyPI, without a card);
+- Internet wall: git and gh reach GitHub and pip PyPI without a card (tool profiles); every agent process
+  reaches registry.npmjs.org (npx-started MCP servers need it; npm publish uses it too, a known gap);
   built-in defaults in Protect when no policy loads; googleapis.com narrowed to Gemini's hosts; an
   agent's connection waits for your decision instead of failing.
 - Agents are told why Kai stopped them, and to ask you rather than retry another way.

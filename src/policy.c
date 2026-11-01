@@ -228,6 +228,9 @@ static const char *const BUILTIN_EGRESS[] = {
     "generativelanguage.googleapis.com", "cloudcode-pa.googleapis.com", "oauth2.googleapis.com",
     "cursor.sh", "cursor.com",
     "cursorapi.com", "cursor-cdn.com",
+    /* the npm registry, for every agent process: npx-started MCP servers and
+     * tools need it at start. npm publish uses the same host (ESCAPES.md). */
+    "registry.npmjs.org",
     /* Code hosting, package registries and the like are asked about per host
      * (spec v2.1 B.4: no fixed categories); the catalog below only describes. */
 };
