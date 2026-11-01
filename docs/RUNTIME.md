@@ -1,5 +1,7 @@
 # Runtime enforcement health (B4)
 
+> **Build order superseded by [`docs/security/RECONCILED-PLAN.md`](security/RECONCILED-PLAN.md)** (Security Plan v1.0, frozen Oct 31, 2026). This document keeps its specs and tests; where it conflicts with the spec, the spec wins.
+
 Kai reports two things separately, in `kai doctor` and in the app:
 
 - **Extension health**: is each extension running, is its heartbeat fresh (30 s at most; root-owned, not writable by agents), and does it run the current policy (the heartbeat carries the policy's fingerprint, the first 12 hex digits of its SHA-256).

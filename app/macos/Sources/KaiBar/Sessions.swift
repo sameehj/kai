@@ -93,8 +93,8 @@ struct SessionRow: Decodable, Identifiable, Equatable {
         }
     }
     var workspaces: [Workspace]? = nil
-    /// B1: set by AgentsModel when two live sessions would read the same.
-    var nameSuffix: String = ""
+    /// Step 6: the name every list shows, set by `assignNames` (unique).
+    var name: String = ""
 
     static func known(_ v: String, _ values: Set<String>) -> String { values.contains(v) ? v : "unknown" }
 
@@ -145,8 +145,43 @@ struct SessionRow: Decodable, Identifiable, Equatable {
             return w.isEmpty ? (hostApp.isEmpty ? displayAgent : hostApp)
                              : "\(w.count) workspace\(w.count == 1 ? "" : "s")"
         }
-        let base = project.isEmpty ? "—" : (project as NSString).lastPathComponent
-        return nameSuffix.isEmpty ? base : "\(base) · \(nameSuffix)"
+        return project.isEmpty ? "—" : (project as NSString).lastPathComponent
+    }
+    /// The terminal tab the session runs in ("ttys003"), "" when none.
+    var tab: String { tty.hasPrefix("/dev/") ? String(tty.dropFirst(5)) : tty }
+
+    /// Step 6: what the session is about (the topic, else the project folder,
+    /// else its workspaces) plus the terminal tab. Never the agent's or its
+    /// app's own name: the group header already says it ("Cursor · Cursor").
+    func baseName(topic: String) -> String {
+        let own: Set<String> = [displayAgent.lowercased(), agent.lowercased(), hostApp.lowercased()]
+        func ok(_ s: String) -> Bool { !s.isEmpty && s != "—" && !own.contains(s.lowercased()) }
+        var about = String(topic.split(separator: "\n").first ?? "").trimmingCharacters(in: .whitespaces)
+        if about.count > 40 { about = String(about.prefix(39)) + "…" }
+        if !ok(about) {
+            if let w = workspaces, let first = w.first {
+                about = w.count > 1 ? "\(first.name) +\(w.count - 1)" : first.name
+            } else {
+                about = project.isEmpty ? "" : (project as NSString).lastPathComponent
+            }
+        }
+        let parts = [about, tab].filter(ok)
+        if !parts.isEmpty { return parts.joined(separator: " · ") }
+        return startedUtc > 0 ? "session started \(startedClock)" : "session \(id.prefix(6))"
+    }
+
+    /// Names every row, then tells apart rows of one agent that would read the
+    /// same: by start time, then by a short id.
+    static func assignNames(_ rows: inout [SessionRow], topic: (SessionRow) -> String) {
+        for i in rows.indices { rows[i].name = rows[i].baseName(topic: topic(rows[i])) }
+        func dups() -> [Int] {
+            let g = Dictionary(grouping: rows.indices, by: { rows[$0].displayAgent + "|" + rows[$0].name })
+            return g.values.filter { $0.count > 1 }.flatMap { $0 }
+        }
+        for i in dups() where rows[i].startedUtc > 0 && !rows[i].name.contains("started ") {
+            rows[i].name += " · started \(rows[i].startedClock)"
+        }
+        for i in dups() { rows[i].name += " · \(rows[i].id.prefix(6))" }
     }
     /// Proper product names, not the lowercase classifier.
     var displayAgent: String {

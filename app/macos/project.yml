@@ -24,15 +24,15 @@ settings:
     # it in the developer portal: that needs a live login and makes Xcode
     # report "profile doesn't support the App Groups capability" when it can't.
     REGISTER_APP_GROUPS: NO
-    MARKETING_VERSION: "0.1.0"
+    MARKETING_VERSION: "0.2.0"   # the release without its pre-release suffix (checked by make release)
     # The app's build number. Bump freely for app changes (menu bar, signing);
     # this does NOT touch the network extension, so app updates never replace
     # it and never drop agents' live connections.
-    CURRENT_PROJECT_VERSION: "7"
+    CURRENT_PROJECT_VERSION: "8"
     # The network extension's own build number. Bump ONLY when the extension's
     # code (app/macos/Network) changes: macOS replaces an activated extension
     # when this differs, which tears down the content filter.
-    KAI_EXT_VERSION: "28"
+    KAI_EXT_VERSION: "30"
     SWIFT_VERSION: "5.9"
 
 targets:
@@ -118,8 +118,6 @@ targets:
       - path: ../../src/manage.c
       - path: ../../src/grant_cli.c
       - path: ../../src/install.c
-      - path: ../../src/browser.c
-      - path: ../../src/native.c
       - path: ../../src/report.c
       - path: ../../src/health.c
     dependencies:
@@ -181,15 +179,11 @@ targets:
           # Notification sounds must be top-level app resources; NSSound uses
           # the same files for in-app approval feedback and previews.
           cp "$SRCROOT/../../kai-sfx/"*.wav "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/"
-          # The browser extension, so `kai install chrome` can point at it.
-          ext="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/browser"
-          rm -rf "$ext" && mkdir -p "$ext/icons"
-          cp "$SRCROOT/../../integrations/browser/"*.js "$SRCROOT/../../integrations/browser/"*.json \
-             "$SRCROOT/../../integrations/browser/popup.html" "$ext/"
+          # Chrome support was removed: drop a browser folder an older build left.
+          rm -rf "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/browser"
           # v1 has no control service: remove a LaunchAgents folder an older
           # build left in the product.
           rm -rf "$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchAgents"
-          cp "$SRCROOT/../../integrations/browser/icons/"*.png "$ext/icons/"
           if [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
             codesign --force --options runtime --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$dest"
           else

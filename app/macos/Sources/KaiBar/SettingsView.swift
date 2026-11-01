@@ -4,10 +4,10 @@ import SwiftUI
 import KaiCore
 
 /// Phase B item 10: Agent Control (the main page) and Activity, then four
-/// settings pages named for what they protect - Files, Internet, Chats - and
+/// settings pages named for what they protect - Files, Internet - and
 /// Advanced for everything technical.
 enum SettingsPage: String, CaseIterable, Identifiable {
-    case agentControl, activity, files, internet, chats, advanced
+    case agentControl, activity, files, internet, advanced
     var id: String { rawValue }
     /// A page saved by an older Kai ("storage", "network", "general", ...).
     init(stored raw: String) {
@@ -24,7 +24,6 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .activity: return "Activity"
         case .files: return "Files"
         case .internet: return "Internet"
-        case .chats: return "Chats"
         case .advanced: return "Advanced"
         }
     }
@@ -34,7 +33,6 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .activity: return "waveform.path.ecg"
         case .files: return "folder"
         case .internet: return "globe"
-        case .chats: return "bubble.left.and.bubble.right"
         case .advanced: return "slider.horizontal.3"
         }
     }
@@ -88,6 +86,10 @@ struct SettingsView: View {
                     Text(model.health == .problem ? model.headline
                          : model.statusSentence(storageOn: storage.isOn, networkOn: wall.isOn))
                         .font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(1)
+                    if !StorageWall.included {
+                        Text(ProtectionText.filesNotIncluded).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             .padding(.horizontal, 8).padding(.bottom, 18).padding(.top, 8)
@@ -122,7 +124,6 @@ struct SettingsView: View {
         case .activity: ActivityPage()
         case .files: VStack(alignment: .leading, spacing: 18) { StoragePage(); FilesPage() }
         case .internet: NetworkPage()
-        case .chats: ChatsPage()
         case .advanced: AdvancedPage()
         }
     }
@@ -310,7 +311,7 @@ private struct GeneralPage: View {
 
     @ViewBuilder private var agents: some View {
         CapsLabel("Built into your agents")
-        ForEach(Agent.allCases.filter { $0 != .chrome }) { AgentCard(agent: $0) }
+        ForEach(Agent.allCases) { AgentCard(agent: $0) }
         Text("Turning an agent on adds Kai's checks to its settings file (its hooks) and keeps a backup. Restart open agent sessions to pick up the change.")
             .font(.system(size: 12)).foregroundStyle(Theme.muted)
     }
@@ -643,7 +644,7 @@ private struct StoragePage: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Files protection").font(.system(size: 14, weight: .semibold))
-                        Text("Coming in a later release.").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        Text(ProtectionText.filesNotIncluded).font(.system(size: 12)).foregroundStyle(Theme.muted)
                     }
                     Spacer()
                 }
@@ -727,7 +728,7 @@ private struct CompanyPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Words and names that must not reach a model. Matched in prompts, tool arguments and AI chats.")
+            Text("Words and names that must not reach a model. Matched in prompts and tool arguments.")
                 .font(.system(size: 12)).foregroundStyle(Theme.muted)
             Card(padding: 14) {
                 VStack(alignment: .leading, spacing: 10) {
@@ -787,19 +788,6 @@ private struct CompanyPage: View {
                     }
                 }
             }
-        }
-    }
-}
-
-/// Phase B item 10: Chats - what Kai checks in AI chats in the browser.
-private struct ChatsPage: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            PageHeader(icon: "bubble.left.and.bubble.right", title: "Chats",
-                       subtitle: "Kai checks what you paste into AI chats in Chrome.")
-            AgentCard(agent: .chrome)
-            Text("Chats use the same secret checks and company terms as your agents (Advanced → Company data). Files and Internet protection don't apply to the browser.")
-                .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -870,7 +858,6 @@ private struct AgentControlPage: View {
                             ForEach([("claude", "Claude Code"), ("codex", "Codex"), ("cursor", "Cursor")], id: \.0) { a in
                                 Text(a.1).font(.system(size: 13)).tag("agent:" + a.0)
                             }
-                            Text("Chats").font(.system(size: 13)).tag("chats")
                         }
                         if !model.workingNow.isEmpty {
                             Section {
@@ -905,8 +892,6 @@ private struct AgentControlPage: View {
                 Group {
                     if let id = selected, id.hasPrefix("agent:") {
                         AgentReachView(agent: String(id.dropFirst(6)), grants: grants)
-                    } else if selected == "chats" {
-                        ChatsDetail()
                     } else if let id = selected, let s = model.sessions.first(where: { $0.id == id }) {
                         SessionDetail(session: s, grants: grants)
                     } else {

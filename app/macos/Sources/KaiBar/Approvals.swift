@@ -1006,12 +1006,12 @@ struct ApprovalCard: View {
         }
     }
 
-    /// "Allow this session" (when there is one), then "Allow 1 hour".
+    /// "Allow for this task" (when there is one), then "Allow 1 hour".
     private var allowActions: [CardAction] {
         let session = !(req.session ?? "").isEmpty
         var a: [CardAction] = []
         if session {
-            a.append(CardAction(title: "Allow this session", info: InfoText.thisSession, primary: true) { ask(.session) })
+            a.append(CardAction(title: "Allow for this task", info: InfoText.thisSession, primary: true) { ask(.session) })
         }
         if !session && req.rememberable && tier < 2 {
             // Fix 2: no session to bind to: one hour, by signed identity.

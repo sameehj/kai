@@ -9,11 +9,6 @@ HARDEN   = -D_FORTIFY_SOURCE=2 -fstack-protector-strong
 OPT     ?= -O2
 CFLAGS  ?= $(CSTD) $(WARN) $(OPT) $(HARDEN)
 CFLAGS  += -Iinclude -Ithird_party/cjson -D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE
-# The Chrome Web Store copy's extension ID, so its native host accepts it.
-KAI_STORE_ID ?=
-ifneq ($(KAI_STORE_ID),)
-CFLAGS  += -DKAI_STORE_EXTENSION_ID='"$(KAI_STORE_ID)"'
-endif
 # libcurl (gateway) and pthreads. On macOS link Apple's libcurl from the SDK
 # explicitly, so a Homebrew/static libcurl in /usr/local can't shadow it.
 ifeq ($(shell uname -s),Darwin)
@@ -28,7 +23,7 @@ endif
 
 CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
        src/net.c src/storage.c src/storage_prof.c src/grant.c src/approval_store.c src/proc.c src/shell.c src/gateway.c src/session.c src/agent_rules.c third_party/cjson/cJSON.c
-APP  = src/main.c src/hooks.c src/install.c src/manage.c src/browser.c src/native.c src/report.c src/health.c src/storaged.c src/grant_cli.c src/status.c src/demo.c
+APP  = src/main.c src/hooks.c src/install.c src/manage.c src/report.c src/health.c src/storaged.c src/grant_cli.c src/status.c src/demo.c
 
 OBJ      = $(CORE:.c=.o) $(APP:.c=.o)
 COREOBJ  = $(CORE:.c=.o)
@@ -50,6 +45,16 @@ kai: $(OBJ)
 libkai.a: $(COREOBJ)
 	$(AR) rcs $@ $(COREOBJ)
 
+# Traceable build: the commit (with -dirty for uncommitted changes) goes into
+# `kai version` and `kai status --json`. Rewritten only when it changes.
+src/kai_commit.h: FORCE
+	@c=$$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown); \
+	 git diff --quiet HEAD -- 2>/dev/null || c="$$c-dirty"; \
+	 l="#define KAI_COMMIT \"$$c\""; \
+	 [ -f $@ ] && [ "$$(cat $@)" = "$$l" ] || echo "$$l" > $@
+FORCE:
+src/main.o src/manage.o: src/kai_commit.h
+
 %.o: %.c include/kai.h src/internal.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -69,7 +74,7 @@ STORAGE_TEST_SRC = $(CORE) $(filter-out src/main.c,$(APP))
 # The test-only binary: a dev build (honours KAI_HOME / KAI_POLICY) with the
 # policy seam. Built before every suite that runs it: the storage suite drives
 # it, and on a clean checkout (CI) it didn't exist yet when that suite ran.
-tests/cli/kai-test: $(CORE) $(APP) include/kai.h src/internal.h
+tests/cli/kai-test: $(CORE) $(APP) include/kai.h src/internal.h src/kai_commit.h
 	$(CC) $(CFLAGS) -DKAI_TEST_DIRECT_POLICY -o tests/cli/kai-test $(CORE) $(APP) $(LDLIBS)
 
 test: kai tests/cli/kai-test
@@ -81,6 +86,7 @@ test: kai tests/cli/kai-test
 	sh tests/release/run_postinstall_tests.sh
 	sh tests/app/run_app_tests.sh
 	sh tests/release/run_release_env_tests.sh
+	sh tests/release/run_sign_tests.sh
 	# Suites that SET UP policy via `kai policy ...` use a throwaway binary built
 	# with the test seam (KAI_TEST_DIRECT_POLICY): the suites run inside the
 	# dev's agent tree and set loosening switches, both of which the production
@@ -91,10 +97,6 @@ test: kai tests/cli/kai-test
 	sh tests/cli/run_cli_tests.sh tests/cli/kai-test
 	sh tests/gateway/run_gateway_tests.sh tests/cli/kai-test
 	sh tests/gateway/run_tls_tests.sh tests/cli/kai-test
-	@# browser + escape suites write agent hook settings / native-host manifests:
-	@# inside an agent with Files protection on, skip them (never fail).
-	@if sh tests/hook_writes_ok.sh; then sh tests/browser/run_native_tests.sh tests/cli/kai-test; \
-	 else echo "browser tests: skipped - needs a non-agent shell (Files protection blocks agent hook settings)"; fi
 	python3 -I tests/corpus/run_corpus.py ./kai
 	python3 -I tests/coverage/run_coverage.py ./kai
 	@if sh tests/hook_writes_ok.sh; then python3 -I tests/escape/run_escape.py ./kai; \
@@ -106,10 +108,6 @@ escape: kai
 	python3 -I tests/escape/run_escape.py ./kai --markdown docs/ESCAPES.md --validation docs/SECURITY-VALIDATION.md
 
 validation: escape
-
-# Chrome Web Store upload (no "key", no local test page): build/kai-chrome-<version>.zip
-chrome-zip:
-	python3 -I scripts/package-chrome.py
 
 # macOS app (menu bar + network system extension), via XcodeGen + Xcode.
 #   make app                  ad-hoc signed; menu bar works, the network wall
@@ -176,10 +174,6 @@ install-app:
 install: all
 	install -d $(DESTDIR)$(PREFIX)/bin
 	install -m 0755 kai $(DESTDIR)$(PREFIX)/bin/kai
-	install -d $(DESTDIR)$(PREFIX)/share/kai/browser/icons
-	install -m 0644 integrations/browser/*.js integrations/browser/*.json \
-	  integrations/browser/popup.html $(DESTDIR)$(PREFIX)/share/kai/browser/
-	install -m 0644 integrations/browser/icons/*.png $(DESTDIR)$(PREFIX)/share/kai/browser/icons/
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/kai
@@ -190,7 +184,7 @@ clean:
 
 # A release kai: ignores KAI_HOME / KAI_POLICY. Built from the sources into its
 # own file, so dev objects (built without the flag) are never mixed in.
-kai-release:
+kai-release: src/kai_commit.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -DKAI_RELEASE -o build/kai-release $(CORE) $(APP) $(LDLIBS)
 
@@ -198,7 +192,7 @@ kai-release:
 # and a release build. Built independently of the host-native objects above:
 # compiling the sources in one invocation gives both slices the same macOS 13
 # deployment target and never reuses stale single-arch .o files.
-build/kai-universal: $(CORE) $(APP) include/kai.h src/internal.h
+build/kai-universal: $(CORE) $(APP) include/kai.h src/internal.h src/kai_commit.h
 	mkdir -p build
 	$(CC) $(CFLAGS) -DKAI_RELEASE -DKAI_PRODUCT_BUILD=1 -arch x86_64 -arch arm64 \
 	  -mmacosx-version-min=13.0 -o $@ $(CORE) $(APP) $(LDLIBS)
@@ -206,4 +200,14 @@ build/kai-universal: $(CORE) $(APP) include/kai.h src/internal.h
 
 kai-universal: build/kai-universal
 
-.PHONY: kai-universal kai-release all asan fuzz test escape validation chrome-zip app app-dev app-storage try-app-storage try-app install-app install uninstall clean
+# Step 7: the release package (Kai.app + network extension + CLI), Developer ID
+# signed, notarized and stapled; fails on any check. Needs the variables at the
+# top of scripts/release/build-preview-pkg.sh. `make release-test` builds the
+# unsigned test package.
+KAI_VERSION_STR = $(shell sed -n 's/^\#define KAI_VERSION "\(.*\)"/\1/p' include/kai.h)
+release:
+	sh scripts/release/build-preview-pkg.sh $(KAI_VERSION_STR)
+release-test:
+	sh scripts/release/build-preview-pkg.sh $(KAI_VERSION_STR) --test
+
+.PHONY: FORCE kai-universal kai-release release release-test all asan fuzz test escape validation app app-dev app-storage try-app-storage try-app install-app install uninstall clean

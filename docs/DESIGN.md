@@ -1,5 +1,7 @@
 # Kai MVP — Design (for review before we build)
 
+> **Build order superseded by [`docs/security/RECONCILED-PLAN.md`](security/RECONCILED-PLAN.md)** (Security Plan v1.0, frozen Oct 31, 2026). This document keeps its specs and tests; where it conflicts with the spec, the spec wins.
+
 This is the original MVP design, kept for its reasoning. Where it differs from today, the note below wins.
 
 > **Current state (v0.2.0-preview.1, 2026-10-29).**

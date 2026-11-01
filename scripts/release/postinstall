@@ -1,9 +1,11 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
 #
-# Kai Preview postinstall (runs as root after the package installs). Registers
-# kai's native host with the browsers of the user signed in at the console, so
-# the Chrome Web Store extension reaches kai without a Terminal step.
+# Kai Preview postinstall (runs as root after the package installs), for the
+# user signed in at the console: removes an earlier Kai's Chrome helper (Chrome
+# support was removed in 0.2.0-preview.1, and an upgrade must leave no browser
+# manifest pointing at a helper that no longer answers), then refreshes the
+# hooks of agents that already have Kai's.
 #
 # Only the console user: run as that user (launchctl asuser + sudo -u, with
 # that user's own HOME), never as root and never in root's home. Nobody signed
@@ -18,7 +20,7 @@ if [ "${KAI_CONSOLE_USER+set}" = set ]; then user="$KAI_CONSOLE_USER"
 else user=$(stat -f %Su /dev/console 2>/dev/null); fi
 case "$user" in
     ""|root|loginwindow|_mbsetupuser)
-        log "nobody is signed in; skipped registering kai with the browser (run later: kai install chrome)"
+        log "nobody is signed in; skipped the per-user steps (later: kai uninstall chrome; kai install)"
         exit 0 ;;
 esac
 uid=$(id -u "$user" 2>/dev/null) || { log "no such user '$user'; skipped"; exit 0; }
@@ -33,8 +35,8 @@ esac
 
 as_user() { launchctl asuser "$uid" sudo -u "$user" -H env HOME="$home" "$KAI_BIN" "$@" >/dev/null 2>&1; }
 
-if as_user install chrome; then log "registered kai with $user's browsers"
-else log "kai install chrome failed for $user (run it later: kai install chrome)"; fi
+if as_user uninstall chrome; then log "removed any earlier Kai Chrome helper for $user"
+else log "couldn't remove an earlier Kai Chrome helper for $user (run later: kai uninstall chrome)"; fi
 
 # Refresh the hooks of every agent that already has Kai's: this version's
 # matchers and messages (e.g. Claude Code's web fetch check). kai install keeps

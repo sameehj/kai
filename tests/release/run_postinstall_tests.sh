@@ -27,10 +27,11 @@ out=$(PATH="$TMP/bin:$PATH" KAI_CONSOLE_USER="$me" sh "$PI"); rc=$?
 call=$(cat "$TMP/calls" 2>/dev/null)
 [ "$rc" = 0 ] && pass "exits 0" || fail "exit $rc"
 case "$call" in
-    *"asuser $myuid sudo -u $me -H env HOME=$myhome /usr/local/bin/kai install chrome"*) pass "runs kai install chrome as the console user, with that user's HOME" ;;
+    *"asuser $myuid sudo -u $me -H env HOME=$myhome /usr/local/bin/kai uninstall chrome"*) pass "removes an earlier Kai's Chrome helper as the console user, with that user's HOME" ;;
     *) fail "unexpected call: $call" ;;
 esac
-case "$out" in *"registered kai with $me"*) pass "notes it in the installer log" ;; *) fail "no note: $out" ;; esac
+case "$out" in *"removed any earlier Kai Chrome helper for $me"*) pass "notes it in the installer log" ;; *) fail "no note: $out" ;; esac
+case "$call" in *"/kai install chrome"*) fail "still registers a Chrome helper: $call" ;; *) pass "never registers a Chrome helper" ;; esac
 
 for who in root loginwindow ""; do
     rm -f "$TMP/calls"

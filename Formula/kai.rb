@@ -19,10 +19,6 @@ class Kai < Formula
     system "make", "kai"
     bin.install "kai"
     pkgshare.install "policy/default.policy"
-    # Browser extension: bin/kai finds it at ../share/kai/browser
-    (pkgshare/"browser").install Dir["integrations/browser/*.{js,json}"],
-                                 "integrations/browser/popup.html",
-                                 "integrations/browser/icons"
   end
 
   def caveats

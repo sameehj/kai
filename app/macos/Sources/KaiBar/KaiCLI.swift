@@ -14,7 +14,6 @@ struct KaiStatus: Decodable, Equatable {
         let installed: Bool
         let detected: Bool
         let config: String
-        var extensionLoaded: Bool? = nil // chrome only
         /// Live check (kai status runs the installed hook): nil from older kai CLIs.
         var working: Bool? = nil
         var problem: String? = nil
@@ -56,7 +55,6 @@ struct KaiStatus: Decodable, Equatable {
     let claude: Agent
     let cursor: Agent
     let codex: Agent?
-    let chrome: Agent?
     let audit: Audit
     var walls: Walls? = nil
 }

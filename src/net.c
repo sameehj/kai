@@ -164,6 +164,14 @@ int kai_host_is_telemetry(const char *host) {
     return 0;
 }
 
+int kai_pause_verdict(int grant_allows, int kept_blocked, int pending_exists, double waited, double timeout) {
+    if (waited < 0.25) return -1;            /* the pause verdict may not be in effect yet */
+    if (kept_blocked) return 0;
+    if (grant_allows) return 1;
+    if (!pending_exists) return 0;           /* the card went away without a grant */
+    return waited >= timeout ? 0 : -1;
+}
+
 int kai_egress_endpoint_allowed(const kai_policy *p, const char *host, const char *ip, int port,
                                 char *why, size_t whylen) {
     if (why && whylen) why[0] = '\0';
@@ -173,6 +181,11 @@ int kai_egress_endpoint_allowed(const kai_policy *p, const char *host, const cha
     if (have_ip && is_loopback(addr, family)) {
         if (why) kai_strlcpy(why, "this Mac (loopback)", whylen);
         return 1;
+    }
+    /* G5: running without a policy, known hosts only on web ports */
+    if (p->failsafe && port != 443 && port != 80) {
+        if (why) kai_strlcpy(why, "running without a policy: only web ports", whylen);
+        return 0;
     }
     for (int i = 0; i < p->negress; i++) {
         egress_entry e;

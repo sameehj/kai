@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial -->
 # Kai Walls — Phase 0 Audit
 
+> **Build order superseded by [`docs/security/RECONCILED-PLAN.md`](../security/RECONCILED-PLAN.md)** (Security Plan v1.0, frozen Oct 31, 2026). This document keeps its specs and tests; where it conflicts with the spec, the spec wins.
+
 Oct 23, 2026. Read-only; **no behaviour was changed and no extension touched.**
 Evidence is `file:line` into the current tree (v `0.1.0`, storage extension v15
 staged). Per the action plan Rules, findings are labelled **Live** (observed on

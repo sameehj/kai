@@ -53,6 +53,11 @@ struct DecisionSheet: View {
                      + "see what is sent over the encrypted connection. Kai doesn't know why this was requested.")
                     .font(.system(size: 11)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             }
+            // Step 6 / NEVER-RERUN card: the triggering command (a redacted excerpt).
+            if !event.isNetwork, let cmd = event.target, !cmd.isEmpty {
+                Text("While running: \(cmd)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.soft)
+                    .lineLimit(3).truncationMode(.middle).textSelection(.enabled)
+            }
             if let d = done { result(d) } else { options }
             if showWhy {
                 VStack(alignment: .leading, spacing: 2) {
@@ -89,7 +94,7 @@ struct DecisionSheet: View {
             let signed = event.identity != nil
             // Action-only labels (the title names the agent and the site);
             // stacked full width when they don't fit, never truncated.
-            CardActions(actions: (sessionLive ? [CardAction(title: "Allow this session", info: InfoText.thisSession) {
+            CardActions(actions: (sessionLive ? [CardAction(title: "Allow for this task", info: InfoText.thisSession) {
                                       grants.allowForSession(event); done = .session }] : [])
                                  + (signed ? [CardAction(title: "Allow 1 hour", info: InfoText.oneHour) {
                                       grants.allowForHour(grants.request(from: event)); done = .hour(Date().addingTimeInterval(3600)) },
@@ -258,84 +263,6 @@ struct AgentReachView: View {
             HStack(spacing: 6) { trailing() }.fixedSize()   // buttons keep their whole label; the text wraps
         }
         .padding(8).background(Theme.surface, in: RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-// MARK: - Spec §6: chats
-
-/// AI chat sites the browser extension reports (site only, never a URL).
-struct ChatSite: Identifiable {
-    let site: String
-    let openTabs: Int
-    let redactions: Int
-    let overrides: Int
-    let last: Date
-    var id: String { site }
-    var redactedToday: Int { Int(kai_daily_site(site)) }
-
-    /// The extension Kai ships vs the version Chrome last reported.
-    static var extensionOutdated: Bool {
-        guard let url = Bundle.main.url(forResource: "manifest", withExtension: "json", subdirectory: "browser"),
-              let d = try? Data(contentsOf: url),
-              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-              let want = o["version"] as? String else { return false }
-        var buf = [CChar](repeating: 0, count: 32)
-        let have = kai_chat_extension_version(&buf, buf.count, nil) == 1 ? String(cString: buf) : ""
-        return have != want
-    }
-
-    static func load() -> [ChatSite] {
-        var ptr: UnsafeMutablePointer<kai_chat>? = nil
-        var n: Int32 = 0
-        guard kai_chat_load(&ptr, &n) == 0, let ptr else { return [] }
-        defer { free(ptr) }
-        let halfDay = Date().addingTimeInterval(-12 * 3600)
-        return (0..<Int(n)).map { i -> ChatSite in
-            var c = ptr[i]
-            let site = withUnsafePointer(to: &c.site) { $0.withMemoryRebound(to: CChar.self, capacity: 256) { String(cString: $0) } }
-            return ChatSite(site: site, openTabs: Int(c.open_tabs), redactions: Int(c.redactions),
-                            overrides: Int(c.overrides), last: Date(timeIntervalSince1970: TimeInterval(c.last_utc)))
-        }
-        .map { s in s.last < halfDay ? ChatSite(site: s.site, openTabs: 0, redactions: s.redactions,
-                                                 overrides: s.overrides, last: s.last) : s }
-        .sorted { $0.site < $1.site }
-    }
-    static var keptOutToday: Int { Int(kai_daily_count(nil, CChar(UInt8(ascii: "c")))) }
-}
-
-struct ChatsDetail: View {
-    @EnvironmentObject var model: AppModel
-    private var sites: [ChatSite] { ChatSite.load() }
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 4) { Text("Chats").font(.title3).fontWeight(.semibold); InfoButton(text: InfoText.chats) }
-                if model.chromeNeedsExtension || !model.agentInfo(.chrome).installed || ChatSite.extensionOutdated {
-                    Button("Chats: reload the Kai extension in Chrome") { model.openExtensionSetup() }
-                        .buttonStyle(.plain).foregroundStyle(Theme.amber)
-                }
-                HStack(spacing: 4) {
-                    Text("AI chat sites the Kai extension reports. No conversation titles are kept.")
-                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
-                }
-                if sites.isEmpty { Text("No chat sites seen yet.").font(.system(size: 12)).foregroundStyle(Theme.muted) }
-                ForEach(sites) { s in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(s.site).font(.system(size: 13))
-                            Text("\(s.openTabs > 0 ? "\(s.openTabs) tab\(s.openTabs == 1 ? "" : "s") open" : "closed") · "
-                                 + "\(s.redactedToday) redacted before sending today")
-                                .font(.system(size: 11)).foregroundStyle(Theme.muted)
-                        }
-                        Spacer()
-                    }
-                    .padding(8).background(Theme.surface, in: RoundedRectangle(cornerRadius: 8))
-                }
-                Button("Extension settings ›") { model.openExtensionSetup() }.buttonStyle(.plain).foregroundStyle(Theme.lime)
-            }
-            .padding(16)
-        }
     }
 }
 

@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial -->
 # KAI — Implementation Status (whole-codebase evaluation)
 
+> **Build order superseded by [`docs/security/RECONCILED-PLAN.md`](security/RECONCILED-PLAN.md)** (Security Plan v1.0, frozen Oct 31, 2026). This document keeps its specs and tests; where it conflicts with the spec, the spec wins.
+
 A grounded, honest map of what Kai actually does today: what is implemented and
 verified, what is coded but unproven at runtime, what is partial, and what is
 missing. Produced from a read-only audit of the source (v `0.1.0`); every claim
@@ -8,6 +10,9 @@ is tied to code. **A feature existing in code is not a security guarantee** —
 the status column says how far each one is actually established.
 
 ## Update — v0.2.0-preview.1 (`fix/ux-review-phase-a`, 2026-10-29)
+
+> *Superseded (order of work): see `docs/security/RECONCILED-PLAN.md`. Kept as a record.*
+
 
 > **Current state (v0.2.0-preview.1, 2026-10-29).**
 > - **Preview 1** is the `kai` command, the checks inside Claude Code, Codex and Cursor (hooks), and the Chrome extension. It has **no protected writer**: Kai's policy and terminal rules (`kai allow-…`) are files a program with your permissions can edit; Kai notices some outside policy changes (fingerprint), never all.
@@ -18,6 +23,9 @@ the status column says how far each one is actually established.
 
 
 ## Update — PR #2 (`fix/ux-review-phase-a`, 2026-10-28)
+
+> *Superseded (order of work): see `docs/security/RECONCILED-PLAN.md`. Kept as a record.*
+
 
 Sections below predate this branch where they say the storage wall or the
 approval UI are unbuilt or not live; this is what changed (details in the PR).

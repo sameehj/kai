@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define KAI_VERSION "0.2.0-preview.1"
+#define KAI_VERSION "0.2.0-preview.2"
 /* MAJOR.MINOR.PATCH[-preview.N]; a pre-release is older than its release. */
 int kai_version_cmp(const char *a, const char *b);
 
@@ -62,6 +62,15 @@ int kai_policy_integrity(char *detail, size_t n);
 /* Directives this version doesn't know: count, and the first one's name. */
 int kai_policy_unknown(const kai_policy *p, char *first, size_t n);
 kai_policy *kai_policy_from_string(const char *text, char *err, size_t errlen);
+/* NEVER-RERUN fix 4: an agent's TCP connection that needs a decision is held
+ * (paused), not dropped, while the card waits. 1 resume (allow), 0 drop,
+ * -1 keep waiting. Keep blocked wins; a dismissed card or the timeout drops;
+ * never resumed within 250 ms of pausing (Apple's pause/resume race). */
+#define KAI_PAUSE_TIMEOUT 120.0
+int kai_pause_verdict(int grant_allows, int kept_blocked, int pending_exists, double waited, double timeout);
+/* G5: built-in defaults in Protect, for a wall with no loadable policy. */
+kai_policy *kai_policy_builtin_failsafe(void);
+int kai_policy_is_failsafe(const kai_policy *p);
 void kai_policy_free(kai_policy *p);
 const char *kai_policy_source(const kai_policy *p); /* file path or "built-in" */
 
@@ -188,9 +197,8 @@ int kai_policy_agent_count(const kai_policy *p);
 /* Agent product kind, from the shipped catalog: how Kai finds its sessions. */
 typedef enum {
     KAI_AGENT_CLI = 0,          /* one root process per terminal (Aider, Codex, …) */
-    KAI_AGENT_IDE = 1,          /* an app hosting many chats/windows (Cursor, Zed, …) */
+    KAI_AGENT_IDE = 1,          /* an app hosting many windows (Cursor, Zed, …) */
     KAI_AGENT_IDE_EXTENSION = 2,/* an agent inside an editor extension (Cline, Copilot) */
-    KAI_AGENT_BROWSER = 3       /* a browser extension (Chrome AI chats) */
 } kai_agent_kind;
 int kai_agent_product_kind(const char *name);  /* kai_agent_kind; CLI if unknown */
 int kai_agent_catalog_verified(const char *name); /* 1 only if checked vs an install */
@@ -374,7 +382,7 @@ const char *kai_enforcement_from_levels(int files, int internet);
 #define KAI_WORKING_WINDOW 900
 int kai_session_working(long long last_active, long long now);
 /* A tool call in progress (allowed PreToolUse seen, PostToolUse not yet).
- * since 0 clears. kai_session_busy: in progress for under 6 hours. */
+ * since 0 clears. kai_session_busy: in progress for under 4 hours. */
 int kai_session_inflight_set(const char *sid, long long since);
 int kai_session_busy(const char *sid, long long now);
 const char *kai_session_activity_dir(void);
@@ -388,6 +396,8 @@ int kai_sessions_prune_delegated(void);
  * "Files protection is off", ...). files/internet: 0 off, 1 watch, 2 protect;
  * internet -1 = not verified (left out of the headline); agents < 0 = unknown.
  * Writes into out and returns it. */
+/* files = KAI_FILES_NOT_INCLUDED: this build ships no Files wall (Step 6). */
+#define KAI_FILES_NOT_INCLUDED (-2)
 const char *kai_status_sentence(int files, int internet, int agents, int paused,
                                 char *out, size_t n);
 /* The Kai app group (Team-ID-prefixed; matches the entitlements). */
@@ -441,24 +451,6 @@ int kai_discovery_record(const char *exe, const char *host);
 int kai_discovery_load(kai_discovery **out, int *n);   /* caller frees *out */
 void kai_pid_exe(int pid, char *out, size_t n);        /* a pid's executable path */
 
-/* ---- AI chats (item 3) ----
- * Browser AI chats (claude.ai, chatgpt.com, gemini, …) are not CLI agents and
- * the walls don't apply to them; Kai still SHOWS them so the user sees where AI
- * is used. The data comes only from the Kai browser extension over native
- * messaging (src/native.c) — the network wall stays agent-only and never
- * records a non-agent flow. Site only: no full URL, no chat text is stored.
- * Records live under <home>/chats, keyed by site. Visibility only. */
-typedef struct {
-    char site[256];      /* site only, e.g. "claude.ai" — never a full URL      */
-    long long last_utc;  /* last time the extension reported this site          */
-    int open_tabs;       /* tabs currently open on this site                    */
-    int redactions;      /* redactions Kai applied before sending, on this site */
-    int overrides;       /* times the user chose to send anyway                 */
-} kai_chat;
-int kai_host_is_ai_chat(const char *site);     /* claude.ai/chatgpt.com/gemini/… */
-/* Record/update the browser extension's status for one chat site. */
-int kai_chat_record(const char *site, int open_tabs, int redactions, int overrides);
-int kai_chat_load(kai_chat **out, int *n);     /* caller frees *out */
 
 /* Create or update a session record (idempotent on id). Returns 0 on success.
  * Called by Kai components only; the control store keeps agents out. */
@@ -625,6 +617,11 @@ int kai_host_is_telemetry(const char *host);
 /* Hosts in one agent's own profile (e.g. Cursor's sign-in), allowed for that
  * agent only. Each covers its subdomains. */
 int kai_agent_profile_allows(const char *agent, const char *host);
+/* Tool profiles: git/gh -> GitHub's hosts, npm -> registry.npmjs.org, pip ->
+ * PyPI, for those tools installed in system or package-manager folders. 1 =
+ * allowed without a card. kai_pid_tool_allows reads the process. */
+int kai_tool_profile_allows(const char *exe, const char *const *argv, int argc, const char *host);
+int kai_pid_tool_allows(int pid, const char *host);
 /* Spec v2.1 B.3: what a host is, in plain words, and its group, or NULL.
  * Explanation only: it never allows anything. */
 const char *kai_host_describe(const char *host, const char **group);
@@ -708,11 +705,6 @@ int kai_codex_analytics_off_at(const char *path, int set);
 /* Session topic from the first prompt: the first real sentence, without
  * pasted-content placeholders or markup; "" if none. */
 void kai_topic_clean(const char *raw, char *out, size_t n);
-/* Chats: today's redactions/holds for a site; the extension's reported version. */
-int kai_daily_site(const char *site);
-int kai_daily_site_in(const char *log, const char *site);
-int kai_chat_record_extension(const char *version);
-int kai_chat_extension_version(char *out, size_t n, long long *last);
 /* The verified code-signing identity of a running process: "<signing id>
  * (<team>)", or "<signing id> (Apple)" for Apple's own. 1 when the signature
  * is valid (anchored to Apple), else 0 and out = "". */

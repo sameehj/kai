@@ -21,6 +21,12 @@ has "status is json with version" "$out" '"version"'
 has "status: built-in policy before init" "$out" '"source":	"built-in"'
 has "status: claude not installed" "$out" '"installed":	false'
 
+echo "== traceable build (Security Plan v1.0 P0) =="
+head=$(git -C "$(dirname "$KAI")/../.." rev-parse --short=12 HEAD 2>/dev/null)
+v=$("$KAI" version)
+case "$v" in *"commit $head"*) pass "kai version names the commit it was built from ($head)" ;; *) fail "kai version: $v (HEAD $head)" ;; esac
+has "kai status --json carries the commit" "$("$KAI" status --json)" "\"commit\":	\"$head"
+
 echo "== status (measured, A2) =="
 st=$("$KAI" status)
 has "status: agents section" "$st" "Agents"
@@ -120,7 +126,7 @@ has "status opens with the contract" "$o" "It is an extra safety layer, not isol
 has "status: a working hook reads Checking" "$o" "Claude Code  Checking"
 has "status: each item separately" "$o" "Installed: yes · Configured: yes · Trusted: not needed · Self-test:"
 has "status: live verification never, with how" "$o" "Live verification: never. Run kai demo --live"
-has "status: OS enforcement not in Preview 1" "$o" "Not included in Preview 1"
+has "status: Files is not included in this release" "$o" "Files: not included in this release"
 hasnt "status never says Protected" "$o" "Protected"
 python3 -I -c 'import json,sys; p=sys.argv[1]; o=json.load(open(p)); o["disableAllHooks"]=True; json.dump(o,open(p,"w"))' "$D/.claude/settings.json"
 o=$(dk status)
@@ -176,17 +182,73 @@ hasnt "4th: not repeated" "$r4" "$note"
 r5=$(printf '%s' "$rep" | sed 's/rep-1/rep-2/' | KAI_HOME="$RH/.kai" KAI_NO_APP=1 "$KAI" hook claude)
 hasnt "another session counts on its own" "$r5" "$note"
 
-echo "== Chrome extension version (release batch 10) =="
-EH="$TMP/ext"; mkdir -p "$EH/.kai"
-python3 -I - "$KAI" "$EH/.kai" <<'PY'
-import json, os, struct, subprocess, sys
-kai, home = sys.argv[1], sys.argv[2]
-def frame(o):
-    b = json.dumps(o).encode(); return struct.pack("=I", len(b)) + b
-m = frame({"type": "status", "version": "0.2.1", "sites": [{"site": "claude.ai", "open_tabs": 2, "redactions": 0, "overrides": 0}]})
-subprocess.run([kai, "chrome-extension://x/"], input=m, capture_output=True, env=dict(os.environ, KAI_HOME=home), timeout=20)
-PY
-has "the extension's version is recorded from its status report" "$(cat "$EH/.kai/chats/_extension.json" 2>/dev/null)" '"version":"0.2.1"'
+echo "== G4 letter case, G14 folder rename (Security Plan v1.0 P0) =="
+GH="$TMP/g4"; mkdir -p "$GH/.ssh" "$GH/.aws" "$GH/.config/gcloud" "$GH/.claude" "$GH/proj/src" "$GH/.kai"
+echo fake > "$GH/.ssh/id_rsa"
+gp() {   # tool, json input -> DENY/allow
+    o=$(printf '{"hook_event_name":"PreToolUse","tool_name":"%s","session_id":"g4","tool_input":%s,"cwd":"%s/proj"}' "$1" "$2" "$GH" \
+        | HOME="$GH" KAI_HOME="$GH/.kai" KAI_NO_APP=1 "$KAI" hook claude)
+    case "$o" in *'"deny"'*) echo DENY ;; *) echo allow ;; esac
+}
+gb() { gp Bash '{"command":"'"$1"'"}'; }
+[ "$(gp Read '{"file_path":"'"$GH"'/.SSH/ID_RSA"}')" = DENY ] && pass "G4: Read ~/.SSH/ID_RSA is stopped (APFS is case-insensitive)" || fail "G4: Read ~/.SSH/ID_RSA allowed"
+[ "$(gp Write '{"file_path":"'"$GH"'/.SSH/authorized_keys","content":"x"}')" = DENY ] && pass "G4: Write ~/.SSH/authorized_keys is stopped" || fail "G4: Write ~/.SSH/authorized_keys allowed"
+[ "$(gb "cat $GH/.AWS/credentials")" = DENY ] && pass "G4: cat ~/.AWS/credentials is stopped" || fail "G4: cat ~/.AWS/credentials allowed"
+[ "$(gp Write '{"file_path":"'"$GH"'/.Claude/Settings.json","content":"{}"}')" = DENY ] && pass "G4: Write ~/.Claude/Settings.json (hook config) is stopped" || fail "G4: hook config case variant allowed"
+[ "$(gp Write '{"file_path":"'"$GH"'/Library/launchagents/x.plist","content":"x"}')" = DENY ] && pass "G4: a LaunchAgent written as library/launchagents is stopped" || fail "G4: persistence case variant allowed"
+[ "$(gb "mv $GH/.SSH $GH/x")" = DENY ] && pass "G4+G14: mv ~/.SSH ~/x is stopped" || fail "G4+G14: mv ~/.SSH allowed"
+[ "$(gb "cd $GH && mv .ssh x")" = DENY ] && pass "G14: cd ~ && mv .ssh x (relative to the cd) is stopped" || fail "G14: cd-relative rename allowed"
+[ "$(gb "cd $GH; tar czf /tmp/a.tgz .ssh")" = DENY ] && pass "G14: cd ~; tar .ssh is stopped" || fail "G14: cd-relative tar allowed"
+[ "$(gb "mv $GH/.config $GH/c")" = DENY ] && pass "G14: renaming a folder that holds a protected one (~/.config) is stopped" || fail "G14: ancestor rename allowed"
+[ "$(gb "cp -r $GH/.config $GH/c")" = DENY ] && pass "G14: copying it recursively is stopped" || fail "G14: ancestor copy allowed"
+[ "$(gb "tar czf /tmp/c.tgz $GH/.config")" = DENY ] && pass "G14: archiving it is stopped" || fail "G14: ancestor archive allowed"
+[ "$(gb "rsync -a $GH/.config/ /tmp/c")" = DENY ] && pass "G14: rsync of it is stopped" || fail "G14: ancestor rsync allowed"
+[ "$(gb "mv $GH/.claude $GH/old")" = DENY ] && pass "G14: moving ~/.claude (holds the hook config) is stopped" || fail "G14: hook-config folder move allowed"
+[ "$(gb "rm -rf $GH/.claude")" = DENY ] && pass "G14: deleting it is stopped" || fail "G14: hook-config folder delete allowed"
+[ "$(gb "mv $GH/proj/src $GH/proj/lib")" = allow ] && pass "an ordinary folder rename goes through" || fail "ordinary mv stopped"
+[ "$(gb "cp -r src lib")" = allow ] && pass "an ordinary recursive copy goes through" || fail "ordinary cp -r stopped"
+[ "$(gb "tar czf out.tgz src")" = allow ] && pass "an ordinary archive goes through" || fail "ordinary tar stopped"
+[ "$(gb "cp $GH/.config/notes.txt /tmp/")" = allow ] && pass "copying one ordinary file out of ~/.config goes through" || fail "plain cp of a file in an ancestor stopped"
+[ "$(gb "ls -la $GH")" = allow ] && pass "listing the home folder goes through" || fail "ls ~ stopped"
+[ "$(gb "find $GH/proj -name '*.txt'")" = allow ] && pass "find in a project goes through" || fail "find stopped"
+
+echo "== tell the agent why (NEVER-RERUN fix 5) =="
+WH="$TMP/why"; mkdir -p "$WH/.claude" "$WH/.codex" "$WH/.kai" "$WH/proj"; printf 'A=1\n' > "$WH/proj/.env"
+wy() { printf '%s' "$2" | HOME="$WH" KAI_HOME="$WH/.kai" KAI_NO_APP=1 "$KAI" hook "$1"; }
+o=$(wy claude '{"hook_event_name":"PreToolUse","tool_name":"Read","session_id":"w","tool_input":{"file_path":"'"$WH"'/proj/.env"},"cwd":"'"$WH"'/proj"}')
+has "Claude Code deny tells the agent not to work around it" "$o" "Don't retry another way; ask the user."
+o=$(wy codex '{"hook_event_name":"PreToolUse","tool_name":"shell","session_id":"w","tool_input":{"command":["bash","-lc","cat .env"]},"cwd":"'"$WH"'/proj"}')
+has "Codex deny too" "$o" "Don't retry another way; ask the user."
+o=$(wy cursor '{"hook_event_name":"beforeShellExecution","command":"cat '"$WH"'/proj/.env","workspace_roots":["'"$WH"'/proj"]}')
+has "Cursor's agent_message too" "$o" "Don't retry another way; ask the user."
+printf '# my own notes\nkeep this line\n' > "$WH/.claude/CLAUDE.md"
+HOME="$WH" KAI_HOME="$WH/.kai" "$KAI" install claude >/dev/null 2>&1
+HOME="$WH" KAI_HOME="$WH/.kai" "$KAI" install claude >/dev/null 2>&1
+c=$(cat "$WH/.claude/CLAUDE.md")
+has "kai install writes Kai's agent instructions into ~/.claude/CLAUDE.md" "$c" "<!-- kai:agent-instructions:start -->"
+has "...saying a Kai denial means ask, not work around" "$c" "don't retry it another way"
+has "...keeping the user's own text" "$c" "keep this line"
+[ "$(grep -c 'kai:agent-instructions:start' "$WH/.claude/CLAUDE.md")" = 1 ] && pass "...once, however often kai install runs" || fail "instructions block duplicated"
+HOME="$WH" KAI_HOME="$WH/.kai" "$KAI" install codex >/dev/null 2>&1
+has "kai install codex writes them into ~/.codex/AGENTS.md" "$(cat "$WH/.codex/AGENTS.md" 2>/dev/null)" "<!-- kai:agent-instructions:start -->"
+HOME="$WH" KAI_HOME="$WH/.kai" "$KAI" uninstall claude >/dev/null 2>&1
+c=$(cat "$WH/.claude/CLAUDE.md")
+hasnt "kai uninstall removes them" "$c" "kai:agent-instructions"
+has "...and leaves the user's text" "$c" "keep this line"
+
+echo "== Chrome support removed (Security Plan v1.0) =="
+CR="$TMP/chrome"; NM="$CR/Library/Application Support/Google/Chrome/NativeMessagingHosts"
+mkdir -p "$NM" "$CR/.kai/browser-extension"
+printf '{"name":"io.github.sameehj.kai","path":"/usr/local/bin/kai"}' > "$NM/io.github.sameehj.kai.json"
+o=$(HOME="$CR" KAI_HOME="$CR/.kai" "$KAI" install chrome 2>&1); rc=$?
+[ "$rc" = 2 ] && has "kai install chrome is refused, and says how to clean up" "$o" "kai uninstall chrome" || fail "install chrome: rc=$rc $o"
+has "kai doctor flags an earlier Kai's Chrome helper" "$(HOME="$CR" KAI_HOME="$CR/.kai" "$KAI" doctor 2>&1)" "an earlier Kai's Chrome helper is still registered"
+HOME="$CR" KAI_HOME="$CR/.kai" "$KAI" uninstall chrome >/dev/null 2>&1
+[ ! -e "$NM/io.github.sameehj.kai.json" ] && [ ! -e "$CR/.kai/browser-extension" ] \
+    && pass "kai uninstall chrome removes the earlier host manifest and extension copy (no dangling manifest)" \
+    || fail "earlier Chrome helper left behind"
+hasnt "...and doctor no longer flags it" "$(HOME="$CR" KAI_HOME="$CR/.kai" "$KAI" doctor 2>&1)" "Chrome helper is still registered"
+hasnt "kai status has no Chats line" "$(HOME="$CR" KAI_HOME="$CR/.kai" KAI_NO_APP=1 "$KAI" status 2>&1)" "Chats"
 
 echo "== screen and app control (release batch 16) =="
 CH="$TMP/capture"; mkdir -p "$CH/.kai"

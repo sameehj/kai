@@ -7,14 +7,13 @@ import UserNotifications
 import KaiCore
 
 enum Agent: String, CaseIterable, Identifiable {
-    case claude, cursor, codex, chrome
+    case claude, cursor, codex
     var id: String { rawValue }
     var title: String {
         switch self {
         case .claude: return "Claude Code"
         case .cursor: return "Cursor"
         case .codex: return "Codex"
-        case .chrome: return "Chats (Chrome)"
         }
     }
 }
@@ -71,7 +70,7 @@ final class AppModel: ObservableObject {
         if infos.contains(where: \.broken) { return .problem }
         if !infos.contains(where: \.installed) { return .off }
         // Only "partial" if an agent that is actually used here is unprotected.
-        let missed = infos.contains { $0.detected && !$0.installed } || chromeNeedsExtension
+        let missed = infos.contains { $0.detected && !$0.installed }
         return missed ? .partial : .protecting
     }
 
@@ -85,7 +84,9 @@ final class AppModel: ObservableObject {
     enum ObservedProtection { case protected, partial, notProtected }
 
     func levels(storageOn: Bool, networkOn: Bool) -> (files: Int32, internet: Int32, paused: Bool) {
-        let files = storageOn ? max(kai_wall_observed_level("storage"), 0) : 0
+        // Step 6: an edition without the Files extension says so, never "Files off".
+        let files: Int32 = !StorageWall.included ? KAI_FILES_NOT_INCLUDED
+                         : storageOn ? max(kai_wall_observed_level("storage"), 0) : 0
         let internet: Int32 = networkOn ? kai_wall_observed_level("network") : 0   // -1 = not verified
         let paused = kai_wall_paused("storage", Int64(Date().timeIntervalSince1970)) != 0
         return (files, internet, paused)
@@ -94,13 +95,21 @@ final class AppModel: ObservableObject {
     /// "Internet: on (not verified)" while the network extension is on but no
     /// verified heartbeat has arrived; nil otherwise.
     func internetUnverifiedNote(networkOn: Bool) -> String? {
-        networkOn && kai_wall_observed_level("network") < 0 ? "Internet: on (not verified)" : nil
+        guard networkOn else { return nil }
+        if kai_wall_observed_level("network") < 0 { return "Internet: on (not verified)" }
+        // G5: the wall couldn't load a policy and runs on built-in defaults (Protect).
+        var buf = [CChar](repeating: 0, count: 16)
+        if kai_heartbeat_field("network", "policy_state", &buf, buf.count) == 1, String(cString: buf) == "builtin" {
+            return "Internet: running without a policy (built-in defaults)"
+        }
+        return nil
     }
 
     func observedProtection(storageOn: Bool, networkOn: Bool) -> ObservedProtection {
         let l = levels(storageOn: storageOn, networkOn: networkOn)
-        if l.files == 2 && l.internet == 2 && !l.paused { return .protected }
-        if l.files == 0 && l.internet == 0 { return .notProtected }
+        let none = l.files == KAI_FILES_NOT_INCLUDED
+        if (l.files == 2 || none) && l.internet == 2 && !l.paused { return .protected }
+        if (l.files == 0 || none) && l.internet == 0 { return .notProtected }
         return .partial
     }
 
@@ -164,29 +173,6 @@ final class AppModel: ObservableObject {
     /// Integrations that are switched on but failed their live check.
     var brokenAgents: [Agent] { Agent.allCases.filter { agentInfo($0).broken } }
 
-    /// Kai is registered with the browser but the extension isn't loaded yet.
-    var chromeNeedsExtension: Bool {
-        let c = agentInfo(.chrome)
-        return c.installed && c.extensionLoaded == false
-    }
-
-    /// Finish the browser setup: copy the extension folder's path, show it in
-    /// Finder and open the browser's extensions page ("Load unpacked").
-    func openExtensionSetup() {
-        let dir = agentInfo(.chrome).config
-        guard !dir.isEmpty else {
-            errorMessage = "Can't find Kai's browser extension folder."
-            return
-        }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(dir, forType: .string)
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: dir)])
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        p.arguments = ["-a", "Google Chrome", "chrome://extensions"]
-        try? p.run()
-    }
-
     func agentInfo(_ a: Agent) -> KaiStatus.Agent {
         let none = KaiStatus.Agent(installed: false, detected: false, config: "")
         guard let s = status else { return none }
@@ -194,7 +180,6 @@ final class AppModel: ObservableObject {
         case .claude: return s.claude
         case .cursor: return s.cursor
         case .codex: return s.codex ?? none // older kai CLIs don't report Codex
-        case .chrome: return s.chrome ?? none
         }
     }
 
@@ -235,7 +220,7 @@ final class AppModel: ObservableObject {
     }
 
     /// After Kai is updated, re-run setup for every agent that's turned on, so
-    /// new protections (hook matchers, the browser extension copy) take effect
+    /// new protections (hook matchers) take effect
     /// without the user flipping switches. Setup is idempotent.
     private var reappliedThisLaunch = false
     private func reapplyIntegrationsIfUpdated(_ s: KaiStatus) async {
@@ -243,18 +228,15 @@ final class AppModel: ObservableObject {
         // reinstall hooks while the user is turning that agent off.
         guard !reappliedThisLaunch && !busy else { return }
         reappliedThisLaunch = true
-        // ...and the bundled Chrome extension's version, so a new extension is
-        // copied (and Chrome told to reload) even when the app version didn't change.
-        var ext = ""
-        if let url = Bundle.main.url(forResource: "manifest", withExtension: "json", subdirectory: "browser"),
-           let d = try? Data(contentsOf: url),
-           let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] { ext = o["version"] as? String ?? "" }
-        let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "") + "/" + s.version + "/" + ext
+        let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "") + "/" + s.version
         let key = "integrationsAppliedFor"
         guard UserDefaults.standard.string(forKey: key) != build else { return }
         busy = true
         defer { busy = false }
         var applied = true
+        // Chrome support was removed: no browser manifest may keep pointing at a
+        // helper that no longer answers (an earlier Kai registered one).
+        _ = await KaiCLI.run(["uninstall", "chrome"])
         for agent in Agent.allCases where agentInfo(agent).installed {
             let result = await KaiCLI.run(["install", agent.rawValue])
             if !result.ok {

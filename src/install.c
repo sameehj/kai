@@ -7,6 +7,7 @@
 #include "cJSON.h"
 #include "internal.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -154,6 +155,77 @@ static void ensure_event(cJSON *hooks, const char *event, const char *matcher,
         cJSON_AddItemToObject(hooks, event, list);
     }
     cJSON_AddItemToArray(list, claude_hook_entry(matcher, exe, fails_closed(event)));
+}
+
+/* NEVER-RERUN fix 5: a short note in each agent's own instructions file, so a
+ * Kai denial the hook can't explain (a script's file open, a dropped
+ * connection) is still read as "ask the user", not "find another way". Kept
+ * between markers: written once, replaced on reinstall, removed on uninstall,
+ * the user's own text untouched. */
+#define AI_START "<!-- kai:agent-instructions:start -->"
+#define AI_END "<!-- kai:agent-instructions:end -->"
+static const char AGENT_INSTRUCTIONS[] =
+    AI_START "\n"
+    "## Kai (added by `kai install`; `kai uninstall` removes it)\n\n"
+    "Kai checks your tool calls on this Mac. A Kai denial starts with \"Kai stopped\", \"Kai can't read its "
+    "rules\" or \"<agent> wants to\", and says why. A connection Kai blocks fails like a network error.\n\n"
+    "When Kai stops something, don't retry it another way (another command, a script, a different path or "
+    "host): tell the user what was stopped and why, and ask them. If the message gives a `kai allow-…` "
+    "command, show it to the user to run in their own terminal; never run it yourself.\n"
+    AI_END "\n";
+
+static char *strip_instructions(const char *text) {
+    const char *a = text ? strstr(text, AI_START) : NULL;
+    const char *b = a ? strstr(a, AI_END) : NULL;
+    if (!a || !b) return text ? strdup(text) : strdup("");
+    b += strlen(AI_END);
+    if (*b == '\n') b++;
+    size_t head = (size_t)(a - text);
+    while (head > 0 && text[head - 1] == '\n' && head > 1 && text[head - 2] == '\n') head--;  /* the blank line we added */
+    char *out = malloc(head + strlen(b) + 1);
+    if (!out) return NULL;
+    memcpy(out, text, head);
+    strcpy(out + head, b);
+    return out;
+}
+
+static void write_instructions(const char *path, int add) {
+    size_t n = 0;
+    char *cur = kai_read_file(path, 1 << 20, &n);
+    if (!cur && !add) return;
+    char *base = strip_instructions(cur ? cur : "");
+    free(cur);
+    if (!base) return;
+    size_t bl = strlen(base);
+    char *tmp = NULL;
+    if (asprintf(&tmp, "%s.kai-tmp.%d", path, (int)getpid()) < 0) { free(base); return; }
+    FILE *f = fopen(tmp, "w");
+    if (f) {
+        fputs(base, f);
+        if (add) {
+            if (bl && base[bl - 1] != '\n') fputc('\n', f);
+            if (bl) fputc('\n', f);
+            fputs(AGENT_INSTRUCTIONS, f);
+        }
+        if (fclose(f) == 0 && (add || bl)) rename(tmp, path);
+        else { unlink(tmp); if (!add && !bl) unlink(path); }
+    }
+    unlink(tmp);
+    free(tmp); free(base);
+}
+
+static void agent_instructions(const char *agent, int add) {
+    char *path = NULL;
+    if (!strcmp(agent, "claude")) path = kai_expand_home("~/.claude/CLAUDE.md");
+    else if (!strcmp(agent, "codex")) {
+        char *h = kai_codex_home();
+        if (h && asprintf(&path, "%s/AGENTS.md", h) < 0) path = NULL;
+        free(h);
+    }
+    if (!path) return;
+    if (add) mkparents(path);
+    write_instructions(path, add);
+    free(path);
 }
 
 static int install_claude(const char *exe) {
@@ -597,19 +669,81 @@ int kai_cmd_install(int argc, char **argv) {
     if (!version_guard()) return 3;
     version_record();
     int rc;
-    if (strcmp(which, "claude") == 0) { if ((rc = install_claude(exe)) == 0) try_it("Claude Code"); return rc; }
+    if (strcmp(which, "claude") == 0) {
+        if ((rc = install_claude(exe)) == 0) { agent_instructions("claude", 1); try_it("Claude Code"); }
+        return rc;
+    }
     if (strcmp(which, "cursor") == 0) { if ((rc = install_cursor(exe)) == 0) try_it("Cursor"); return rc; }
-    if (strcmp(which, "codex") == 0) { if ((rc = install_codex(exe)) == 0) try_it("Codex"); return rc; }
-    if (strcmp(which, "chrome") == 0 || strcmp(which, "browser") == 0) return kai_browser_install(exe);
+    if (strcmp(which, "codex") == 0) {
+        if ((rc = install_codex(exe)) == 0) { agent_instructions("codex", 1); try_it("Codex"); }
+        return rc;
+    }
+    if (strcmp(which, "chrome") == 0 || strcmp(which, "browser") == 0) {
+        fprintf(stderr, "kai install chrome: Kai no longer includes a Chrome extension (removed in 0.2.0-preview.1).\n"
+                        "`kai uninstall chrome` removes one an earlier Kai installed.\n");
+        return 2;
+    }
     if (strcmp(which, "all") == 0 || !*which) {
         int a = install_claude(exe), b = install_cursor(exe);
         int has_codex = codex_present();
         int c = has_codex ? install_codex(exe) : 0;
+        if (!a) agent_instructions("claude", 1);
+        if (has_codex && !c) agent_instructions("codex", 1);
         if (!a && !b && !c) try_it(has_codex ? "Claude Code, Codex and Cursor" : "Claude Code and Cursor");
         return (a || b || c) ? 1 : 0;
     }
-    fprintf(stderr, "kai install: expected claude | cursor | codex | chrome | all\n");
+    fprintf(stderr, "kai install: expected claude | cursor | codex | all\n");
     return 1;
+}
+
+/* Chrome support was removed in 0.2.0-preview.1. An earlier Kai registered a
+ * native-messaging host in each Chromium browser and copied the extension to
+ * <kai home>/browser-extension; an upgrade must leave no manifest pointing at
+ * a program that no longer answers. */
+static const char *const LEGACY_BROWSER_ROOTS[] = {
+#ifdef __APPLE__
+    "~/Library/Application Support/Google/Chrome", "~/Library/Application Support/Google/Chrome Beta",
+    "~/Library/Application Support/BraveSoftware/Brave-Browser", "~/Library/Application Support/Microsoft Edge",
+    "~/Library/Application Support/Chromium", "~/Library/Application Support/Arc/User Data",
+#else
+    "~/.config/google-chrome", "~/.config/google-chrome-beta", "~/.config/BraveSoftware/Brave-Browser",
+    "~/.config/microsoft-edge", "~/.config/chromium",
+#endif
+};
+#define LEGACY_HOST "io.github.sameehj.kai"
+
+static int remove_tree(const char *path);
+
+/* 1 if an earlier Kai's Chrome host is still registered anywhere. */
+int kai_browser_legacy_present(void) {
+    for (size_t i = 0; i < sizeof LEGACY_BROWSER_ROOTS / sizeof LEGACY_BROWSER_ROOTS[0]; i++) {
+        char *root = kai_expand_home(LEGACY_BROWSER_ROOTS[i]);
+        char p[1400];
+        snprintf(p, sizeof p, "%s/NativeMessagingHosts/%s.json", root ? root : "", LEGACY_HOST);
+        free(root);
+        if (access(p, F_OK) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Remove the earlier Kai's host manifests and extension copy. 0 ok. */
+int kai_browser_legacy_remove(int verbose) {
+    int rc = 0;
+    for (size_t i = 0; i < sizeof LEGACY_BROWSER_ROOTS / sizeof LEGACY_BROWSER_ROOTS[0]; i++) {
+        char *root = kai_expand_home(LEGACY_BROWSER_ROOTS[i]);
+        char p[1400];
+        snprintf(p, sizeof p, "%s/NativeMessagingHosts/%s.json", root ? root : "", LEGACY_HOST);
+        free(root);
+        if (unlink(p) == 0) { if (verbose) printf("Removed an earlier Kai's Chrome helper: %s\n", p); }
+        else if (errno != ENOENT) rc = 1;
+    }
+    char ext[1300];
+    snprintf(ext, sizeof ext, "%s/browser-extension", kai_home());
+    struct stat st;
+    if (lstat(ext, &st) == 0) {
+        if (remove_tree(ext) == 0) { if (verbose) printf("Removed %s\n", ext); } else rc = 1;
+    }
+    return rc;
 }
 
 /* rm -rf for --purge (Kai's own home only). */
@@ -635,14 +769,18 @@ int kai_cmd_uninstall(int argc, char **argv) {
     int purge = 0;
     for (int i = 0; i < argc; i++) if (!strcmp(argv[i], "--purge")) purge = 1;
     int rc = 0;
-    if (strcmp(which, "claude") == 0 || strcmp(which, "all") == 0)
+    if (strcmp(which, "claude") == 0 || strcmp(which, "all") == 0) {
         rc |= uninstall_file("~/.claude/settings.json");
+        agent_instructions("claude", 0);
+    }
     if (strcmp(which, "cursor") == 0 || strcmp(which, "all") == 0)
         rc |= uninstall_file("~/.cursor/hooks.json");
-    if (strcmp(which, "codex") == 0 || strcmp(which, "all") == 0)
+    if (strcmp(which, "codex") == 0 || strcmp(which, "all") == 0) {
         rc |= uninstall_codex();
+        agent_instructions("codex", 0);
+    }
     if (strcmp(which, "chrome") == 0 || strcmp(which, "browser") == 0 || strcmp(which, "all") == 0)
-        rc |= kai_browser_uninstall();
+        rc |= kai_browser_legacy_remove(1);
     /* Hooks first (no hook may call a missing binary); the user's policy and
      * logs stay unless they ask for --purge, explicitly. */
     if (purge) {

@@ -1,5 +1,7 @@
 # Roadmap
 
+> **Build order superseded by [`docs/security/RECONCILED-PLAN.md`](security/RECONCILED-PLAN.md)** (Security Plan v1.0, frozen Oct 31, 2026). This document keeps its specs and tests; where it conflicts with the spec, the spec wins.
+
 | Phase | What ships | Needs Apple? |
 |---|---|---|
 | **v0.1 (now)** | Hooks for Claude Code & Cursor, Codex hooks (preview); policy engine; secret/company-data scanner (redact/replace/block); upload & prompt-injection detection; hash-chained audit log; `install`/`uninstall`/`scan`/`redact`/`doctor`/`log`. macOS + Linux. macOS network wall in Log mode (verified). Browser extension and gateway (experimental). Escape suite ([`ESCAPES.md`](ESCAPES.md)). | Network wall: paid developer account |
