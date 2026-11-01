@@ -32,6 +32,16 @@ done
 grep -q "com.apple.developer.system-extension.install" "$T/ent/app.entitlements" \
     && pass "app may install the system extension" || fail "app lacks system-extension.install"
 
+# the release entitlements carry exactly the keys project.yml gives each target
+Y="$ROOT/app/macos/project.yml"
+for k in com.apple.developer.networking.networkextension com.apple.security.application-groups \
+         com.apple.developer.system-extension.install; do
+    n=$(grep -c "^ *$k:" "$Y")
+    m=$(cat "$T/ent/app.entitlements" "$T/ent/ext.entitlements" | grep -c "<key>$k</key>")
+    [ "$n" = "$m" ] && pass "$k: in project.yml and the release entitlements alike ($n)" \
+        || fail "$k: project.yml has it $n times, the release entitlements $m"
+done
+
 # signing refuses without its inputs
 out=$(env -u KAI_DEVID_APP -u KAI_TEAM sh "$S" sign "$T/none.app" 2>&1); rc=$?
 [ $rc -eq 2 ] && echo "$out" | grep -q "KAI_DEVID_APP" \
