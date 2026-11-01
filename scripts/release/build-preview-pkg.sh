@@ -63,12 +63,19 @@ notarize() {
 # Kai.app and its network extension (Step 7): built unsigned for the release
 # team, then Developer ID signed, checked, notarized, stapled and checked again.
 ( cd app/macos && KAI_APP_ID=io.github.sameehj.kai KAI_TEAM="${KAI_TEAM:-}" xcodegen generate --quiet )
+# With signing off, Xcode leaves $(TeamIdentifierPrefix) empty, so the
+# extension's NEMachServiceName would lose its team prefix: set it here.
 xcodebuild -project app/macos/Kai.xcodeproj -scheme Kai -configuration Release -derivedDataPath "$OUT/dd" \
-    DEVELOPMENT_TEAM="${KAI_TEAM:-}" CODE_SIGNING_ALLOWED=NO -quiet build
+    DEVELOPMENT_TEAM="${KAI_TEAM:-}" TeamIdentifierPrefix="${KAI_TEAM:+$KAI_TEAM.}" CODE_SIGNING_ALLOWED=NO -quiet build
 APP="$STAGE/Applications/Kai.app"
 cp -R "$OUT/dd/Build/Products/Release/Kai.app" "$APP"
 [ -d "$APP/Contents/Library/SystemExtensions/io.github.sameehj.kai.network.systemextension" ] || {
     echo "Kai.app has no network extension"; exit 1; }
+if [ "$MODE" != "--test" ]; then   # fail before signing, not after
+    mach=$(/usr/libexec/PlistBuddy -c "Print :NetworkExtension:NEMachServiceName" \
+        "$APP/Contents/Library/SystemExtensions/io.github.sameehj.kai.network.systemextension/Contents/Info.plist")
+    case "$mach" in "$KAI_TEAM".*) ;; *) echo "NEMachServiceName '$mach' lacks the team prefix $KAI_TEAM."; exit 1 ;; esac
+fi
 [ ! -e "$APP/Contents/Library/SystemExtensions/io.github.sameehj.kai.storage.systemextension" ] || {
     echo "Kai.app contains the storage extension; Files isn't in this release"; exit 1; }
 appv=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
