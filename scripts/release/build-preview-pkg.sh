@@ -69,6 +69,8 @@ APP="$STAGE/Applications/Kai.app"
 cp -R "$OUT/dd/Build/Products/Release/Kai.app" "$APP"
 [ -d "$APP/Contents/Library/SystemExtensions/io.github.sameehj.kai.network.systemextension" ] || {
     echo "Kai.app has no network extension"; exit 1; }
+[ ! -e "$APP/Contents/Library/SystemExtensions/io.github.sameehj.kai.storage.systemextension" ] || {
+    echo "Kai.app contains the storage extension; Files isn't in this release"; exit 1; }
 appv=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")
 [ "$appv" = "${VERSION%%-*}" ] || { echo "Kai.app is version $appv, not ${VERSION%%-*} (project.yml MARKETING_VERSION)"; exit 1; }
 if [ "$MODE" = "--test" ]; then
@@ -157,6 +159,7 @@ else
     productbuild --distribution "$DIST" --resources "$RES" --package-path "$OUT" \
                  --sign "$KAI_DEVID_INSTALLER" --timestamp "$PKG" >/dev/null
     rm -f "$COMP"
+    ! pkgutil --payload-files "$PKG" | grep -q "kai.storage" || { echo "the package contains the storage extension"; exit 1; }
     pkgutil --check-signature "$PKG" | grep -q "Developer ID Installer" || { echo "package isn't Developer ID Installer signed"; exit 1; }
     notarize "$PKG"
     xcrun stapler staple "$PKG"

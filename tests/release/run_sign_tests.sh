@@ -62,6 +62,12 @@ if cc -o "$A/Contents/MacOS/Kai" "$T/m.c" 2>/dev/null; then
     out=$(KAI_TEAM=ABCDE12345 sh "$S" check "$A" 2>&1); rc=$?
     [ $rc -ne 0 ] && pass "check fails on an ad-hoc signed bundle" || fail "check passed an ad-hoc bundle"
     echo "$out" | grep -q "FAIL" && pass "...and names the failed check" || fail "check gave no FAIL line: $out"
+    echo "$out" | grep -q "FAIL.*storage extension" && fail "check reported a storage extension that isn't there" || pass "no storage extension: not flagged"
+    # Files isn't in this release: a storage extension inside the app is a FAIL
+    mkdir -p "$A/Contents/Library/SystemExtensions/io.github.sameehj.kai.storage.systemextension"
+    out=$(KAI_TEAM=ABCDE12345 sh "$S" check "$A" 2>&1)
+    echo "$out" | grep -q "FAIL.*storage extension" && pass "check fails when the storage extension is inside the app" \
+        || fail "check didn't flag the storage extension"
 else
     echo "  skip no cc for the fake bundle"
 fi

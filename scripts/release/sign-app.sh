@@ -101,6 +101,9 @@ check)
     [ "$team" = "$(compiled_team)" ] && ok "team $team matches KAI_APP_GROUP" \
         || bad "team $team isn't the KAI_APP_GROUP team $(compiled_team)"
     [ -d "$ext" ] && ok "network extension present" || bad "no network extension at $ext"
+    # Files protection isn't in this release: the storage extension must not ship
+    [ -e "$app/Contents/Library/SystemExtensions/io.github.sameehj.kai.storage.systemextension" ] \
+        && bad "storage extension inside the app (Files isn't in this release)" || ok "no storage extension"
 
     # entitlements actually signed into each bundle
     for b in "$app" "$ext"; do
