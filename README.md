@@ -3,11 +3,13 @@
 <div align="center">
   <img src="assets/kai-logo.png" alt="Kai shield logo" width="132" />
 
-  # Kai Preview
+  # Kai
 
-  ### Turn off your agent's permission prompts. Kai stops it reading your secrets or sending data where it shouldn't.
+  ### Zero Trust. Zero Wrappers. Zero Friction.
 
-  **macOS 13+** · **Claude Code · Codex · Cursor** · **Open source**
+  **Turn off your agent's permission prompts. Kai stops it reading your secrets or sending data where it shouldn't.**
+
+  **Preview 2 · macOS 13+** · **Claude Code · Codex · Cursor** · **Open source**
 </div>
 
 ## What Kai stops
