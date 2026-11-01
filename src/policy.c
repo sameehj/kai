@@ -367,6 +367,26 @@ int kai_tool_profile_allows(const char *exe, const char *const *argv, int argc, 
     return 0;
 }
 
+int kai_pid_cmdline(const kai_policy *p, int pid, char *out, size_t n) {
+    if (!out || !n) return 0;
+    out[0] = '\0';
+    if (pid <= 0) return 0;
+    kai_proc pr;
+    if (kai_proc_read_fast(pid, &pr) != 0) return 0;
+    size_t len = 0;
+    for (int i = 0; i < pr.argc && len + 1 < n; i++) {
+        int w = snprintf(out + len, n - len, "%s%s", i ? " " : "", pr.argv[i] ? pr.argv[i] : "");
+        if (w < 0) break;
+        len += (size_t)w < n - len ? (size_t)w : n - len - 1;
+    }
+    kai_proc_free(&pr);
+    if (p && out[0]) {   /* a token passed as an argument never reaches the card */
+        char *red = kai_redact_for_log(p, out);
+        if (red) { kai_strlcpy(out, red, n); free(red); }
+    }
+    return out[0] != '\0';
+}
+
 int kai_pid_tool_allows(int pid, const char *host) {
     if (pid <= 0 || !host) return 0;
     kai_proc pr;

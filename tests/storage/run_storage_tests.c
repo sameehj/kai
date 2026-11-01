@@ -2555,6 +2555,14 @@ static void test_channels(void) {
                     kai_egress_endpoint_allowed(np, "npmjs.com", "104.16.1.1", 443, why, sizeof why) != 1,
               "npm registry: ...only the registry host, not the npm website");
         kai_policy_free(np);
+        /* a card names the blocked process's command line (redacted), so the
+         * hook can tell which MCP server failed to start */
+        char cl[512];
+        kai_policy *cp = kai_policy_builtin_failsafe();
+        CHECK(kai_pid_cmdline(cp, (int)getpid(), cl, sizeof cl) == 1 && strstr(cl, "run_storage_tests") != NULL,
+              "cmdline: a process's command line, for the card");
+        CHECK(kai_pid_cmdline(cp, -1, cl, sizeof cl) == 0 && cl[0] == 0, "cmdline: no process, nothing");
+        kai_policy_free(cp);
         /* the old allowlist alone never allowed these (they were cards) */
         kai_policy *bp = kai_policy_builtin_failsafe();
         CHECK(bp && kai_egress_endpoint_allowed(bp, "api.github.com", "1.2.3.4", 443, why, sizeof why) != 1,

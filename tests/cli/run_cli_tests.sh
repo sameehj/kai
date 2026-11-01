@@ -236,6 +236,31 @@ c=$(cat "$WH/.claude/CLAUDE.md")
 hasnt "kai uninstall removes them" "$c" "kai:agent-instructions"
 has "...and leaves the user's text" "$c" "keep this line"
 
+echo "== MCP server blocked: the agent is told (dogfood) =="
+MH="$TMP/mcpnote"; mkdir -p "$MH/.kai/pending" "$MH/proj"
+cat > "$MH/.claude.json" <<EOF
+{"projects":{"$MH/proj":{"mcpServers":{"block-mcp-site":{"type":"stdio","command":"npx","args":["-y","@gravitykit/block-mcp"]}}}}}
+EOF
+printf '%s' '{"id":"net-1-1-1","agent":"claude","pid":0,"pidversion":0,"strength":1,"resource":"registry.example.org","op":"connect","ts":'"$(date +%s)"',"cmd":"node /usr/local/bin/npx -y @gravitykit/block-mcp"}' > "$MH/.kai/pending/net-1-1-1.json"
+mn() { printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Bash","session_id":"m","tool_input":{"command":"ls"},"cwd":"'"$MH"'/proj"}' \
+       | HOME="$MH" KAI_HOME="$MH/.kai" KAI_NO_APP=1 "$KAI" hook claude; }
+o=$(mn)
+has "next tool call names the blocked host and the MCP server" "$o" "Kai blocked registry.example.org for MCP server block-mcp-site. Ask the user to allow it, then run /mcp to reconnect."
+printf '%s' "$o" | python3 -I -c 'import json,sys; json.loads(sys.stdin.read())' 2>/dev/null && pass "...as one valid JSON answer" || fail "MCP note output isn't one JSON object: $o"
+o=$(mn)
+hasnt "...said once, not on every tool call" "$o" "for MCP server block-mcp-site"
+# the user allows it: the card goes, the approval is in the log
+rm -f "$MH/.kai/pending/net-1-1-1.json"
+printf '%s\n' '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","source":"grant","event":"approved","decision":"sign","rule":"connect","detail":"grant approved id=x agent=claude approved by console user","target":"registry.example.org"}' >> "$MH/.kai/audit.log"
+o=$(mn)
+has "after the allow: told to reconnect" "$o" "Allowed now; run /mcp to reconnect."
+o=$(mn)
+hasnt "...once" "$o" "run /mcp to reconnect"
+# a card from a process that isn't one of the agent's MCP servers: nothing
+printf '%s' '{"id":"net-2-2-2","agent":"claude","pid":0,"pidversion":0,"strength":1,"resource":"other.example.org","op":"connect","ts":'"$(date +%s)"',"cmd":"curl https://other.example.org"}' > "$MH/.kai/pending/net-2-2-2.json"
+o=$(mn)
+hasnt "a blocked curl isn't reported as an MCP server" "$o" "MCP server"
+
 echo "== Chrome support removed (Security Plan v1.0) =="
 CR="$TMP/chrome"; NM="$CR/Library/Application Support/Google/Chrome/NativeMessagingHosts"
 mkdir -p "$NM" "$CR/.kai/browser-extension"

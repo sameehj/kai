@@ -631,6 +631,9 @@ int kai_agent_profile_allows(const char *agent, const char *host);
  * allowed without a card. kai_pid_tool_allows reads the process. */
 int kai_tool_profile_allows(const char *exe, const char *const *argv, int argc, const char *host);
 int kai_pid_tool_allows(int pid, const char *host);
+/* A process's command line, redacted with the policy's secret detectors (for
+ * the card, so the hook can name an MCP server that failed to start). */
+int kai_pid_cmdline(const kai_policy *p, int pid, char *out, size_t n);
 /* Spec v2.1 B.3: what a host is, in plain words, and its group, or NULL.
  * Explanation only: it never allows anything. */
 const char *kai_host_describe(const char *host, const char **group);

@@ -614,13 +614,18 @@ final class Engine {
         let sess = sessionFor(pid: pid, pidv: pidv)
         let sessFields = (sess.sid.isEmpty ? "" : "\"session\":\"\(esc(sess.sid))\",") +
                          (sess.project.isEmpty ? "" : "\"project\":\"\(esc(sess.project))\",")
+        // Dogfood: the blocked process's command line (redacted), so the agent's
+        // hook can say which MCP server failed to start.
+        var cl = [CChar](repeating: 0, count: 600)
+        let cmdField = kai_pid_cmdline(policy, Int32(pid), &cl, cl.count) == 1
+            ? "\"cmd\":\"\(esc(String(cString: cl)))\"," : ""
         let json = "{\"id\":\"\(id)\",\"agent\":\"\(esc(agent))\",\"pid\":\(pid)," +
                    "\"pidversion\":\(pidv),\"strength\":1,\"resource\":\"\(esc(dest))\"," +
-                   sessFields + (identity.isEmpty ? "" : "\"identity\":\"\(esc(identity))\",") +
+                   sessFields + cmdField + (identity.isEmpty ? "" : "\"identity\":\"\(esc(identity))\",") +
                    "\"hostKnown\":\(hostKnown),\"op\":\"connect\",\"ts\":\(Int(Date().timeIntervalSince1970))}"
         let fp = dir + "/" + id + ".json"
-        let fd = open(fp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0o644)
-        if fd >= 0 { fchmod(fd, 0o644); let b = Array(json.utf8)
+        let fd = open(fp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0o600)   // holds a command line: the user's only
+        if fd >= 0 { fchmod(fd, 0o600); let b = Array(json.utf8)
                      b.withUnsafeBytes { if let base = $0.baseAddress { _ = write(fd, base, b.count) } }
                      close(fd) }
         if let o = owner { chown(fp, o.uid, o.gid); chown(dir, o.uid, o.gid) }
