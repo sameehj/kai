@@ -286,12 +286,15 @@ struct MenuView: View {
 
     /// Spec §4: orange is for problems. A protection you switched off is a
     /// state, not a problem: neutral, and "Files: off" in the protections line.
+    /// Nov 2: colours mean something. Red only for a real problem (a check
+    /// unhealthy, an agent blocked by a broken hook, Kai's own health); amber
+    /// while paused; green when agents are being checked; neutral for watching.
     private var glow: Color {
-        if alert != nil || model.health == .problem { return Theme.coral }
+        let ag = AgentsModel.shared.loaded ? AgentsModel.shared.agents : []
+        let tone = LiveCoverage.headlineTone(agents: ag, internetLevel: Int(kai_wall_observed_level("network")))
+        if tone == .problem || model.health == .problem { return Theme.coral }
         if grantManager.pauseState(nil) != Int32(KAI_PAUSE_NONE) { return Theme.amber }
-        if storage.stateWord == "unhealthy" || wall.stateWord == "unhealthy" { return Theme.amber }
-        if storage.stateWord == "blocking" || wall.stateWord == "blocking" || wall.stateWord == "watching" { return Theme.lime }
-        return Theme.soft
+        return Theme.coverage(tone)
     }
 
 
@@ -952,18 +955,27 @@ struct LiveCoverageList: View {
         // the heartbeat level, read live; -1 when the extension can't be confirmed
         let level = Int(kai_wall_observed_level("network"))
         let known = agents.loaded && agents.sourceError == nil
-        let rows = LiveCoverage.rows(agents: known ? agents.agents.filter { !compact || LiveCoverage.integrated.contains($0.name) } : [],
+        let rows = LiveCoverage.rows(agents: known ? agents.agents : [],
                                      internetLevel: level, protectAvailable: kai_internet_protect_available() == 1)
+        let others = known ? LiveCoverage.others(agents: agents.agents) : []
         VStack(alignment: .leading, spacing: compact ? 3 : 6) {
             CapsLabel("Coverage now")
             ForEach(rows, id: \.label) { r in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Circle().fill(r.good ? Theme.lime : Theme.muted).frame(width: 6, height: 6)
-                    Text(r.label).font(.system(size: compact ? 12 : 13)).foregroundStyle(Theme.soft)
+                    Circle().fill(Theme.coverage(r.tone)).frame(width: 6, height: 6)
+                    Text(r.label).font(.system(size: compact ? 12 : 13)).foregroundStyle(Theme.soft).lineLimit(1)
                     Spacer(minLength: 8)
-                    Text(r.state).font(.system(size: compact ? 11 : 12)).foregroundStyle(Theme.muted)
-                        .multilineTextAlignment(.trailing).fixedSize(horizontal: false, vertical: true)
+                    Text(r.state).font(.system(size: compact ? 11 : 12))
+                        .foregroundStyle(r.tone == .problem ? Theme.coral : Theme.muted).lineLimit(1)
+                    InfoButton(text: r.info)
                 }
+            }
+            // Nov 2: agents Kai supports that aren't on this Mac: Settings only, collapsed
+            if !compact && !others.isEmpty {
+                DisclosureGroup("Other supported agents (\(others.count))") {
+                    Text(others.joined(separator: ", ")).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true).padding(.top, 2)
+                }.font(.system(size: 12)).foregroundStyle(Theme.muted)
             }
         }
     }
@@ -1002,6 +1014,18 @@ struct BlockedAgentBanner: View {
                                : "Couldn't do it: \(r.message)"
                 done()
             }
+        }
+    }
+}
+
+extension Theme {
+    /// Nov 2: green checking, neutral watching, grey off or not included, red a problem.
+    static func coverage(_ t: LiveCoverage.Tone) -> Color {
+        switch t {
+        case .checking: return lime
+        case .watching: return soft
+        case .off, .notIncluded: return muted
+        case .problem: return coral
         }
     }
 }

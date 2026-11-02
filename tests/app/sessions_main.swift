@@ -80,9 +80,9 @@ var named = [
 ]
 SessionRow.assignNames(&named, topic: { $0.topic })
 let byId = Dictionary(uniqueKeysWithValues: named.map { ($0.id, $0.name) })
-check(byId["c1"] == "kai · ttys001" && byId["c2"] == "kai · ttys002",
+check(byId["c1"] == "kai · Terminal tab 1" && byId["c2"] == "kai · Terminal tab 2",
       "project folder plus terminal tab: \(byId["c1"]!), \(byId["c2"]!)")
-check(byId["c3"] == "Fix the login page · ttys004", "the topic, when the agent reported one: \(byId["c3"]!)")
+check(byId["c3"] == "Fix the login page · Terminal tab 4", "the topic, when the agent reported one: \(byId["c3"]!)")
 check(byId["c4"] != byId["c5"] && byId["c4"]!.hasPrefix("api · started "),
       "same project, no tab: told apart by start time: \(byId["c4"]!), \(byId["c5"]!)")
 check(byId["c6"] != byId["c7"], "identical sessions still get different names: \(byId["c6"]!), \(byId["c7"]!)")
