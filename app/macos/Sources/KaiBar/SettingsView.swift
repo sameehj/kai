@@ -1180,7 +1180,7 @@ private struct ActivityRow: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: icon).foregroundStyle(color).frame(width: 18)
-            Text(event.verb).font(.system(size: 13, weight: .semibold))
+            Text(event.verbLabel).font(.system(size: 13, weight: .semibold))
             + Text(" · \(event.agentName)").font(.system(size: 13))
             + Text(event.actionLabel.map { " · \($0)" } ?? "").font(.system(size: 13)).foregroundColor(Theme.muted)
             if count > 1 {

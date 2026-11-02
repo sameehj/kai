@@ -37,6 +37,13 @@ let recent = AuditEvent.droppingAllowedBlocks([used, otherBlock, netBlock])   //
 check(!recent.contains(where: { $0.h == "n1" }), "Recent drops a 'Blocked' row once that host is allowed")
 check(recent.contains(where: { $0.h == "n2" }), "...and keeps blocks of hosts still not allowed")
 
+print("activity: test noise (Nov 2)")
+let fromTest = ev(#"{"ts":"2026-11-02T12:39:23Z","source":"claude","event":"PreToolUse","decision":"block","rule":"protected_path","detail":"Kai stopped reading","h":"t1","tool":"Read","target":"/private/tmp/kai-hooktest.Oys1Le/fixture","cwd":"/private/tmp/kai-hooktest.Oys1Le"}"#)
+let fromVar = ev(#"{"ts":"2026-11-02T12:38:57Z","source":"claude","event":"PreToolUse","decision":"block","rule":"protected_path","detail":"x","h":"t2","cwd":"/var/folders/5j/abc/T/tmp.nE/"}"#)
+check(fromTest.isTest && fromVar.isTest, "an event from a temporary test folder is labelled test")
+check(!hookBlock.isTest && !approved1.isTest, "real work isn't")
+check(fromTest.verbLabel == "Denied by agent check · test", "...and Activity says so (\(fromTest.verbLabel))")
+
 print("activity: scope and duration agree")
 let now = 1_800_000_000
 check(GrantText.scope(scope: 2, session: true, created: now, expires: now + 604_800) == "this session",
