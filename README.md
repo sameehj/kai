@@ -15,7 +15,8 @@
 ## What Kai stops
 
 - **Your agent's own secret reads and uploads**: Claude Code, Codex and Cursor reading your keys, `.env` files and credentials, or sending them out, stopped before the tool call runs.
-- **Agent traffic to unknown hosts, bare IPs and odd ports**, once you turn on Protect: the Kai app's Internet wall checks each connection an agent opens and asks you about one it doesn't know. Kai starts in Watch, which records these connections and blocks none.
+
+**Internet: Kai shows every connection your agents make. Blocking arrives in the next release.** The Kai app's Internet wall watches: it records each connection an agent opens (unknown hosts, bare IPs, odd ports included) and blocks none in this release.
 
 ## What it doesn't stop in this release
 
@@ -23,6 +24,7 @@
 - Planted SSH keys or login items.
 - Untagged editors such as VS Code.
 - Exfiltration through allowed services like GitHub or npm.
+- Agent traffic to unknown hosts, bare IPs or odd ports: the Internet wall shows it and blocks nothing in this release.
 
 **Files protection: not included in this release.**
 
@@ -30,7 +32,7 @@ Evidence for this release: the agent checks were verified live with Claude Code 
 
 ## First steps
 
-1. **Turn on Protect in Kai → Internet.** Kai starts in Watch: it records agent connections but blocks none until you do. (First install the package and approve the Internet wall when macOS asks: see [Install](#install).)
+1. **Install the package and approve the Internet wall** when macOS asks (see [Install](#install)). Internet: Kai shows every connection your agents make. Blocking arrives in the next release.
 2. **Check it:** `kai install all`, then `kai doctor` and `kai status`.
 3. **You decide, narrowly.** When Kai stops something legitimate, it tells you why and what to do: one agent, one operation, one target, with an expiry. The agent is told why, and to ask you instead of trying another way.
 
@@ -47,7 +49,7 @@ shasum -a 256 -c SHA256SUMS
 spctl --assess --type install -vv Kai-Preview-0.2.0-preview.2.pkg   # "source=Notarized Developer ID"
 ```
 
-It installs the Kai app (with its Internet wall) and the `kai` command. Open Kai, approve the Internet wall when macOS asks (System Settings → Privacy & Security, or General → Login Items & Extensions → Network Extensions), then **turn on Protect in Kai → Internet**. The installer refreshes Kai's checks in the agents that already have them. For another agent:
+It installs the Kai app (with its Internet wall) and the `kai` command. Open Kai, approve the Internet wall when macOS asks (System Settings → Privacy & Security, or General → Login Items & Extensions → Network Extensions), and Kai starts showing every connection your agents make (it blocks none in this release). The installer refreshes Kai's checks in the agents that already have them. For another agent:
 
 ```sh
 kai install claude      # or codex, cursor, all

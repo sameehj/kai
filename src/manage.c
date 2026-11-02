@@ -1197,6 +1197,14 @@ int kai_policy_dispatch(int argc, char **argv, int caller_is_agent) {
         return 3;
     }
     if (strcmp(sub, "path") == 0) { printf("%s\n", kai_policy_file()); return 0; }
+    if (strcmp(sub, "egress-mode") == 0) {   /* the effective Internet wall mode: off | log | block */
+        char perr[256];
+        kai_policy *ep = kai_policy_load(NULL, perr, sizeof perr);
+        kai_egress_mode m = kai_policy_egress_mode(ep);
+        printf("%s\n", m == KAI_EGRESS_BLOCK ? "block" : m == KAI_EGRESS_LOG ? "log" : "off");
+        kai_policy_free(ep);
+        return 0;
+    }
     if (strcmp(sub, "pending") == 0) return policy_pending_list();
     if (strcmp(sub, "show") == 0)
         return policy_show(argc > 1 && strcmp(argv[1], "--json") == 0);

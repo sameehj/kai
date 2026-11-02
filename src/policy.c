@@ -976,8 +976,25 @@ int kai_policy_exempt(const kai_policy *p, const char *rule, const char *target)
             return 1;
     return 0;
 }
-kai_egress_mode kai_policy_egress_mode(const kai_policy *p) {
+/* Nov 1 corrective change: a release build keeps the Internet wall in Watch
+ * (log) whatever the policy or the no-policy fail-safe asks; Protect waits
+ * for Guard. Developer builds honour Protect (the app hides it behind a flag). */
+int kai_internet_protect_available(void) {
+#ifdef KAI_RELEASE
+    return 0;
+#else
+    return 1;
+#endif
+}
+
+kai_egress_mode kai_policy_egress_requested(const kai_policy *p) {
     return p ? p->egress_mode : KAI_EGRESS_OFF;
+}
+
+kai_egress_mode kai_policy_egress_mode(const kai_policy *p) {
+    kai_egress_mode m = kai_policy_egress_requested(p);
+    if (m == KAI_EGRESS_BLOCK && !kai_internet_protect_available()) return KAI_EGRESS_LOG;
+    return m;
 }
 
 kai_storage_mode kai_policy_storage_mode(const kai_policy *p) {

@@ -588,14 +588,23 @@ private struct NetworkPage: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("When an agent connects to a host that is not on your list")
                     .font(.system(size: 13)).foregroundStyle(Theme.muted)
-                ChoiceCards(options: [("log", "Watch", "See where agents go. Nothing is blocked."),
-                                      ("block", "Protect", "Only sites on your list are reachable."),
-                                      ("off", "Off", "Agents reach anything.")],
-                            selected: model.policy?.switches["egress"] ?? "log") { model.setSwitch("egress", $0) }
+                // Nov 1 corrective change: Watch only in this release (Protect behind a developer flag).
+                let protect = DevFlags.internetProtect
+                let raw = model.policy?.switches["egress"] ?? "log"
+                ChoiceCards(options: [("log", "Watch", "Shows every agent connection; blocks nothing in this release.")]
+                                     + (protect ? [("block", "Protect", "Only sites on your list are reachable.")] : [])
+                                     + [("off", "Off", "Kai doesn't record agent connections.")],
+                            selected: !protect && raw == "block" ? "log" : raw) { model.setSwitch("egress", $0) }
                     .disabled(model.busy || model.policy == nil)
+                if !protect {
+                    Text("Internet: Kai shows every connection your agents make. Blocking arrives in the next release.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.soft).fixedSize(horizontal: false, vertical: true)
+                }
                 HStack(spacing: 10) {
                     HStack(spacing: 3) { Text("Watch").font(.system(size: 11)).foregroundStyle(Theme.muted); InfoButton(text: InfoText.watch) }
-                    HStack(spacing: 3) { Text("Protect").font(.system(size: 11)).foregroundStyle(Theme.muted); InfoButton(text: InfoText.protect) }
+                    if protect {
+                        HStack(spacing: 3) { Text("Protect").font(.system(size: 11)).foregroundStyle(Theme.muted); InfoButton(text: InfoText.protect) }
+                    }
                 }
                 Text("Watch and Protect both turn off QUIC for agents, so Kai can see which sites they reach. "
                    + "Agents fall back to normal HTTPS; in Watch nothing else is blocked.")

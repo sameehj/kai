@@ -10,18 +10,18 @@ ol{padding-left:20px} li{margin:4px 0}</style></head>
 <h2>What Kai stops</h2>
 <ul>
 <li><b>Your agent's own secret reads and uploads</b>: Claude Code, Codex and Cursor reading your keys, <code>.env</code> files and credentials, or sending them out, stopped before the tool call runs.</li>
-<li><b>Agent traffic to unknown hosts, bare IPs and odd ports</b>, once you turn on Protect: the Kai app's Internet wall checks each connection an agent opens and asks you about one it doesn't know. Kai starts in Watch, which records these connections and blocks none.</li>
 </ul>
+<p><b>Internet: Kai shows every connection your agents make. Blocking arrives in the next release.</b></p>
 <h2>What it doesn&rsquo;t stop in this release</h2>
 <ul>
 <li>Files read or written by scripts the agent writes.</li>
 <li>Planted SSH keys or login items.</li>
 <li>Untagged editors such as VS Code.</li>
 <li>Exfiltration through allowed services like GitHub or npm.</li>
+<li>Agent traffic to unknown hosts, bare IPs or odd ports: the Internet wall shows it and blocks nothing in this release.</li>
 </ul>
 <p><b>Files protection: not included in this release.</b></p>
 <ol>
-<li><b>Turn on Protect in Kai &rarr; Internet</b> after installing: Kai starts in Watch, which blocks no connections.</li>
 <li><b>Install Kai.</b> This package installs the Kai app (with its Internet wall) and the <code>kai</code> command,
 and refreshes Kai's checks in the agents that already use them.</li>
 <li><b>Approve the Internet wall</b> when macOS asks, then run <code>kai install all</code> and <code>kai doctor</code>.</li>

@@ -910,6 +910,12 @@ struct DevBadge: View {
 ///   defaults write io.github.sameehj.kai devPerSessionPause -bool YES
 enum DevFlags {
     static var perSessionPause: Bool { UserDefaults.standard.bool(forKey: "devPerSessionPause") }
+    /// Nov 1 corrective change: Protect for the Internet wall waits for Guard.
+    /// Release builds never offer it (libkai keeps them in Watch); a developer
+    /// build shows it only with `defaults write io.github.sameehj.kai.dev devInternetProtect -bool YES`.
+    static var internetProtect: Bool {
+        kai_internet_protect_available() == 1 && UserDefaults.standard.bool(forKey: "devInternetProtect")
+    }
 }
 
 enum PauseText {

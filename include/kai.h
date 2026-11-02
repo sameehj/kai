@@ -129,7 +129,9 @@ typedef enum {
     KAI_EGRESS_BLOCK = 2 /* drop agent traffic to non-allowlisted hosts    */
 } kai_egress_mode;
 
-kai_egress_mode kai_policy_egress_mode(const kai_policy *p);
+kai_egress_mode kai_policy_egress_mode(const kai_policy *p);   /* effective: release builds never block */
+kai_egress_mode kai_policy_egress_requested(const kai_policy *p); /* what the policy file asks for */
+int kai_internet_protect_available(void);                         /* 0 in release builds (Watch only) */
 /* Is host on the allowlist? An entry matches itself and its subdomains.
  * why receives the matching entry. Hosts are compared case-insensitively. */
 int kai_egress_allowed(const kai_policy *p, const char *host, char *why, size_t whylen);
