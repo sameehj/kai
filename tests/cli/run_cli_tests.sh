@@ -3,6 +3,7 @@
 # CLI tests: status, policy editing and install/uninstall, all inside a
 # throwaway HOME so nothing on the machine is touched.
 set -u
+export KAI_TEST_ALLOW_DEV_HOOK=1   # STEP 2c: tests install hooks from the checkout on purpose
 KAI="$(cd "$(dirname "${1:-./kai}")" && pwd)/$(basename "${1:-./kai}")"
 TMP="$(mktemp -d)"
 export HOME="$TMP" KAI_HOME="$TMP/.kai"
@@ -555,11 +556,16 @@ for event, groups in d["hooks"].items():
                 continue
             gone = cmd.replace(kai, "/nonexistent/kai")
             r = subprocess.run(["/bin/sh", "-c", gone], input="{}", capture_output=True, text=True)
-            want = event in ("PreToolUse", "UserPromptSubmit")
-            if want and (r.returncode != 2 or "Kai couldn't check this" not in r.stderr):
+            tool = event == "PreToolUse"
+            # STEP 2c: tool hooks fail closed (Claude Code: onFailure block;
+            # Codex: the self-check, exit 2 with a reason); prompts and
+            # lifecycle hooks never block on Kai's own failure.
+            if tool and agent == "claude" and (h.get("onFailure") != "block" or r.returncode == 0):
+                bad.append(f"{event}: no onFailure block (exit {r.returncode})")
+            if tool and agent == "codex" and (r.returncode != 2 or "Kai couldn't check this" not in r.stderr):
                 bad.append(f"{event}: exit {r.returncode}")
-            if not want and r.returncode == 2:
-                bad.append(f"{event}: exit 2 would not be harmless")
+            if not tool and r.returncode == 2:
+                bad.append(f"{event}: a missing Kai would block it")
 print("ok" if not bad else "; ".join(bad))
 PY
 }
@@ -611,17 +617,96 @@ for groups in d["hooks"].values():
         for h in g.get("hooks", []):
             if " hook claude" in h.get("command", ""):
                 h["command"] = kai + " hook claude"
+                h.pop("onFailure", None)          # an older Kai: no fail-closed setting
 json.dump(d, open(p, "w"))
 PY
 has "status: unguarded hooks are flagged" "$(claude_health)" 'older Kai'
 "$KAI" install claude >/dev/null
 has "status: reinstall fixes it" "$(claude_health)" 'True'
-has "claude hooks fail closed when Kai is missing (not on Stop)" "$(fails_closed "$HOME/.claude/settings.json" claude)" 'ok'
+has "claude tool hooks fail closed when Kai is missing; prompts and Stop don't" "$(fails_closed "$HOME/.claude/settings.json" claude)" 'ok'
 "$KAI" uninstall claude >/dev/null
 s=$(cat "$HOME/.claude/settings.json")
 hasnt "uninstall removes kai hooks" "$s" 'hook claude'
 has "uninstall keeps user hooks" "$s" 'echo mine'
 has "uninstall keeps other settings" "$s" '"theme"'
+
+echo "== hook safety (STEP 2c): stable path, quoted, per-event failure, launcher, repair =="
+# a. never a build or worktree path
+printf '{"theme":"dark"}' > "$HOME/.claude/settings.json"
+o=$(env -u KAI_TEST_ALLOW_DEV_HOOK "$KAI" install claude 2>&1); rc=$?
+[ $rc -eq 2 ] && pass "install refuses a kai inside a source checkout (exit 2)" || fail "install from the checkout: exit $rc"
+has "...and says how to install properly" "$o" "Hooks must point at an installed Kai"
+hasnt "...and writes no hooks" "$(cat "$HOME/.claude/settings.json")" "hook claude"
+SD="$TMP/stable dir"; mkdir -p "$SD"; cp "$KAI" "$SD/kai"
+env -u KAI_TEST_ALLOW_DEV_HOOK "$SD/kai" install claude >/dev/null 2>&1 && pass "install from a stable copy (path with a space) works" || fail "stable install failed"
+SDR=$(cd "$SD" && pwd -P)
+has "...the path is quoted in the hook command" "$(cat "$HOME/.claude/settings.json")" "'$SDR/kai' hook claude"
+has "...and the hooks answer (health)" "$(claude_health)" 'True'
+# b. per event: tool hooks fail closed, prompts and lifecycle never brick
+python3 -I - "$HOME/.claude/settings.json" <<'PY' > "$TMP/claude-events.txt"
+import json, sys
+d = json.load(open(sys.argv[1]))
+for ev, groups in d["hooks"].items():
+    for g in groups:
+        for h in g.get("hooks", []):
+            if " hook claude" in h.get("command", ""):
+                print(ev, h.get("onFailure", "-"), "wrapper" if "exit 2" in h["command"] else "plain")
+PY
+has "Claude Code PreToolUse: onFailure block" "$(cat "$TMP/claude-events.txt")" "PreToolUse block plain"
+has "UserPromptSubmit: no onFailure, no exit-2 wrapper" "$(cat "$TMP/claude-events.txt")" "UserPromptSubmit - plain"
+hasnt "no Kai hook uses the exit-2 wrapper" "$(cat "$TMP/claude-events.txt")" "wrapper"
+rm "$SD/kai"
+o=$(printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"s","prompt":"hi","cwd":"/tmp"}' | sh -c "'$SD/kai' hook claude" 2>&1); rc=$?
+[ $rc -ne 2 ] && pass "kai missing: the prompt hook doesn't exit 2 (the prompt reaches the agent)" || fail "prompt hook exits 2 with kai missing"
+printf '%s' '{}' | sh -c "'$SD/kai' hook claude" >/dev/null 2>&1; rc=$?
+[ $rc -ne 0 ] && pass "kai missing: the tool hook fails (onFailure block stops the call)" || fail "tool hook succeeded with kai missing"
+has "status: the missing program is a problem, the agent blocked" "$(claude_health)" "Kai's program is missing"
+# c. repair from the CLI: kai doctor --fix rewrites the hooks to the running, stable kai
+SD2="$TMP/stable2"; mkdir -p "$SD2"; cp "$KAI" "$SD2/kai"
+o=$(env -u KAI_TEST_ALLOW_DEV_HOOK "$SD2/kai" doctor --fix 2>&1)
+has "kai doctor --fix repairs Claude Code's hooks" "$o" "Repaired Claude Code"
+has "...now pointing at the running kai" "$(cat "$HOME/.claude/settings.json")" "'$(cd "$SD2" && pwd -P)/kai' hook claude"
+has "...and they answer" "$(claude_health)" 'True'
+# Claude Code older than 2.1.295 has no onFailure: say so
+mkdir -p "$TMP/oldclaude"; printf '#!/bin/sh\necho "2.1.200 (Claude Code)"\n' > "$TMP/oldclaude/claude"; chmod +x "$TMP/oldclaude/claude"
+o=$(PATH="$TMP/oldclaude:$PATH" env -u KAI_TEST_ALLOW_DEV_HOOK "$SD2/kai" install claude 2>&1)
+has "an older Claude Code: install warns tool checks may fail open" "$o" "tool checks may fail open if Kai is missing"
+# Cursor: failClosed on tool hooks only
+mkdir -p "$HOME/.cursor"
+env -u KAI_TEST_ALLOW_DEV_HOOK "$SD2/kai" install cursor >/dev/null 2>&1
+python3 -I - "$HOME/.cursor/hooks.json" <<'PY' > "$TMP/cursor-events.txt"
+import json, sys
+d = json.load(open(sys.argv[1]))
+for ev, entries in d["hooks"].items():
+    for e in entries:
+        if " hook cursor" in e.get("command", ""):
+            print(ev, "failClosed" if e.get("failClosed") else "open")
+PY
+has "Cursor beforeShellExecution: failClosed" "$(cat "$TMP/cursor-events.txt")" "beforeShellExecution failClosed"
+has "Cursor beforeSubmitPrompt: not failClosed (prompts never brick)" "$(cat "$TMP/cursor-events.txt")" "beforeSubmitPrompt open"
+env -u KAI_TEST_ALLOW_DEV_HOOK "$SD2/kai" uninstall cursor >/dev/null 2>&1
+
+echo "== hook launcher (STEP 2c): kai missing never bricks the agent =="
+L="$TMP/kai-hook"
+sed "s#^K=.*#K='$TMP/nokai/kai'#" "$(dirname "$0")/../../scripts/release/kai-hook" > "$L"; chmod +x "$L"
+lo() { printf '%s' "$2" | "$L" hook "$1"; }
+o=$(lo claude '{"hook_event_name":"UserPromptSubmit","prompt":"hi"}'); rc=$?
+[ $rc -eq 0 ] && pass "launcher, kai missing: a Claude Code prompt goes through (exit 0)" || fail "launcher prompt exit $rc"
+has "...with a warning that names Repair" "$o" "Repair"
+o=$(lo claude '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}')
+has "launcher, kai missing: a Claude Code tool call is denied" "$o" '"permissionDecision":"deny"'
+has "...with a message that names the Repair button" "$o" "Repair"
+o=$(lo claude '{"hook_event_name":"Stop"}'); rc=$?
+[ $rc -eq 0 ] && [ -z "$o" ] && pass "launcher, kai missing: Stop passes silently (never traps the session)" || fail "launcher Stop: exit $rc [$o]"
+has "launcher, kai missing: a Codex tool call is denied" "$(lo codex '{"hook_event_name":"PreToolUse","tool_name":"shell"}')" '"permissionDecision":"deny"'
+o=$(lo codex '{"hook_event_name":"UserPromptSubmit","prompt":"hi"}'); rc=$?
+[ $rc -eq 0 ] && pass "launcher, kai missing: a Codex prompt goes through" || fail "launcher codex prompt exit $rc"
+has "launcher, kai missing: a Cursor shell command is denied" "$(lo cursor '{"hook_event_name":"beforeShellExecution","command":"ls"}')" '"permission":"deny"'
+has "launcher, kai missing: a Cursor prompt continues" "$(lo cursor '{"hook_event_name":"beforeSubmitPrompt","prompt":"hi"}')" '"continue":true'
+sed "s#^K=.*#K='$KAI'#" "$(dirname "$0")/../../scripts/release/kai-hook" > "$L"; chmod +x "$L"
+has "launcher with kai present: runs kai's own checks" \
+  "$(printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Read","session_id":"l","tool_input":{"file_path":"'"$G"'/.env"},"cwd":"'"$G"'"}' | KAI_NO_APP=1 "$L" hook claude)" '"permissionDecision":"deny"'
+
 
 echo "== install lifecycle (A4) =="
 # Invalid settings: Kai refuses and changes nothing (it used to replace the file with only its hooks).

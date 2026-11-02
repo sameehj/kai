@@ -8,6 +8,7 @@
 #include "internal.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -110,11 +111,64 @@ static cJSON *load_clean(const char *path) {
 /* ----- Claude Code: ~/.claude/settings.json -----
  * hooks.<Event>[] = { matcher, hooks:[{type:command, command:"kai hook claude", _kai:true}] }
  */
-/* The hook command. A guarded one fails closed: Claude Code and Codex run the
- * action when a hook fails in any way but exit 2, so if Kai's program is
- * missing, crashes or can't answer, the shell turns that into exit 2 (block)
- * with a reason. Only for events where exit 2 means "block" (PreToolUse,
- * UserPromptSubmit): on Stop it would mean "keep going" and trap the agent. */
+/* STEP 2c: hooks run a stable, installed program, never a build or a source
+ * checkout: the package's launcher (/usr/local/libexec/kai-hook, which runs
+ * /usr/local/bin/kai and, if kai is missing, lets prompts through with a
+ * warning and denies tool calls naming Repair), or the running kai when it is
+ * installed. The path is always quoted (a space split it once and bricked
+ * Claude Code). Tests set KAI_TEST_ALLOW_DEV_HOOK in dev builds only. */
+#define KAI_HOOK_LAUNCHER "/usr/local/libexec/kai-hook"
+
+static int dev_path(const char *exe) {
+    if (strstr(exe, "/build/") || strstr(exe, "/DerivedData/") || strstr(exe, "/.build/") ||
+        strstr(exe, "/.claude/worktrees/"))
+        return 1;
+    char dir[PATH_MAX];
+    kai_strlcpy(dir, exe, sizeof dir);
+    for (char *s = strrchr(dir, '/'); s && s != dir; s = strrchr(dir, '/')) {
+        *s = '\0';
+        char g[PATH_MAX + 8];
+        snprintf(g, sizeof g, "%s/.git", dir);
+        struct stat st;
+        if (stat(g, &st) == 0) return 1;     /* inside a git checkout or worktree */
+    }
+    return 0;
+}
+
+/* The quoted program the hooks call, or NULL (and a message) for a dev path. */
+static const char *hook_target(void) {
+    static char out[PATH_MAX + 8];
+    const char *exe = kai_exe_path();
+    int allow_dev = 0;
+#ifndef KAI_RELEASE
+    allow_dev = getenv("KAI_TEST_ALLOW_DEV_HOOK") != NULL;
+#endif
+    if (dev_path(exe) && !allow_dev) {
+        fprintf(stderr, "kai install: %s is a development build inside a source checkout or build folder.\n"
+                        "Hooks must point at an installed Kai: install the Kai package (it puts the hook launcher at "
+                        KAI_HOOK_LAUNCHER "), or copy kai to a stable folder and run that copy's kai install.\n", exe);
+        return NULL;
+    }
+    const char *t = exe;
+#ifdef KAI_RELEASE
+    if (access(KAI_HOOK_LAUNCHER, X_OK) == 0) t = KAI_HOOK_LAUNCHER;
+#endif
+    size_t o = 0;
+    out[o++] = '\'';
+    for (const char *c = t; *c && o + 5 < sizeof out; c++) {
+        if (*c == '\'') { memcpy(out + o, "'\\''", 4); o += 4; }
+        else out[o++] = *c;
+    }
+    out[o++] = '\'';
+    out[o] = '\0';
+    return out;
+}
+
+/* The hook command. Only Codex keeps a shell guard (it has no fail-closed
+ * option), and only on tool hooks: a missing Kai becomes exit 2 there.
+ * Claude Code's tool hooks use onFailure "block"; Cursor's failClosed. Prompt
+ * and lifecycle hooks are never guarded: a broken Kai must not brick a session
+ * (exit 2 on UserPromptSubmit blocked every prompt; on Stop it traps the agent). */
 static void hook_command(char *cmd, size_t n, const char *exe, const char *agent, int guard,
                          const char *settings) {
     if (!guard) {
@@ -127,8 +181,8 @@ static void hook_command(char *cmd, size_t n, const char *exe, const char *agent
              exe, agent, settings);
 }
 
-static int fails_closed(const char *event) {
-    return !strcmp(event, "PreToolUse") || !strcmp(event, "UserPromptSubmit");
+static int fails_closed(const char *event) {   /* tool hooks only (STEP 2c) */
+    return !strcmp(event, "PreToolUse");
 }
 
 static cJSON *claude_hook_entry(const char *matcher, const char *exe, int guard) {
@@ -138,8 +192,9 @@ static cJSON *claude_hook_entry(const char *matcher, const char *exe, int guard)
     cJSON *h = cJSON_CreateObject();
     cJSON_AddStringToObject(h, "type", "command");
     char cmd[1600];
-    hook_command(cmd, sizeof cmd, exe, "claude", guard, "~/.claude/settings.json");
+    hook_command(cmd, sizeof cmd, exe, "claude", 0, "~/.claude/settings.json");
     cJSON_AddStringToObject(h, "command", cmd);
+    if (guard) cJSON_AddStringToObject(h, "onFailure", "block");   /* Claude Code 2.1.295+ */
     cJSON_AddBoolToObject(h, "_kai", 1);
     cJSON_AddItemToArray(arr, h);
     cJSON_AddItemToObject(group, "hooks", arr);
@@ -228,6 +283,25 @@ static void agent_instructions(const char *agent, int add) {
     free(path);
 }
 
+/* onFailure needs Claude Code 2.1.295 or later. 1 older, 0 new enough or unknown. */
+static int claude_too_old(char *ver, size_t n) {
+    if (n) ver[0] = '\0';
+    char *local = kai_expand_home("~/.claude/local/claude");
+    char cmd[PATH_MAX + 64];
+    snprintf(cmd, sizeof cmd, "claude --version 2>/dev/null || '%s' --version 2>/dev/null", local ? local : "");
+    free(local);
+    FILE *f = popen(cmd, "r");
+    if (!f) return 0;
+    char line[128] = "";
+    if (!fgets(line, sizeof line, f)) line[0] = '\0';
+    pclose(f);
+    int a = 0, b = 0, c = 0;
+    if (sscanf(line, "%d.%d.%d", &a, &b, &c) != 3) return 0;
+    snprintf(ver, n, "%d.%d.%d", a, b, c);
+    long v = a * 1000000L + b * 1000L + c, need = 2 * 1000000L + 1 * 1000L + 295;
+    return v < need;
+}
+
 static int install_claude(const char *exe) {
     char *path = kai_expand_home("~/.claude/settings.json");
     if (!settings_ok(path)) { free(path); return 3; }
@@ -250,6 +324,17 @@ static int install_claude(const char *exe) {
     free(out); cJSON_Delete(root);
     if (rc == 0) printf("Installed Kai hooks into %s (backup: %s.kai-bak)\n", path, path);
     else fprintf(stderr, "Failed to write %s\n", path);
+    char ver[32];
+    char *marker = NULL;
+    if (asprintf(&marker, "%s/claude-onfailure-unsupported", kai_home()) < 0) marker = NULL;
+    if (rc == 0 && claude_too_old(ver, sizeof ver)) {
+        printf("Claude Code %s is older than 2.1.295: tool checks may fail open if Kai is missing. "
+               "Update Claude Code.\n", ver);
+        if (marker) { FILE *m = fopen(marker, "w"); if (m) { fprintf(m, "%s\n", ver); fclose(m); } }
+        kai_audit("kai", "install", "note", "claude_onfailure",
+                  "Claude Code is older than 2.1.295: tool checks may fail open if Kai is missing");
+    } else if (marker) unlink(marker);
+    free(marker);
     free(path);
     return rc;
 }
@@ -350,12 +435,12 @@ int kai_codex_analytics_off(int set) {
 /* ----- Cursor: ~/.cursor/hooks.json -----
  * { version:1, hooks:{ <event>:[ {command:"kai hook cursor", failClosed:true, _kai:true} ] } }
  */
-static cJSON *cursor_hook_entry(const char *exe, const char *matcher) {
+static cJSON *cursor_hook_entry(const char *exe, const char *matcher, int tool) {
     cJSON *h = cJSON_CreateObject();
     char cmd[1300];
     snprintf(cmd, sizeof cmd, "%s hook cursor", exe);
     cJSON_AddStringToObject(h, "command", cmd);
-    cJSON_AddBoolToObject(h, "failClosed", 1);
+    if (tool) cJSON_AddBoolToObject(h, "failClosed", 1);   /* tool hooks only: prompts never brick */
     if (matcher) cJSON_AddStringToObject(h, "matcher", matcher);
     cJSON_AddBoolToObject(h, "_kai", 1);
     return h;
@@ -368,7 +453,7 @@ static void cursor_event(cJSON *hooks, const char *event, const char *exe,
         list = cJSON_CreateArray();
         cJSON_AddItemToObject(hooks, event, list);
     }
-    cJSON_AddItemToArray(list, cursor_hook_entry(exe, matcher));
+    cJSON_AddItemToArray(list, cursor_hook_entry(exe, matcher, strcmp(event, "beforeSubmitPrompt") != 0));
 }
 
 static int install_cursor(const char *exe) {
@@ -664,7 +749,8 @@ static void try_it(const char *names) {
 }
 
 int kai_cmd_install(int argc, char **argv) {
-    const char *exe = kai_exe_path();
+    const char *exe = hook_target();
+    if (!exe) return 2;
     const char *which = argc > 0 ? argv[0] : "";
     if (!version_guard()) return 3;
     version_record();
@@ -792,4 +878,44 @@ int kai_cmd_uninstall(int argc, char **argv) {
         else { fprintf(stderr, "Couldn't remove %s\n", kai_home()); rc = 1; }
     }
     return rc;
+}
+
+/* STEP 2c: `kai doctor --fix` (and the app's Repair): every agent whose Kai
+ * hooks are installed but don't answer (a missing or broken program, an old
+ * guard) gets its hooks rewritten to the stable target. */
+int kai_cmd_doctor_fix(void) {
+    const char *target = hook_target();
+    if (!target) return 2;
+    char *codex = kai_codex_hooks_path();
+    const struct { const char *agent, *name, *config; } A[] = {
+        {"claude", "Claude Code", "~/.claude/settings.json"},
+        {"codex", "Codex", codex},
+        {"cursor", "Cursor", "~/.cursor/hooks.json"},
+    };
+    int problems = 0;
+    for (size_t i = 0; i < sizeof A / sizeof A[0]; i++) {
+        if (!A[i].config) continue;
+        kai_health h;
+        memset(&h, 0, sizeof h);
+        kai_health_agent(A[i].agent, A[i].config, &h);
+        if (h.ok) { printf("\xE2\x9C\x93 %s: hooks work\n", A[i].name); continue; }
+        if (!h.problem[0]) continue;            /* not installed: nothing to repair */
+        int rc = !strcmp(A[i].agent, "claude") ? install_claude(target)
+               : !strcmp(A[i].agent, "codex") ? install_codex(target) : install_cursor(target);
+        kai_health after;
+        memset(&after, 0, sizeof after);
+        kai_health_agent(A[i].agent, A[i].config, &after);
+        if (rc == 0 && after.ok) {
+            printf("Repaired %s: its hooks now run %s (was: %s)\n", A[i].name, target, h.problem);
+            char d[600];
+            snprintf(d, sizeof d, "repaired %s hooks (was: %s)", A[i].agent, h.problem);
+            kai_audit("kai", "doctor-fix", "note", "hook_repair", d);
+        } else {
+            printf("Couldn't repair %s (%s). Turn off its checks with: kai uninstall %s\n", A[i].name,
+                   after.problem[0] ? after.problem : "install failed", A[i].agent);
+            problems++;
+        }
+    }
+    free(codex);
+    return problems ? 1 : 0;
 }

@@ -35,5 +35,16 @@ rows = LiveCoverage.rows(agents: [], internetLevel: 1, protectAvailable: false)
 check(state("Agent checks") == "unknown (Kai can't list agents right now)", "no agent rows: unknown, not 'none installed'")
 check(!rows.contains { $0.state.lowercased().contains("protected") }, "no row says protected")
 
+print("blocked banner (STEP 2c)")
+var broken = AgentRow(name: "claude"); broken.hooks = "failing"
+broken.detail = "Kai's program is missing (/usr/local/bin/kai): the agent is blocked until Kai is reinstalled"
+var fine = AgentRow(name: "codex"); fine.hooks = "installed"
+var odd = AgentRow(name: "cursor"); odd.hooks = "failing"; odd.detail = "Kai's hook didn't block a test request (exit 1)"
+let banners = LiveCoverage.blocked(agents: [broken, fine, odd])
+check(banners.map(\.agent) == ["Claude Code", "Cursor"], "every agent whose checks can't run gets a banner (\(banners.map(\.agent)))")
+check(banners.first?.title == "Claude Code is blocked: Kai's checks can't run", "the banner names the agent and the cause")
+check(banners.first?.actions == ["Repair", "Turn off checks for Claude Code"], "...with Repair and Turn off checks")
+check(LiveCoverage.blocked(agents: [fine]).isEmpty, "healthy agents: no banner")
+
 print(fails == 0 ? "coverage list tests: all passed" : "coverage list tests: \(fails) failed")
 exit(fails == 0 ? 0 : 1)

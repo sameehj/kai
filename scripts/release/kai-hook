@@ -1,0 +1,28 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
+#
+# Kai's hook launcher (STEP 2c). Agents' hooks call this stable path, which the
+# package installs at /usr/local/libexec/kai-hook:  kai-hook hook <agent>
+# It runs Kai. If Kai's program is missing, a broken Kai must never brick the
+# agent: prompts go through with a warning, tool calls are denied with a
+# message that names the Repair button, and other events pass silently.
+K=/usr/local/bin/kai
+[ "${1:-}" = hook ] && shift
+agent="${1:-claude}"
+if [ -x "$K" ]; then exec "$K" hook "$agent"; fi
+
+ev=$(cat)
+MSG="Kai's checks can't run: its program is missing. Open Kai and click Repair (or run kai doctor --fix in your own terminal)."
+case "$ev" in
+    *'"UserPromptSubmit"'*|*'"beforeSubmitPrompt"'*)
+        if [ "$agent" = cursor ]; then printf '{"continue":true}\n'
+        else printf '{"systemMessage":"%s This prompt was not checked."}\n' "$MSG"; fi
+        exit 0 ;;
+    *'"PreToolUse"'*)
+        printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s Don'\''t retry another way; ask the user."}}\n' "$MSG"
+        exit 0 ;;
+    *'"beforeShellExecution"'*|*'"beforeMCPExecution"'*|*'"beforeReadFile"'*)
+        printf '{"permission":"deny","user_message":"%s","agent_message":"%s Don'\''t retry another way; ask the user."}\n' "$MSG" "$MSG"
+        exit 0 ;;
+esac
+exit 0

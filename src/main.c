@@ -113,6 +113,7 @@ static int cmd_redact(void) {
 
 int kai_cmd_status_text(void);   /* status.c: measured state (Release Plan A2) */
 int kai_cmd_doctor(void);
+int kai_cmd_doctor_fix(void);
 
 static int cmd_log(int argc, char **argv) {
     const char *sub = argc > 0 ? argv[0] : "tail";
@@ -238,7 +239,8 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "scan") == 0) return cmd_scan(rest, restv);
     if (strcmp(cmd, "redact") == 0) return cmd_redact();
     if (strcmp(cmd, "init") == 0) return cmd_init();
-    if (strcmp(cmd, "doctor") == 0) return kai_cmd_doctor();
+    if (strcmp(cmd, "doctor") == 0)
+        return (rest > 0 && strcmp(restv[0], "--fix") == 0) ? kai_cmd_doctor_fix() : kai_cmd_doctor();
     if (strcmp(cmd, "status") == 0)
         return (rest > 0 && strcmp(restv[0], "--json") == 0) ? kai_cmd_status_json() : kai_cmd_status_text();
     if (strcmp(cmd, "policy") == 0) return kai_cmd_policy(rest, restv);

@@ -85,12 +85,19 @@ static int run_probe(const char *cmd, const char *input, size_t inlen, char *out
 }
 
 /* The program a hook command runs: the text before " hook ". */
+/* The program a hook command runs: the part before " hook ", unquoted
+ * ('...' with '\'' escapes, as kai install writes it since STEP 2c). */
 static void command_exe(const char *cmd, char *exe, size_t n) {
     const char *h = strstr(cmd, " hook ");
     size_t len = h ? (size_t)(h - cmd) : strlen(cmd);
-    if (len >= n) len = n - 1;
-    memcpy(exe, cmd, len);
-    exe[len] = '\0';
+    size_t o = 0;
+    int q = 0;
+    for (size_t i = 0; i < len && o + 1 < n; i++) {
+        if (cmd[i] == '\'') { q = !q; continue; }
+        if (!q && cmd[i] == '\\' && i + 1 < len) { exe[o++] = cmd[++i]; continue; }
+        exe[o++] = cmd[i];
+    }
+    exe[o] = '\0';
 }
 
 static int executable(const char *path) {
@@ -144,9 +151,11 @@ void kai_health_agent(const char *agent, const char *config, kai_health *h) {
     char exe[1100] = "";
     const cJSON *ev;
     cJSON_ArrayForEach(ev, hooks) {
-        int blocking = !strcmp(ev->string, "PreToolUse") || !strcmp(ev->string, "UserPromptSubmit") ||
+        /* STEP 2c: tool hooks fail closed; prompt hooks must not (a broken Kai
+         * would brick every prompt), so they aren't counted here */
+        int blocking = !strcmp(ev->string, "PreToolUse") ||
                        !strcmp(ev->string, "beforeReadFile") || !strcmp(ev->string, "beforeShellExecution") ||
-                       !strcmp(ev->string, "beforeSubmitPrompt") || !strcmp(ev->string, "beforeMCPExecution");
+                       !strcmp(ev->string, "beforeMCPExecution");
         const cJSON *g;
         cJSON_ArrayForEach(g, ev) {
             /* Claude Code / Codex: groups with a "hooks" list; Cursor: entries */
@@ -159,8 +168,12 @@ void kai_health_agent(const char *agent, const char *config, kai_health *h) {
                 found = 1;
                 if (!exe[0]) command_exe(c->valuestring, exe, sizeof exe);
                 if (blocking) {
+                    const cJSON *of = cJSON_GetObjectItemCaseSensitive(e, "onFailure");
                     int fc = !strcmp(agent, "cursor")
                                  ? cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(e, "failClosed"))
+                             : !strcmp(agent, "claude")
+                                 ? (cJSON_IsString(of) && !strcmp(of->valuestring, "block")) ||
+                                   strstr(c->valuestring, "exit 2") != NULL
                                  : strstr(c->valuestring, "exit 2") != NULL;
                     if (!fc) guarded = 0;
                     if (!probe_cmd && (!strcmp(ev->string, "PreToolUse") || !strcmp(ev->string, "beforeReadFile")))
@@ -173,6 +186,13 @@ void kai_health_agent(const char *agent, const char *config, kai_health *h) {
     if (!found) {
         h->ok = 0;
         h->problem[0] = '\0'; /* not installed: not a health problem */
+        cJSON_Delete(root);
+        return;
+    }
+    /* through the package's launcher: what matters is the kai it runs */
+    if (!strcmp(exe, "/usr/local/libexec/kai-hook") && executable(exe) && !executable("/usr/local/bin/kai")) {
+        set_problem(h, "Kai's program is missing (%s): tool calls are blocked until Kai is repaired; prompts still "
+                       "go through", "/usr/local/bin/kai");
         cJSON_Delete(root);
         return;
     }
