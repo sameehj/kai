@@ -40,5 +40,24 @@ let secretish = ev(#"{"ts":"2026-11-02T12:40:52Z","source":"claude","event":"Pre
 let b2 = CardText.brief(secretish, sessionName: nil)
 check(!b2.contains("ghp_") && !b2.contains("REDACTED"), "never secret values (nor redaction markers) in the brief")
 
+print("plain words for older records (Nov 2)")
+let oldPrompt = ev(#"{"ts":"2026-11-02T19:16:25Z","source":"claude","event":"UserPromptSubmit","decision":"block","rule":"prompt_secret","detail":"secret:generic_secret_assign x1 (redact)","h":"x3","target":"(prompt, 300 characters - not kept)","decision_id":"k-94b07c6f"}"#)
+check(oldPrompt.detail == "Prompt blocked: it contained a password-like secret. Claude Code can't redact prompts, so Kai blocked it.",
+      "an old blocked prompt reads what happened: '\(oldPrompt.detail)'")
+let oldCursor = ev(#"{"ts":"2026-11-02T19:16:25Z","source":"cursor","event":"beforeSubmitPrompt","decision":"block","rule":"prompt","detail":"secret:aws_access_key x1 (redact), secret:password_assign x2 (redact)","h":"x4"}"#)
+check(oldCursor.detail == "Prompt blocked: it contained an AWS access key and a password. Cursor can't redact prompts, so Kai blocked it.",
+      "two findings, Cursor: '\(oldCursor.detail)'")
+check(secretish.detail == "Kai stopped sending tests/x.sh to the model: it holds a GitHub token.",
+      "rule ids inside a sentence become words: '\(secretish.detail)'")
+let custom = ev(#"{"ts":"2026-11-02T19:16:25Z","source":"claude","event":"PreToolUse","decision":"block","rule":"mcp_arguments","detail":"secret:acme_badge x1 (block)","h":"x5"}"#)
+check(!custom.detail.contains("(block)") && !custom.detail.contains("secret:") && custom.detail.contains("acme_badge"),
+      "a user's own rule is named, without the id syntax: '\(custom.detail)'")
+for e in [oldPrompt, oldCursor, secretish, custom] {
+    check(!e.detail.contains("(redact)") && !e.detail.contains("_assign"), "no '(redact)' or rule id shown (\(e.h))")
+    check(!CardText.brief(e, sessionName: nil).contains("(redact)"), "nor in the copied brief (\(e.h))")
+}
+let plainNet = ev(#"{"ts":"2026-11-02T19:16:25Z","source":"network","event":"claude","decision":"log","rule":"","detail":"connection to example.org is not on the allowlist","h":"x6"}"#)
+check(plainNet.detail == "connection to example.org is not on the allowlist", "other details are unchanged")
+
 print(fails == 0 ? "card text tests: all passed" : "card text tests: \(fails) failed")
 exit(fails == 0 ? 0 : 1)

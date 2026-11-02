@@ -86,7 +86,7 @@ cread() { python3 -I -c 'import json,sys; print(json.dumps({"hook_event_name":"b
 cshell() { python3 -I -c 'import json,sys; print(json.dumps({"hook_event_name":"beforeShellExecution","command":sys.argv[2],"cwd":sys.argv[1],"workspace_roots":[sys.argv[1]]}))' "$fdir" "$1"; }
 # default on_file_secret is ask
 expect "your blocked term in a file: blocked, not asked" claude "$(fread "$fdir/customers.csv")" '"deny"'
-expect "the block names the term" claude "$(fread "$fdir/customers.csv")" 'holds term:Globex'
+expect "the block names the term" claude "$(fread "$fdir/customers.csv")" 'holds the company term \"Globex'
 expect "your blocked rule in a file: blocked" claude "$(fread "$fdir/notes.md")" '"deny"'
 expect "a detected secret: Claude Code asks you" claude "$(fread "$fdir/config.txt")" '"permissionDecision":"ask"'
 expect "the question says what it holds" claude "$(fread "$fdir/config.txt")" 'Allow it this time?'
@@ -265,6 +265,25 @@ printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"C3","prompt":"p
 has "prompt block keeps no prompt text, only that it was not kept (A5)" 'not kept'
 lacks "none of the prompt's words are stored" 'deploy with key'
 lacks "prompt secret is not stored" 'ghp_abcdefghijklmnop'
+# Nov 2: plain words. A blocked prompt never says "(redact)" or a rule id.
+has "prompt block record says what happened in plain words" 'Prompt blocked: it contained a GitHub token. Claude Code can'"'"'t redact prompts, so Kai blocked it.'
+lacks "prompt block record shows no configured action" '(redact)'
+lacks "prompt block record shows no rule id in the detail" 'x1'
+P_GEN='{"hook_event_name":"UserPromptSubmit","session_id":"C5","prompt":"use api_key=Zq8mW2xK7pLr4 for this"}'
+expect "claude prompt block names a password-like secret" claude "$P_GEN" 'Prompt blocked: it contained a password-like secret.'
+refute "claude prompt block message has no rule id" claude "$P_GEN" 'generic_secret_assign'
+refute "claude prompt block message has no (redact)" claude "$P_GEN" '(redact)'
+refute "claude prompt block message isn't prefixed twice" claude "$P_GEN" 'Kai stopped this: Prompt'
+expect "codex prompt block names Codex" codex "$P_GEN" 'Codex can'"'"'t redact prompts'
+expect "cursor prompt block in plain words" cursor \
+  '{"hook_event_name":"beforeSubmitPrompt","prompt":"use api_key=Zq8mW2xK7pLr4 for this"}' \
+  'Prompt blocked: it contained a password-like secret. Cursor can'"'"'t redact prompts'
+expect "claude MCP arguments with a secret: plain words" claude \
+  '{"hook_event_name":"PreToolUse","cwd":"/tmp/proj","tool_name":"mcp__srv__send","tool_input":{"text":"api_key=Zq8mW2xK7pLr4"}}' \
+  'its arguments contain a password-like secret'
+refute "claude MCP arguments message has no rule id" claude \
+  '{"hook_event_name":"PreToolUse","cwd":"/tmp/proj","tool_name":"mcp__srv__send","tool_input":{"text":"api_key=Zq8mW2xK7pLr4"}}' \
+  'secret:'
 NOCTX="$TMP/noctx.policy"
 printf '%s\n' 'audit_context off' 'rule_upload netcat (^|\| )(nc|ncat|netcat)( |$)' > "$NOCTX"
 export KAI_POLICY="$NOCTX"

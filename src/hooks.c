@@ -302,9 +302,23 @@ static void add_ask_user(char *msg, size_t n) {
     if (l + sizeof KAI_ASK_USER < n) memcpy(msg + l, KAI_ASK_USER, sizeof KAI_ASK_USER);
 }
 
+/* Nov 2: a prompt with a secret, in plain words. No agent can redact a
+ * prompt, so the configured "redact" becomes a block; say that, not
+ * "(redact)". The prompt itself is never quoted (A5). */
+static void prompt_reason(const char *agent, const char *what, int blocked, char *out, size_t n) {
+    const char *name = !strcmp(agent, "claude") ? "Claude Code" : !strcmp(agent, "codex") ? "Codex"
+                     : !strcmp(agent, "cursor") ? "Cursor" : "This agent";
+    if (blocked)
+        snprintf(out, n, "Prompt blocked: it contained %s. %s can't redact prompts, so Kai blocked it. "
+                 "Remove the secret and send the prompt again.", what, name);
+    else
+        snprintf(out, n, "Prompt sent with a warning: it contained %s (your settings warn instead of "
+                 "blocking).", what);
+}
+
 /* The stop already reads as a sentence to the user: no "Kai stopped this:". */
 static int own_words(const char *reason) {
-    return !strncmp(reason, "Kai ", 4) || strstr(reason, "kai allow-capture --app") != NULL ||
+    return !strncmp(reason, "Kai ", 4) || !strncmp(reason, "Prompt ", 7) || strstr(reason, "kai allow-capture --app") != NULL ||
            strstr(reason, "page, Screen and app control.") != NULL;
 }
 
@@ -480,7 +494,7 @@ static int file_holds_sensitive(const kai_policy *p, const char *file, const cha
                 for (int i = 0; i < rep.nhits; i++)
                     if (rep.hits[i].action >= KAI_ACT_BLOCK && strncmp(rep.hits[i].rule, "secret:", 7) != 0)
                         hit = 2;
-                kai_report_summary(&rep, why, whylen);
+                kai_report_plain(&rep, why, whylen);
             }
         }
         free(txt);
@@ -1315,7 +1329,8 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
         if (rep.worst >= KAI_ACT_REDACT) {
             kai_action a = kai_policy_prompt_action(p);
             decision = a >= KAI_ACT_REDACT ? KAI_ACT_BLOCK : KAI_ACT_WARN;
-            kai_report_summary(&rep, reason, sizeof reason);
+            char what[300]; kai_report_plain(&rep, what, sizeof what);
+            prompt_reason(source, what, decision >= KAI_ACT_BLOCK, reason, sizeof reason);
             kai_strlcpy(rule, "prompt_secret", sizeof rule);
         }
     } else if (ev && (strcmp(ev, "PreToolUse") == 0)) {
@@ -1458,7 +1473,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 snprintf(reason, sizeof reason, "Kai stopped fetching from %s: the user chose to stop this (kai rules).", hosts[0]);
             } else if (url && frep.worst >= KAI_ACT_REDACT) {
                 decision = KAI_ACT_BLOCK; kai_strlcpy(rule, "fetch_secret", sizeof rule);
-                char what[200]; kai_report_summary(&frep, what, sizeof what);
+                char what[200]; kai_report_plain(&frep, what, sizeof what);
                 snprintf(reason, sizeof reason, "Kai stopped a fetch whose address contains a secret (%s). "
                          "Remove it from the address.", what);
             } else if (kai_policy_fetch_block(p) &&
@@ -1553,7 +1568,9 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             if (rep.worst >= KAI_ACT_REDACT) {
                 decision = KAI_ACT_BLOCK;
                 ask = 0;   /* not "allow this time?" - a secret must not be sent */
-                kai_report_summary(&rep, reason, sizeof reason);
+                char what[300]; kai_report_plain(&rep, what, sizeof what);
+                snprintf(reason, sizeof reason, "Kai stopped this MCP call: its arguments contain %s, "
+                         "which must not be sent to a tool.", what);
                 kai_strlcpy(rule, "mcp_arguments", sizeof rule);
                 free(subject);
                 subject = strdup(alltext);
@@ -1676,7 +1693,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             cJSON *o = cJSON_CreateObject();
             cJSON_AddStringToObject(o, "decision", "block");
             char msg[600];
-            if (!strncmp(reason, "Kai ", 4)) snprintf(msg, sizeof msg, "%s", reason);
+            if (own_words(reason)) snprintf(msg, sizeof msg, "%s", reason);
             else snprintf(msg, sizeof msg, "Kai stopped this: %s", reason);
             add_decision_id(msg, sizeof msg, did);
             cJSON_AddStringToObject(o, "reason", msg);
@@ -1859,7 +1876,10 @@ static int hook_cursor(const char *json) {
             kai_strlcpy(why, "screen_app_control", sizeof why);
             kai_strlcpy(match, capapp, sizeof match);
         } else if (rep.worst >= KAI_ACT_REDACT) {
-            deny = 1; kai_report_summary(&rep, reason, sizeof reason);
+            deny = 1;
+            char what[300]; kai_report_plain(&rep, what, sizeof what);
+            snprintf(reason, sizeof reason, "Kai stopped this MCP call: its arguments contain %s, "
+                     "which must not be sent to a tool.", what);
             kai_strlcpy(why, "mcp_arguments", sizeof why);
         }
     } else if (ev && strcmp(ev, "beforeSubmitPrompt") == 0) {
@@ -1873,9 +1893,10 @@ static int hook_cursor(const char *json) {
             /* beforeSubmitPrompt uses {continue:false} */
             cJSON *o = cJSON_CreateObject();
             cJSON_AddBoolToObject(o, "continue", 0);
-            char msg[600]; char sm[512];
-            kai_report_summary(&rep, sm, sizeof sm);
-            snprintf(msg, sizeof msg, "Kai stopped this prompt: it contains %s. Remove it and send again.", sm);
+            char msg[600]; char sm[512], what[300];
+            kai_report_plain(&rep, what, sizeof what);
+            prompt_reason("cursor", what, 1, sm, sizeof sm);
+            snprintf(msg, sizeof msg, "%s", sm);
             cJSON_AddStringToObject(o, "user_message", msg);
             char *s = cJSON_PrintUnformatted(o);
             printf("%s\n", s); free(s); cJSON_Delete(o);

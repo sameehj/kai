@@ -61,10 +61,12 @@ check(banners.first?.actions == ["Repair", "Turn off checks for Claude Code"], "
 check(LiveCoverage.blocked(agents: [fine]).isEmpty, "healthy agents: no banner")
 
 print("session tab names (Nov 2)")
-var s = SessionRow(id: "a", agent: "claude"); s.tty = "/dev/ttys001"
-check(s.tab == "Terminal tab 1", "ttys001 reads 'Terminal tab 1' (\(s.tab))")
+var s = SessionRow(id: "a", agent: "claude"); s.tty = "/dev/ttys000"
+check(s.tab == "Terminal tab 1", "tabs count from 1: ttys000 reads 'Terminal tab 1' (\(s.tab))")
+s.tty = "/dev/ttys001"
+check(s.tab == "Terminal tab 2", "ttys001 reads 'Terminal tab 2' (\(s.tab))")
 s.tty = "ttys012"
-check(s.tab == "Terminal tab 12", "ttys012 reads 'Terminal tab 12'")
+check(s.tab == "Terminal tab 13", "ttys012 reads 'Terminal tab 13'")
 s.tty = ""
 check(s.tab == "", "no tty: no tab")
 
