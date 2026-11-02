@@ -9,7 +9,7 @@ What Kai Preview's checks (hooks inside each agent) receive and can stop, per ag
 
 Evidence: each agent's hook event, in that agent's format, sent to the real `kai hook` with the default policy in a throwaway home (`python3 -I tests/coverage/run_coverage.py ./kai`). Generated 2026-11-01.
 
-## Claude Code (2.1.312 (Claude Code))
+## Claude Code (2.1.316 (Claude Code))
 
 | Action | Event or hook | Input available | Stage | Can block? | Known bypasses and limits | Evidence |
 |---|---|---|---|---|---|---|
