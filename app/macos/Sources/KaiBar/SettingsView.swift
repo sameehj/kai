@@ -1163,6 +1163,10 @@ private struct ActivityRow: View {
                 Text(event.detail).font(.system(size: 12)).foregroundStyle(Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let d = event.decision_id {   // the ID the agent quoted, to find this row
+                Text("Decision \(d)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.muted)
+                    .textSelection(.enabled)
+            }
             DecisionSheet(event: event, count: count, showHeader: false, grants: grants)
             if let n = followUp {
                 Label(n.detail, systemImage: "arrow.turn.down.right")

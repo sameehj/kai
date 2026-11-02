@@ -910,7 +910,10 @@ typedef struct {
     const char *session;  /* the agent's session / conversation id          */
     const char *cwd;
     const char *identity; /* the agent's verified signing identity, if known */
+    const char *decision_id; /* Nov 1: "k-1a2b3c4d" on a denial or ask, also sent to the agent */
 } kai_audit_entry;
+/* A new decision ID ("k-" + 8 hex). */
+void kai_decision_id_new(char *out, size_t n);
 int kai_audit_write(const kai_audit_entry *e);
 /* Today's (date NULL) or a given day's ("YYYY-MM-DD", local) counts of
  * meaningful records: secrets kept private and other blocks. Written with each

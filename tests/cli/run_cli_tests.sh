@@ -315,6 +315,26 @@ hasnt "a pinned version isn't noted" "$al" "MCP server pinned runs from an unpin
 hasnt "a local executable isn't noted" "$al" "MCP server local runs from an unpinned"
 [ -n "$(printf '%s' "$al" | grep 'unpinned npx spec' | grep '"decision":"note"')" ] && pass "...as a note (shown in Activity, not a block)" || fail "unpinned record isn't a note"
 
+echo "== every denial: decision ID, reason, recovery (Nov 1 step 4) =="
+DH="$TMP/decid"; mkdir -p "$DH/.kai" "$DH/proj"; printf 'KAI_TEST_SECRET=fake-123\n' > "$DH/proj/.env"
+dk() { printf '%s' "$2" | HOME="$DH" KAI_HOME="$DH/.kai" KAI_NO_APP=1 "$KAI" hook "$1"; }
+o=$(dk claude '{"hook_event_name":"PreToolUse","tool_name":"Bash","session_id":"d","tool_input":{"command":"cat .env"},"cwd":"'"$DH"'/proj"}')
+id=$(printf '%s' "$o" | grep -o 'Kai decision k-[0-9a-f]\{8\}' | head -1 | sed 's/Kai decision //')
+[ -n "$id" ] && pass "a Claude Code denial names its decision ID ($id)" || fail "no decision ID in the denial: $o"
+has "...with the reason" "$o" "Kai stopped a command that uses"
+has "...and the recovery" "$o" "ask the user"
+has "...and where the user sees it" "$o" "Kai → Activity"
+grep -q "\"decision_id\":\"$id\"" "$DH/.kai/audit.log" 2>/dev/null && pass "...the same ID is on the audit record (Activity)" || fail "decision ID $id not in the audit log"
+o=$(dk codex '{"hook_event_name":"PreToolUse","tool_name":"shell","session_id":"d","tool_input":{"command":["bash","-lc","cat .env"]},"cwd":"'"$DH"'/proj"}')
+has "a Codex denial too" "$o" "Kai decision k-"
+o=$(dk cursor '{"hook_event_name":"beforeShellExecution","command":"cat '"$DH"'/proj/.env","workspace_roots":["'"$DH"'/proj"]}')
+has "a Cursor denial too (agent_message)" "$o" "Kai decision k-"
+o=$(dk claude '{"hook_event_name":"UserPromptSubmit","session_id":"d","prompt":"use ghp_abcdefghijklmnopqrstuvwxyz0123456789 please","cwd":"'"$DH"'/proj"}')
+has "a stopped prompt too" "$o" "Kai decision k-"
+o1=$(dk claude '{"hook_event_name":"PreToolUse","tool_name":"Bash","session_id":"d","tool_input":{"command":"cat .env"},"cwd":"'"$DH"'/proj"}')
+id2=$(printf '%s' "$o1" | grep -o 'k-[0-9a-f]\{8\}' | head -1)
+[ -n "$id2" ] && [ "$id2" != "$id" ] && pass "each denial gets its own ID" || fail "decision IDs repeat: $id / $id2"
+
 echo "== Chrome support removed (Security Plan v1.0) =="
 CR="$TMP/chrome"; NM="$CR/Library/Application Support/Google/Chrome/NativeMessagingHosts"
 mkdir -p "$NM" "$CR/.kai/browser-extension"

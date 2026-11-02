@@ -123,6 +123,7 @@ static int append_record(int fd, const kai_audit_entry *e) {
     opt_field(&body, "session", e->session, 128);
     opt_field(&body, "cwd", e->cwd, 512);
     opt_field(&body, "identity", e->identity, 160);
+    opt_field(&body, "decision_id", e->decision_id, 16);
     sb_adds(&body, ",\"prev\":"); esc(&body, prev);
     char *bodystr = sb_take(&body);
 
@@ -457,4 +458,9 @@ int kai_audit_verify(const char *path, int *nlines, char *err, size_t errlen) {
     if (nlines) *nlines = ln;
     if (bad) { snprintf(err, errlen, "chain broken at record %d", bad); return -1; }
     return 0;
+}
+
+/* Nov 1 step 4: the ID a denial carries to the agent and into Activity. */
+void kai_decision_id_new(char *out, size_t n) {
+    if (out && n) snprintf(out, n, "k-%08x", arc4random());
 }

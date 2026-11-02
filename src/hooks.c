@@ -287,6 +287,13 @@ static int terminal_stopped(const char *cmd, const char *hit, const char *agent,
     return capture_stopped(what, name, " (commands it runs there aren't checked by Kai)", agent, cwd, out, n);
 }
 
+/* Nov 1 step 4: the decision ID, in what the agent (and the user) reads. */
+static void add_decision_id(char *msg, size_t n, const char *did) {
+    if (!did || !*did) return;
+    size_t l = strlen(msg);
+    snprintf(msg + l, n > l ? n - l : 0, " (Kai decision %s; the user can see it in Kai \xE2\x86\x92 Activity.)", did);
+}
+
 /* NEVER-RERUN fix 5: what the agent should do after a Kai denial. */
 #define KAI_ASK_USER " Don't retry another way; ask the user."
 static void add_ask_user(char *msg, size_t n) {
@@ -1633,6 +1640,8 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
         maybe_wait_note(reason, sizeof reason, session, rule, subject);
     const char *dec_str = would_block ? "would-block"
                           : ask ? "ask" : (decision >= KAI_ACT_BLOCK) ? "block" : "warn";
+    char did[16] = "";
+    if (decision >= KAI_ACT_BLOCK) kai_decision_id_new(did, sizeof did);
     if (decision >= KAI_ACT_BLOCK) {
         /* PreToolUse uses permissionDecision; prompt/other use top-level decision */
         if (ev && strcmp(ev, "PreToolUse") == 0) {
@@ -1648,6 +1657,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             else
                 snprintf(msg, sizeof msg, "Kai stopped this: %s", reason);
             if (!ask) add_ask_user(msg, sizeof msg);
+            add_decision_id(msg, sizeof msg, did);
             cJSON_AddStringToObject(h, "permissionDecisionReason", msg);
             cJSON_AddItemToObject(o, "hookSpecificOutput", h);
             char *s = cJSON_PrintUnformatted(o);
@@ -1659,6 +1669,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             char msg[600];
             if (!strncmp(reason, "Kai ", 4)) snprintf(msg, sizeof msg, "%s", reason);
             else snprintf(msg, sizeof msg, "Kai stopped this: %s", reason);
+            add_decision_id(msg, sizeof msg, did);
             cJSON_AddStringToObject(o, "reason", msg);
             char *s = cJSON_PrintUnformatted(o);
             printf("%s\n", s);
@@ -1695,7 +1706,8 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
     if (decision != KAI_ACT_NONE || exempted[0]) {
         if (ev && !strcmp(ev, "UserPromptSubmit")) prompt_context(subject, ctx, sizeof ctx);
         else log_context(p, subject, match, ctx, sizeof ctx, mctx, sizeof mctx);
-        kai_audit_entry e = {source, event_label, dec_str, rule, reason, tool, ctx, mctx, session, cwd, NULL};
+        kai_audit_entry e = {source, event_label, dec_str, rule, reason, tool, ctx, mctx, session, cwd, NULL,
+                             did[0] ? did : NULL};
         if (decision == KAI_ACT_NONE) {
             e.decision = "exempt";
             e.rule = exempted;
@@ -1716,12 +1728,13 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
 
 /* ---------- Cursor ---------- */
 
-static void cursor_deny(const char *user_msg) {
+static void cursor_deny_id(const char *user_msg, const char *did) {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "permission", "deny");
-    char msg[600];
+    char msg[700];
     if (own_words(user_msg)) snprintf(msg, sizeof msg, "%s", user_msg);
     else snprintf(msg, sizeof msg, "Kai stopped this: %s", user_msg);
+    add_decision_id(msg, sizeof msg, did);
     cJSON_AddStringToObject(o, "user_message", msg);
     add_ask_user(msg, sizeof msg);
     cJSON_AddStringToObject(o, "agent_message", msg);
@@ -1729,6 +1742,8 @@ static void cursor_deny(const char *user_msg) {
     printf("%s\n", s);
     free(s); cJSON_Delete(o);
 }
+
+static void cursor_deny(const char *user_msg) { cursor_deny_id(user_msg, NULL); }
 
 static int hook_cursor(const char *json) {
     cJSON *root = cJSON_Parse(json);
@@ -1870,14 +1885,17 @@ static int hook_cursor(const char *json) {
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "permission", "ask");
         char msg[600];
+        char adid[16];
+        kai_decision_id_new(adid, sizeof adid);
         snprintf(msg, sizeof msg, "Kai: %s. Allow it this time?", reason);
+        add_decision_id(msg, sizeof msg, adid);
         cJSON_AddStringToObject(o, "user_message", msg);
         cJSON_AddStringToObject(o, "agent_message", msg);
         char *s = cJSON_PrintUnformatted(o);
         printf("%s\n", s);
         free(s); cJSON_Delete(o);
         kai_audit_entry e = {"cursor", ev ? ev : "unknown", "ask", why, reason,
-                             tool, ctx, mctx, session, cwd, NULL};
+                             tool, ctx, mctx, session, cwd, NULL, adid};
         kai_audit_write(&e);
     } else if (deny && kai_rule_is_builtin(why) == 0 && kai_session_paused_here((long long)time(NULL))) {
         /* paused: soft blocks go through, logged; Kai's own files still hold */
@@ -1888,9 +1906,11 @@ static int hook_cursor(const char *json) {
         deny = 0;
     } else if (deny) {
         maybe_wait_note(reason, sizeof reason, session, why, subject);
-        cursor_deny(reason);
+        char cdid[16];
+        kai_decision_id_new(cdid, sizeof cdid);
+        cursor_deny_id(reason, cdid);
         kai_audit_entry e = {"cursor", ev ? ev : "unknown", "block", why, reason,
-                             tool, ctx, mctx, session, cwd, NULL};
+                             tool, ctx, mctx, session, cwd, NULL, cdid};
         kai_audit_write(&e);
     } else {
         if (ex.exempted[0]) {

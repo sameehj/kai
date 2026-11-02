@@ -31,6 +31,7 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
     let cwd: String?
 
     var identity: String? = nil   // the agent's verified signing identity (network records)
+    var decision_id: String? = nil   // Nov 1 step 4: the ID the agent was given with a denial
     var id: String { h }
     var date: Date? { AuditEvent.iso.date(from: ts) }
     var isBlock: Bool { decision == "block" }
