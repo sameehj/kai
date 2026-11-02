@@ -27,33 +27,51 @@
 
 **Files protection: not included in this release.**
 
-Evidence for this release: agent checks verified live with Claude Code 2.1.312 (9 of 9 checks PASS, 2026-10-30) and Codex 0.162.1 (the deny reason reached the model, 2026-11-02), synthetic hook events for Cursor ([docs/COVERAGE.md](docs/COVERAGE.md)); the release-blocking tests on the signed build are listed in the release notes. The end-to-end replay of attack cases hasn't run: NOT COVERED.
-
-## First steps
-
-1. **Install the package and approve the Internet wall** when macOS asks (see [Install](#install)).
-2. **Check it:** `kai install all`, then `kai doctor` and `kai status`.
-3. **When Kai denies something legitimate,** the message names the decision, why, and the narrow way to allow it: one agent, one operation, one target, with an expiry. The agent is told why, and to ask you instead of trying another way.
+How this release was verified: see the [release notes](https://github.com/sameehj/kai/releases). What each agent reports to Kai, and what Kai can stop: [docs/COVERAGE.md](docs/COVERAGE.md).
 
 ## Install
 
-**macOS 13 or later; Linux and Windows aren't supported.**
+**macOS 13 or later; Linux and Windows aren't supported.** Works with Claude Code, Codex and Cursor.
 
-Download `Kai-Preview-<version>.pkg` from [Releases](https://github.com/sameehj/kai/releases), check it, and open it:
+1. **Download** `Kai-Preview-<version>.pkg` from the newest release on the [Releases page](https://github.com/sameehj/kai/releases), and double-click it. It installs the Kai app and the `kai` command.
+2. **Open Kai** (Applications → Kai). It lives in the menu bar. Click its icon and switch **Internet** on.
+3. **Approve Kai's network extension** when macOS asks. This is what lets Kai see where your agents connect.
+   - macOS 13–14: System Settings → Privacy & Security, then click Allow next to Kai.
+   - macOS 15: System Settings → General → Login Items & Extensions → Network Extensions, then turn Kai on.
+4. **Add Kai's checks to your agents** in Terminal:
+   ```sh
+   kai install claude      # and/or: kai install codex, kai install cursor (or: kai install all)
+   kai doctor              # each agent should show a ✓
+   ```
+   Codex runs hooks only after you trust them: open Codex, run `/hooks`, and trust Kai's.
+
+`kai status` shows what's checked, per agent, at any time.
+
+### Verify the download (optional)
+
+Download `SHA256SUMS` from the same release into the same folder, then:
 
 ```sh
-shasum -a 256 -c SHA256SUMS
-spctl --assess --type install -vv Kai-Preview-0.2.0-preview.2.pkg   # "source=Notarized Developer ID"
+shasum -a 256 -c SHA256SUMS                                  # "Kai-Preview-<version>.pkg: OK"
+spctl --assess --type install -vv Kai-Preview-*.pkg          # "source=Notarized Developer ID"
 ```
 
-It installs the Kai app (with its Internet wall) and the `kai` command. Open Kai, approve the Internet wall when macOS asks (System Settings → Privacy & Security, or General → Login Items & Extensions → Network Extensions), and Kai starts recording the connections it observes (it blocks none in this release). The installer refreshes Kai's checks in the agents that already have them. For another agent:
+### When Kai stops something
 
-```sh
-kai install claude      # or codex, cursor, all
-kai status              # what's checked, per agent
-```
+The message says what Kai stopped, why, and the narrow way to allow it if it was intended (one agent, one operation, one target, with an expiry); see [Allow and block, narrowly](#allow-and-block-narrowly). The agent is told the same, and to ask you instead of trying another way.
 
-Codex runs hooks only after you trust them: open Codex, run `/hooks`, and trust Kai's. From source: `make && sudo make install` (C compiler and `make`).
+### Uninstall
+
+1. Remove Kai's checks from your agents: `kai uninstall all` (add `--purge` to also delete `~/.kai`: your settings, log and permissions).
+2. Quit Kai from its menu bar icon, then drag `/Applications/Kai.app` to the Trash **in Finder**; macOS removes Kai's network extension with it.
+3. Remove the `kai` command:
+   ```sh
+   sudo rm -f /usr/local/bin/kai /usr/local/libexec/kai-hook
+   sudo rm -rf /usr/local/share/kai
+   sudo pkgutil --forget io.github.sameehj.kai.preview
+   ```
+
+All releases: [github.com/sameehj/kai/releases](https://github.com/sameehj/kai/releases). From source: `make && sudo make install` (C compiler and `make`).
 
 ## See it work
 
