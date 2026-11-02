@@ -127,7 +127,7 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
     /// "Claude Code tried an unknown site (1.1.1.1). Blocked."
     var plainSentence: String {
         let who = isGrant ? AuditEvent.title(agentKey) : agentName
-        let outcome = isBlock ? "Blocked." : decision == "log" ? "Allowed (Watch)." : ""
+        let outcome = isBlock ? "Blocked." : decision == "log" ? "Observed, not blocked." : ""
         let t = target ?? ""
         if isGrant {
             switch event {
@@ -180,10 +180,10 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
         return summary
     }
 
-    /// One readable line, e.g. "Blocked Claude Code: reading protected path (~/.ssh)".
+    /// One readable line, e.g. "Claude Code · denied by agent check: Kai stopped reading ~/.ssh".
     var summary: String {
         let what = detail.isEmpty ? (rule.isEmpty ? event : rule) : detail
-        return "\(verb) \(agentName): \(what)"
+        return "\(agentName) · \(verb.prefix(1).lowercased() + verb.dropFirst()): \(what)"
     }
 
     /// The record's excerpt, if Kai kept one.

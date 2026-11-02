@@ -843,6 +843,7 @@ private struct AgentControlPage: View {
         VStack(alignment: .leading, spacing: 14) {
             PageHeader(icon: "person.2.gobackward", title: "Agent Control",
                        subtitle: "Every agent session Kai sees, with its permissions. Revoke one without touching the others.")
+            Card(padding: 14) { LiveCoverageList() }
             // A plain HStack (not a nested split view, which collapsed inside the
             // Settings window's own split): a fixed-width list + a detail, both
             // filling the height.

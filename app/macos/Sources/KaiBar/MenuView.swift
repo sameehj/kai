@@ -35,7 +35,8 @@ struct MenuView: View {
             if DevFlags.perSessionPause { pauseBanner }
             migratedConfirm
             activeNow
-            protectionsLine
+            Button { open(.files) } label: { LiveCoverageList(compact: true).contentShape(Rectangle()) }
+                .buttonStyle(.plain).help("From live checks. Open Settings to change Internet or an agent's checks.")
             permissions
             recent
             footer
@@ -948,6 +949,32 @@ extension Theme {
         case .allowed, .cleaned: return lime
         case .neutral: return muted
         case .warning: return amber
+        }
+    }
+}
+
+/// Step 6: what Kai covers right now, from live checks only (LiveCoverage):
+/// the agents' measured hook state and the Internet wall's verified heartbeat.
+struct LiveCoverageList: View {
+    @ObservedObject private var agents = AgentsModel.shared
+    var compact = false
+    var body: some View {
+        // the heartbeat level, read live; -1 when the extension can't be confirmed
+        let level = Int(kai_wall_observed_level("network"))
+        let known = agents.loaded && agents.sourceError == nil
+        let rows = LiveCoverage.rows(agents: known ? agents.agents.filter { !compact || LiveCoverage.integrated.contains($0.name) } : [],
+                                     internetLevel: level, protectAvailable: kai_internet_protect_available() == 1)
+        VStack(alignment: .leading, spacing: compact ? 3 : 6) {
+            CapsLabel("Coverage now")
+            ForEach(rows, id: \.label) { r in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Circle().fill(r.good ? Theme.lime : Theme.muted).frame(width: 6, height: 6)
+                    Text(r.label).font(.system(size: compact ? 12 : 13)).foregroundStyle(Theme.soft)
+                    Spacer(minLength: 8)
+                    Text(r.state).font(.system(size: compact ? 11 : 12)).foregroundStyle(Theme.muted)
+                        .multilineTextAlignment(.trailing).fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 }

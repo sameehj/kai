@@ -36,6 +36,10 @@ if [ -x "$ROOT/kai" ]; then
     cp "$ROOT/tests/app/sessions_main.swift" "$SO/main.swift"
     swiftc -O -o "$SO/run" "$S/Sessions.swift" "$SO/main.swift" || exit 1
     "$SO/run" "$SO/snap.json" || rc=1
+    cp "$ROOT/tests/app/coverage_main.swift" "$SO/cov.swift"
+    mkdir -p "$SO/cov" && cp "$SO/cov.swift" "$SO/cov/main.swift"
+    swiftc -O -o "$SO/cov/run" "$S/Sessions.swift" "$S/LiveCoverage.swift" "$SO/cov/main.swift" || exit 1
+    "$SO/cov/run" || rc=1
     rm -rf "$SO"
 else
     echo "  FAIL no ./kai to decode (build it first)"; rc=1

@@ -1268,9 +1268,8 @@ static void test_enforcement_labels(void) {
     CHECK(!strcmp(kai_status_sentence(NI, 2, 2, 0, st, sizeof st), "Internet: blocking unknown hosts (developer build) \xC2\xB7 2 agents working"),
           "Files not included: Internet protected with the agent count");
     CHECK(!strcmp(kai_status_sentence(NI, 2, 0, 0, st, sizeof st), "Internet: blocking unknown hosts (developer build)"), "...without agents");
-    CHECK(!strcmp(kai_status_sentence(NI, 1, 0, 0, st, sizeof st),
-                 "Internet: watching (records the connections it observes; blocks nothing in this release)"),
-          "...Internet watching, said in full (Nov 1: Watch only)");
+    CHECK(!strcmp(kai_status_sentence(NI, 1, 0, 0, st, sizeof st), "Internet: watching"),
+          "...Internet watching (the headline stays short; the coverage list explains)");
     CHECK(!strcmp(kai_status_sentence(NI, 0, 0, 0, st, sizeof st), "Internet protection is off"), "...Internet off");
     CHECK(!strcmp(kai_status_sentence(NI, -1, 1, 0, st, sizeof st), "Internet: unknown (Kai can't confirm the wall's mode)"),
           "...Internet mode not confirmed by the extension: unknown, never watching by assumption");
