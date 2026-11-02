@@ -1069,6 +1069,86 @@ static int mcp_card_waits(const char *agent, const char *host) {
     return found;
 }
 
+/* Nov 1 step 3: an MCP server started from an unpinned npx/uvx spec can run a
+ * different version on its next start. No new trust for it; a note in
+ * Activity, once per server per day. */
+static cJSON *mcp_server_named(const char *path, const char *proj, const char *name) {
+    size_t len = 0;
+    char *t = kai_read_file(path, 8u << 20, &len);
+    cJSON *o = t ? cJSON_Parse(t) : NULL;
+    free(t);
+    if (!o) return NULL;
+    cJSON *s = cJSON_GetObjectItem(cJSON_GetObjectItem(o, "mcpServers"), name);
+    if (!s && proj) s = cJSON_GetObjectItem(cJSON_GetObjectItem(cJSON_GetObjectItem(cJSON_GetObjectItem(o, "projects"), proj),
+                                                                "mcpServers"), name);
+    cJSON *copy = s ? cJSON_Duplicate(s, 1) : NULL;
+    cJSON_Delete(o);
+    return copy;
+}
+
+static void mcp_note_unpinned(const char *agent, const char *cwd, const char *server) {
+    if (!agent || strcmp(agent, "claude") || !server || !*server) return;
+    char *h = kai_expand_home("~/.claude.json");
+    cJSON *srv = h ? mcp_server_named(h, cwd, server) : NULL;
+    free(h);
+    if (!srv && cwd) {
+        char path[1400];
+        snprintf(path, sizeof path, "%s/.mcp.json", cwd);
+        srv = mcp_server_named(path, NULL, server);
+    }
+    if (!srv) return;
+    const char *cmd = cJSON_GetStringValue(cJSON_GetObjectItem(srv, "command"));
+    const char *b = cmd ? strrchr(cmd, '/') : NULL;
+    b = b ? b + 1 : cmd;
+    const char *spec = NULL;
+    cJSON *a = NULL;
+    cJSON_ArrayForEach(a, cJSON_GetObjectItem(srv, "args")) {
+        const char *s = cJSON_GetStringValue(a);
+        if (s && *s && *s != '-') { spec = s; break; }
+    }
+    int runner = b && (!strcmp(b, "npx") || !strcmp(b, "uvx"));
+    /* pinned: an exact version (pkg@1.2.3, @scope/pkg@1.2.3, pkg==1.2.3); "latest" isn't one */
+    int pinned = 0;
+    if (spec) {
+        const char *at = strchr(spec + 1, '@'), *eq = strstr(spec, "==");
+        pinned = (at && isdigit((unsigned char)at[1])) || (eq && isdigit((unsigned char)eq[2]));
+    }
+    if (runner && spec && !pinned) {
+        char dir[1100], state[1300], day[16], key[200];
+        snprintf(dir, sizeof dir, "%s/mcpnotes", kai_home());
+        snprintf(state, sizeof state, "%s/unpinned.json", dir);
+        time_t now = time(NULL); struct tm tmv; localtime_r(&now, &tmv);
+        strftime(day, sizeof day, "%Y-%m-%d", &tmv);
+        snprintf(key, sizeof key, "%s|%s", agent, server);
+        size_t len = 0;
+        char *t = kai_read_file(state, 65536, &len);
+        cJSON *st = t ? cJSON_Parse(t) : NULL;
+        free(t);
+        if (!cJSON_IsObject(st)) { cJSON_Delete(st); st = cJSON_CreateObject(); }
+        const char *last = cJSON_GetStringValue(cJSON_GetObjectItem(st, key));
+        if (!last || strcmp(last, day)) {
+            char detail[400];
+            snprintf(detail, sizeof detail, "MCP server %s runs from an unpinned %s spec (%s): its version can change "
+                     "between runs. Kai gives it no extra trust; pin a version to keep it the same.", server, b, spec);
+            kai_audit_entry e = {agent, "mcp-server", "note", "mcp_unpinned", detail, NULL, server, NULL, NULL, cwd, NULL};
+            kai_audit_write(&e);
+            cJSON_DeleteItemFromObject(st, key);
+            cJSON_AddStringToObject(st, key, day);
+            mkdir(dir, 0700);
+            char *js = cJSON_PrintUnformatted(st);
+            if (js) {
+                char tmp[1400];
+                snprintf(tmp, sizeof tmp, "%s.tmp.%d", state, (int)getpid());
+                FILE *f = fopen(tmp, "w");
+                if (f) { fputs(js, f); if (fclose(f) == 0) rename(tmp, state); else unlink(tmp); }
+                free(js);
+            }
+        }
+        cJSON_Delete(st);
+    }
+    cJSON_Delete(srv);
+}
+
 /* One message for this tool call, or "". State: <kai home>/mcpnotes/<agent>.json. */
 static void mcp_note(const kai_policy *p, const char *agent, const char *cwd, char *out, size_t n) {
     if (n) out[0] = '\0';
@@ -1304,6 +1384,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
              * for that exact tool. */
             kai_action a = kai_mcp_decide(p, mcp_server, mcp_tool);
             snprintf(rule, sizeof rule, "mcp:%.26s/%.26s", mcp_server, mcp_tool);
+            mcp_note_unpinned(source, cwd, mcp_server);
             const char *pmode = cjstr(root, "permission_mode");
             int human_prompt = can_ask && !(pmode && (!strcmp(pmode, "bypassPermissions") || !strcmp(pmode, "dontAsk")));
             int destructive = kai_mcp_tool_destructive(mcp_tool, cjstr(ti, "status"));

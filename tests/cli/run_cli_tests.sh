@@ -296,6 +296,25 @@ printf '%s' '{"id":"net-2-2-2","agent":"claude","pid":0,"pidversion":0,"strength
 o=$(mn)
 hasnt "a blocked curl isn't reported as an MCP server" "$o" "MCP server"
 
+echo "== MCP server from an unpinned npx/uvx spec: noted in Activity (Nov 1 step 3) =="
+UH="$TMP/unpinned"; mkdir -p "$UH/.kai" "$UH/proj"
+cat > "$UH/.claude.json" <<EOF
+{"mcpServers":{"wp":{"command":"npx","args":["-y","@gravitykit/block-mcp"]},
+ "pinned":{"command":"npx","args":["-y","@gravitykit/block-mcp@1.4.2"]},
+ "py":{"command":"uvx","args":["mcp-server-fetch"]},
+ "local":{"command":"/usr/local/bin/my-mcp","args":[]}}}
+EOF
+um() { printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"mcp__'"$1"'__get_page","session_id":"u","permission_mode":"auto","tool_input":{},"cwd":"'"$UH"'/proj"}' \
+       | HOME="$UH" KAI_HOME="$UH/.kai" KAI_NO_APP=1 "$KAI" hook claude >/dev/null; }
+um wp; um wp; um pinned; um py; um local
+al=$(cat "$UH/.kai/audit.log" 2>/dev/null)
+has "an unpinned npx server is noted" "$al" "MCP server wp runs from an unpinned npx spec (@gravitykit/block-mcp): its version can change between runs"
+[ "$(printf '%s' "$al" | grep -c 'MCP server wp runs from an unpinned')" = 1 ] && pass "...once, not on every call" || fail "unpinned note repeated"
+has "an unpinned uvx server too" "$al" "MCP server py runs from an unpinned uvx spec (mcp-server-fetch)"
+hasnt "a pinned version isn't noted" "$al" "MCP server pinned runs from an unpinned"
+hasnt "a local executable isn't noted" "$al" "MCP server local runs from an unpinned"
+[ -n "$(printf '%s' "$al" | grep 'unpinned npx spec' | grep '"decision":"note"')" ] && pass "...as a note (shown in Activity, not a block)" || fail "unpinned record isn't a note"
+
 echo "== Chrome support removed (Security Plan v1.0) =="
 CR="$TMP/chrome"; NM="$CR/Library/Application Support/Google/Chrome/NativeMessagingHosts"
 mkdir -p "$NM" "$CR/.kai/browser-extension"
