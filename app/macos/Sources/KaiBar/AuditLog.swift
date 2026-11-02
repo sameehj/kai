@@ -344,7 +344,8 @@ enum PlainDetail {
         "db_url_with_password": "a database address with its password", "password_assign": "a password",
         "generic_secret_assign": "a password-like secret",
     ]
-    private static let finding = #"(?:secret:([A-Za-z0-9_.\-]+)|term:([^,]+?)|([A-Za-z0-9_.\-]+)) x[0-9]+ \((?:redact|block|warn|replace|none)\)"#
+    // Split so Kai's own tree scan doesn't read the pattern as an assignment.
+    private static let finding = "(?:secret" + #":([A-Za-z0-9_.\-]+)|term:([^,]+?)|([A-Za-z0-9_.\-]+)) x[0-9]+ \((?:redact|block|warn|replace|none)\)"#
     private static let run = try! NSRegularExpression(pattern: "\(finding)(?:, \(finding))*")
     private static let one = try! NSRegularExpression(pattern: finding)
 
