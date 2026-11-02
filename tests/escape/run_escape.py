@@ -70,7 +70,10 @@ def outcome(event):
     text = json.dumps(event).replace("{HOME}", home)
     out = subprocess.run([kai, "hook", "claude"], input=text, capture_output=True,
                          text=True, env=env, timeout=30).stdout
-    if '"deny"' in out or '"decision":"block"' in out or '"decision": "block"' in out:
+    # "ask": the call waits for the user in the agent's own prompt (Nov 1 step 3;
+    # in auto mode that prompt goes to the user, not the classifier)
+    if ('"deny"' in out or '"decision":"block"' in out or '"decision": "block"' in out
+            or '"permissionDecision":"ask"' in out):
         return "stopped"
     if "Kai warning" in out:
         return "warned"

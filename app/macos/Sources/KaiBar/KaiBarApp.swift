@@ -2,6 +2,7 @@
 import AppKit
 import Security
 import SwiftUI
+import UserNotifications
 import KaiCore
 
 @main
@@ -53,8 +54,26 @@ enum KaiInstance {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private var lockFD: Int32 = -1
+
+    // Dogfood: card notifications show even while Kai is active, and their
+    // buttons answer the card.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {
+        done([.banner, .list, .sound])
+    }
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler done: @escaping () -> Void) {
+        let id = response.notification.request.content.userInfo["pending"] as? String
+        let action = response.actionIdentifier
+        DispatchQueue.main.async {
+            if let id, action == "ALLOW" || action == "KEEP" {
+                GrantManager.shared.answerFromNotification(pendingID: id, allow: action == "ALLOW")
+            }
+            done()
+        }
+    }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         if Snapshot.requestedDir != nil { return }   // rendering only: no lock
@@ -77,6 +96,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu-bar only: no Dock icon even when run outside a bundle.
         NSApp.setActivationPolicy(.accessory)
+        if Snapshot.requestedDir == nil && Bundle.main.bundleIdentifier != nil {
+            UNUserNotificationCenter.current().delegate = self
+            Notifier.registerCategories()
+            _ = GrantManager.shared   // cards notify from launch, popover opened or not
+        }
         if let dir = Snapshot.requestedDir { Task { @MainActor in await Snapshot.run(to: dir) } }
         // v1 has no control service: this app writes policy and permissions
         // in-process; the CLI only reads them.

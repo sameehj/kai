@@ -45,8 +45,8 @@ max_scan_bytes     2000000
 # ── Network wall (macOS network extension + gateway) ──────────────────
 # Traffic from agent processes (Claude Code, Cursor, Codex, … and anything
 # they start) to hosts not on the allowlist: off | log | block
-# Model APIs and this Mac (loopback) are built in; git and gh reach GitHub,
-# npm its registry and pip PyPI (tool profiles). Anything else asks you in
+# Model APIs, the npm registry (registry.npmjs.org) and this Mac (loopback)
+# are built in; git and gh reach GitHub and pip PyPI (tool profiles). Anything else asks you in
 # block mode (Protect); log (Watch, the default) only records it. An entry
 # is a host (with its subdomains), an IP address or
 # CIDR range, optionally with :port. In block mode a connection with no host

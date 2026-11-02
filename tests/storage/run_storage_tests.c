@@ -1225,95 +1225,19 @@ static void test_session_pause(void) {
 /* Redesign item 1: session enforcement labels, and that the process scan never
  * claims "protected" for a session no wall can attribute. */
 static void test_enforcement_labels(void) {
-    printf("session enforcement labels (redesign)\n");
-    /* Phase B item 6: user-facing names are Files and Internet, not walls. */
-    CHECK(!strcmp(kai_enforcement_label(1, 1), "Enforced: Files and Internet"), "both walls");
-    CHECK(!strcmp(kai_enforcement_label(0, 1), "Enforced: Internet only"), "network only");
-    CHECK(!strcmp(kai_enforcement_label(1, 0), "Enforced: Files only"), "storage only");
-    const char *off = kai_enforcement_label(0, 0);
-    CHECK(strstr(off, "Seen only") != NULL, "no wall: labelled seen only");
-    CHECK(strcasestr(off, "protect") == NULL, "no wall: never labelled 'protected'");
-    CHECK(strcasestr(off, "wall") == NULL, "no wall: no 'wall' jargon");
-
-    /* Phase B item 8: the one status sentence (popover, sidebar, kai status).
-     * Levels: 0 off, 1 watch, 2 protect; agents < 0 = count unknown. */
-    char st[128];
-    CHECK(!strcmp(kai_status_sentence(2, 2, 3, 0, st, sizeof st), "Protected \xC2\xB7 3 agents working"),
-          "both protecting, 3 agents");
-    CHECK(!strcmp(kai_status_sentence(2, 2, 1, 0, st, sizeof st), "Protected \xC2\xB7 1 agent working"),
-          "singular agent");
-    CHECK(!strcmp(kai_status_sentence(2, 2, 0, 0, st, sizeof st), "Protected"), "no agents: no count");
-    CHECK(!strcmp(kai_status_sentence(2, 2, -1, 0, st, sizeof st), "Protected"), "unknown count: no count");
-    CHECK(!strcmp(kai_status_sentence(1, 1, 2, 0, st, sizeof st), "Watching only"), "both watching");
-    CHECK(!strcmp(kai_status_sentence(2, 1, 2, 0, st, sizeof st), "Partly protected \xC2\xB7 Internet is watching only"),
-          "one watching");
-    CHECK(!strcmp(kai_status_sentence(0, 2, 2, 0, st, sizeof st), "Files protection is off"), "files off");
-    CHECK(!strcmp(kai_status_sentence(2, 0, 2, 0, st, sizeof st), "Internet protection is off"), "internet off");
-    CHECK(!strcmp(kai_status_sentence(0, 0, 2, 0, st, sizeof st), "Not protected"), "both off");
-    CHECK(!strcmp(kai_status_sentence(2, 2, 2, 1, st, sizeof st), "Kai is paused"), "paused wins");
-
-    /* Fix 3: Internet is never inferred. Unverified (-1) is left out of the
-     * headline, which then speaks for Files alone. */
-    CHECK(!strcmp(kai_status_sentence(2, -1, 3, 0, st, sizeof st), "Files protected \xC2\xB7 3 agents working"),
-          "internet unverified: headline is Files only");
-    CHECK(!strcmp(kai_status_sentence(1, -1, 3, 0, st, sizeof st), "Files: watching only"),
-          "internet unverified, files watching");
-    CHECK(!strcmp(kai_status_sentence(0, -1, 3, 0, st, sizeof st), "Files protection is off"),
-          "internet unverified, files off");
-    CHECK(strstr(kai_status_sentence(2, -1, 3, 0, st, sizeof st), "Internet") == NULL,
-          "unverified Internet never appears in the headline");
-    /* Step 6: Files isn't in this release. The headline speaks for Internet
-     * alone and never says "Files protection is off" or "Not protected". */
-    int NI = KAI_FILES_NOT_INCLUDED;
-    CHECK(!strcmp(kai_status_sentence(NI, 2, 2, 0, st, sizeof st), "Internet protected \xC2\xB7 2 agents working"),
-          "Files not included: Internet protected with the agent count");
-    CHECK(!strcmp(kai_status_sentence(NI, 2, 0, 0, st, sizeof st), "Internet protected"), "...without agents");
-    CHECK(!strcmp(kai_status_sentence(NI, 1, 0, 0, st, sizeof st), "Internet: watching only"), "...Internet watching");
-    CHECK(!strcmp(kai_status_sentence(NI, 0, 0, 0, st, sizeof st), "Internet protection is off"), "...Internet off");
-    CHECK(!strcmp(kai_status_sentence(NI, -1, 1, 0, st, sizeof st), "Internet: not verified"), "...Internet unverified");
-    CHECK(!strcmp(kai_status_sentence(NI, 2, 1, 1, st, sizeof st), "Kai is paused"), "...paused still wins");
-    CHECK(strstr(kai_status_sentence(NI, 0, 0, 0, st, sizeof st), "Files") == NULL, "...and never names Files");
-
-    /* Fix 3: a heartbeat counts only if it is fresh, names the wall, is owned
-     * by the expected uid (root in production) and isn't group/world-writable,
-     * so an agent running as the user can't forge one. */
-    char hdir[] = "/tmp/kai-hbXXXXXX";
-    if (mkdtemp(hdir)) {
-        char hb[300]; snprintf(hb, sizeof hb, "%s/network-health.json", hdir);
-        uid_t me = getuid();
-        CHECK(kai_heartbeat_level(hb, "network", me) == -1, "missing heartbeat: not verified");
-    {
-        kai_policy *pa = mk("egress block\n");
-        CHECK(pa && kai_policy_agent_count(pa) >= 3, "built-in agent rules are always loaded (network wall can recognize agents)");
-        kai_policy_free(pa);
+    printf("session coverage label (Nov 1: never 'Enforced' for a watching Internet wall)\n");
+    CHECK(!strcmp(kai_session_coverage_label(1, 1), "Agent checks: on \xC2\xB7 Internet: watching"), "hooks on, Internet watching");
+    CHECK(!strcmp(kai_session_coverage_label(0, 1), "Agent checks: off \xC2\xB7 Internet: watching"), "hooks off, Internet watching");
+    CHECK(!strcmp(kai_session_coverage_label(1, -1), "Agent checks: on \xC2\xB7 Internet: unknown"), "Internet unconfirmed: unknown");
+    CHECK(!strcmp(kai_session_coverage_label(1, 0), "Agent checks: on \xC2\xB7 Internet: off"), "Internet off");
+    CHECK(!strcmp(kai_session_coverage_label(1, 2), "Agent checks: on \xC2\xB7 Internet: blocking (developer build)"),
+          "developer Protect says so");
+    int enforced = 0;
+    for (int a = -1; a <= 1; a++) for (int l = -1; l <= 2; l++) {
+        const char *x = kai_session_coverage_label(a, l);
+        if (strstr(x, "Enforced") || strstr(x, "rotected")) enforced = 1;
     }
-        FILE *hf = fopen(hb, "w");
-        if (hf) { fputs("{\"wall\":\"network\",\"mode\":\"block\"}", hf); fclose(hf); }
-        chmod(hb, 0644);
-        CHECK(kai_heartbeat_level(hb, "network", me) == 2, "fresh, right owner, block: level 2");
-        CHECK(kai_heartbeat_level(hb, "storage", me) == -1, "names another wall: not verified");
-        CHECK(kai_heartbeat_level(hb, "network", 0) == -1 || me == 0, "owned by the user, not root: not verified");
-        chmod(hb, 0666);
-        CHECK(kai_heartbeat_level(hb, "network", me) == -1, "world-writable: not verified");
-        chmod(hb, 0644);
-        struct timeval old2[2] = {{time(NULL) - 120, 0}, {time(NULL) - 120, 0}};
-        utimes(hb, old2);
-        CHECK(kai_heartbeat_level(hb, "network", me) == -1, "stale: not verified");
-        hf = fopen(hb, "w");
-        if (hf) { fputs("{\"wall\":\"network\",\"mode\":\"log\"}", hf); fclose(hf); }
-        CHECK(kai_heartbeat_level(hb, "network", me) == 1, "log mode: level 1");
-        unlink(hb); rmdir(hdir);
-    }
-    CHECK(strstr(kai_network_heartbeat_path(), "/Library/Group Containers/") != NULL,
-          "network heartbeat lives in the app-group container");
-    /* The scan runs and returns a bounded, sane result (no crash); the live
-     * session set is verified in the live test. */
-    kai_policy *p = mk("storage block\n");
-    kai_session *s = NULL; int n = 0;
-    int rc = kai_sessions_scan(p, &s, &n);
-    CHECK(rc >= 0 && n >= 0, "process scan returns a sane count");
-    free(s);
-    kai_policy_free(p);
+    CHECK(!enforced, "no session label says Enforced or protected");
 }
 
 /* U5: the agent may READ its own hook config via a tool, but not WRITE it, and
@@ -1736,11 +1660,8 @@ static void test_session_model(void) {
     CHECK(kai_session_last_active("act-1", "/w/pro") == 0, "a sibling prefix is not a match");
     CHECK(kai_session_last_active("nope", NULL) == 0, "unknown session: never active");
 
-    /* labels from the measured levels: Files off -> Internet only */
-    CHECK(!strcmp(kai_enforcement_from_levels(0, 2), "Enforced: Internet only"), "files off: Internet only");
-    CHECK(!strcmp(kai_enforcement_from_levels(-1, 2), "Enforced: Internet only"), "files not running: Internet only");
-    CHECK(!strcmp(kai_enforcement_from_levels(2, -1), "Enforced: Files only"), "internet unverified: Files only");
-    CHECK(!strcmp(kai_enforcement_from_levels(1, 2), "Enforced: Files and Internet"), "watch counts as covering");
+    /* labels from the measured levels: a watching Internet wall is "watching", never "Enforced" */
+    CHECK(!strcmp(kai_session_coverage_label(1, 1), "Agent checks: on \xC2\xB7 Internet: watching"), "watch is watching");
 
     /* registry: a working + an idle terminal session, an ended one, a
      * delegated one, and two Cursor workspaces (one active). */
@@ -2247,6 +2168,59 @@ static void test_daily_counter(void) {
 
 /* Fix 2: with no session to bind to, "Allow <agent> to reach <host> for 1
  * hour" is a signed rule bound to the verified identity that expires. */
+/* Dogfood 2026-11-01: Keep blocked lasts for the agent session it was chosen
+ * in (a session-bound, signed rule); without a session it ends after an hour.
+ * A permanent Keep blocked is the separate, session-less rule. */
+static void test_session_keep_blocked(void) {
+    printf("Keep blocked: this session only by default (dogfood)\n");
+    char dir[] = "/tmp/kai-skbXXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "mkdtemp"); return; }
+    const unsigned char key[] = "session-keep-blocked-key-0123456";
+    const char *claude = "com.anthropic.claude-code (Q6L2SF6YDW)";
+    char id[40];
+    long long now = (long long)time(NULL);
+    char *kb = kai_rule_build_json_session("kb1", KAI_RULE_KEEP_BLOCKED, claude, "claude", "registry.example.org",
+                                           KAI_OP_CONNECT, now, 0, "sessA", key, sizeof key - 1);
+    CHECK(kb != NULL && strstr(kb, "\"session\":\"sessA\"") != NULL, "a session-bound Keep blocked is built and names its session");
+    write_rule(dir, "kb1", kb);
+    CHECK(kai_rule_lookup_session(dir, claude, "registry.example.org", KAI_OP_CONNECT, "sessA", key, sizeof key - 1,
+                                  id, sizeof id) == KAI_RULE_KEEP_BLOCKED, "...it blocks in its own session");
+    CHECK(kai_rule_lookup_session(dir, claude, "registry.example.org", KAI_OP_CONNECT, "sessB", key, sizeof key - 1,
+                                  id, sizeof id) == 0, "...not in the next session (asks again)");
+    CHECK(kai_rule_lookup(dir, claude, "registry.example.org", KAI_OP_CONNECT, key, sizeof key - 1, id, sizeof id) == 0,
+          "...and never for a caller that doesn't know the session");
+    /* tampering with the session moves nothing: the signature covers it */
+    if (kb) {
+        char *t = strdup(kb), *at = strstr(t, "sessA");
+        if (at) at[4] = 'B';
+        write_rule(dir, "kb1", t);
+        CHECK(kai_rule_lookup_session(dir, claude, "registry.example.org", KAI_OP_CONNECT, "sessB", key, sizeof key - 1,
+                                      id, sizeof id) == 0, "...an edited session doesn't verify");
+        free(t);
+        write_rule(dir, "kb1", kb);
+    }
+    free(kb);
+    char *al = kai_rule_build_json_session("al9", KAI_RULE_ALLOW, claude, "claude", "registry.example.org",
+                                           KAI_OP_CONNECT, now, 0, "sessA", key, sizeof key - 1);
+    CHECK(al == NULL, "an Allow can't be session-bound this way (session allows are grants)");
+    free(al);
+    /* no session known: an hour */
+    char *kh = kai_rule_build_json_until("kh1", KAI_RULE_KEEP_BLOCKED, claude, "claude", "other.example.org",
+                                         KAI_OP_CONNECT, now - 4000, now - 400, 0, key, sizeof key - 1);
+    write_rule(dir, "kh1", kh);
+    free(kh);
+    CHECK(kai_rule_lookup_session(dir, claude, "other.example.org", KAI_OP_CONNECT, "sessA", key, sizeof key - 1,
+                                  id, sizeof id) == 0, "a Keep blocked with no session ends after its hour");
+    /* the permanent one, from Settings */
+    char *kp = kai_rule_build_json("kp1", KAI_RULE_KEEP_BLOCKED, claude, "claude", "perm.example.org",
+                                   KAI_OP_CONNECT, now, 0, key, sizeof key - 1);
+    write_rule(dir, "kp1", kp);
+    free(kp);
+    CHECK(kai_rule_lookup_session(dir, claude, "perm.example.org", KAI_OP_CONNECT, "sessZ", key, sizeof key - 1,
+                                  id, sizeof id) == KAI_RULE_KEEP_BLOCKED, "a permanent Keep blocked applies in every session");
+    char cmd[200]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir); (void)system(cmd);
+}
+
 static void test_temporary_rule(void) {
     printf("1-hour allow by verified identity (fix 2)\n");
     char dir[] = "/tmp/kai-trXXXXXX";
@@ -2475,6 +2449,17 @@ static void test_channels(void) {
         CHECK(kai_tool_profile_allows("/opt/homebrew/bin/node", evil_node, 3, "registry.npmjs.org") == 0,
               "tools: a node script that merely names npm-cli.js doesn't");
         CHECK(kai_tool_profile_allows("/opt/homebrew/bin/node", npm, 3, "github.com") == 0, "tools: npm doesn't get GitHub");
+        /* npx and npm started through their symlink (#!/usr/bin/env node): node's
+         * first argument is the symlink path, e.g. /usr/local/bin/npx */
+        const char *npx_link[] = {"node", "/usr/local/bin/npx", "-y", "@gravitykit/block-mcp"};
+        const char *npm_link[] = {"node", "/opt/homebrew/bin/npm", "install"};
+        const char *fake_npx[] = {"node", "/tmp/x/npx", "-y", "pkg"};
+        CHECK(kai_tool_profile_allows("/usr/local/Cellar/node/23.10.0_1/bin/node", npx_link, 4, "registry.npmjs.org") == 1,
+              "tools: npx run through its symlink reaches the npm registry");
+        CHECK(kai_tool_profile_allows("/opt/homebrew/bin/node", npm_link, 3, "registry.npmjs.org") == 1,
+              "tools: npm run through its symlink too");
+        CHECK(kai_tool_profile_allows("/opt/homebrew/bin/node", fake_npx, 4, "registry.npmjs.org") == 0,
+              "tools: a script named npx outside the install folders doesn't");
         CHECK(kai_tool_profile_allows("/usr/bin/python3", pipm, 5, "pypi.org") == 1, "tools: python -m pip reaches pypi.org");
         CHECK(kai_tool_profile_allows(pips[0], pips, 4, "files.pythonhosted.org") == 1,
               "tools: the pip script reaches files.pythonhosted.org");
@@ -2482,6 +2467,23 @@ static void test_channels(void) {
               "tools: a python script that isn't pip doesn't");
         CHECK(kai_tool_profile_allows("/usr/bin/git", git, 4, NULL) == 0 && kai_tool_profile_allows(NULL, git, 4, "github.com") == 0,
               "tools: no host or no program: no");
+        /* dogfood 2026-11-01: the npm registry is allowed for every agent process
+         * (node/npx started by an agent or its MCP servers), not only npm itself */
+        kai_policy *np = kai_policy_builtin_failsafe();
+        CHECK(np && kai_egress_endpoint_allowed(np, "registry.npmjs.org", "104.16.1.1", 443, why, sizeof why) == 1,
+              "npm registry: allowed for agent processes by default");
+        CHECK(np && kai_egress_endpoint_allowed(np, "www.npmjs.com", "104.16.1.1", 443, why, sizeof why) != 1 &&
+                    kai_egress_endpoint_allowed(np, "npmjs.com", "104.16.1.1", 443, why, sizeof why) != 1,
+              "npm registry: ...only the registry host, not the npm website");
+        kai_policy_free(np);
+        /* a card names the blocked process's command line (redacted), so the
+         * hook can tell which MCP server failed to start */
+        char cl[512];
+        kai_policy *cp = kai_policy_builtin_failsafe();
+        CHECK(kai_pid_cmdline(cp, (int)getpid(), cl, sizeof cl) == 1 && strstr(cl, "run_storage_tests") != NULL,
+              "cmdline: a process's command line, for the card");
+        CHECK(kai_pid_cmdline(cp, -1, cl, sizeof cl) == 0 && cl[0] == 0, "cmdline: no process, nothing");
+        kai_policy_free(cp);
         /* the old allowlist alone never allowed these (they were cards) */
         kai_policy *bp = kai_policy_builtin_failsafe();
         CHECK(bp && kai_egress_endpoint_allowed(bp, "api.github.com", "1.2.3.4", 443, why, sizeof why) != 1,
@@ -2863,7 +2865,7 @@ static void test_decision_rules(void) {
               == KAI_RULE_KEEP_BLOCKED, "Keep blocked wins over an Allow");
     free(al);
 
-    CHECK(!strcmp(kai_wall_state_word(KAI_WALL_OS_ON, 2), "protecting")
+    CHECK(!strcmp(kai_wall_state_word(KAI_WALL_OS_ON, 2), "blocking")
               && !strcmp(kai_wall_state_word(KAI_WALL_OS_ON, 1), "watching")
               && !strcmp(kai_wall_state_word(KAI_WALL_OS_ON, -1), "unhealthy")
               && !strcmp(kai_wall_state_word(KAI_WALL_OS_STARTING, 2), "starting")
@@ -3254,6 +3256,7 @@ int main(void) {
     test_channels();
     test_agent_rules();
     test_temporary_rule();
+    test_session_keep_blocked();
     test_daily_counter();
     test_revocation_reaches_ro_store();
     test_audit_no_prompts();

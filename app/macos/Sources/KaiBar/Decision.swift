@@ -54,7 +54,7 @@ struct DecisionSheet: View {
                     .font(.system(size: 11)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             }
             // Step 6 / NEVER-RERUN card: the triggering command (a redacted excerpt).
-            if !event.isNetwork, let cmd = event.target, !cmd.isEmpty {
+            if let cmd = event.whileRunning {   // the triggering command, or nothing
                 Text("While running: \(cmd)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.soft)
                     .lineLimit(3).truncationMode(.middle).textSelection(.enabled)
             }
@@ -132,7 +132,7 @@ struct DecisionSheet: View {
         switch d {
         case .hour(let end): return "Allowed for 1 hour · ends \(end.formatted(date: .omitted, time: .shortened))"
         case .session: return "Allowed for this session"
-        case .kept: return "Kept blocked · Kai won't ask again"
+        case .kept: return "Kept blocked for this session · permanent blocks are in Settings"
         case .always:
             return ruleFor(allow: true, temporary: false) == nil ? "Waiting for Touch ID…" : "Always allowed"
         }

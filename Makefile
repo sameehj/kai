@@ -87,6 +87,7 @@ test: kai tests/cli/kai-test
 	sh tests/app/run_app_tests.sh
 	sh tests/release/run_release_env_tests.sh
 	sh tests/release/run_sign_tests.sh
+	sh tests/release/run_release_guard_tests.sh
 	# Suites that SET UP policy via `kai policy ...` use a throwaway binary built
 	# with the test seam (KAI_TEST_DIRECT_POLICY): the suites run inside the
 	# dev's agent tree and set loosening switches, both of which the production

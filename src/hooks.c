@@ -287,6 +287,13 @@ static int terminal_stopped(const char *cmd, const char *hit, const char *agent,
     return capture_stopped(what, name, " (commands it runs there aren't checked by Kai)", agent, cwd, out, n);
 }
 
+/* Nov 1 step 4: the decision ID, in what the agent (and the user) reads. */
+static void add_decision_id(char *msg, size_t n, const char *did) {
+    if (!did || !*did) return;
+    size_t l = strlen(msg);
+    snprintf(msg + l, n > l ? n - l : 0, " (Kai decision %s, recorded in Kai \xE2\x86\x92 Activity.)", did);
+}
+
 /* NEVER-RERUN fix 5: what the agent should do after a Kai denial. */
 #define KAI_ASK_USER " Don't retry another way; ask the user."
 static void add_ask_user(char *msg, size_t n) {
@@ -951,6 +958,291 @@ static int kai_session_paused_here(long long now) {
     return kai_wall_paused("storage", now);
 }
 
+/* ---- Dogfood (Nov 1): an MCP server Kai blocked at start ----
+ * An agent starts its MCP servers before any tool call; when the Internet wall
+ * blocks one's host (npx fetching the server from the npm registry), the
+ * server just fails and the agent reports "connection down". The card the
+ * wall writes names the blocked process's command line; at the agent's next
+ * tool call, match it against the agent's MCP server configs and say which
+ * server and host, once. After the user allows the host, say so, once. */
+static int mcp_server_matches(cJSON *srv, const char *cmd) {
+    const char *c = cJSON_GetStringValue(cJSON_GetObjectItem(srv, "command"));
+    if (!c || !*c || !cmd) return 0;
+    const char *sig = NULL;
+    cJSON *a = NULL;
+    cJSON_ArrayForEach(a, cJSON_GetObjectItem(srv, "args")) {
+        const char *s = cJSON_GetStringValue(a);
+        if (s && *s && *s != '-') { sig = s; break; }    /* the package or script: "@gravitykit/block-mcp" */
+    }
+    if (sig) return strstr(cmd, sig) != NULL;
+    const char *b = strrchr(c, '/');
+    return strstr(cmd, b ? b + 1 : c) != NULL;
+}
+
+static int mcp_in(cJSON *servers, const char *cmd, char *name, size_t n) {
+    cJSON *s = NULL;
+    cJSON_ArrayForEach(s, servers) {
+        if (s->string && cJSON_IsObject(s) && mcp_server_matches(s, cmd)) { kai_strlcpy(name, s->string, n); return 1; }
+    }
+    return 0;
+}
+
+static int mcp_in_file(const char *path, const char *proj, const char *cmd, char *name, size_t n) {
+    size_t len = 0;
+    char *t = kai_read_file(path, 8u << 20, &len);
+    cJSON *o = t ? cJSON_Parse(t) : NULL;
+    free(t);
+    if (!o) return 0;
+    int hit = mcp_in(cJSON_GetObjectItem(o, "mcpServers"), cmd, name, n);
+    if (!hit && proj) {
+        cJSON *pr = cJSON_GetObjectItem(cJSON_GetObjectItem(o, "projects"), proj);
+        hit = mcp_in(cJSON_GetObjectItem(pr, "mcpServers"), cmd, name, n);
+    }
+    cJSON_Delete(o);
+    return hit;
+}
+
+/* The agent's MCP server whose command line is `cmd`, by name. */
+static int mcp_find_server(const char *agent, const char *cwd, const char *cmd, char *name, size_t n) {
+    char path[1400];
+    if (!strcmp(agent, "claude")) {
+        char *h = kai_expand_home("~/.claude.json");
+        int hit = h && mcp_in_file(h, cwd, cmd, name, n);
+        free(h);
+        if (hit) return 1;
+        if (cwd) { snprintf(path, sizeof path, "%s/.mcp.json", cwd); if (mcp_in_file(path, NULL, cmd, name, n)) return 1; }
+    } else if (!strcmp(agent, "cursor")) {
+        char *h = kai_expand_home("~/.cursor/mcp.json");
+        int hit = h && mcp_in_file(h, NULL, cmd, name, n);
+        free(h);
+        if (hit) return 1;
+        if (cwd) { snprintf(path, sizeof path, "%s/.cursor/mcp.json", cwd); if (mcp_in_file(path, NULL, cmd, name, n)) return 1; }
+    }
+    return 0;
+}
+
+/* Did the user allow `host` for `agent` since `since` (an approval or a rule
+ * used, in the audit log)? */
+static int mcp_allowed_since(const char *agent, const char *host, long long since) {
+    char iso[32];
+    time_t t = (time_t)since;
+    struct tm tmv;
+    gmtime_r(&t, &tmv);
+    strftime(iso, sizeof iso, "%Y-%m-%dT%H:%M:%SZ", &tmv);
+    size_t n = 0;
+    char *log = kai_read_file(kai_audit_path(), 64u << 20, &n);
+    if (!log) return 0;
+    char ak[96];
+    snprintf(ak, sizeof ak, "agent=%s ", agent);
+    int found = 0;
+    for (char *line = strtok(log, "\n"); line && !found; line = strtok(NULL, "\n")) {
+        if (!strstr(line, host) || !strstr(line, "\"source\":\"grant\"")) continue;
+        cJSON *o = cJSON_Parse(line);
+        if (!o) continue;
+        const char *ts = cJSON_GetStringValue(cJSON_GetObjectItem(o, "ts"));
+        const char *ev = cJSON_GetStringValue(cJSON_GetObjectItem(o, "event"));
+        const char *tg = cJSON_GetStringValue(cJSON_GetObjectItem(o, "target"));
+        const char *det = cJSON_GetStringValue(cJSON_GetObjectItem(o, "detail"));
+        if (ts && ev && tg && det && strcmp(ts, iso) >= 0 && !strcasecmp(tg, host) && strstr(det, ak) &&
+            (!strcmp(ev, "approved") || !strcmp(ev, "used")))
+            found = 1;
+        cJSON_Delete(o);
+    }
+    free(log);
+    return found;
+}
+
+static int mcp_card_waits(const char *agent, const char *host) {
+    char dir[1100];
+    snprintf(dir, sizeof dir, "%s/pending", kai_home());
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    int found = 0;
+    struct dirent *e;
+    while (!found && (e = readdir(d))) {
+        if (!strstr(e->d_name, ".json")) continue;
+        char fp[1400];
+        snprintf(fp, sizeof fp, "%s/%s", dir, e->d_name);
+        size_t n = 0;
+        char *t = kai_read_file(fp, 65536, &n);
+        cJSON *o = t ? cJSON_Parse(t) : NULL;
+        free(t);
+        const char *a = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "agent")) : NULL;
+        const char *r = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "resource")) : NULL;
+        found = a && r && !strcmp(a, agent) && !strcasecmp(r, host);
+        cJSON_Delete(o);
+    }
+    closedir(d);
+    return found;
+}
+
+/* Nov 1 step 3: an MCP server started from an unpinned npx/uvx spec can run a
+ * different version on its next start. No new trust for it; a note in
+ * Activity, once per server per day. */
+static cJSON *mcp_server_named(const char *path, const char *proj, const char *name) {
+    size_t len = 0;
+    char *t = kai_read_file(path, 8u << 20, &len);
+    cJSON *o = t ? cJSON_Parse(t) : NULL;
+    free(t);
+    if (!o) return NULL;
+    cJSON *s = cJSON_GetObjectItem(cJSON_GetObjectItem(o, "mcpServers"), name);
+    if (!s && proj) s = cJSON_GetObjectItem(cJSON_GetObjectItem(cJSON_GetObjectItem(cJSON_GetObjectItem(o, "projects"), proj),
+                                                                "mcpServers"), name);
+    cJSON *copy = s ? cJSON_Duplicate(s, 1) : NULL;
+    cJSON_Delete(o);
+    return copy;
+}
+
+static void mcp_note_unpinned(const char *agent, const char *cwd, const char *server) {
+    if (!agent || strcmp(agent, "claude") || !server || !*server) return;
+    char *h = kai_expand_home("~/.claude.json");
+    cJSON *srv = h ? mcp_server_named(h, cwd, server) : NULL;
+    free(h);
+    if (!srv && cwd) {
+        char path[1400];
+        snprintf(path, sizeof path, "%s/.mcp.json", cwd);
+        srv = mcp_server_named(path, NULL, server);
+    }
+    if (!srv) return;
+    const char *cmd = cJSON_GetStringValue(cJSON_GetObjectItem(srv, "command"));
+    const char *b = cmd ? strrchr(cmd, '/') : NULL;
+    b = b ? b + 1 : cmd;
+    const char *spec = NULL;
+    cJSON *a = NULL;
+    cJSON_ArrayForEach(a, cJSON_GetObjectItem(srv, "args")) {
+        const char *s = cJSON_GetStringValue(a);
+        if (s && *s && *s != '-') { spec = s; break; }
+    }
+    int runner = b && (!strcmp(b, "npx") || !strcmp(b, "uvx"));
+    /* pinned: an exact version (pkg@1.2.3, @scope/pkg@1.2.3, pkg==1.2.3); "latest" isn't one */
+    int pinned = 0;
+    if (spec) {
+        const char *at = strchr(spec + 1, '@'), *eq = strstr(spec, "==");
+        pinned = (at && isdigit((unsigned char)at[1])) || (eq && isdigit((unsigned char)eq[2]));
+    }
+    if (runner && spec && !pinned) {
+        char dir[1100], state[1300], day[16], key[200];
+        snprintf(dir, sizeof dir, "%s/mcpnotes", kai_home());
+        snprintf(state, sizeof state, "%s/unpinned.json", dir);
+        time_t now = time(NULL); struct tm tmv; localtime_r(&now, &tmv);
+        strftime(day, sizeof day, "%Y-%m-%d", &tmv);
+        snprintf(key, sizeof key, "%s|%s", agent, server);
+        size_t len = 0;
+        char *t = kai_read_file(state, 65536, &len);
+        cJSON *st = t ? cJSON_Parse(t) : NULL;
+        free(t);
+        if (!cJSON_IsObject(st)) { cJSON_Delete(st); st = cJSON_CreateObject(); }
+        const char *last = cJSON_GetStringValue(cJSON_GetObjectItem(st, key));
+        if (!last || strcmp(last, day)) {
+            char detail[400];
+            snprintf(detail, sizeof detail, "MCP server %s runs from an unpinned %s spec (%s): its version can change "
+                     "between runs. Kai gives it no extra trust; pin a version to keep it the same.", server, b, spec);
+            kai_audit_entry e = {agent, "mcp-server", "note", "mcp_unpinned", detail, NULL, server, NULL, NULL, cwd, NULL};
+            kai_audit_write(&e);
+            cJSON_DeleteItemFromObject(st, key);
+            cJSON_AddStringToObject(st, key, day);
+            mkdir(dir, 0700);
+            char *js = cJSON_PrintUnformatted(st);
+            if (js) {
+                char tmp[1400];
+                snprintf(tmp, sizeof tmp, "%s.tmp.%d", state, (int)getpid());
+                FILE *f = fopen(tmp, "w");
+                if (f) { fputs(js, f); if (fclose(f) == 0) rename(tmp, state); else unlink(tmp); }
+                free(js);
+            }
+        }
+        cJSON_Delete(st);
+    }
+    cJSON_Delete(srv);
+}
+
+/* One message for this tool call, or "". State: <kai home>/mcpnotes/<agent>.json. */
+static void mcp_note(const kai_policy *p, const char *agent, const char *cwd, char *out, size_t n) {
+    if (n) out[0] = '\0';
+    if (!agent || strchr(agent, '/')) return;
+    char dir[1100], state[1300], pend[1100];
+    snprintf(dir, sizeof dir, "%s/mcpnotes", kai_home());
+    snprintf(state, sizeof state, "%s/%s.json", dir, agent);
+    snprintf(pend, sizeof pend, "%s/pending", kai_home());
+    size_t len = 0;
+    char *t = kai_read_file(state, 65536, &len);
+    cJSON *told = t ? cJSON_Parse(t) : NULL;
+    free(t);
+    if (!cJSON_IsArray(told)) { cJSON_Delete(told); told = cJSON_CreateArray(); }
+    long long now = (long long)time(NULL);
+    int changed = 0;
+    /* 1. a newly blocked MCP server */
+    DIR *d = opendir(pend);
+    struct dirent *e;
+    while (d && !out[0] && (e = readdir(d))) {
+        if (!strstr(e->d_name, ".json")) continue;
+        char fp[1400];
+        snprintf(fp, sizeof fp, "%s/%s", pend, e->d_name);
+        char *c = kai_read_file(fp, 65536, &len);
+        cJSON *o = c ? cJSON_Parse(c) : NULL;
+        free(c);
+        const char *a = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "agent")) : NULL;
+        const char *op = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "op")) : NULL;
+        const char *host = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "resource")) : NULL;
+        const char *cmd = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "cmd")) : NULL;
+        char name[128];
+        if (a && op && host && cmd && !strcmp(a, agent) && !strcmp(op, "connect") &&
+            mcp_find_server(agent, cwd, cmd, name, sizeof name)) {
+            int seen = 0;
+            cJSON *it = NULL;
+            cJSON_ArrayForEach(it, told) {
+                const char *h = cJSON_GetStringValue(cJSON_GetObjectItem(it, "host"));
+                const char *s = cJSON_GetStringValue(cJSON_GetObjectItem(it, "server"));
+                if (h && s && !strcasecmp(h, host) && !strcmp(s, name)) seen = 1;
+            }
+            if (!seen) {
+                snprintf(out, n, "Kai blocked %s for MCP server %s. Ask the user to allow it, then run /mcp to reconnect.",
+                         host, name);
+                cJSON *it2 = cJSON_CreateObject();
+                cJSON_AddStringToObject(it2, "server", name);
+                cJSON_AddStringToObject(it2, "host", host);
+                cJSON_AddNumberToObject(it2, "told", (double)now);
+                cJSON_AddItemToArray(told, it2);
+                changed = 1;
+            }
+        }
+        cJSON_Delete(o);
+    }
+    if (d) closedir(d);
+    /* 2. one that has been allowed since (or no longer needs it) */
+    for (int i = cJSON_GetArraySize(told) - 1; i >= 0 && !out[0]; i--) {
+        cJSON *it = cJSON_GetArrayItem(told, i);
+        const char *h = cJSON_GetStringValue(cJSON_GetObjectItem(it, "host"));
+        const char *s = cJSON_GetStringValue(cJSON_GetObjectItem(it, "server"));
+        long long when = (long long)cJSON_GetNumberValue(cJSON_GetObjectItem(it, "told"));
+        if (!h || !s) { cJSON_DeleteItemFromArray(told, i); changed = 1; continue; }
+        if (mcp_card_waits(agent, h)) continue;
+        char why[128];
+        int allowed = mcp_allowed_since(agent, h, when) ||
+                      (p && kai_egress_endpoint_allowed(p, h, "", 443, why, sizeof why) == 1);
+        if (allowed) {
+            snprintf(out, n, "Kai: %s for MCP server %s: Allowed now; run /mcp to reconnect.", h, s);
+            cJSON_DeleteItemFromArray(told, i);
+            changed = 1;
+        } else if (now - when > 1800) {          /* the card went unanswered: drop it */
+            cJSON_DeleteItemFromArray(told, i);
+            changed = 1;
+        }
+    }
+    if (changed) {
+        mkdir(dir, 0700);
+        char *js = cJSON_PrintUnformatted(told);
+        if (js) {
+            char tmp[1400];
+            snprintf(tmp, sizeof tmp, "%s.tmp.%d", state, (int)getpid());
+            FILE *f = fopen(tmp, "w");
+            if (f) { fputs(js, f); if (fclose(f) == 0) rename(tmp, state); else unlink(tmp); }
+            free(js);
+        }
+    }
+    cJSON_Delete(told);
+}
+
 static int hook_claude(const char *json, const char *cwd_arg, const char *source) {
     cJSON *root = cJSON_Parse(json);
     if (!root) {
@@ -1089,36 +1381,63 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
              * session grant (-> allow), or stages a Kai card (-> waiting). We
              * NEVER return Claude's native "ask": auto mode could approve that
              * with no Kai decision. */
+            /* Nov 1 step 3: never strand the agent. Claude Code asks in its own
+             * prompt (the same call continues on approval; in auto mode the
+             * prompt goes to the user, not the classifier). Codex can't ask:
+             * a deny that says what, why and the exact recovery. Destructive
+             * tools (delete, publish, users and roles) always ask, even on an
+             * approved server; where the agent can't put a prompt in front of
+             * the user (bypassPermissions, dontAsk, Codex) they need a grant
+             * for that exact tool. */
             kai_action a = kai_mcp_decide(p, mcp_server, mcp_tool);
             snprintf(rule, sizeof rule, "mcp:%.26s/%.26s", mcp_server, mcp_tool);
-            if (a == KAI_ACT_NONE) {
-                decision = KAI_ACT_NONE;                       /* policy allows outright */
-            } else if (a == KAI_ACT_BLOCK) {
+            mcp_note_unpinned(source, cwd, mcp_server);
+            const char *pmode = cjstr(root, "permission_mode");
+            int human_prompt = can_ask && !(pmode && (!strcmp(pmode, "bypassPermissions") || !strcmp(pmode, "dontAsk")));
+            int destructive = kai_mcp_tool_destructive(mcp_tool, cjstr(ti, "status"));
+            long long tnow = (long long)time(NULL);
+            if (a == KAI_ACT_BLOCK) {
                 decision = KAI_ACT_BLOCK; ask = 0;
-                snprintf(reason, sizeof reason, "Kai stopped the MCP tool %s from %s: your policy doesn't allow it.",
+                snprintf(reason, sizeof reason, "Kai stopped the MCP tool %s from %s: your policy doesn't allow it. "
+                         "Don't retry another way; ask the user (they can change it in Kai's policy).",
                          mcp_tool, mcp_server);
+            } else if (destructive && kai_cli_mcp_exact_grant(source, mcp_server, mcp_tool, tnow)) {
+                decision = KAI_ACT_NONE;                      /* the user allowed exactly this tool */
+            } else if (destructive && human_prompt) {
+                decision = KAI_ACT_BLOCK; ask = 1;
+                snprintf(reason, sizeof reason, "%s \xC2\xB7 %s deletes, publishes or changes users, so Kai asks every "
+                         "time, even on an approved server (to allow this tool without asking: "
+                         "kai allow-mcp %s %s --agent %s --for 1h).", mcp_server, mcp_tool, mcp_server, mcp_tool, source);
+            } else if (destructive) {
+                decision = KAI_ACT_BLOCK; ask = 0;
+                snprintf(reason, sizeof reason, "Kai stopped the MCP tool %s from %s: it deletes, publishes or changes "
+                         "users, and %s can't ask the user here%s. Don't retry another way; ask the user to run "
+                         "kai allow-mcp %s %s --agent %s --for 1h, then retry%s.", mcp_tool, mcp_server,
+                         can_ask ? "Claude Code" : "this agent",
+                         can_ask ? " in this permission mode" : "", mcp_server, mcp_tool, source,
+                         can_ask ? ", or to switch Claude Code out of bypass mode" : "");
+            } else if (a == KAI_ACT_NONE || kai_cli_grant_allows("mcp", source, mcp_server, mcp_tool, cwd, tnow)) {
+                decision = KAI_ACT_NONE;                      /* policy or the user's grant allows it */
+            } else if (kai_mcp_tool_reads(mcp_tool)) {
+                /* Step 7 / rule 1: a read from a server the user configured is
+                 * ordinary: no prompt, recorded */
+                decision = KAI_ACT_NONE;
+                char rd[300];
+                snprintf(rd, sizeof rd, "MCP read tool %s from %s: allowed and recorded (read tools aren't asked about)",
+                         mcp_tool, mcp_server);
+                kai_audit_entry re = {source, "PreToolUse", "log", rule, rd, tool, NULL, NULL, session, cwd, NULL, NULL};
+                kai_audit_write(&re);
+            } else if (human_prompt) {
+                decision = KAI_ACT_BLOCK; ask = 1;
+                snprintf(reason, sizeof reason, "%s \xC2\xB7 %s: MCP tools need your go-ahead "
+                         "(to skip this prompt: kai allow-mcp %s %s --agent %s --for 1h, or the whole server: "
+                         "kai allow-mcp %s --agent %s --for 1h).", mcp_server, mcp_tool, mcp_server, mcp_tool, source,
+                         mcp_server, source);
             } else {
-                char host[256] = ""; kai_mcp_declared_host(mcp_server, cwd, host, sizeof host);
-                char *rv[3] = { mcp_server, mcp_tool, host };
-                char svc[256] = "";
-                (void)rv;
-                int rc = kai_cli_grant_allows("mcp", source, mcp_server, mcp_tool, cwd, (long long)time(NULL)) ? 0
-                       : !kai_app_present() ? 11
-                       : kai_mcp_request((int)getpid(), mcp_server, mcp_tool, host, 0, svc, sizeof svc);
-                if (rc == 11) {   /* Preview 1: no app to ask; the terminal grant is the way */
-                    decision = KAI_ACT_BLOCK; ask = 0;
-                    snprintf(reason, sizeof reason,
-                             "Kai stopped the MCP tool %s from %s: MCP tools need the user's go-ahead. If this was "
-                             "intended, run in your own terminal: `kai allow-mcp %s %s --agent %s --for 1h`.",
-                             mcp_tool, mcp_server, mcp_server, mcp_tool, source);
-                } else if (rc == 0) {
-                    decision = KAI_ACT_NONE;                   /* a session grant covers it */
-                } else {
-                    decision = KAI_ACT_BLOCK; ask = 0;
-                    snprintf(reason, sizeof reason,
-                             "Waiting for approval in Kai: %s \xC2\xB7 %s. Approve in Kai, then retry.",
-                             mcp_server, mcp_tool);
-                }
+                decision = KAI_ACT_BLOCK; ask = 0;
+                snprintf(reason, sizeof reason, "Kai stopped the MCP tool %s from %s: MCP tools need the user's "
+                         "go-ahead. Don't retry another way; ask the user to run: kai allow-mcp %s --agent %s --for 1h, "
+                         "then retry.", mcp_tool, mcp_server, mcp_server, source);
             }
             subject = strdup(mcp_tool);
         } else if (file_op && first_path &&
@@ -1330,6 +1649,8 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
         maybe_wait_note(reason, sizeof reason, session, rule, subject);
     const char *dec_str = would_block ? "would-block"
                           : ask ? "ask" : (decision >= KAI_ACT_BLOCK) ? "block" : "warn";
+    char did[16] = "";
+    if (decision >= KAI_ACT_BLOCK) kai_decision_id_new(did, sizeof did);
     if (decision >= KAI_ACT_BLOCK) {
         /* PreToolUse uses permissionDecision; prompt/other use top-level decision */
         if (ev && strcmp(ev, "PreToolUse") == 0) {
@@ -1345,6 +1666,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             else
                 snprintf(msg, sizeof msg, "Kai stopped this: %s", reason);
             if (!ask) add_ask_user(msg, sizeof msg);
+            add_decision_id(msg, sizeof msg, did);
             cJSON_AddStringToObject(h, "permissionDecisionReason", msg);
             cJSON_AddItemToObject(o, "hookSpecificOutput", h);
             char *s = cJSON_PrintUnformatted(o);
@@ -1356,6 +1678,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             char msg[600];
             if (!strncmp(reason, "Kai ", 4)) snprintf(msg, sizeof msg, "%s", reason);
             else snprintf(msg, sizeof msg, "Kai stopped this: %s", reason);
+            add_decision_id(msg, sizeof msg, did);
             cJSON_AddStringToObject(o, "reason", msg);
             char *s = cJSON_PrintUnformatted(o);
             printf("%s\n", s);
@@ -1367,12 +1690,19 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
      * the user to load a key / use gh) instead of letting it fail on ~/.ssh and
      * guess. PreToolUse allow only; never for a block (that carries its own
      * reason) or an ask. */
-    if (ev && strcmp(ev, "PreToolUse") == 0 && decision < KAI_ACT_BLOCK && !ask &&
-        hint_key && !ssh_agent_has_keys()) {
+    char mnote[600] = "";
+    if (ev && strcmp(ev, "PreToolUse") == 0 && decision == KAI_ACT_NONE && !ask && source &&
+        (!strcmp(source, "claude") || !strcmp(source, "codex")))
+        mcp_note(p, source, cwd, mnote, sizeof mnote);
+    int ssh_hint = ev && strcmp(ev, "PreToolUse") == 0 && decision < KAI_ACT_BLOCK && !ask &&
+                   hint_key && !ssh_agent_has_keys();
+    if (ssh_hint || mnote[0]) {
+        char ctx[1400];
+        snprintf(ctx, sizeof ctx, "%s%s%s", mnote, mnote[0] && ssh_hint ? " " : "", ssh_hint ? kai_hint_text(hint_key) : "");
         cJSON *o = cJSON_CreateObject();
         cJSON *h = cJSON_AddObjectToObject(o, "hookSpecificOutput");
         cJSON_AddStringToObject(h, "hookEventName", "PreToolUse");
-        cJSON_AddStringToObject(h, "additionalContext", kai_hint_text(hint_key));
+        cJSON_AddStringToObject(h, "additionalContext", ctx);
         char *s = cJSON_PrintUnformatted(o);
         if (s) { printf("%s\n", s); free(s); }
         cJSON_Delete(o);
@@ -1385,7 +1715,8 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
     if (decision != KAI_ACT_NONE || exempted[0]) {
         if (ev && !strcmp(ev, "UserPromptSubmit")) prompt_context(subject, ctx, sizeof ctx);
         else log_context(p, subject, match, ctx, sizeof ctx, mctx, sizeof mctx);
-        kai_audit_entry e = {source, event_label, dec_str, rule, reason, tool, ctx, mctx, session, cwd, NULL};
+        kai_audit_entry e = {source, event_label, dec_str, rule, reason, tool, ctx, mctx, session, cwd, NULL,
+                             did[0] ? did : NULL};
         if (decision == KAI_ACT_NONE) {
             e.decision = "exempt";
             e.rule = exempted;
@@ -1406,12 +1737,13 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
 
 /* ---------- Cursor ---------- */
 
-static void cursor_deny(const char *user_msg) {
+static void cursor_deny_id(const char *user_msg, const char *did) {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "permission", "deny");
-    char msg[600];
+    char msg[700];
     if (own_words(user_msg)) snprintf(msg, sizeof msg, "%s", user_msg);
     else snprintf(msg, sizeof msg, "Kai stopped this: %s", user_msg);
+    add_decision_id(msg, sizeof msg, did);
     cJSON_AddStringToObject(o, "user_message", msg);
     add_ask_user(msg, sizeof msg);
     cJSON_AddStringToObject(o, "agent_message", msg);
@@ -1419,6 +1751,8 @@ static void cursor_deny(const char *user_msg) {
     printf("%s\n", s);
     free(s); cJSON_Delete(o);
 }
+
+static void cursor_deny(const char *user_msg) { cursor_deny_id(user_msg, NULL); }
 
 static int hook_cursor(const char *json) {
     cJSON *root = cJSON_Parse(json);
@@ -1560,14 +1894,17 @@ static int hook_cursor(const char *json) {
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "permission", "ask");
         char msg[600];
+        char adid[16];
+        kai_decision_id_new(adid, sizeof adid);
         snprintf(msg, sizeof msg, "Kai: %s. Allow it this time?", reason);
+        add_decision_id(msg, sizeof msg, adid);
         cJSON_AddStringToObject(o, "user_message", msg);
         cJSON_AddStringToObject(o, "agent_message", msg);
         char *s = cJSON_PrintUnformatted(o);
         printf("%s\n", s);
         free(s); cJSON_Delete(o);
         kai_audit_entry e = {"cursor", ev ? ev : "unknown", "ask", why, reason,
-                             tool, ctx, mctx, session, cwd, NULL};
+                             tool, ctx, mctx, session, cwd, NULL, adid};
         kai_audit_write(&e);
     } else if (deny && kai_rule_is_builtin(why) == 0 && kai_session_paused_here((long long)time(NULL))) {
         /* paused: soft blocks go through, logged; Kai's own files still hold */
@@ -1578,9 +1915,11 @@ static int hook_cursor(const char *json) {
         deny = 0;
     } else if (deny) {
         maybe_wait_note(reason, sizeof reason, session, why, subject);
-        cursor_deny(reason);
+        char cdid[16];
+        kai_decision_id_new(cdid, sizeof cdid);
+        cursor_deny_id(reason, cdid);
         kai_audit_entry e = {"cursor", ev ? ev : "unknown", "block", why, reason,
-                             tool, ctx, mctx, session, cwd, NULL};
+                             tool, ctx, mctx, session, cwd, NULL, cdid};
         kai_audit_write(&e);
     } else {
         if (ex.exempted[0]) {

@@ -32,7 +32,7 @@ settings:
     # The network extension's own build number. Bump ONLY when the extension's
     # code (app/macos/Network) changes: macOS replaces an activated extension
     # when this differs, which tears down the content filter.
-    KAI_EXT_VERSION: "30"
+    KAI_EXT_VERSION: "32"
     SWIFT_VERSION: "5.9"
 
 targets:
@@ -136,6 +136,9 @@ targets:
         LSUIElement: true
         LSMinimumSystemVersion: "13.0"
         NSHumanReadableCopyright: GPL-3.0 · The Kai Authors
+        # Card notifications stay on screen until answered (macOS may still let
+        # the user pick banners).
+        NSUserNotificationAlertStyle: alert
         # kai://settings/<page>: the CLI's "Change this in Kai" opens the page.
         CFBundleURLTypes:
           - CFBundleURLName: io.github.sameehj.kai

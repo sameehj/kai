@@ -313,6 +313,22 @@ int kai_cli_grant_allows(const char *op, const char *agent, const char *target, 
     return ok;
 }
 
+/* Nov 1 step 3: a grant for exactly this MCP tool (not a whole server). A
+ * destructive tool needs one where the agent can't show the user a prompt. */
+int kai_cli_mcp_exact_grant(const char *agent, const char *server, const char *tool, long long now) {
+    if (!agent || !server || !*server || !tool || !*tool) return 0;
+    cJSON *a = load_rules();
+    int ok = 0;
+    cJSON *r;
+    cJSON_ArrayForEach(r, a) {
+        if (strcmp(jstr(r, "kind"), "allow") || strcmp(jstr(r, "op"), "mcp") || !live(r, now)) continue;
+        if (strcmp(jstr(r, "agent"), agent) || strcmp(jstr(r, "target"), server)) continue;
+        if (!strcmp(jstr(r, "to"), tool)) { ok = 1; break; }
+    }
+    cJSON_Delete(a);
+    return ok;
+}
+
 /* The end of this agent's live allow for op + target: the latest "until",
  * -1 for one that never ends, 0 for none. */
 long long kai_cli_grant_until(const char *op, const char *agent, const char *target, long long now) {

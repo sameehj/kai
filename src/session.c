@@ -196,24 +196,29 @@ const char *kai_session_kind_name(int kind) {
     }
 }
 
-/* Phase B item 6: user-facing names are what is protected (Files = the storage
- * wall, Internet = the network wall), not the walls. */
-const char *kai_enforcement_label(int storage_active, int network_active) {
-    if (storage_active && network_active) return "Enforced: Files and Internet";
-    if (network_active && !storage_active) return "Enforced: Internet only";
-    if (storage_active && !network_active) return "Enforced: Files only";
-    return "Seen only: Files and Internet are off";
+/* Nov 1: what covers a session, from measured state only: the agent's checks
+ * (its hooks installed and answering) and the Internet wall's verified mode.
+ * A watching wall enforces nothing, so nothing here says "Enforced". Files
+ * isn't in this release. agent_checks: 1 on, 0 off, -1 unknown. */
+const char *kai_session_coverage_label(int agent_checks, int internet_level) {
+    static const char *const L[3][4] = {
+        {"Agent checks: unknown \xC2\xB7 Internet: unknown", "Agent checks: unknown \xC2\xB7 Internet: off",
+         "Agent checks: unknown \xC2\xB7 Internet: watching",
+         "Agent checks: unknown \xC2\xB7 Internet: blocking (developer build)"},
+        {"Agent checks: off \xC2\xB7 Internet: unknown", "Agent checks: off \xC2\xB7 Internet: off",
+         "Agent checks: off \xC2\xB7 Internet: watching", "Agent checks: off \xC2\xB7 Internet: blocking (developer build)"},
+        {"Agent checks: on \xC2\xB7 Internet: unknown", "Agent checks: on \xC2\xB7 Internet: off",
+         "Agent checks: on \xC2\xB7 Internet: watching", "Agent checks: on \xC2\xB7 Internet: blocking (developer build)"},
+    };
+    int a = agent_checks > 0 ? 2 : agent_checks == 0 ? 1 : 0;
+    int l = internet_level < 0 ? 0 : internet_level > 2 ? 3 : internet_level + 1;
+    return L[a][l];
 }
 
 static int id_ok(const char *id);
 static int read_session(const char *path, kai_session *out);
 
-/* Labels from the same measured levels as the headline (kai_wall_observed_level):
- * a wall covers sessions in Watch or Protect (>= 1); off / not running /
- * unverified (<= 0) does not. */
-const char *kai_enforcement_from_levels(int files, int internet) {
-    return kai_enforcement_label(files >= 1, internet >= 1);
-}
+
 
 /* ---- session activity (Agent Control: working / idle) ----
  * "Working" = the agent ran a command or a hook in the last 15 minutes. The
@@ -368,28 +373,30 @@ const char *kai_status_sentence(int files, int internet, int agents, int paused,
     if (!out || !n) return "";
     if (paused) snprintf(out, n, "Kai is paused");
     else if (files == KAI_FILES_NOT_INCLUDED) {   /* the header adds "Files: not included in this release" */
-        if (internet < 0) snprintf(out, n, "Internet: not verified");
+        if (internet < 0) snprintf(out, n, "Internet: unknown (Kai can't confirm the wall's mode)");
         else if (internet == 0) snprintf(out, n, "Internet protection is off");
-        else if (internet == 1) snprintf(out, n, "Internet: watching only");
-        else if (agents > 0)
-            snprintf(out, n, "Internet protected \xC2\xB7 %d agent%s working", agents, agents == 1 ? "" : "s");
-        else snprintf(out, n, "Internet protected");
+        else if (internet == 1)
+            snprintf(out, n, "Internet: watching");   /* the coverage list and kai status explain it */
+        else if (agents > 0)   /* Protect: developer builds only */
+            snprintf(out, n, "Internet: blocking unknown hosts (developer build) \xC2\xB7 %d agent%s working",
+                     agents, agents == 1 ? "" : "s");
+        else snprintf(out, n, "Internet: blocking unknown hosts (developer build)");
     }
     /* Internet not verified: left out of the headline, which speaks for Files. */
     else if (internet < 0 && files <= 0) snprintf(out, n, "Files protection is off");
     else if (internet < 0 && files == 1) snprintf(out, n, "Files: watching only");
     else if (internet < 0 && agents > 0)
-        snprintf(out, n, "Files protected \xC2\xB7 %d agent%s working", agents, agents == 1 ? "" : "s");
-    else if (internet < 0) snprintf(out, n, "Files protected");
-    else if (files == 0 && internet == 0) snprintf(out, n, "Not protected");
+        snprintf(out, n, "Files enforcing \xC2\xB7 %d agent%s working", agents, agents == 1 ? "" : "s");
+    else if (internet < 0) snprintf(out, n, "Files enforcing");
+    else if (files == 0 && internet == 0) snprintf(out, n, "No wall enforcing");
     else if (files == 0) snprintf(out, n, "Files protection is off");
     else if (internet == 0) snprintf(out, n, "Internet protection is off");
     else if (files == 1 && internet == 1) snprintf(out, n, "Watching only");
-    else if (files == 1) snprintf(out, n, "Partly protected \xC2\xB7 Files is watching only");
-    else if (internet == 1) snprintf(out, n, "Partly protected \xC2\xB7 Internet is watching only");
+    else if (files == 1) snprintf(out, n, "Partly enforcing \xC2\xB7 Files is watching only");
+    else if (internet == 1) snprintf(out, n, "Partly enforcing \xC2\xB7 Internet is watching only");
     else if (agents > 0)
-        snprintf(out, n, "Protected \xC2\xB7 %d agent%s working", agents, agents == 1 ? "" : "s");
-    else snprintf(out, n, "Protected");
+        snprintf(out, n, "Files and Internet enforcing \xC2\xB7 %d agent%s working", agents, agents == 1 ? "" : "s");
+    else snprintf(out, n, "Files and Internet enforcing");
     return out;
 }
 
@@ -532,7 +539,7 @@ const char *kai_wall_state_word(int os, int level) {
     case KAI_WALL_OS_STARTING:      return "starting";
     case KAI_WALL_OS_FAILED:        return "unhealthy";
     default:
-        return level == 2 ? "protecting" : level == 1 ? "watching" : level == 0 ? "off" : "unhealthy";
+        return level == 2 ? "blocking" : level == 1 ? "watching" : level == 0 ? "off" : "unhealthy";
     }
 }
 

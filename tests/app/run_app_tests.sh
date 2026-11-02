@@ -16,6 +16,16 @@ mkdir -p "$OUT/cards"
 cp "$ROOT/tests/app/cards_main.swift" "$OUT/cards/main.swift"
 swiftc -O -o "$OUT/cards/run" "$S/Theme.swift" "$S/Info.swift" "$S/CardActions.swift" "$OUT/cards/main.swift" || exit 1
 "$OUT/cards/run" "${KAI_CARD_SNAPSHOTS:-$OUT/cards}" || rc=1
+# Notifications: one per waiting card per agent and host (NotifyPlan.swift).
+mkdir -p "$OUT/notify"
+cp "$ROOT/tests/app/notify_main.swift" "$OUT/notify/main.swift"
+swiftc -O -o "$OUT/notify/run" "$S/NotifyPlan.swift" "$OUT/notify/main.swift" || exit 1
+"$OUT/notify/run" || rc=1
+# Activity: icons, words, merges, scope and duration (ActivityRules.swift).
+mkdir -p "$OUT/activity"
+cp "$ROOT/tests/app/activity_main.swift" "$OUT/activity/main.swift"
+swiftc -O -o "$OUT/activity/run" "$S/AuditLog.swift" "$S/ActivityRules.swift" "$OUT/activity/main.swift" || exit 1
+"$OUT/activity/run" || rc=1
 rm -rf "$OUT"
 # The app decodes the built kai's real `kai snapshot --json` with its own
 # types, so app and CLI can't drift apart.
@@ -26,6 +36,10 @@ if [ -x "$ROOT/kai" ]; then
     cp "$ROOT/tests/app/sessions_main.swift" "$SO/main.swift"
     swiftc -O -o "$SO/run" "$S/Sessions.swift" "$SO/main.swift" || exit 1
     "$SO/run" "$SO/snap.json" || rc=1
+    cp "$ROOT/tests/app/coverage_main.swift" "$SO/cov.swift"
+    mkdir -p "$SO/cov" && cp "$SO/cov.swift" "$SO/cov/main.swift"
+    swiftc -O -o "$SO/cov/run" "$S/Sessions.swift" "$S/LiveCoverage.swift" "$SO/cov/main.swift" || exit 1
+    "$SO/cov/run" || rc=1
     rm -rf "$SO"
 else
     echo "  FAIL no ./kai to decode (build it first)"; rc=1

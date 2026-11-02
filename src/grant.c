@@ -636,7 +636,11 @@ int kai_grant_resolve(const char *path, char *buf, size_t buflen) {
 static int rule_canonical(const kai_decision_rule *r, char *buf, size_t n) {
     /* rule1 for rules that last until removed (their signatures stay valid);
      * rule2 signs the expiry too; rule3 also signs "migrated". */
-    int w = r->migrated
+    int w = r->session[0]   /* rule4: a Keep blocked for one session, which is signed too */
+        ? snprintf(buf, n, "rule4\n%s\n%d\n%s\n%s\n%s\n%d\n%lld\n%lld\n%d\n%s",
+                   r->id, r->kind, r->identity, r->agent, r->dest, r->op,
+                   r->created_utc, r->expires_utc, r->authenticated, r->session)
+        : r->migrated
         ? snprintf(buf, n, "rule3\n%s\n%d\n%s\n%s\n%s\n%d\n%lld\n%lld\n%d\n%d",
                    r->id, r->kind, r->identity, r->agent, r->dest, r->op,
                    r->created_utc, r->expires_utc, r->authenticated, r->migrated)
@@ -694,23 +698,33 @@ char *kai_rule_build_json(const char *id, int kind, const char *identity, const 
 
 static char *rule_build(const char *id, int kind, const char *identity, const char *agent,
                         const char *dest, int op, long long created, long long expires,
-                        int authenticated, int migrated, const unsigned char *key, size_t keylen);
+                        int authenticated, int migrated, const char *session,
+                        const unsigned char *key, size_t keylen);
+
+char *kai_rule_build_json_session(const char *id, int kind, const char *identity, const char *agent,
+                                  const char *dest, int op, long long created, long long expires,
+                                  const char *session, const unsigned char *key, size_t keylen) {
+    if (kind != KAI_RULE_KEEP_BLOCKED || !session || !*session || strlen(session) >= 64 ||
+        strchr(session, '\n')) return NULL;
+    return rule_build(id, kind, identity, agent, dest, op, created, expires, 0, 0, session, key, keylen);
+}
 
 char *kai_rule_build_json_migrated(const char *id, const char *identity, const char *agent, const char *dest,
                                    int op, long long created, long long expires,
                                    const unsigned char *key, size_t keylen) {
-    return rule_build(id, KAI_RULE_ALLOW, identity, agent, dest, op, created, expires, 0, 1, key, keylen);
+    return rule_build(id, KAI_RULE_ALLOW, identity, agent, dest, op, created, expires, 0, 1, NULL, key, keylen);
 }
 
 char *kai_rule_build_json_until(const char *id, int kind, const char *identity, const char *agent,
                                 const char *dest, int op, long long created, long long expires,
                                 int authenticated, const unsigned char *key, size_t keylen) {
-    return rule_build(id, kind, identity, agent, dest, op, created, expires, authenticated, 0, key, keylen);
+    return rule_build(id, kind, identity, agent, dest, op, created, expires, authenticated, 0, NULL, key, keylen);
 }
 
 static char *rule_build(const char *id, int kind, const char *identity, const char *agent,
                         const char *dest, int op, long long created, long long expires,
-                        int authenticated, int migrated, const unsigned char *key, size_t keylen) {
+                        int authenticated, int migrated, const char *session,
+                        const unsigned char *key, size_t keylen) {
     if (!id || !*id || !identity || !*identity || !key || !keylen) return NULL;
     if (kind != KAI_RULE_ALLOW && kind != KAI_RULE_KEEP_BLOCKED) return NULL;
     if (!kai_rule_dest_ok(kind, dest)) return NULL;
@@ -726,6 +740,7 @@ static char *rule_build(const char *id, int kind, const char *identity, const ch
     r.expires_utc = expires;
     r.authenticated = authenticated ? 1 : 0;
     r.migrated = migrated ? 1 : 0;
+    kai_strlcpy(r.session, session ? session : "", sizeof r.session);
     if (kind == KAI_RULE_ALLOW && !allow_ok(&r)) return NULL;
     char canon[3072];
     uint8_t mac[32];
@@ -749,6 +764,7 @@ static char *rule_build(const char *id, int kind, const char *identity, const ch
         cJSON_AddStringToObject(o, "expires_utc", ex);
     }
     if (r.migrated) cJSON_AddNumberToObject(o, "migrated", 1);
+    if (r.session[0]) cJSON_AddStringToObject(o, "session", r.session);
     cJSON_AddNumberToObject(o, "authenticated", r.authenticated);
     cJSON_AddStringToObject(o, "hmac", r.hmac);
     char *out = cJSON_PrintUnformatted(o);
@@ -774,6 +790,7 @@ int kai_rule_from_json(const char *json, kai_decision_rule *out) {
     out->expires_utc = num_str(o, "expires_utc");
     out->migrated = num_int(o, "migrated");
     out->authenticated = num_int(o, "authenticated");
+    cpy(out->session, sizeof out->session, o, "session");
     cpy(out->hmac, sizeof out->hmac, o, "hmac");
     cJSON_Delete(o);
     return out->id[0] && out->kind;
@@ -819,6 +836,11 @@ const char *kai_rules_dir(void) {
 
 int kai_rule_lookup(const char *dir, const char *identity, const char *dest, int op,
                     const unsigned char *key, size_t keylen, char *id_out, size_t idn) {
+    return kai_rule_lookup_session(dir, identity, dest, op, NULL, key, keylen, id_out, idn);
+}
+
+int kai_rule_lookup_session(const char *dir, const char *identity, const char *dest, int op, const char *session,
+                            const unsigned char *key, size_t keylen, char *id_out, size_t idn) {
     if (id_out && idn) id_out[0] = '\0';
     if (!identity || !*identity || !dest || !*dest) return 0;   /* unverified: no rules */
     DIR *d = opendir(dir ? dir : kai_rules_dir());
@@ -838,6 +860,7 @@ int kai_rule_lookup(const char *dir, const char *identity, const char *dest, int
         if (!ok || !rule_hmac_ok(&r, key, keylen)) continue;           /* forged/tampered */
         if (r.op != op || strcmp(r.identity, identity) != 0 || strcasecmp(r.dest, dest) != 0) continue;
         if (r.expires_utc && (long long)time(NULL) >= r.expires_utc) continue;     /* ended */
+        if (r.session[0] && (!session || strcmp(r.session, session) != 0)) continue; /* another session's */
         if (r.kind == KAI_RULE_ALLOW && (!allow_ok(&r) || !kai_rule_dest_ok(r.kind, r.dest))) continue;
         /* Keep blocked wins over an Allow for the same thing: the tighter one. */
         if (r.kind == KAI_RULE_KEEP_BLOCKED || !found) {

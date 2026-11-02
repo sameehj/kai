@@ -442,13 +442,22 @@ static void ago(long long secs, char *out, size_t n) {
     else snprintf(out, n, "%lldd", secs / 86400);
 }
 
+static const char *session_coverage(const char *agent, int inet, const char **seen, int *seen_on, int *nseen) {
+    for (int i = 0; i < *nseen; i++) if (!strcmp(seen[i], agent)) return kai_session_coverage_label(seen_on[i], inet);
+    int on = kai_agent_checks_on(agent);
+    if (*nseen < 8) { seen[*nseen] = agent; seen_on[*nseen] = on; (*nseen)++; }
+    return kai_session_coverage_label(on, inet);
+}
+
 static int sessions_list(int json) {
     sess_row *r = NULL; int n = 0;
     session_rows(&r, &n);
     long long now = (long long)time(NULL);
-    /* Labels from the same measured, verified levels as the headline. */
-    const char *enf = kai_enforcement_from_levels(kai_wall_observed_level("storage"),
-                                                  kai_wall_observed_level("network"));
+    /* Nov 1: per session, from measured state: the agent's checks and the
+     * Internet wall's verified mode (checked once per agent per listing). */
+    int inet = kai_wall_observed_level("network");
+    const char *seen[8]; int seen_on[8], nseen = 0;
+#define SESSION_COVERAGE(agent) session_coverage(agent, inet, seen, seen_on, &nseen)
     if (json) {
         /* cJSON escapes every string (a topic with a newline used to break it). */
         cJSON *arr = cJSON_CreateArray();
@@ -472,7 +481,7 @@ static int sessions_list(int json) {
             cJSON_AddNumberToObject(o, "child_count", s->child_count);
             cJSON_AddStringToObject(o, "source", s->source == KAI_SESS_SCAN ? "scan" : "es");
             cJSON_AddStringToObject(o, "kind", kai_session_kind_name(s->kind));
-            cJSON_AddStringToObject(o, "enforcement", enf);
+            cJSON_AddStringToObject(o, "enforcement", SESSION_COVERAGE(s->agent));
             cJSON_AddStringToObject(o, "state", sess_state(s));
             if (kai_agent_product_kind(s->agent) == KAI_AGENT_IDE && !s->ended_utc) {
                 cJSON *ws = cJSON_AddArrayToObject(o, "workspaces");
@@ -510,7 +519,7 @@ static int sessions_list(int json) {
                     snprintf(where, sizeof where, "%s", s->project);
                 printf("  %-8.8s %-8s %-9s %-28.28s last active %-7s %s\n", s->id, s->agent,
                        s->tty[0] ? s->tty : (s->host_app[0] ? s->host_app : "-"), where, when,
-                       s->ended_utc ? "" : enf);
+                       s->ended_utc ? "" : SESSION_COVERAGE(s->agent));
             }
         }
         /* Background services and orphans are listed apart, not counted as sessions. */

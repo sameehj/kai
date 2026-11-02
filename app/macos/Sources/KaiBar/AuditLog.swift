@@ -31,6 +31,7 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
     let cwd: String?
 
     var identity: String? = nil   // the agent's verified signing identity (network records)
+    var decision_id: String? = nil   // Nov 1 step 4: the ID the agent was given with a denial
     var id: String { h }
     var date: Date? { AuditEvent.iso.date(from: ts) }
     var isBlock: Bool { decision == "block" }
@@ -81,8 +82,10 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
             }
         }
         switch decision {
-        case "block": return "Blocked"
-        case "log": return "Noticed"
+        case "block": return (isNetwork || isStorage) ? "Blocked" : "Denied by agent check"
+        case "log": return isNetwork ? "Observed" : "Noticed"
+        case "note": return "Note"
+        case "allow": return "Allowed"
         case "exempt": return "Allowed by your exception"
         case "ask": return "Asked you"
         case "redact", "replace": return "Cleaned"
@@ -124,7 +127,7 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
     /// "Claude Code tried an unknown site (1.1.1.1). Blocked."
     var plainSentence: String {
         let who = isGrant ? AuditEvent.title(agentKey) : agentName
-        let outcome = isBlock ? "Blocked." : decision == "log" ? "Allowed (Watch)." : ""
+        let outcome = isBlock ? "Blocked." : decision == "log" ? "Observed, not blocked." : ""
         let t = target ?? ""
         if isGrant {
             switch event {
@@ -177,10 +180,10 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
         return summary
     }
 
-    /// One readable line, e.g. "Blocked Claude Code: reading protected path (~/.ssh)".
+    /// One readable line, e.g. "Claude Code · denied by agent check: Kai stopped reading ~/.ssh".
     var summary: String {
         let what = detail.isEmpty ? (rule.isEmpty ? event : rule) : detail
-        return "\(verb) \(agentName): \(what)"
+        return "\(agentName) · \(verb.prefix(1).lowercased() + verb.dropFirst()): \(what)"
     }
 
     /// The record's excerpt, if Kai kept one.

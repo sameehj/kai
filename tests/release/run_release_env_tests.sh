@@ -32,6 +32,29 @@ printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Read","session_id":"r"
     && pass "release hook: the record goes to the real home, never to KAI_HOME" \
     || fail "release hook logged to KAI_HOME"
 
+# Nov 1 corrective change: release builds keep the Internet wall in Watch. A
+# policy that asks for Protect (egress block) is ignored, and status says so.
+H5="$TMP/h5"; mkdir -p "$H5/.kai"
+cp "$ROOT/policy/default.policy" "$H5/.kai/policy"
+sed -i '' 's/^egress  *log$/egress block/' "$H5/.kai/policy" 2>/dev/null || sed -i 's/^egress  *log$/egress block/' "$H5/.kai/policy"
+grep -q '^egress block' "$H5/.kai/policy" && pass "test policy asks for Protect (egress block)" || fail "couldn't set egress block in the test policy"
+st=$(HOME="$H5" KAI_NO_APP=1 "$REL" status 2>&1)
+case "$st" in *"records the connections it observes; blocks nothing in this release"*) pass "release status: Internet watching, blocks nothing in this release" ;;
+     *) fail "release status doesn't say Internet blocks nothing: $(printf '%s' "$st" | grep -i internet)" ;; esac
+case "$st" in *"your policy asks for Protect; this release only watches"*) pass "...and says the policy's Protect is ignored" ;;
+     *) fail "release status doesn't say the policy's Protect is ignored" ;; esac
+case "$st" in *"upcoming release"*) fail "release status still promises OS protection in an upcoming release" ;;
+     *) pass "...no 'upcoming release' promise" ;; esac
+mode=$(HOME="$H5" KAI_NO_APP=1 "$REL" policy egress-mode 2>&1)
+[ "$mode" = "log" ] && pass "release: the effective Internet mode is watch (log) despite egress block" || fail "release effective mode: $mode"
+mode=$(HOME="$H5" KAI_HOME="$H5/.kai" KAI_NO_APP=1 "$DEV" policy egress-mode 2>&1)
+[ "$mode" = "block" ] && pass "dev build: Protect is still honoured (developer flag territory)" || fail "dev effective mode: $mode"
+
+snap=$(HOME="$H5" KAI_NO_APP=1 "$REL" snapshot --json 2>&1)
+case "$snap" in *Enforced*) fail "release snapshot says Enforced: $snap" ;; *) pass "release build: the session list never says Enforced" ;; esac
+sl=$(HOME="$H5" KAI_NO_APP=1 "$REL" status 2>&1)
+case "$sl" in *Enforced*) fail "release status says Enforced" ;; *) pass "release build: status never says Enforced" ;; esac
+
 # Step 8: an agent's environment can't shrink the rotation size to push
 # history out of the log (only one rotated file is kept).
 H3="$TMP/h3"; mkdir -p "$H3/.kai"

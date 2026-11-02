@@ -129,7 +129,9 @@ typedef enum {
     KAI_EGRESS_BLOCK = 2 /* drop agent traffic to non-allowlisted hosts    */
 } kai_egress_mode;
 
-kai_egress_mode kai_policy_egress_mode(const kai_policy *p);
+kai_egress_mode kai_policy_egress_mode(const kai_policy *p);   /* effective: release builds never block */
+kai_egress_mode kai_policy_egress_requested(const kai_policy *p); /* what the policy file asks for */
+int kai_internet_protect_available(void);                         /* 0 in release builds (Watch only) */
 /* Is host on the allowlist? An entry matches itself and its subdomains.
  * why receives the matching entry. Hosts are compared case-insensitively. */
 int kai_egress_allowed(const kai_policy *p, const char *host, char *why, size_t whylen);
@@ -372,12 +374,12 @@ int kai_sessions_scan(const kai_policy *p, kai_session **out, int *n);
 
 /* The enforcement label for a session given which walls are observed active.
  * Never claims "protected" for a session no active wall can attribute. */
-const char *kai_enforcement_label(int storage_active, int network_active);
+const char *kai_session_coverage_label(int agent_checks, int internet_level); /* never "Enforced" */
+int kai_agent_checks_on(const char *agent);   /* hooks installed and healthy: 1, 0 off, -1 not supported */
 /* A registry session is live: not ended, root process running and not a newer
  * process reusing its pid. */
 int kai_session_live(const kai_session *s);
 /* Session label from measured wall levels (>= 1 covers: Watch or Protect). */
-const char *kai_enforcement_from_levels(int files, int internet);
 /* Session activity: "working" = a command or hook in the last 15 minutes. */
 #define KAI_WORKING_WINDOW 900
 int kai_session_working(long long last_active, long long now);
@@ -593,6 +595,7 @@ typedef struct {
     long long expires_utc;      /* 0 = until removed; else a temporary allow */
     int migrated;               /* from an old category switch: ends unless confirmed */
     int authenticated;
+    char session[64];           /* "" = every session; else a Keep blocked for that session only */
     char hmac[65];
 } kai_decision_rule;
 const char *kai_rules_dir(void);          /* <kai home>/rules */
@@ -607,10 +610,18 @@ int kai_rule_from_json(const char *json, kai_decision_rule *out);
 char *kai_rule_build_json_until(const char *id, int kind, const char *identity, const char *agent,
                                 const char *dest, int op, long long created, long long expires,
                                 int authenticated, const unsigned char *key, size_t keylen);
+/* Dogfood: a Keep blocked for one agent session (the default choice). Keep
+ * blocked only; the session is signed into the rule. */
+char *kai_rule_build_json_session(const char *id, int kind, const char *identity, const char *agent,
+                                  const char *dest, int op, long long created, long long expires,
+                                  const char *session, const unsigned char *key, size_t keylen);
 /* KAI_RULE_ALLOW, KAI_RULE_KEEP_BLOCKED (wins over an Allow) or 0. Only
- * verified rules count. dir NULL = kai_rules_dir(). */
+ * verified rules count. dir NULL = kai_rules_dir(). A session-bound rule
+ * matches only when the caller passes that session (never via kai_rule_lookup). */
 int kai_rule_lookup(const char *dir, const char *identity, const char *dest, int op,
                     const unsigned char *key, size_t keylen, char *id_out, size_t idn);
+int kai_rule_lookup_session(const char *dir, const char *identity, const char *dest, int op, const char *session,
+                            const unsigned char *key, size_t keylen, char *id_out, size_t idn);
 /* Known telemetry/crash-report hosts (B2): denied silently, audited, one
  * passive hint per agent instead of a card. */
 int kai_host_is_telemetry(const char *host);
@@ -622,6 +633,17 @@ int kai_agent_profile_allows(const char *agent, const char *host);
  * allowed without a card. kai_pid_tool_allows reads the process. */
 int kai_tool_profile_allows(const char *exe, const char *const *argv, int argc, const char *host);
 int kai_pid_tool_allows(int pid, const char *host);
+/* A process's command line, redacted with the policy's secret detectors (for
+ * the card, so the hook can name an MCP server that failed to start). */
+int kai_pid_cmdline(const kai_policy *p, int pid, char *out, size_t n);
+/* An MCP tool that deletes, publishes or changes users/roles (by name, or a
+ * status argument of publish/future/trash). 1 = destructive: always asks. */
+int kai_mcp_tool_destructive(const char *tool, const char *status_arg);
+/* An MCP read tool by its first word (get, list, read, search, ...): allowed
+ * and recorded. Names are the server's: a write named like a read passes. */
+int kai_mcp_tool_reads(const char *tool);
+/* A terminal grant for exactly this MCP tool (not a server-wide one). */
+int kai_cli_mcp_exact_grant(const char *agent, const char *server, const char *tool, long long now);
 /* Spec v2.1 B.3: what a host is, in plain words, and its group, or NULL.
  * Explanation only: it never allows anything. */
 const char *kai_host_describe(const char *host, const char **group);
@@ -818,6 +840,8 @@ int kai_approval_store_protected(kai_approval_store *s, const char *path,
 /* B2: the user's Keep blocked / Allow rule for (verified identity, dest, op),
  * read from the "rules" folder beside the grants folder and verified with the
  * store's key. KAI_RULE_ALLOW, KAI_RULE_KEEP_BLOCKED or 0. */
+int kai_approval_store_rule_session(kai_approval_store *s, const char *identity, const char *dest, int op,
+                                    const char *session, char *id_out, size_t idn);
 int kai_approval_store_rule(kai_approval_store *s, const char *identity, const char *dest, int op,
                             char *id_out, size_t idn);
 
@@ -889,7 +913,10 @@ typedef struct {
     const char *session;  /* the agent's session / conversation id          */
     const char *cwd;
     const char *identity; /* the agent's verified signing identity, if known */
+    const char *decision_id; /* Nov 1: "k-1a2b3c4d" on a denial or ask, also sent to the agent */
 } kai_audit_entry;
+/* A new decision ID ("k-" + 8 hex). */
+void kai_decision_id_new(char *out, size_t n);
 int kai_audit_write(const kai_audit_entry *e);
 /* Today's (date NULL) or a given day's ("YYYY-MM-DD", local) counts of
  * meaningful records: secrets kept private and other blocks. Written with each

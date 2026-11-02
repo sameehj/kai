@@ -588,14 +588,23 @@ private struct NetworkPage: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("When an agent connects to a host that is not on your list")
                     .font(.system(size: 13)).foregroundStyle(Theme.muted)
-                ChoiceCards(options: [("log", "Watch", "See where agents go. Nothing is blocked."),
-                                      ("block", "Protect", "Only sites on your list are reachable."),
-                                      ("off", "Off", "Agents reach anything.")],
-                            selected: model.policy?.switches["egress"] ?? "log") { model.setSwitch("egress", $0) }
+                // Nov 1 corrective change: Watch only in this release (Protect behind a developer flag).
+                let protect = DevFlags.internetProtect
+                let raw = model.policy?.switches["egress"] ?? "log"
+                ChoiceCards(options: [("log", "Watch", "Records the connections Kai observes; blocks nothing in this release.")]
+                                     + (protect ? [("block", "Protect", "Only sites on your list are reachable.")] : [])
+                                     + [("off", "Off", "Kai doesn't record agent connections.")],
+                            selected: !protect && raw == "block" ? "log" : raw) { model.setSwitch("egress", $0) }
                     .disabled(model.busy || model.policy == nil)
+                if !protect {
+                    Text("Internet: Kai records the connections it observes. Blocking arrives in the next release.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.soft).fixedSize(horizontal: false, vertical: true)
+                }
                 HStack(spacing: 10) {
                     HStack(spacing: 3) { Text("Watch").font(.system(size: 11)).foregroundStyle(Theme.muted); InfoButton(text: InfoText.watch) }
-                    HStack(spacing: 3) { Text("Protect").font(.system(size: 11)).foregroundStyle(Theme.muted); InfoButton(text: InfoText.protect) }
+                    if protect {
+                        HStack(spacing: 3) { Text("Protect").font(.system(size: 11)).foregroundStyle(Theme.muted); InfoButton(text: InfoText.protect) }
+                    }
                 }
                 Text("Watch and Protect both turn off QUIC for agents, so Kai can see which sites they reach. "
                    + "Agents fall back to normal HTTPS; in Watch nothing else is blocked.")
@@ -834,6 +843,7 @@ private struct AgentControlPage: View {
         VStack(alignment: .leading, spacing: 14) {
             PageHeader(icon: "person.2.gobackward", title: "Agent Control",
                        subtitle: "Every agent session Kai sees, with its permissions. Revoke one without touching the others.")
+            Card(padding: 14) { LiveCoverageList() }
             // A plain HStack (not a nested split view, which collapsed inside the
             // Settings window's own split): a fixed-width list + a detail, both
             // filling the height.
@@ -956,9 +966,10 @@ private struct PermissionsPage: View {
         ForEach(allow) { r in ruleRow(r, line: "\(r.agentTitle) may connect to \(r.dest) \(r.untilLabel)") }
         if !kept.isEmpty {
             CapsLabel("Kept blocked").padding(.top, 4)
-            Text("Kai doesn't ask about these again; each attempt is still blocked and recorded.")
-                .font(.system(size: 12)).foregroundStyle(Theme.muted)
-            ForEach(kept) { r in ruleRow(r, line: "\(r.agentTitle) can't connect to \(r.dest)") }
+            Text("Kai doesn't ask about these again while they last; each attempt is still blocked and recorded. "
+                 + "Keep blocked lasts for the session it was chosen in; Block always makes it permanent.")
+                .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            ForEach(kept) { r in ruleRow(r, line: "\(r.agentTitle) can't connect to \(r.dest) \(r.untilLabel)") }
         }
     }
 
@@ -974,6 +985,10 @@ private struct PermissionsPage: View {
                         .font(.system(size: 11)).foregroundStyle(Theme.muted)
                 }
                 Spacer()
+                if !r.isAllow && (r.isSessionOnly || r.isTemporary) {
+                    Button("Block always") { grants.blockAlways(r) }.buttonStyle(GhostButtonStyle())
+                        .help("Block \(r.dest) for \(r.agentTitle) in every session, until you remove it.")
+                }
                 Button(r.isAllow ? "Remove" : "Ask again") { grants.removeRule(r) }
                     .buttonStyle(GhostButtonStyle())
             }
@@ -1064,7 +1079,7 @@ private struct ActivityPage: View {
         var order: [String] = []
         var groups: [String: (event: AuditEvent, count: Int)] = [:]
         for e in shown {
-            let k = "\(e.agentName)|\(e.decision)|\(e.rule)|\(e.excerpt ?? "")|\(e.detail)"
+            let k = e.mergeKey   // step 5: one grant record per agent and target
             if let g = groups[k] { groups[k] = (g.event, g.count + 1) }
             else { groups[k] = (e, 1); order.append(k) }
         }
@@ -1121,19 +1136,8 @@ private struct ActivityRow: View {
     let toggle: () -> Void
     @State private var report: ReportInfo?
 
-    private var color: Color {
-        if event.isBlock { return Theme.coral }
-        if event.isExempt || event.decision == "log" { return Theme.muted }
-        if event.decision == "redact" || event.decision == "replace" { return Theme.lime }
-        return Theme.amber
-    }
-    private var icon: String {
-        if event.isBlock { return "hand.raised.fill" }
-        if event.isExempt { return "checkmark.circle" }
-        if event.decision == "log" { return "eye" }
-        if event.decision == "redact" || event.decision == "replace" { return "wand.and.stars" }
-        return "exclamationmark.triangle.fill"
-    }
+    private var color: Color { Theme.tone(event.tone) }
+    private var icon: String { event.iconName }   // step 5: an allow is never ⚠
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1148,6 +1152,10 @@ private struct ActivityRow: View {
             } else if !event.detail.isEmpty {
                 Text(event.detail).font(.system(size: 12)).foregroundStyle(Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if let d = event.decision_id {   // the ID the agent quoted, to find this row
+                Text("Decision \(d)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.muted)
+                    .textSelection(.enabled)
             }
             DecisionSheet(event: event, count: count, showHeader: false, grants: grants)
             if let n = followUp {
@@ -1280,7 +1288,7 @@ struct WallPill: View {
     let word: String
     private var color: Color {
         switch word {
-        case "protecting": return Theme.lime
+        case "blocking", "watching": return Theme.lime
         case "watching", "starting": return Theme.amber
         case "unhealthy": return Theme.coral
         default: return Theme.muted

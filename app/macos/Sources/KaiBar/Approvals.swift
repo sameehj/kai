@@ -192,7 +192,9 @@ struct ActiveGrant: Decodable, Identifiable {
     /// until that session ends (its expiry is only a cap), so it never shows
     /// "this process · 7 days".
     var isSession: Bool { !(session_id ?? "").isEmpty }
-    var scopeLabel: String { scope == 1 ? "once" : isSession ? "this session" : "this process" }
+    var scopeLabel: String {   // step 5: "this session", "for 7 days" or "once"; never "this process"
+        GrantText.scope(scope: scope, session: isSession, created: Int(created_utc ?? "") ?? 0, expires: expiresEpoch)
+    }
     var signed: Bool { !hmac.isEmpty }
     var expiresEpoch: Int { Int(expires_utc) ?? 0 }
 }
@@ -244,12 +246,8 @@ struct GrantGroup: Identifiable {
     }
     /// Time left, in the same terms as the scope.
     var status: String {
-        let secs = expiresEpoch - Int(Date().timeIntervalSince1970)
-        if secs <= 0 { return "expired" }
-        if isSession { return "until the session ends" }
-        if secs < 60 { return "\(secs)s left" }
-        if secs < 3600 { return "\(secs / 60)m left" }
-        return "\(secs / 3600)h \((secs % 3600) / 60)m left"
+        let s = GrantText.status(session: isSession, expires: expiresEpoch)
+        return s == "ended" ? "expired" : s
     }
 }
 
@@ -273,6 +271,11 @@ struct PendingPolicyChange: Decodable, Identifiable {
 }
 
 final class GrantManager: ObservableObject {
+    /// The one manager that posts card notifications (the popover uses it too):
+    /// created at launch, so a card notifies even if the popover was never opened.
+    static let shared: GrantManager = { let g = GrantManager(); g.postsNotifications = true; return g }()
+    private var postsNotifications = false
+    private var notifyPlan = NotifyPlan()
     @Published private(set) var pending: [PendingRequest] = []
     @Published private(set) var grants: [ActiveGrant] = []
     @Published private(set) var pendingPolicy: [PendingPolicyChange] = []
@@ -339,6 +342,15 @@ final class GrantManager: ObservableObject {
         }
         let fresh = live.filter { r in !seenPending.contains(r.id) }
         if primed && !fresh.isEmpty { KaiSounds.approvalNeeded() }
+        if postsNotifications {
+            // Dogfood: a waiting card notifies (it used to only play a sound), one
+            // per agent and host, with Allow for this task / Keep blocked on it.
+            let cards = live.map { NotifyPlan.Card(id: $0.id, agent: $0.agent, host: $0.resource) }
+            let post = notifyPlan.cardsToNotify(cards)
+            if primed { for c in post { if let r = live.first(where: { $0.id == c.id }) { Notifier.card(r) } } }
+            let gone = pending.filter { r in !live.contains { $0.agent == r.agent && $0.resource == r.resource } }
+            Notifier.withdraw(gone.map { NotifyPlan.cardID(agent: $0.agent, host: $0.resource) })
+        }
         seenPending.formUnion(live.map(\.id)); primed = true
         pending = live
         grants = loadJSON(dir: grantsDir).compactMap { try? JSONDecoder().decode(ActiveGrant.self, from: $0) }
@@ -464,14 +476,17 @@ final class GrantManager: ObservableObject {
                                               attributes: [.posixPermissions: 0o600])
     }
 
-    /// B2: Keep blocked. For a verified agent and a real hostname it is
-    /// remembered (a signed rule): later attempts are audited, not carded.
-    /// Reversible in Settings → Permissions. Otherwise it just dismisses.
+    /// B2 + dogfood: Keep blocked lasts for the agent session it was chosen in
+    /// (an hour when there is no session); a permanent block is a separate
+    /// choice in Settings (Block always). Later attempts in that session are
+    /// audited, not carded, and show in Recent with Unblock.
     func keepBlocked(_ req: PendingRequest) {
+        let sess = req.session ?? ""
         if req.rememberable, let ident = req.verifiedIdentity,
-           writeRule(kind: Int32(KAI_RULE_KEEP_BLOCKED), req: req, identity: ident, authenticated: false) {
+           writeRule(kind: Int32(KAI_RULE_KEEP_BLOCKED), req: req, identity: ident, authenticated: false,
+                     ttl: sess.isEmpty ? 3600 : 0, session: sess.isEmpty ? nil : sess) {
             kai_grant_audit("denied", req.id, req.agent, req.resource, 2, "deny",
-                            "kept blocked by user; remembered for \(ident)")
+                            "kept blocked by user for \(sess.isEmpty ? "1 hour" : "this session"); remembered for \(ident)")
             for r in pending where r.op == "connect" && r.resource == req.resource && r.identity == req.identity {
                 clearPending(r)
             }
@@ -519,15 +534,24 @@ final class GrantManager: ObservableObject {
     }
 
     private func writeRule(kind: Int32, req: PendingRequest, identity: String, authenticated: Bool,
-                           ttl: Int = 0) -> Bool {
+                           ttl: Int = 0, session: String? = nil) -> Bool {
+        writeRule(kind: kind, agent: req.agent, dest: req.resource, identity: identity,
+                  authenticated: authenticated, ttl: ttl, session: session)
+    }
+
+    private func writeRule(kind: Int32, agent: String, dest: String, identity: String, authenticated: Bool,
+                           ttl: Int = 0, session: String? = nil) -> Bool {
         guard let key = KaiApprovalKey.ensure() else { return false }
         let rid = UUID().uuidString
         let now = Int64(Date().timeIntervalSince1970)
         let json: String? = key.withUnsafeBytes { raw -> String? in
-            guard let base = raw.bindMemory(to: UInt8.self).baseAddress,
-                  let c = kai_rule_build_json_until(rid, kind, identity, req.agent, req.resource, 2,
-                                                    now, ttl > 0 ? now + Int64(ttl) : 0, authenticated ? 1 : 0,
-                                              base, key.count) else { return nil }
+            guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return nil }
+            let exp = ttl > 0 ? now + Int64(ttl) : 0
+            let c = session.map { kai_rule_build_json_session(rid, kind, identity, agent, dest, 2, now, exp, $0,
+                                                              base, key.count) }
+                ?? kai_rule_build_json_until(rid, kind, identity, agent, dest, 2, now, exp, authenticated ? 1 : 0,
+                                             base, key.count)
+            guard let c else { return nil }
             defer { free(c) }
             return String(cString: c)
         }
@@ -536,6 +560,18 @@ final class GrantManager: ObservableObject {
                                                  attributes: [.posixPermissions: 0o700])
         return FileManager.default.createFile(atPath: rulesDir + "/" + rid + ".json", contents: Data(json.utf8),
                                               attributes: [.posixPermissions: 0o600])
+    }
+
+    /// Settings: make a session (or hourly) Keep blocked permanent for this
+    /// agent and host, in every session until removed.
+    func blockAlways(_ r: DecisionRule) {
+        guard !r.isAllow else { return }
+        if writeRule(kind: Int32(KAI_RULE_KEEP_BLOCKED), agent: r.agent, dest: r.dest, identity: r.identity,
+                     authenticated: false) {
+            kai_grant_audit("denied", r.id, r.agent, r.dest, 2, "deny", "blocked always by user for \(r.identity)")
+            try? FileManager.default.removeItem(atPath: rulesDir + "/" + r.id + ".json")
+        }
+        refresh()
     }
 
     /// Removing a rule never lowers protection (an Allow goes away, or a Keep
@@ -747,15 +783,16 @@ final class GrantManager: ObservableObject {
     /// Identical grants collapsed with a count; soonest expiry wins.
     var grantGroups: [GrantGroup] {
         var map: [String: [ActiveGrant]] = [:]
-        for g in grants {
-            map["\(g.agent)|\(g.resource)|\(g.opLabel)|\(g.scopeLabel)", default: []].append(g)
+        for g in grants {   // step 5: one row per agent and target (and operation)
+            map["\(g.agent)|\(g.resource.lowercased())|\(g.opLabel)", default: []].append(g)
         }
         return map.map { key, gs in
-            let f = gs[0]
+            // the row speaks for the grant that lasts longest; revoking it revokes all
+            let f = gs.max { a, b in (a.isSession ? Int.max : a.expiresEpoch) < (b.isSession ? Int.max : b.expiresEpoch) } ?? gs[0]
             return GrantGroup(id: key, agent: f.agent, resource: f.resource, opLabel: f.opLabel,
                               scopeLabel: f.scopeLabel, isSession: f.isSession, count: gs.count,
                               signed: gs.allSatisfy { $0.signed },
-                              expiresEpoch: gs.map(\.expiresEpoch).min() ?? 0, members: gs)
+                              expiresEpoch: f.expiresEpoch, members: gs)
         }.sorted { $0.id < $1.id }
     }
 
@@ -770,6 +807,22 @@ final class GrantManager: ObservableObject {
 
     private func clearPending(_ req: PendingRequest) {
         try? FileManager.default.removeItem(atPath: pendingDir + "/" + req.id + ".json")
+        Notifier.withdraw([NotifyPlan.cardID(agent: req.agent, host: req.resource)])
+    }
+
+    /// A button on a card notification: Allow for this task (the session; an
+    /// hour by verified identity when there is none; this one connection for an
+    /// unknown host) or Keep blocked.
+    func answerFromNotification(pendingID: String, allow: Bool) {
+        refresh()
+        guard let req = pending.first(where: { $0.id == pendingID }) else { return }
+        notifyPlan.answered(agent: req.agent, host: req.resource)
+        if !allow { keepBlocked(req); return }
+        if req.unknownHost { approveOnce(req) }
+        else if !(req.session ?? "").isEmpty { approve(req, duration: .session) }
+        else if req.rememberable { allowForHour(req) }
+        else { approve(req, duration: .hour1) }
+        refresh()
     }
 
     // ---- Item 5: group pending cards, collapse temp paths, dismiss all ----
@@ -1137,6 +1190,8 @@ struct DecisionRule: Decodable, Identifiable {
     var expires_utc: String? = nil
     var authenticated: Int? = 0
     var migrated: Int? = 0
+    var session: String? = nil
+    var isSessionOnly: Bool { !(session ?? "").isEmpty }
     var created: Int { Int(created_utc) ?? 0 }
     var expires: Int { Int(expires_utc ?? "") ?? 0 }
     var isTemporary: Bool { expires > 0 }
@@ -1146,6 +1201,7 @@ struct DecisionRule: Decodable, Identifiable {
             return "until " + Date(timeIntervalSince1970: TimeInterval(expires)).formatted(date: .abbreviated, time: .omitted)
                 + " unless you confirm (from the old switch)"
         }
+        if isSessionOnly { return "for this session" }
         return isTemporary ? "until " + Date(timeIntervalSince1970: TimeInterval(expires)).formatted(date: .omitted, time: .shortened)
                     : "in every session"
     }

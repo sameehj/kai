@@ -12,7 +12,7 @@ struct MenuView: View {
     @State private var dismissedBlock: String?
     @State private var showPermissions = false
     @State private var openDecision: String?
-    @StateObject private var grantManager = GrantManager()
+    @ObservedObject private var grantManager = GrantManager.shared
     @ObservedObject private var agents = AgentsModel.shared
 
     private var alert: AuditEvent? {
@@ -35,7 +35,8 @@ struct MenuView: View {
             if DevFlags.perSessionPause { pauseBanner }
             migratedConfirm
             activeNow
-            protectionsLine
+            Button { open(.files) } label: { LiveCoverageList(compact: true).contentShape(Rectangle()) }
+                .buttonStyle(.plain).help("From live checks. Open Settings to change Internet or an agent's checks.")
             permissions
             recent
             footer
@@ -114,18 +115,6 @@ struct MenuView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// What a session row would say if every session were covered like the
-    /// headline; a row shows its coverage only when it differs.
-    private var expectedCoverage: String {
-        let l = model.levels(storageOn: storage.isOn, networkOn: wall.isOn)
-        switch (l.files > 0, l.internet > 0) {
-        case (true, true): return "Files + Internet"
-        case (true, false): return "Files only"
-        case (false, true): return "Internet only"
-        default: return "seen only"
-        }
-    }
-
     // Migration: one line; the details (Keep with Touch ID, Remove) are on the
     // agent's page behind Review.
     @AppStorage("agentControlOpen") private var agentControlOpen = ""
@@ -184,7 +173,7 @@ struct MenuView: View {
                     ForEach(rows.prefix(4)) { s in
                         let gc = grantManager.grants.filter { $0.session_id == s.id }.count
                         Button { openAgentControl() } label: {
-                            PopoverSessionRow(session: s, grants: gc, expectedCoverage: expectedCoverage)
+                            PopoverSessionRow(session: s, grants: gc)
                         }
                             .buttonStyle(.plain)
                         if DevFlags.perSessionPause && grantManager.pauseState(s.id) == Int32(KAI_PAUSE_NONE) {
@@ -297,7 +286,7 @@ struct MenuView: View {
         if alert != nil || model.health == .problem { return Theme.coral }
         if grantManager.pauseState(nil) != Int32(KAI_PAUSE_NONE) { return Theme.amber }
         if storage.stateWord == "unhealthy" || wall.stateWord == "unhealthy" { return Theme.amber }
-        if storage.stateWord == "protecting" || wall.stateWord == "protecting" { return Theme.lime }
+        if storage.stateWord == "blocking" || wall.stateWord == "blocking" || wall.stateWord == "watching" { return Theme.lime }
         return Theme.soft
     }
 
@@ -327,6 +316,12 @@ struct MenuView: View {
                 if !StorageWall.included {
                     Text(ProtectionText.filesNotIncluded).font(.system(size: 11)).foregroundStyle(Theme.muted)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+                if model.notificationsOff {   // dogfood: cards you'd never see
+                    Button { Notifier.openSettings() } label: {
+                        Text("Notifications are off for Kai · Turn on ›").font(.system(size: 11)).foregroundStyle(Theme.amber)
+                    }.buttonStyle(.plain)
+                    .help("Kai can't tell you when an agent waits for you. Opens System Settings → Notifications.")
                 }
             }
             .layoutPriority(1)   // the status lines wrap rather than truncate
@@ -370,10 +365,18 @@ struct MenuView: View {
             }
             // Spec §5.1: every row opens its decision sheet.
             ForEach(recentItems) { g in
-                Button { openDecision = openDecision == g.event.id ? nil : g.event.id } label: {
-                    EventLine(event: g.event, count: g.count, plain: true).contentShape(Rectangle())
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Button { openDecision = openDecision == g.event.id ? nil : g.event.id } label: {
+                        EventLine(event: g.event, count: g.count, plain: true).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    // dogfood: a kept-blocked host is one click from asking again
+                    if g.event.isKeptBlocked, let r = grantManager.keptBlockedRule(g.event) {
+                        Button("Unblock") { grantManager.removeRule(r) }
+                            .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
+                            .help("Kai asks about \(r.dest) again next time.")
+                    }
                 }
-                .buttonStyle(.plain)
                 .popover(isPresented: Binding(get: { openDecision == g.event.id },
                                               set: { if !$0 { openDecision = nil } }), arrowEdge: .leading) {
                     DecisionSheet(event: g.event, count: g.count, grants: grantManager)
@@ -596,8 +599,8 @@ struct AgentCard: View {
 
     private func subtitle(_ info: KaiStatus.Agent) -> String {
         if info.broken { return "Not working: " + (info.problem ?? "check failed") }
-        if info.installed { return "Protected" }
-        return info.detected ? "Not protected" : "Not found on this Mac"
+        if info.installed { return "Agent checks on" }
+        return info.detected ? "Agent checks off" : "Not found on this Mac"
     }
 
     var body: some View {
@@ -730,7 +733,6 @@ struct StorageCard: View {
 struct PopoverSessionRow: View {
     let session: SessionRow
     var grants: Int = 0
-    var expectedCoverage = "Files + Internet"
     /// Step 6: the session's unique name (topic or project, plus the tab);
     /// session id, host app and tty are on its details page.
     private var title: String { session.name.isEmpty ? session.projectBase : session.name }
@@ -740,8 +742,7 @@ struct PopoverSessionRow: View {
             .filter { !$0.isEmpty && $0 != "—" && !title.hasPrefix($0) }.joined(separator: " · ")
     }
     private var badge: Color {
-        session.enforcementShort == "Files + Internet" ? Theme.lime
-        : session.enforcementShort == "seen only" ? Theme.muted : Theme.amber
+        session.checksOff ? Theme.amber : Theme.lime
     }
     var body: some View {
         HStack(spacing: 8) {
@@ -749,7 +750,7 @@ struct PopoverSessionRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
                     Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                    if session.enforcementShort != expectedCoverage {
+                    if session.checksOff {
                         Text(session.enforcementShort).font(.system(size: 11)).foregroundStyle(Theme.amber)
                     }
                     if grants > 0 {
@@ -773,7 +774,7 @@ struct EventLine: View {
     var plain = false
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Circle().fill(event.isBlock ? Theme.coral : Theme.amber).frame(width: 8, height: 8)
+            Circle().fill(Theme.tone(event.tone)).frame(width: 8, height: 8)
             Text((plain ? event.plainSentence : event.summary) + (count > 1 ? "  ×\(count)" : ""))
                 .lineLimit(nil)
                 .font(.system(size: 13)).foregroundStyle(Theme.soft)
@@ -896,6 +897,12 @@ struct DevBadge: View {
 ///   defaults write io.github.sameehj.kai devPerSessionPause -bool YES
 enum DevFlags {
     static var perSessionPause: Bool { UserDefaults.standard.bool(forKey: "devPerSessionPause") }
+    /// Nov 1 corrective change: Protect for the Internet wall waits for Guard.
+    /// Release builds never offer it (libkai keeps them in Watch); a developer
+    /// build shows it only with `defaults write io.github.sameehj.kai.dev devInternetProtect -bool YES`.
+    static var internetProtect: Bool {
+        kai_internet_protect_available() == 1 && UserDefaults.standard.bool(forKey: "devInternetProtect")
+    }
 }
 
 enum PauseText {
@@ -916,6 +923,44 @@ enum ProtectionText {
         case 1: return "\(name): watching"
         case 0: return "\(name): off"
         default: return "\(name): not running"
+        }
+    }
+}
+
+/// Step 5: one colour per event tone, everywhere an event is shown.
+extension Theme {
+    static func tone(_ t: EventTone) -> Color {
+        switch t {
+        case .stopped: return coral
+        case .allowed, .cleaned: return lime
+        case .neutral: return muted
+        case .warning: return amber
+        }
+    }
+}
+
+/// Step 6: what Kai covers right now, from live checks only (LiveCoverage):
+/// the agents' measured hook state and the Internet wall's verified heartbeat.
+struct LiveCoverageList: View {
+    @ObservedObject private var agents = AgentsModel.shared
+    var compact = false
+    var body: some View {
+        // the heartbeat level, read live; -1 when the extension can't be confirmed
+        let level = Int(kai_wall_observed_level("network"))
+        let known = agents.loaded && agents.sourceError == nil
+        let rows = LiveCoverage.rows(agents: known ? agents.agents.filter { !compact || LiveCoverage.integrated.contains($0.name) } : [],
+                                     internetLevel: level, protectAvailable: kai_internet_protect_available() == 1)
+        VStack(alignment: .leading, spacing: compact ? 3 : 6) {
+            CapsLabel("Coverage now")
+            ForEach(rows, id: \.label) { r in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Circle().fill(r.good ? Theme.lime : Theme.muted).frame(width: 6, height: 6)
+                    Text(r.label).font(.system(size: compact ? 12 : 13)).foregroundStyle(Theme.soft)
+                    Spacer(minLength: 8)
+                    Text(r.state).font(.system(size: compact ? 11 : 12)).foregroundStyle(Theme.muted)
+                        .multilineTextAlignment(.trailing).fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 }

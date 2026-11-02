@@ -144,6 +144,89 @@ The number of approval prompts is a hypothesis until measured on a clean Mac. Ap
 - [ ] Measure uninstall, and confirm no helper or permission is left behind
 - [ ] Count prompts per configuration (A to D) and add the result to the usability gate
 
+## Nov 1 corrective change
+
+**Architectural work, traceable to the Nov 1 incident:** the author turned Kai off for Claude Code during an
+ordinary WordPress task after three hidden gates ([FRICTION-POSTMORTEM.md](FRICTION-POSTMORTEM.md)). This
+amends the plan above; it doesn't replace it. Security Plan v1.0 is unchanged, and the Storage Wall stays the
+foundation of the full release.
+
+**This release (0.2.0-preview.2):** agent checks (hooks) enforce where the agent calls them; the Internet wall
+is Watch only, enforced in the network extension: it observes and never blocks or pauses a flow by policy.
+No OS file protection. Protect is behind a developer flag. Guard and the shared Decision Context are the next
+release.
+
+### Three rules
+
+1. **Never interrupt ordinary activity Kai has no specific reason to restrict; record it.**
+2. **Never let Kai silently cause a failure.** The user can always see the cause and the recovery path, and
+   the agent gets the same explanation where the integration allows.
+3. **Never trade away an enforceable boundary to reduce friction.**
+
+Exposure is a risk signal, never proof of safety. A channel Kai doesn't observe is labelled **unverified**,
+never "safe" or "protected".
+
+### MCP trust: three levels
+
+| Level | What is trusted | Revalidate when |
+|---|---|---|
+| Installation | This server, from this executable or package | The executable, the resolved package version or its tool definitions change. An unpinned `npx` or `uvx` spec (no exact version) counts as changeable |
+| Capability | A tool or class of tools (read, edit) for this agent | The tool definitions change |
+| Action | One call with its arguments | Every destructive action |
+
+Destructive actions (delete, publish, change users or roles) always need a scoped approval, even on an
+approved server and capability.
+
+### Presentation and enforcement
+
+- **Task cards group presentation only.** Several requests for one task may share a card; each permission is
+  still granted, scoped and enforced on its own.
+- **Hold-and-resume is a target per enforcement point:** the hook (the agent's own "ask" prompt continues the
+  same call), MCP (the call waits for the decision), the network (pause, then resume). Endpoint Security
+  never waits on a human. "No restart needed" is claimed only where a test shows it.
+
+### Full-release direction
+
+Ordinary HTTPS is allowed (Guard records it and decides only where a task crossed a boundary). Sensitive
+resources are isolated by the OS-enforced Storage Wall, with named readers. Tools get scoped capabilities.
+Crossing a boundary (a sensitive resource to the outside, a destructive action, a changed MCP server) needs
+explicit human authority.
+
+Guard's target policy, as a starting point for that release:
+
+| Activity | Default | Enforced at | Hold and resume |
+|---|---|---|---|
+| Reading a protected secret (keys, `.env`, credentials) by the agent's own tools | Ask once per task | Hook | Agent's own prompt |
+| A protected secret, then an outbound request in the same task | Ask, naming both | Decision Context (hook + network) | Network pause |
+| A new HTTPS destination, no sensitive read in the task | Record | Network | n/a |
+| Bare IP or an unusual port | Ask | Network | Network pause (TCP) |
+| An approved service (GitHub, npm, a site you allowed) | Record; ask if the task read a secret | Network + Decision Context | Network pause |
+| MCP server start (installation level) | Record; ask when the executable, version or tools changed | Hook + network | MCP wait |
+| MCP read tool (capability level) | Allow after the capability is approved | Hook | Agent's own prompt |
+| MCP destructive action | Always ask (action level) | Hook | Agent's own prompt |
+| The same from a subprocess or a parallel session | Same decision as the parent task | Decision Context (lineage) | Same as above |
+| Kai's own settings and hooks | Always protected | Hook (+ Files later) | None |
+
+### Scorecards
+
+| Usability | Target |
+|---|---|
+| Unexplained Kai-caused failures (a stop without cause and recovery shown to the user, and to the agent where possible) | 0 |
+| Protection-disable events (a user turns Kai or a wall off to finish a task) | 0 |
+
+| Security | Target |
+|---|---|
+| Required replays pass at their stated layer | All |
+
+### Required replay cases (full release)
+
+1. Read a protected `.env`, then send it to a new HTTPS destination.
+2. The same through an approved GitHub endpoint.
+3. A sensitive upload through a permitted MCP server.
+4. The executable behind an approved MCP config changes.
+5. A destructive WordPress action while holding a narrow edit grant.
+6. The same from a subprocess or a parallel session.
+
 ## Sources
 
 - [Palo Alto Networks Form 10-Q, quarter ended April 30, 2026](https://www.sec.gov/Archives/edgar/data/0001327567/000132756726000015/panw-20260430.htm)

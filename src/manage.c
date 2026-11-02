@@ -201,6 +201,27 @@ int kai_cmd_status_json(void) {
     return 0;
 }
 
+/* Nov 1: an agent's checks are on when its hooks are installed and answer the
+ * health check (the agent rows' "installed"). 1 on, 0 off, -1 not an agent Kai
+ * has checks for. */
+int kai_agent_checks_on(const char *agent) {
+    if (!agent) return -1;
+    char *codex = kai_codex_hooks_path();
+    const char *rel = !strcmp(agent, "claude") ? "~/.claude/settings.json"
+                    : !strcmp(agent, "cursor") ? "~/.cursor/hooks.json"
+                    : !strcmp(agent, "codex") ? codex : NULL;
+    char needle[32];
+    snprintf(needle, sizeof needle, "hook %s", agent);
+    int r = -1;
+    if (rel) {
+        int detected = 0;
+        if (!agent_installed(rel, needle, &detected)) r = 0;
+        else { kai_health h; h.ok = 0; h.problem[0] = '\0'; kai_health_agent(agent, rel, &h); r = h.ok ? 1 : 0; }
+    }
+    free(codex);
+    return r;
+}
+
 /* ---------- kai agents (S2): agent inventory ---------- */
 
 int kai_cmd_agents(int argc, char **argv) {
@@ -1197,6 +1218,14 @@ int kai_policy_dispatch(int argc, char **argv, int caller_is_agent) {
         return 3;
     }
     if (strcmp(sub, "path") == 0) { printf("%s\n", kai_policy_file()); return 0; }
+    if (strcmp(sub, "egress-mode") == 0) {   /* the effective Internet wall mode: off | log | block */
+        char perr[256];
+        kai_policy *ep = kai_policy_load(NULL, perr, sizeof perr);
+        kai_egress_mode m = kai_policy_egress_mode(ep);
+        printf("%s\n", m == KAI_EGRESS_BLOCK ? "block" : m == KAI_EGRESS_LOG ? "log" : "off");
+        kai_policy_free(ep);
+        return 0;
+    }
     if (strcmp(sub, "pending") == 0) return policy_pending_list();
     if (strcmp(sub, "show") == 0)
         return policy_show(argc > 1 && strcmp(argv[1], "--json") == 0);

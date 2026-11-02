@@ -58,7 +58,7 @@ static void agent_measure(agent_state *a) {
 static const char *wall_word(int lvl, int app) {
     if (!app) return "not included";
     switch (lvl) {
-    case 2: return "protecting";
+    case 2: return "blocking";
     case 1: return "watching";
     case 0: return "off";
     default: return "not running";
@@ -183,8 +183,8 @@ int kai_cmd_status_text(void) {
     const char *head = installed && checking == installed ? "Checking"
                      : any_on ? "Partly checking" : "Not checking";
     printf("Kai%s %s · %s\n", app ? "" : " Preview", KAI_VERSION, head);
-    if (!app) printf("%s\nKai Preview checks inside your agents. OS-level protection for files and internet comes "
-                     "with the Kai app in an upcoming release.\n", CONTRACT);
+    if (!app) printf("%s\nKai Preview checks inside your agents. The Kai app adds the Internet wall, which "
+                     "records the connections it observes and blocks nothing in this release.\n", CONTRACT);
     printf("Agents\n%s", buf ? buf : "");
     free(buf);
 
@@ -193,12 +193,23 @@ int kai_cmd_status_text(void) {
     (void)files;   /* Files protection is not included in this release */
     char pstate[16] = "";
     kai_heartbeat_field("network", "policy_state", pstate, sizeof pstate);
+    /* Nov 1 corrective change: release builds watch, never block */
+    const char *watch_only = kai_internet_protect_available() ? ""
+        : " (records the connections it observes; blocks nothing in this release)";
+    char asked[96] = "";
+    {
+        char perr[256];
+        kai_policy *sp = kai_policy_load(NULL, perr, sizeof perr);
+        if (!kai_internet_protect_available() && kai_policy_egress_requested(sp) == KAI_EGRESS_BLOCK)
+            snprintf(asked, sizeof asked, " (your policy asks for Protect; this release only watches)");
+        kai_policy_free(sp);
+    }
     if (!app)
-        printf("%-16s Internet: not installed (comes with the Kai app) · Files: not included in this release\n",
-               "OS enforcement");
+        printf("%-16s Internet: not installed (comes with the Kai app)%s%s · Files: not included in this release\n",
+               "OS enforcement", watch_only, asked);
     else
-        printf("%-16s Internet: %s%s%s · Files: not included in this release\n", "OS enforcement",
-               internet < 0 ? "not verified" : wall_word(internet, 1),
+        printf("%-16s Internet: %s%s%s%s%s · Files: not included in this release\n", "OS enforcement",
+               internet < 0 ? "unknown (Kai can't confirm the wall's mode)" : wall_word(internet, 1), internet >= 1 ? watch_only : "", asked,
                !strcmp(pstate, "builtin") ? " (running without a policy: built-in defaults)" : "",
                kai_wall_paused("network", (long long)time(NULL)) ? " (Kai is paused)" : "");
 

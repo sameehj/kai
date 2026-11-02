@@ -228,6 +228,9 @@ static const char *const BUILTIN_EGRESS[] = {
     "generativelanguage.googleapis.com", "cloudcode-pa.googleapis.com", "oauth2.googleapis.com",
     "cursor.sh", "cursor.com",
     "cursorapi.com", "cursor-cdn.com",
+    /* the npm registry, for every agent process: npx-started MCP servers and
+     * tools need it at start. npm publish uses the same host (ESCAPES.md). */
+    "registry.npmjs.org",
     /* Code hosting, package registries and the like are asked about per host
      * (spec v2.1 B.4: no fixed categories); the catalog below only describes. */
 };
@@ -353,7 +356,8 @@ int kai_tool_profile_allows(const char *exe, const char *const *argv, int argc, 
     if (!strcmp(b, "git") || !strcmp(b, "git-remote-https") || !strcmp(b, "git-remote-http") || !strcmp(b, "gh"))
         return host_listed(GITHUB_HOSTS, host);
     if (!strcmp(b, "npm") ||
-        (!strncmp(b, "node", 4) && a1 && in_tool_dir(a1) && fnmatch("*/npm/bin/np[mx]-cli.js", a1, 0) == 0))
+        (!strncmp(b, "node", 4) && a1 && in_tool_dir(a1) &&
+         (fnmatch("*/npm/bin/np[mx]-cli.js", a1, 0) == 0 || fnmatch("*/np[mx]", a1, 0) == 0)))
         return host_listed(NPM_HOSTS, host);
     if (!strncmp(b, "pip", 3) ||
         (!strncmp(b, "python", 6) && a1 && ((!strcmp(a1, "-m") && a2 && !strcmp(a2, "pip")) ||
@@ -361,6 +365,81 @@ int kai_tool_profile_allows(const char *exe, const char *const *argv, int argc, 
                                             (in_tool_dir(a1) && fnmatch("*/pip", a1, 0) == 0))))
         return host_listed(PIP_HOSTS, host);
     return 0;
+}
+
+/* Nov 1 step 3: an MCP tool that deletes, publishes or changes users or roles,
+ * from its name (words split on _ - . and case changes) and a "status"
+ * argument that publishes or trashes. Always asks, even on an approved server. */
+static int word_in(const char *w, const char *const *list) {
+    for (int i = 0; list[i]; i++) if (!strcasecmp(w, list[i])) return 1;
+    return 0;
+}
+
+int kai_mcp_tool_destructive(const char *tool, const char *status_arg) {
+    static const char *const kill[] = {"delete", "del", "remove", "rm", "destroy", "drop", "purge", "trash", "wipe",
+                                       "erase", "publish", "unpublish", "deploy", NULL};
+    static const char *const who[] = {"user", "users", "role", "roles", "member", "members", "permission",
+                                      "permissions", "capability", "capabilities", NULL};
+    static const char *const write_verb[] = {"create", "add", "update", "set", "edit", "change", "invite", "promote",
+                                             "demote", "assign", "grant", "revoke", "modify", "patch", "put", NULL};
+    if (status_arg && (word_in(status_arg, (const char *const[]){"publish", "future", "trash", NULL}))) return 1;
+    if (!tool) return 0;
+    char words[16][32];
+    int nw = 0, l = 0;
+    for (const char *c = tool;; c++) {
+        int split = !*c || *c == '_' || *c == '-' || *c == '.' || *c == ' ' ||
+                    (l > 0 && isupper((unsigned char)*c) && islower((unsigned char)c[-1]));
+        if (split && l > 0 && nw < 16) { words[nw][l] = '\0'; nw++; l = 0; }
+        if (!*c) break;
+        if (*c == '_' || *c == '-' || *c == '.' || *c == ' ') continue;
+        if (nw < 16 && l < 31) words[nw][l++] = (char)tolower((unsigned char)*c);
+    }
+    int writes = 0, people = 0;
+    for (int i = 0; i < nw; i++) {
+        if (word_in(words[i], kill)) return 1;
+        if (word_in(words[i], write_verb)) writes = 1;
+        if (word_in(words[i], who)) people = 1;
+    }
+    return writes && people;
+}
+
+/* Nov 1 step 7: an MCP read tool, by its first word (get_page, list_posts,
+ * searchDocs). Reads of a server the user configured are ordinary activity:
+ * allowed and recorded (rule 1). Tool names are the server's, so a write named
+ * like a read passes as one: a known gap until MCP capability approval. */
+int kai_mcp_tool_reads(const char *tool) {
+    static const char *const reads[] = {"get", "list", "read", "search", "fetch", "query", "find", "describe", "view",
+                                        "show", "count", "lookup", "retrieve", "check", "status", "info", "ping",
+                                        "browse", "inspect", NULL};
+    if (!tool || kai_mcp_tool_destructive(tool, NULL)) return 0;
+    char w[32];
+    size_t l = 0;
+    for (const char *c = tool; *c && l + 1 < sizeof w; c++) {
+        if (*c == '_' || *c == '-' || *c == '.' || *c == ' ' || (l > 0 && isupper((unsigned char)*c))) break;
+        w[l++] = (char)tolower((unsigned char)*c);
+    }
+    w[l] = '\0';
+    return l > 0 && word_in(w, reads);
+}
+
+int kai_pid_cmdline(const kai_policy *p, int pid, char *out, size_t n) {
+    if (!out || !n) return 0;
+    out[0] = '\0';
+    if (pid <= 0) return 0;
+    kai_proc pr;
+    if (kai_proc_read_fast(pid, &pr) != 0) return 0;
+    size_t len = 0;
+    for (int i = 0; i < pr.argc && len + 1 < n; i++) {
+        int w = snprintf(out + len, n - len, "%s%s", i ? " " : "", pr.argv[i] ? pr.argv[i] : "");
+        if (w < 0) break;
+        len += (size_t)w < n - len ? (size_t)w : n - len - 1;
+    }
+    kai_proc_free(&pr);
+    if (p && out[0]) {   /* a token passed as an argument never reaches the card */
+        char *red = kai_redact_for_log(p, out);
+        if (red) { kai_strlcpy(out, red, n); free(red); }
+    }
+    return out[0] != '\0';
 }
 
 int kai_pid_tool_allows(int pid, const char *host) {
@@ -952,8 +1031,25 @@ int kai_policy_exempt(const kai_policy *p, const char *rule, const char *target)
             return 1;
     return 0;
 }
-kai_egress_mode kai_policy_egress_mode(const kai_policy *p) {
+/* Nov 1 corrective change: a release build keeps the Internet wall in Watch
+ * (log) whatever the policy or the no-policy fail-safe asks; Protect waits
+ * for Guard. Developer builds honour Protect (the app hides it behind a flag). */
+int kai_internet_protect_available(void) {
+#ifdef KAI_RELEASE
+    return 0;
+#else
+    return 1;
+#endif
+}
+
+kai_egress_mode kai_policy_egress_requested(const kai_policy *p) {
     return p ? p->egress_mode : KAI_EGRESS_OFF;
+}
+
+kai_egress_mode kai_policy_egress_mode(const kai_policy *p) {
+    kai_egress_mode m = kai_policy_egress_requested(p);
+    if (m == KAI_EGRESS_BLOCK && !kai_internet_protect_available()) return KAI_EGRESS_LOG;
+    return m;
 }
 
 kai_storage_mode kai_policy_storage_mode(const kai_policy *p) {
