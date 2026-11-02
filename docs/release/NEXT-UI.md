@@ -14,6 +14,11 @@ everything else is open.
    blocked; add Why? (opens the card in the popover with its reason and decision ID).
 4. **Decision suggestions.** A model that suggests the decision for a card (allow for this task, keep
    blocked) from the task's context, shown as a suggestion the user confirms, never applied on its own.
+5. **"Allow this exact command" applies directly.** Clicking it in the Kai app is the user's own decision:
+   apply it and show "Allowed for this command · Undo"; don't turn it into a "turn protection down"
+   request for the same user to confirm again (on Nov 2 two clicks became two pending "add exempt
+   file_contents" cards, caller Kai(42029)). Keep the confirmation card only for requests from outside the
+   app (CLI, agents, scripts).
 
 ## Done in 0.2.0-preview.2
 
