@@ -21,7 +21,13 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
     let event: String
     let decision: String
     let rule: String
-    let detail: String
+    /// As written in the log. Records before Nov 2 hold scanner ids
+    /// ("secret:generic_secret_assign x1 (redact)"); show `detail`.
+    let rawDetail: String
+    /// What the record says, in plain words: never a rule id or the configured
+    /// action ("(redact)" on a block misled). Recent, Activity and the copied
+    /// brief all read this.
+    var detail: String { PlainDetail.text(rawDetail, source: source, decision: decision, isPrompt: isPrompt) }
     let h: String
     // Context, on records written since Kai 0.1 "activity" (absent on older ones)
     let tool: String?
@@ -32,6 +38,11 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
 
     var identity: String? = nil   // the agent's verified signing identity (network records)
     var decision_id: String? = nil   // Nov 1 step 4: the ID the agent was given with a denial
+
+    enum CodingKeys: String, CodingKey {
+        case ts, source, event, decision, rule, rawDetail = "detail", h, tool, target, match, session, cwd,
+             identity, decision_id
+    }
     var id: String { h }
     var date: Date? { AuditEvent.iso.date(from: ts) }
     var isBlock: Bool { decision == "block" }
@@ -318,5 +329,59 @@ final class AuditTail {
         }
         recent = Array((fresh.reversed() + recent).prefix(keep))
         return firstRead ? [] : fresh
+    }
+}
+
+/// Nov 2: scanner findings in plain words, for records written before the CLI
+/// said them that way. Mirrors kai_rule_plain in src/scan.c.
+enum PlainDetail {
+    private static let words: [String: String] = [
+        "private_key_block": "a private key", "aws_access_key": "an AWS access key",
+        "aws_secret_key": "an AWS secret key", "github_token": "a GitHub token", "gitlab_token": "a GitLab token",
+        "slack_token": "a Slack token", "stripe_key": "a Stripe key", "google_api_key": "a Google API key",
+        "openai_key": "an OpenAI API key", "anthropic_key": "an Anthropic API key",
+        "openrouter_key": "an OpenRouter API key", "jwt": "a login token (JWT)",
+        "db_url_with_password": "a database address with its password", "password_assign": "a password",
+        "generic_secret_assign": "a password-like secret",
+    ]
+    // Split so Kai's own tree scan doesn't read the pattern as an assignment.
+    private static let finding = "(?:secret" + #":([A-Za-z0-9_.\-]+)|term:([^,]+?)|([A-Za-z0-9_.\-]+)) x[0-9]+ \((?:redact|block|warn|replace|none)\)"#
+    private static let run = try! NSRegularExpression(pattern: "\(finding)(?:, \(finding))*")
+    private static let one = try! NSRegularExpression(pattern: finding)
+
+    private static func word(_ m: NSTextCheckingResult, in s: NSString) -> String {
+        func g(_ i: Int) -> String? { m.range(at: i).location == NSNotFound ? nil : s.substring(with: m.range(at: i)) }
+        if let t = g(2) { return "the company term \"\(t)\"" }
+        let id = g(1) ?? g(3) ?? ""
+        return words[id] ?? "a secret your rule \"\(id)\" looks for"
+    }
+
+    private static func joined(_ w: [String]) -> String {
+        var u: [String] = []
+        for x in w where !u.contains(x) { u.append(x) }
+        return u.count < 2 ? (u.first ?? "") : u.dropLast().joined(separator: ", ") + " and " + u.last!
+    }
+
+    /// The findings in one run ("secret:a x1 (redact), secret:b x2 (block)") as words.
+    private static func findings(_ run: String) -> String {
+        let ns = run as NSString
+        return joined(one.matches(in: run, range: NSRange(location: 0, length: ns.length)).map { word($0, in: ns) })
+    }
+
+    static func text(_ raw: String, source: String, decision: String, isPrompt: Bool) -> String {
+        guard raw.contains(" x"), raw.contains("(") else { return raw }
+        let ns = raw as NSString
+        let runs = run.matches(in: raw, range: NSRange(location: 0, length: ns.length))
+        guard !runs.isEmpty else { return raw }
+        if isPrompt && decision == "block", runs.count == 1, runs[0].range.length == ns.length {
+            let agent = ["claude": "Claude Code", "codex": "Codex", "cursor": "Cursor"][source] ?? "This agent"
+            return "Prompt blocked: it contained \(findings(raw)). \(agent) can't redact prompts, so Kai blocked it."
+        }
+        var out = raw
+        for m in runs.reversed() {
+            let r = Range(m.range, in: out)!
+            out.replaceSubrange(r, with: findings(String(out[r])))
+        }
+        return out
     }
 }

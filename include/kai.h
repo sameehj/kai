@@ -892,6 +892,10 @@ int kai_gateway_run(const char *listen_addr, int port);
 
 const char *kai_action_name(kai_action a);
 void kai_report_summary(const kai_report *rep, char *out, size_t outlen);
+/* The same in plain words, for messages ("a password-like secret"). */
+void kai_report_plain(const kai_report *rep, char *out, size_t outlen);
+/* One rule id in plain words, or NULL for a rule the user defined. */
+const char *kai_rule_plain(const char *rule);
 
 /* Audit log: append one hash-chained record. Never pass secret values. */
 int kai_audit(const char *source, const char *event, const char *decision,

@@ -965,6 +965,68 @@ int kai_injection_check(const kai_policy *p, const char *text, char *which,
     return f.rules;
 }
 
+/* Nov 2: what a scan found, in plain words for people and agents
+ * ("a password-like secret and an AWS access key"). Rule ids stay in the
+ * record's `rule` field and in `kai scan`'s output; messages never show
+ * them, nor the configured action ("(redact)" on a block misled). */
+const char *kai_rule_plain(const char *rule) {
+    static const struct { const char *id, *words; } W[] = {
+        {"private_key_block", "a private key"},
+        {"aws_access_key", "an AWS access key"},
+        {"aws_secret_key", "an AWS secret key"},
+        {"github_token", "a GitHub token"},
+        {"gitlab_token", "a GitLab token"},
+        {"slack_token", "a Slack token"},
+        {"stripe_key", "a Stripe key"},
+        {"google_api_key", "a Google API key"},
+        {"openai_key", "an OpenAI API key"},
+        {"anthropic_key", "an Anthropic API key"},
+        {"openrouter_key", "an OpenRouter API key"},
+        {"jwt", "a login token (JWT)"},
+        {"db_url_with_password", "a database address with its password"},
+        {"password_assign", "a password"},
+        {"generic_secret_assign", "a password-like secret"},
+    };
+    if (!rule) return "a secret";
+    if (strncmp(rule, "term:", 5) == 0) return "a company term";
+    if (strncmp(rule, "secret:", 7) == 0) rule += 7;
+    for (size_t i = 0; i < sizeof W / sizeof W[0]; i++)
+        if (strcmp(rule, W[i].id) == 0) return W[i].words;
+    return NULL;   /* a rule the user defined: the caller names it */
+}
+
+void kai_report_plain(const kai_report *rep, char *out, size_t outlen) {
+    if (!outlen) return;
+    out[0] = '\0';
+    if (!rep || rep->nhits == 0) { kai_strlcpy(out, "nothing Kai looks for", outlen); return; }
+    char words[KAI_MAX_HITS][96];
+    int n = 0;
+    for (int i = 0; i < rep->nhits && n < KAI_MAX_HITS; i++) {
+        const char *w = kai_rule_plain(rep->hits[i].rule);
+        char tmp[96];
+        if (strncmp(rep->hits[i].rule, "term:", 5) == 0)   /* the user's own word, not a secret */
+            snprintf(tmp, sizeof tmp, "the company term \"%.48s\"", rep->hits[i].rule + 5);
+        else if (w) kai_strlcpy(tmp, w, sizeof tmp);
+        else {
+            const char *r = rep->hits[i].rule;
+            if (strncmp(r, "secret:", 7) == 0) r += 7;
+            snprintf(tmp, sizeof tmp, "a secret your rule \"%.48s\" looks for", r);
+        }
+        int dup = 0;   /* two rules can read the same ("a company term") */
+        for (int j = 0; j < n; j++) dup |= strcmp(words[j], tmp) == 0;
+        if (!dup) kai_strlcpy(words[n++], tmp, sizeof words[0]);
+    }
+    sb_t b;
+    sb_init(&b);
+    for (int i = 0; i < n; i++) {
+        if (i) sb_adds(&b, i == n - 1 ? " and " : ", ");
+        sb_adds(&b, words[i]);
+    }
+    char *s = sb_take(&b);
+    kai_strlcpy(out, s, outlen);
+    free(s);
+}
+
 void kai_report_summary(const kai_report *rep, char *out, size_t outlen) {
     if (!outlen) return;
     out[0] = '\0';

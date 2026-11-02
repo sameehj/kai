@@ -6,6 +6,10 @@ First public pre-release: agent hooks plus the Kai app's Internet wall in Watch:
 it observes and blocks nothing; blocking arrives in the next release (Nov 1 corrective change). Files protection: not
 included in this release. Notes: [docs/release/0.2.0-preview.2.md](docs/release/0.2.0-preview.2.md).
 
+- Messages in plain words: a blocked prompt says "Prompt blocked: it contained a password-like secret. Claude Code
+  can't redact prompts, so Kai blocked it."; no rule ids or "(redact)" in messages, Recent, Activity or copied text;
+  Terminal tabs count from 1.
+
 - Internet wall: Watch only in release builds (a policy asking for Protect is ignored and kai status says
   so); Protect is behind a developer flag until Guard passes its replay cases.
 

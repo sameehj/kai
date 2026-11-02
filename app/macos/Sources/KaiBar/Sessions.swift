@@ -154,7 +154,8 @@ struct SessionRow: Decodable, Identifiable, Equatable {
     var tab: String {
         let t = tty.hasPrefix("/dev/") ? String(tty.dropFirst(5)) : tty
         guard !t.isEmpty else { return "" }
-        if t.hasPrefix("ttys"), let n = Int(t.dropFirst(4)) { return "Terminal tab \(n)" }
+        // Counted from 1, like Terminal's own tabs: ttys000 is the first.
+        if t.hasPrefix("ttys"), let n = Int(t.dropFirst(4)) { return "Terminal tab \(n + 1)" }
         return t
     }
 

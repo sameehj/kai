@@ -67,9 +67,9 @@ func row(_ id: String, _ agent: String, project: String = "", tty: String = "", 
     return r
 }
 var named = [
-    row("c1", "claude", project: "/u/src/kai", tty: "/dev/ttys001"),
-    row("c2", "claude", project: "/u/src/kai", tty: "/dev/ttys002"),
-    row("c3", "claude", project: "/u/src/web", tty: "ttys004", topic: "Fix the login page"),
+    row("c1", "claude", project: "/u/src/kai", tty: "/dev/ttys000"),
+    row("c2", "claude", project: "/u/src/kai", tty: "/dev/ttys001"),
+    row("c3", "claude", project: "/u/src/web", tty: "ttys003", topic: "Fix the login page"),
     row("c4", "claude", project: "/u/src/api", started: 1_700_000_000),
     row("c5", "claude", project: "/u/src/api", started: 1_700_003_600),
     row("c6", "claude", project: "/u/src/same"),
