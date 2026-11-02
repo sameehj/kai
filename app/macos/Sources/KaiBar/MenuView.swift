@@ -23,6 +23,18 @@ struct MenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
+            if model.notificationsOff {   // Nov 2: a banner, not a footnote
+                HStack(alignment: .top, spacing: 8) {
+                    Text("Notifications are off, so you won't see when Kai stops an agent.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.soft).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Button("Turn on") { Notifier.openSettings() }.buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.lime)
+                        .help("Opens System Settings → Notifications → Kai.")
+                }
+                .padding(10)
+                .background(Theme.amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+            }
             // STEP 2c: an agent Kai's own broken hooks are blocking comes first
             ForEach(LiveCoverage.blocked(agents: AgentsModel.shared.loaded ? AgentsModel.shared.agents : []), id: \.agent) { b in
                 BlockedAgentBanner(banner: b) { Task { await AgentsModel.shared.refresh() } }
@@ -323,12 +335,6 @@ struct MenuView: View {
                 if !StorageWall.included {
                     Text(ProtectionText.filesNotIncluded).font(.system(size: 11)).foregroundStyle(Theme.muted)
                         .fixedSize(horizontal: false, vertical: true)
-                }
-                if model.notificationsOff {   // dogfood: cards you'd never see
-                    Button { Notifier.openSettings() } label: {
-                        Text("Notifications are off for Kai · Turn on ›").font(.system(size: 11)).foregroundStyle(Theme.amber)
-                    }.buttonStyle(.plain)
-                    .help("Kai can't tell you when an agent waits for you. Opens System Settings → Notifications.")
                 }
             }
             .layoutPriority(1)   // the status lines wrap rather than truncate
