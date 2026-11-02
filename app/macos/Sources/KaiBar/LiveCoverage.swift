@@ -52,4 +52,19 @@ enum LiveCoverage {
         out.append(Row(label: "Files", state: "not included in this release", good: false))
         return out
     }
+
+    /// STEP 2c: an agent whose Kai hooks are installed but don't answer (the
+    /// program they run is missing or broken) is blocked: say so at the top of
+    /// the popover, with Repair and Turn off checks.
+    struct Banner: Equatable { let agentKey: String; let agent: String; let title: String; let detail: String; let actions: [String] }
+
+    static func blocked(agents: [AgentRow]) -> [Banner] {
+        agents.filter { $0.hooks == "failing" }.map { a in
+            let name = title(a.name)
+            return Banner(agentKey: a.name.lowercased() == "claude code" ? "claude" : a.name.lowercased(), agent: name,
+                          title: "\(name) is blocked: Kai's checks can't run",
+                          detail: a.detail ?? "Kai's hook didn't answer.",
+                          actions: ["Repair", "Turn off checks for \(name)"])
+        }
+    }
 }

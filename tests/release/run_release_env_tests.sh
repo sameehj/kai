@@ -55,6 +55,13 @@ case "$snap" in *Enforced*) fail "release snapshot says Enforced: $snap" ;; *) p
 sl=$(HOME="$H5" KAI_NO_APP=1 "$REL" status 2>&1)
 case "$sl" in *Enforced*) fail "release status says Enforced" ;; *) pass "release build: status never says Enforced" ;; esac
 
+# STEP 2c: a release kai never writes hooks that point at a build or checkout
+# path, and ignores the tests' override.
+H6="$TMP/h6"; mkdir -p "$H6/.claude"; printf '{}' > "$H6/.claude/settings.json"
+o=$(HOME="$H6" KAI_TEST_ALLOW_DEV_HOOK=1 KAI_NO_APP=1 "$REL" install claude 2>&1); rc=$?
+[ $rc -eq 2 ] && pass "release: install refuses its own build path, override or not" || fail "release install from build/: exit $rc $o"
+case "$(cat "$H6/.claude/settings.json")" in *"hook claude"*) fail "release wrote hooks to a build path" ;; *) pass "...and wrote no hooks" ;; esac
+
 # Step 8: an agent's environment can't shrink the rotation size to push
 # history out of the log (only one rotated file is kept).
 H3="$TMP/h3"; mkdir -p "$H3/.kai"

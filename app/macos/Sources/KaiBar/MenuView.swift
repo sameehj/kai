@@ -23,6 +23,10 @@ struct MenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
+            // STEP 2c: an agent Kai's own broken hooks are blocking comes first
+            ForEach(LiveCoverage.blocked(agents: AgentsModel.shared.loaded ? AgentsModel.shared.agents : []), id: \.agent) { b in
+                BlockedAgentBanner(banner: b) { Task { await AgentsModel.shared.refresh() } }
+            }
             needsYou   // Step 6: a waiting connection comes first
             if let msg = model.errorMessage { ErrorBanner(message: msg) { model.errorMessage = nil } }
             if let b = alert {
@@ -960,6 +964,43 @@ struct LiveCoverageList: View {
                     Text(r.state).font(.system(size: compact ? 11 : 12)).foregroundStyle(Theme.muted)
                         .multilineTextAlignment(.trailing).fixedSize(horizontal: false, vertical: true)
                 }
+            }
+        }
+    }
+}
+
+/// STEP 2c: an agent Kai's broken hooks are blocking, at the top of the popover.
+/// Repair rewrites the hooks to the installed Kai (kai doctor --fix); Turn off
+/// removes Kai's hooks for that agent. Both run the installed CLI: no Terminal.
+struct BlockedAgentBanner: View {
+    let banner: LiveCoverage.Banner
+    var done: () -> Void
+    @State private var busy = false
+    @State private var result: String?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(banner.title).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.coral)
+            Text(result ?? banner.detail).font(.system(size: 11)).foregroundStyle(Theme.soft)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 12) {
+                Button("Repair") { run(["doctor", "--fix"]) }.buttonStyle(.plain).foregroundStyle(Theme.lime)
+                Button(banner.actions.last ?? "Turn off checks") { run(["uninstall", banner.agentKey]) }
+                    .buttonStyle(.plain).foregroundStyle(Theme.muted)
+                if busy { ProgressView().controlSize(.small) }
+            }.font(.system(size: 12, weight: .medium)).disabled(busy)
+        }
+        .padding(10)
+        .background(Theme.coral.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+    }
+    private func run(_ args: [String]) {
+        busy = true
+        Task {
+            let r = await KaiCLI.run(args)
+            await MainActor.run {
+                busy = false
+                result = r.ok ? (args.first == "uninstall" ? "Kai's checks are off for \(banner.agent)." : "Repaired.")
+                               : "Couldn't do it: \(r.message)"
+                done()
             }
         }
     }

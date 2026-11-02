@@ -82,8 +82,9 @@ def outcome(event):
 
 def missing_binary():
     """Install Claude Code hooks pointing at a copy of kai, delete the copy, then
-    run the installed hook command. Claude Code blocks a tool only when a hook
-    exits 2 (or answers deny); any other failure lets the tool run."""
+    run the installed PreToolUse hook command. Claude Code blocks the tool when
+    the hook exits 2 or answers deny, and (2.1.295+) when the hook fails and its
+    entry says onFailure "block" (STEP 2c); any other failure lets the tool run."""
     h = tempfile.mkdtemp()
     os.makedirs(os.path.join(h, ".claude"))
     exe = os.path.join(h, "bin", "kai")
@@ -92,26 +93,34 @@ def missing_binary():
     e = dict(env, HOME=h, KAI_HOME=os.path.join(h, ".kai"))
     subprocess.run([exe, "install", "claude"], capture_output=True, env=e, timeout=30)
     settings = json.load(open(os.path.join(h, ".claude", "settings.json")))
-    cmd = next(x["command"] for groups in settings["hooks"].values() for g in groups
-               for x in g.get("hooks", []) if " hook claude" in x.get("command", ""))
+    entry = next(x for g in settings["hooks"].get("PreToolUse", [])
+                 for x in g.get("hooks", []) if " hook claude" in x.get("command", ""))
+    cmd = entry["command"]
     os.remove(exe)
     event = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Read",
                         "tool_input": {"file_path": "~/.ssh/id_rsa"}, "cwd": h})
     r = subprocess.run(["/bin/sh", "-c", cmd], input=event, capture_output=True, text=True, env=e, timeout=30)
     shutil.rmtree(h, ignore_errors=True)
-    return "stopped" if r.returncode == 2 or '"deny"' in r.stdout else "gets through"
+    blocks = r.returncode == 2 or '"deny"' in r.stdout or (r.returncode != 0 and entry.get("onFailure") == "block")
+    return "stopped" if blocks else "gets through"
 
 
 def cursor_fail_closed():
-    """Cursor runs the action when a hook fails unless the hook says failClosed."""
+    """Cursor runs the action when a hook fails unless the hook says failClosed.
+    STEP 2c: every tool hook is failClosed; the prompt hook isn't (a broken Kai
+    must not block prompts)."""
     h = tempfile.mkdtemp()
     os.makedirs(os.path.join(h, ".cursor"))
-    e = dict(env, HOME=h, KAI_HOME=os.path.join(h, ".kai"))
+    # a dev build in the checkout on purpose (STEP 2c's guard refuses that otherwise)
+    e = dict(env, HOME=h, KAI_HOME=os.path.join(h, ".kai"), KAI_TEST_ALLOW_DEV_HOOK="1")
     subprocess.run([kai, "install", "cursor"], capture_output=True, env=e, timeout=30)
     try:
         cfg = json.load(open(os.path.join(h, ".cursor", "hooks.json")))
         entries = [x for v in cfg.get("hooks", {}).values() for x in v if " hook cursor" in x.get("command", "")]
-        ok = bool(entries) and all(x.get("failClosed") is True for x in entries)
+        tools = {ev: x for ev, v in cfg.get("hooks", {}).items() for x in v
+                 if " hook cursor" in x.get("command", "")}
+        ok = bool(entries) and all(x.get("failClosed") is True for ev, x in tools.items() if ev != "beforeSubmitPrompt") \
+            and tools.get("beforeSubmitPrompt", {}).get("failClosed") is not True
     except (OSError, ValueError):
         ok = False
     shutil.rmtree(h, ignore_errors=True)

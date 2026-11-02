@@ -44,7 +44,7 @@ Package: `Kai-Preview-<version>.pkg` · SHA-256 from the `.sha256` file: ______ 
 | 4.3 | `grep -l "kai:agent-instructions" ~/.claude/CLAUDE.md ~/.codex/AGENTS.md 2>/dev/null` | no output | |
 | 4.4 | Quit Kai; drag `/Applications/Kai.app` to the Trash; confirm the extension removal prompt | | |
 | 4.5 | `systemextensionsctl list` | no `io.github.sameehj.kai.network` (or `[terminated waiting to uninstall on reboot]`; reboot, then none) | |
-| 4.6 | `sudo rm -f /usr/local/bin/kai; sudo rm -rf /usr/local/share/kai; sudo pkgutil --forget io.github.sameehj.kai.preview` | | |
+| 4.6 | `sudo rm -f /usr/local/bin/kai /usr/local/libexec/kai-hook; sudo rm -rf /usr/local/share/kai; sudo pkgutil --forget io.github.sameehj.kai.preview` | | |
 | 4.7 | `ls -d ~/.kai "$HOME/Library/Group Containers/KD446VDTM2.io.github.sameehj.kai" ~/Library/Preferences/io.github.sameehj.kai.plist /usr/local/bin/kai /Applications/Kai.app 2>&1` | each "No such file or directory" (record any that remain) | |
 | 4.8 | System Settings → Network → Filters | no Kai content filter | |
 | 4.9 | Start Claude Code, Codex and Cursor; run one tool call each | works; no error about a missing `kai` | |
