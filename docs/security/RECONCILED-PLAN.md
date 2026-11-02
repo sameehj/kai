@@ -148,9 +148,13 @@ The number of approval prompts is a hypothesis until measured on a clean Mac. Ap
 
 **Architectural work, traceable to the Nov 1 incident:** the author turned Kai off for Claude Code during an
 ordinary WordPress task after three hidden gates ([FRICTION-POSTMORTEM.md](FRICTION-POSTMORTEM.md)). This
-amends the plan above; it doesn't replace it. 0.2.0-preview.2 ships the hooks and the Internet wall in Watch
-only; Protect is behind a developer flag until Guard is built and passes the replay cases below. Guard and
-the shared Decision Context are the next release.
+amends the plan above; it doesn't replace it. Security Plan v1.0 is unchanged, and the Storage Wall stays the
+foundation of the full release.
+
+**This release (0.2.0-preview.2):** agent checks (hooks) enforce where the agent calls them; the Internet wall
+is Watch only, enforced in the network extension: it observes and never blocks or pauses a flow by policy.
+No OS file protection. Protect is behind a developer flag. Guard and the shared Decision Context are the next
+release.
 
 ### Three rules
 
@@ -166,7 +170,7 @@ never "safe" or "protected".
 
 | Level | What is trusted | Revalidate when |
 |---|---|---|
-| Installation | This server, from this executable or package | The executable, the resolved package version or its tool definitions change. An unpinned `npx` spec (no exact version) counts as changeable |
+| Installation | This server, from this executable or package | The executable, the resolved package version or its tool definitions change. An unpinned `npx` or `uvx` spec (no exact version) counts as changeable |
 | Capability | A tool or class of tools (read, edit) for this agent | The tool definitions change |
 | Action | One call with its arguments | Every destructive action |
 
@@ -181,7 +185,14 @@ approved server and capability.
   same call), MCP (the call waits for the decision), the network (pause, then resume). Endpoint Security
   never waits on a human. "No restart needed" is claimed only where a test shows it.
 
-### Guard target policy (next release)
+### Full-release direction
+
+Ordinary HTTPS is allowed (Guard records it and decides only where a task crossed a boundary). Sensitive
+resources are isolated by the OS-enforced Storage Wall, with named readers. Tools get scoped capabilities.
+Crossing a boundary (a sensitive resource to the outside, a destructive action, a changed MCP server) needs
+explicit human authority.
+
+Guard's target policy, as a starting point for that release:
 
 | Activity | Default | Enforced at | Hold and resume |
 |---|---|---|---|
@@ -207,7 +218,7 @@ approved server and capability.
 |---|---|
 | Required replays pass at their stated layer | All |
 
-### Required replay cases (Guard)
+### Required replay cases (full release)
 
 1. Read a protected `.env`, then send it to a new HTTPS destination.
 2. The same through an approved GitHub endpoint.
