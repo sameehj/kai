@@ -84,6 +84,41 @@ has "MCP without the app: no pointing at a missing app" "$o" "kai allow-mcp noti
 k allow-mcp notion search --agent claude --for 1h >/dev/null
 [ -z "$(hk claude "$mcp")" ] && pass "after allow-mcp, that tool goes through" || fail "mcp still stopped"
 
+echo "== MCP approvals never strand the agent (Nov 1 step 3) =="
+wpread='{"hook_event_name":"PreToolUse","tool_name":"mcp__wp__get_page_blocks","session_id":"g","permission_mode":"auto","tool_input":{"page_id":12},"cwd":"'"$G"'"}'
+wpdel='{"hook_event_name":"PreToolUse","tool_name":"mcp__wp__delete_page","session_id":"g","permission_mode":"auto","tool_input":{"page_id":12},"cwd":"'"$G"'"}'
+wppub='{"hook_event_name":"PreToolUse","tool_name":"mcp__wp__update_page","session_id":"g","permission_mode":"auto","tool_input":{"page_id":12,"status":"publish"},"cwd":"'"$G"'"}'
+wpuser='{"hook_event_name":"PreToolUse","tool_name":"mcp__wp__update_user_role","session_id":"g","permission_mode":"auto","tool_input":{"user":3,"role":"administrator"},"cwd":"'"$G"'"}'
+wpusers_read='{"hook_event_name":"PreToolUse","tool_name":"mcp__wp__get_users","session_id":"g","permission_mode":"auto","tool_input":{},"cwd":"'"$G"'"}'
+wpdel_bypass='{"hook_event_name":"PreToolUse","tool_name":"mcp__wp__delete_page","session_id":"g","permission_mode":"bypassPermissions","tool_input":{"page_id":12},"cwd":"'"$G"'"}'
+o=$(hk claude "$wpread")
+has "Claude Code: an unapproved MCP tool asks in Claude Code's own prompt (the same call continues)" "$o" '"permissionDecision":"ask"'
+hasnt "...never 'approve in Kai, then retry'" "$o" "then retry"
+has "...and the prompt names the server, the tool and the narrow allow" "$o" "kai allow-mcp wp get_page_blocks --agent claude"
+k allow-mcp wp --agent claude --for 1h >/dev/null
+[ -z "$(hk claude "$wpread")" ] && pass "server approved: a read tool goes through, no prompt" || fail "approved server still prompts for a read"
+has "destructive (delete) asks even on an approved server" "$(hk claude "$wpdel")" '"permissionDecision":"ask"'
+has "...publishing through an update asks" "$(hk claude "$wppub")" '"permissionDecision":"ask"'
+has "...changing a user's role asks" "$(hk claude "$wpuser")" '"permissionDecision":"ask"'
+[ -z "$(hk claude "$wpusers_read")" ] && pass "...reading users is not destructive" || fail "get_users treated as destructive"
+has "...the prompt says why it's destructive" "$(hk claude "$wpdel")" "deletes, publishes or changes users"
+o=$(hk claude "$wpdel_bypass")
+has "bypass mode can't be trusted to ask: a destructive tool is denied" "$o" '"permissionDecision":"deny"'
+has "...with what, why and the recovery" "$o" "switch Claude Code out of bypass mode"
+cxread=$(printf '%s' "$wpread" | sed 's/"permission_mode":"auto",//')
+o=$(hk codex "$cxread")
+has "Codex (no ask): a structured deny" "$o" '"permissionDecision":"deny"'
+has "...naming what Kai stopped" "$o" "Kai stopped the MCP tool get_page_blocks from wp"
+has "...and the exact recovery" "$o" "kai allow-mcp wp --agent codex --for 1h, then retry"
+has "...so the agent asks instead of ending its turn" "$o" "ask the user"
+cxdel=$(printf '%s' "$wpdel" | sed 's/"permission_mode":"auto",//')
+k allow-mcp wp --agent codex --for 1h >/dev/null
+o=$(hk codex "$cxdel")
+has "Codex: a destructive tool needs a grant for that exact tool, not the server" "$o" "kai allow-mcp wp delete_page --agent codex --for 1h"
+k allow-mcp wp delete_page --agent codex --for 1h >/dev/null
+[ -z "$(hk codex "$cxdel")" ] && pass "...and goes through with one" || fail "codex destructive still stopped with an exact grant"
+
+
 [ -z "$(hk claude "$fetch")" ] && pass "web fetch is allowed by default (on_fetch allow)" || fail "fetch stopped by default"
 "$KAI" policy set on_fetch block >/dev/null 2>&1
 o=$(hk claude "$fetch")

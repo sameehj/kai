@@ -1294,36 +1294,53 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
              * session grant (-> allow), or stages a Kai card (-> waiting). We
              * NEVER return Claude's native "ask": auto mode could approve that
              * with no Kai decision. */
+            /* Nov 1 step 3: never strand the agent. Claude Code asks in its own
+             * prompt (the same call continues on approval; in auto mode the
+             * prompt goes to the user, not the classifier). Codex can't ask:
+             * a deny that says what, why and the exact recovery. Destructive
+             * tools (delete, publish, users and roles) always ask, even on an
+             * approved server; where the agent can't put a prompt in front of
+             * the user (bypassPermissions, dontAsk, Codex) they need a grant
+             * for that exact tool. */
             kai_action a = kai_mcp_decide(p, mcp_server, mcp_tool);
             snprintf(rule, sizeof rule, "mcp:%.26s/%.26s", mcp_server, mcp_tool);
-            if (a == KAI_ACT_NONE) {
-                decision = KAI_ACT_NONE;                       /* policy allows outright */
-            } else if (a == KAI_ACT_BLOCK) {
+            const char *pmode = cjstr(root, "permission_mode");
+            int human_prompt = can_ask && !(pmode && (!strcmp(pmode, "bypassPermissions") || !strcmp(pmode, "dontAsk")));
+            int destructive = kai_mcp_tool_destructive(mcp_tool, cjstr(ti, "status"));
+            long long tnow = (long long)time(NULL);
+            if (a == KAI_ACT_BLOCK) {
                 decision = KAI_ACT_BLOCK; ask = 0;
-                snprintf(reason, sizeof reason, "Kai stopped the MCP tool %s from %s: your policy doesn't allow it.",
+                snprintf(reason, sizeof reason, "Kai stopped the MCP tool %s from %s: your policy doesn't allow it. "
+                         "Don't retry another way; ask the user (they can change it in Kai's policy).",
                          mcp_tool, mcp_server);
+            } else if (destructive && kai_cli_mcp_exact_grant(source, mcp_server, mcp_tool, tnow)) {
+                decision = KAI_ACT_NONE;                      /* the user allowed exactly this tool */
+            } else if (destructive && human_prompt) {
+                decision = KAI_ACT_BLOCK; ask = 1;
+                snprintf(reason, sizeof reason, "%s \xC2\xB7 %s deletes, publishes or changes users, so Kai asks every "
+                         "time, even on an approved server (to allow this tool without asking: "
+                         "kai allow-mcp %s %s --agent %s --for 1h).", mcp_server, mcp_tool, mcp_server, mcp_tool, source);
+            } else if (destructive) {
+                decision = KAI_ACT_BLOCK; ask = 0;
+                snprintf(reason, sizeof reason, "Kai stopped the MCP tool %s from %s: it deletes, publishes or changes "
+                         "users, and %s can't ask the user here%s. Don't retry another way; ask the user to run "
+                         "kai allow-mcp %s %s --agent %s --for 1h, then retry%s.", mcp_tool, mcp_server,
+                         can_ask ? "Claude Code" : "this agent",
+                         can_ask ? " in this permission mode" : "", mcp_server, mcp_tool, source,
+                         can_ask ? ", or to switch Claude Code out of bypass mode" : "");
+            } else if (a == KAI_ACT_NONE || kai_cli_grant_allows("mcp", source, mcp_server, mcp_tool, cwd, tnow)) {
+                decision = KAI_ACT_NONE;                      /* policy or the user's grant allows it */
+            } else if (human_prompt) {
+                decision = KAI_ACT_BLOCK; ask = 1;
+                snprintf(reason, sizeof reason, "%s \xC2\xB7 %s: MCP tools need your go-ahead "
+                         "(to skip this prompt: kai allow-mcp %s %s --agent %s --for 1h, or the whole server: "
+                         "kai allow-mcp %s --agent %s --for 1h).", mcp_server, mcp_tool, mcp_server, mcp_tool, source,
+                         mcp_server, source);
             } else {
-                char host[256] = ""; kai_mcp_declared_host(mcp_server, cwd, host, sizeof host);
-                char *rv[3] = { mcp_server, mcp_tool, host };
-                char svc[256] = "";
-                (void)rv;
-                int rc = kai_cli_grant_allows("mcp", source, mcp_server, mcp_tool, cwd, (long long)time(NULL)) ? 0
-                       : !kai_app_present() ? 11
-                       : kai_mcp_request((int)getpid(), mcp_server, mcp_tool, host, 0, svc, sizeof svc);
-                if (rc == 11) {   /* Preview 1: no app to ask; the terminal grant is the way */
-                    decision = KAI_ACT_BLOCK; ask = 0;
-                    snprintf(reason, sizeof reason,
-                             "Kai stopped the MCP tool %s from %s: MCP tools need the user's go-ahead. If this was "
-                             "intended, run in your own terminal: `kai allow-mcp %s %s --agent %s --for 1h`.",
-                             mcp_tool, mcp_server, mcp_server, mcp_tool, source);
-                } else if (rc == 0) {
-                    decision = KAI_ACT_NONE;                   /* a session grant covers it */
-                } else {
-                    decision = KAI_ACT_BLOCK; ask = 0;
-                    snprintf(reason, sizeof reason,
-                             "Waiting for approval in Kai: %s \xC2\xB7 %s. Approve in Kai, then retry.",
-                             mcp_server, mcp_tool);
-                }
+                decision = KAI_ACT_BLOCK; ask = 0;
+                snprintf(reason, sizeof reason, "Kai stopped the MCP tool %s from %s: MCP tools need the user's "
+                         "go-ahead. Don't retry another way; ask the user to run: kai allow-mcp %s --agent %s --for 1h, "
+                         "then retry.", mcp_tool, mcp_server, mcp_server, source);
             }
             subject = strdup(mcp_tool);
         } else if (file_op && first_path &&

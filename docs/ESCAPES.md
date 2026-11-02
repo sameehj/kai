@@ -98,7 +98,7 @@ How to read it:
 | Attempt | Without Kai (replayed) | Hooks (measured) | Meant to be closed by |
 |---|---|---|---|
 | Pass a token to an MCP tool | not replayed | ✅ stopped | Hooks |
-| Send ordinary project data out through an MCP tool | not replayed | ✅ stopped | Hooks (Preview 1): an MCP tool whose server has no rule is stopped until the user allows it (kai allow-mcp, or a card in the app); once allowed, what it sends isn't checked beyond secrets. Network wall when the MCP server is the agent's child |
+| Send ordinary project data out through an MCP tool | not replayed | ✅ stopped | Hooks: an MCP tool whose server has no rule waits for the user in Claude Code's own prompt (denied with the recovery step where no prompt can reach the user, and in Codex) until allowed (kai allow-mcp); once allowed, what it sends isn't checked beyond secrets. Destructive tools ask every time. The Internet wall only watches in this release |
 
 ## Untrusted content
 

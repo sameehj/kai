@@ -367,6 +367,42 @@ int kai_tool_profile_allows(const char *exe, const char *const *argv, int argc, 
     return 0;
 }
 
+/* Nov 1 step 3: an MCP tool that deletes, publishes or changes users or roles,
+ * from its name (words split on _ - . and case changes) and a "status"
+ * argument that publishes or trashes. Always asks, even on an approved server. */
+static int word_in(const char *w, const char *const *list) {
+    for (int i = 0; list[i]; i++) if (!strcasecmp(w, list[i])) return 1;
+    return 0;
+}
+
+int kai_mcp_tool_destructive(const char *tool, const char *status_arg) {
+    static const char *const kill[] = {"delete", "del", "remove", "rm", "destroy", "drop", "purge", "trash", "wipe",
+                                       "erase", "publish", "unpublish", "deploy", NULL};
+    static const char *const who[] = {"user", "users", "role", "roles", "member", "members", "permission",
+                                      "permissions", "capability", "capabilities", NULL};
+    static const char *const write_verb[] = {"create", "add", "update", "set", "edit", "change", "invite", "promote",
+                                             "demote", "assign", "grant", "revoke", "modify", "patch", "put", NULL};
+    if (status_arg && (word_in(status_arg, (const char *const[]){"publish", "future", "trash", NULL}))) return 1;
+    if (!tool) return 0;
+    char words[16][32];
+    int nw = 0, l = 0;
+    for (const char *c = tool;; c++) {
+        int split = !*c || *c == '_' || *c == '-' || *c == '.' || *c == ' ' ||
+                    (l > 0 && isupper((unsigned char)*c) && islower((unsigned char)c[-1]));
+        if (split && l > 0 && nw < 16) { words[nw][l] = '\0'; nw++; l = 0; }
+        if (!*c) break;
+        if (*c == '_' || *c == '-' || *c == '.' || *c == ' ') continue;
+        if (nw < 16 && l < 31) words[nw][l++] = (char)tolower((unsigned char)*c);
+    }
+    int writes = 0, people = 0;
+    for (int i = 0; i < nw; i++) {
+        if (word_in(words[i], kill)) return 1;
+        if (word_in(words[i], write_verb)) writes = 1;
+        if (word_in(words[i], who)) people = 1;
+    }
+    return writes && people;
+}
+
 int kai_pid_cmdline(const kai_policy *p, int pid, char *out, size_t n) {
     if (!out || !n) return 0;
     out[0] = '\0';
