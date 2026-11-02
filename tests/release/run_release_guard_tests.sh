@@ -31,6 +31,11 @@ grep -q 'bundled kai in Kai.app' "$ROOT/scripts/release/build-preview-pkg.sh" \
 grep -q 'the tree is dirty after the build' "$ROOT/scripts/release/build-preview-pkg.sh" \
     && pass "the tree is checked again after the build" || fail "no clean-tree check after the build"
 
+# Nov 1: the Internet wall enforces nothing in this release, so no UI string or
+# status may say "Enforced" next to Internet (nor the orange "Internet only" tag).
+hits=$(grep -rn 'Enforced: Internet\|Enforced: Files and Internet\|"Internet only"' "$ROOT/src" "$ROOT/app/macos/Sources" "$ROOT/app/macos/Network" 2>/dev/null)
+[ -z "$hits" ] && pass "no source string says Enforced next to Internet, or 'Internet only'" || fail "Enforced/Internet-only strings remain: $hits"
+
 rm -rf "$T"
 [ $fails -eq 0 ] && echo "release guard tests: all passed" || echo "release guard tests: $fails failed"
 exit $fails

@@ -8,8 +8,6 @@ enum InfoText {
     static let workingNow = "Did something in the last 15 minutes, or is running a command now."
     static let idle = "Still open, but nothing for 15 minutes or more."
     static let ended = "Closed. Permissions for this session ended with it."
-    static let filesInternet = "Kai checks this agent's file access and connections."
-    static let internetOnly = "Kai checks this agent's connections. Files protection is off."
     static let watch = "Kai shows what would be blocked, but blocks nothing."
     static let protect = "Kai stops anything you haven't allowed."
     static let thisSession = "For this task: until this agent session ends. Durable rules stay in Settings."
@@ -23,11 +21,9 @@ enum InfoText {
 
     /// The ⓘ for a session's coverage word, if there is one.
     static func coverage(_ short: String) -> String? {
-        switch short {
-        case "Files + Internet": return filesInternet
-        case "Internet only": return internetOnly
-        default: return nil
-        }
+        short == "Agent checks: off"
+            ? "Kai's hooks aren't installed or aren't answering for this agent, so its tool calls aren't checked. Run kai install."
+            : nil
     }
 }
 

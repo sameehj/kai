@@ -212,13 +212,11 @@ struct SessionRow: Decodable, Identifiable, Equatable {
         if activity == "unknown" { return "activity unknown · last seen \(d) ago" }
         return isWorking ? "active \(d) ago" : "idle \(d)"
     }
-    /// Never say "protected": the label comes straight from observed enforcement.
-    var enforcementShort: String {
-        if enforcement.hasPrefix("Enforced: Files and Internet") { return "Files + Internet" }
-        if enforcement.hasPrefix("Enforced: Internet") { return "Internet only" }
-        if enforcement.hasPrefix("Enforced: Files") { return "Files only" }
-        return "seen only"
-    }
+    /// Nov 1: the coverage label comes from measured state ("Agent checks: on ·
+    /// Internet: watching"). A session is tagged only when its agent's checks
+    /// are off; a watching Internet wall enforces nothing, so it gets no tag.
+    var checksOff: Bool { enforcement.hasPrefix("Agent checks: off") }
+    var enforcementShort: String { checksOff ? "Agent checks: off" : "" }
 }
 
 /// `kai snapshot --json`: both lists, each decoded row by row.

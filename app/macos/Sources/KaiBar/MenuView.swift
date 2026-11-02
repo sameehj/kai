@@ -115,18 +115,6 @@ struct MenuView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// What a session row would say if every session were covered like the
-    /// headline; a row shows its coverage only when it differs.
-    private var expectedCoverage: String {
-        let l = model.levels(storageOn: storage.isOn, networkOn: wall.isOn)
-        switch (l.files > 0, l.internet > 0) {
-        case (true, true): return "Files + Internet"
-        case (true, false): return "Files only"
-        case (false, true): return "Internet only"
-        default: return "seen only"
-        }
-    }
-
     // Migration: one line; the details (Keep with Touch ID, Remove) are on the
     // agent's page behind Review.
     @AppStorage("agentControlOpen") private var agentControlOpen = ""
@@ -185,7 +173,7 @@ struct MenuView: View {
                     ForEach(rows.prefix(4)) { s in
                         let gc = grantManager.grants.filter { $0.session_id == s.id }.count
                         Button { openAgentControl() } label: {
-                            PopoverSessionRow(session: s, grants: gc, expectedCoverage: expectedCoverage)
+                            PopoverSessionRow(session: s, grants: gc)
                         }
                             .buttonStyle(.plain)
                         if DevFlags.perSessionPause && grantManager.pauseState(s.id) == Int32(KAI_PAUSE_NONE) {
@@ -745,7 +733,6 @@ struct StorageCard: View {
 struct PopoverSessionRow: View {
     let session: SessionRow
     var grants: Int = 0
-    var expectedCoverage = "Files + Internet"
     /// Step 6: the session's unique name (topic or project, plus the tab);
     /// session id, host app and tty are on its details page.
     private var title: String { session.name.isEmpty ? session.projectBase : session.name }
@@ -755,8 +742,7 @@ struct PopoverSessionRow: View {
             .filter { !$0.isEmpty && $0 != "—" && !title.hasPrefix($0) }.joined(separator: " · ")
     }
     private var badge: Color {
-        session.enforcementShort == "Files + Internet" ? Theme.lime
-        : session.enforcementShort == "seen only" ? Theme.muted : Theme.amber
+        session.checksOff ? Theme.amber : Theme.lime
     }
     var body: some View {
         HStack(spacing: 8) {
@@ -764,7 +750,7 @@ struct PopoverSessionRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
                     Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                    if session.enforcementShort != expectedCoverage {
+                    if session.checksOff {
                         Text(session.enforcementShort).font(.system(size: 11)).foregroundStyle(Theme.amber)
                     }
                     if grants > 0 {

@@ -234,10 +234,10 @@ struct SessionRowView: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
                     Text(session.displayAgent).fontWeight(.medium)
-                    Text(session.enforcementShort).font(.caption2)
-                        .foregroundStyle(session.enforcementShort == "Files + Internet" ? .green
-                                         : session.enforcementShort == "seen only" ? .secondary : .orange)
-                    if let i = InfoText.coverage(session.enforcementShort) { InfoButton(text: i) }
+                    if session.checksOff {   // the only tag: this agent's tool calls aren't checked
+                        Text(session.enforcementShort).font(.caption2).foregroundStyle(.orange)
+                        if let i = InfoText.coverage(session.enforcementShort) { InfoButton(text: i) }
+                    }
                     if !session.isActive { Text("ended").font(.caption2).foregroundStyle(.secondary) }
                 }
                 if !session.topicLine.isEmpty {   // hook-reported topic, or hidden
@@ -271,7 +271,7 @@ struct SessionDetail: View {
                         // id. A scan-only session (no ES session) or one the storage
                         // wall doesn't cover can't be paused.
                         let storageCovered = session.source == "es" &&
-                            session.enforcement.hasPrefix("Enforced: Files")
+                            session.enforcement.contains("Files: on")
                         if storageCovered && DevFlags.perSessionPause {
                             PauseControl(state: grants.pauseState(session.id), until: grants.pauseEnds(session.id),
                                          pause: { grants.pauseSession(session.id, minutes: 15) },
@@ -292,7 +292,7 @@ struct SessionDetail: View {
                     Text(String(cString: noteC)).font(.caption).foregroundStyle(.orange)
                 }
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
-                    detailRow("Enforcement", session.enforcement.isEmpty ? "—" : session.enforcement)
+                    detailRow("Coverage", session.enforcement.isEmpty ? "—" : session.enforcement)
                     detailRow(session.isIDE ? "Workspaces" : "Project",
                               session.isIDE ? (session.workspaces ?? []).map { "\($0.name) (\($0.activity))" }
                                                   .joined(separator: ", ")

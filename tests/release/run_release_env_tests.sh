@@ -50,6 +50,11 @@ mode=$(HOME="$H5" KAI_NO_APP=1 "$REL" policy egress-mode 2>&1)
 mode=$(HOME="$H5" KAI_HOME="$H5/.kai" KAI_NO_APP=1 "$DEV" policy egress-mode 2>&1)
 [ "$mode" = "block" ] && pass "dev build: Protect is still honoured (developer flag territory)" || fail "dev effective mode: $mode"
 
+snap=$(HOME="$H5" KAI_NO_APP=1 "$REL" snapshot --json 2>&1)
+case "$snap" in *Enforced*) fail "release snapshot says Enforced: $snap" ;; *) pass "release build: the session list never says Enforced" ;; esac
+sl=$(HOME="$H5" KAI_NO_APP=1 "$REL" status 2>&1)
+case "$sl" in *Enforced*) fail "release status says Enforced" ;; *) pass "release build: status never says Enforced" ;; esac
+
 # Step 8: an agent's environment can't shrink the rotation size to push
 # history out of the log (only one rotated file is kept).
 H3="$TMP/h3"; mkdir -p "$H3/.kai"

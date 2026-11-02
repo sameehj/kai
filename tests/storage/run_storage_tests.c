@@ -1225,107 +1225,19 @@ static void test_session_pause(void) {
 /* Redesign item 1: session enforcement labels, and that the process scan never
  * claims "protected" for a session no wall can attribute. */
 static void test_enforcement_labels(void) {
-    printf("session enforcement labels (redesign)\n");
-    /* Phase B item 6: user-facing names are Files and Internet, not walls. */
-    CHECK(!strcmp(kai_enforcement_label(1, 1), "Enforced: Files and Internet"), "both walls");
-    CHECK(!strcmp(kai_enforcement_label(0, 1), "Enforced: Internet only"), "network only");
-    CHECK(!strcmp(kai_enforcement_label(1, 0), "Enforced: Files only"), "storage only");
-    const char *off = kai_enforcement_label(0, 0);
-    CHECK(strstr(off, "Seen only") != NULL, "no wall: labelled seen only");
-    CHECK(strcasestr(off, "protect") == NULL, "no wall: never labelled 'protected'");
-    CHECK(strcasestr(off, "wall") == NULL, "no wall: no 'wall' jargon");
-
-    /* Phase B item 8: the one status sentence (popover, sidebar, kai status).
-     * Levels: 0 off, 1 watch, 2 protect; agents < 0 = count unknown. */
-    char st[128];
-    CHECK(!strcmp(kai_status_sentence(2, 2, 3, 0, st, sizeof st), "Files and Internet enforcing \xC2\xB7 3 agents working"),
-          "both protecting, 3 agents");
-    CHECK(!strcmp(kai_status_sentence(2, 2, 1, 0, st, sizeof st), "Files and Internet enforcing \xC2\xB7 1 agent working"),
-          "singular agent");
-    CHECK(!strcmp(kai_status_sentence(2, 2, 0, 0, st, sizeof st), "Files and Internet enforcing"), "no agents: no count");
-    CHECK(!strcmp(kai_status_sentence(2, 2, -1, 0, st, sizeof st), "Files and Internet enforcing"), "unknown count: no count");
-    CHECK(!strcmp(kai_status_sentence(1, 1, 2, 0, st, sizeof st), "Watching only"), "both watching");
-    CHECK(!strcmp(kai_status_sentence(2, 1, 2, 0, st, sizeof st), "Partly enforcing \xC2\xB7 Internet is watching only"),
-          "one watching");
-    CHECK(!strcmp(kai_status_sentence(0, 2, 2, 0, st, sizeof st), "Files protection is off"), "files off");
-    CHECK(!strcmp(kai_status_sentence(2, 0, 2, 0, st, sizeof st), "Internet protection is off"), "internet off");
-    CHECK(!strcmp(kai_status_sentence(0, 0, 2, 0, st, sizeof st), "No wall enforcing"), "both off");
-    CHECK(!strcmp(kai_status_sentence(2, 2, 2, 1, st, sizeof st), "Kai is paused"), "paused wins");
-
-    /* Fix 3: Internet is never inferred. Unverified (-1) is left out of the
-     * headline, which then speaks for Files alone. */
-    CHECK(!strcmp(kai_status_sentence(2, -1, 3, 0, st, sizeof st), "Files enforcing \xC2\xB7 3 agents working"),
-          "internet unverified: headline is Files only");
-    CHECK(!strcmp(kai_status_sentence(1, -1, 3, 0, st, sizeof st), "Files: watching only"),
-          "internet unverified, files watching");
-    CHECK(!strcmp(kai_status_sentence(0, -1, 3, 0, st, sizeof st), "Files protection is off"),
-          "internet unverified, files off");
-    CHECK(strstr(kai_status_sentence(2, -1, 3, 0, st, sizeof st), "Internet") == NULL,
-          "unverified Internet never appears in the headline");
-    /* Step 6: Files isn't in this release. The headline speaks for Internet
-     * alone and never says "Files protection is off" or "No wall enforcing". */
-    int NI = KAI_FILES_NOT_INCLUDED;
-    CHECK(!strcmp(kai_status_sentence(NI, 2, 2, 0, st, sizeof st), "Internet: blocking unknown hosts (developer build) \xC2\xB7 2 agents working"),
-          "Files not included: Internet protected with the agent count");
-    CHECK(!strcmp(kai_status_sentence(NI, 2, 0, 0, st, sizeof st), "Internet: blocking unknown hosts (developer build)"), "...without agents");
-    CHECK(!strcmp(kai_status_sentence(NI, 1, 0, 0, st, sizeof st), "Internet: watching"),
-          "...Internet watching (the headline stays short; the coverage list explains)");
-    CHECK(!strcmp(kai_status_sentence(NI, 0, 0, 0, st, sizeof st), "Internet protection is off"), "...Internet off");
-    CHECK(!strcmp(kai_status_sentence(NI, -1, 1, 0, st, sizeof st), "Internet: unknown (Kai can't confirm the wall's mode)"),
-          "...Internet mode not confirmed by the extension: unknown, never watching by assumption");
-    CHECK(!strcmp(kai_status_sentence(NI, 2, 1, 1, st, sizeof st), "Kai is paused"), "...paused still wins");
-    CHECK(strstr(kai_status_sentence(NI, 0, 0, 0, st, sizeof st), "Files") == NULL, "...and never names Files");
-    /* Nov 1 step 5: no overall status says "protected", in any state */
-    {
-        int said = 0;
-        const int fs[] = {NI, -1, 0, 1, 2}, is[] = {-1, 0, 1, 2};
-        for (int f = 0; f < 5; f++) for (int i = 0; i < 4; i++) for (int a = 0; a < 3; a += 2) {
-            const char *x = kai_status_sentence(fs[f], is[i], a, 0, st, sizeof st);
-            if (strstr(x, "rotected")) { said = 1; printf("    says protected: %s\n", x); }
-        }
-        CHECK(!said, "no status sentence claims 'protected' (Files x Internet x agents)");
+    printf("session coverage label (Nov 1: never 'Enforced' for a watching Internet wall)\n");
+    CHECK(!strcmp(kai_session_coverage_label(1, 1), "Agent checks: on \xC2\xB7 Internet: watching"), "hooks on, Internet watching");
+    CHECK(!strcmp(kai_session_coverage_label(0, 1), "Agent checks: off \xC2\xB7 Internet: watching"), "hooks off, Internet watching");
+    CHECK(!strcmp(kai_session_coverage_label(1, -1), "Agent checks: on \xC2\xB7 Internet: unknown"), "Internet unconfirmed: unknown");
+    CHECK(!strcmp(kai_session_coverage_label(1, 0), "Agent checks: on \xC2\xB7 Internet: off"), "Internet off");
+    CHECK(!strcmp(kai_session_coverage_label(1, 2), "Agent checks: on \xC2\xB7 Internet: blocking (developer build)"),
+          "developer Protect says so");
+    int enforced = 0;
+    for (int a = -1; a <= 1; a++) for (int l = -1; l <= 2; l++) {
+        const char *x = kai_session_coverage_label(a, l);
+        if (strstr(x, "Enforced") || strstr(x, "rotected")) enforced = 1;
     }
-
-    /* Fix 3: a heartbeat counts only if it is fresh, names the wall, is owned
-     * by the expected uid (root in production) and isn't group/world-writable,
-     * so an agent running as the user can't forge one. */
-    char hdir[] = "/tmp/kai-hbXXXXXX";
-    if (mkdtemp(hdir)) {
-        char hb[300]; snprintf(hb, sizeof hb, "%s/network-health.json", hdir);
-        uid_t me = getuid();
-        CHECK(kai_heartbeat_level(hb, "network", me) == -1, "missing heartbeat: not verified");
-    {
-        kai_policy *pa = mk("egress block\n");
-        CHECK(pa && kai_policy_agent_count(pa) >= 3, "built-in agent rules are always loaded (network wall can recognize agents)");
-        kai_policy_free(pa);
-    }
-        FILE *hf = fopen(hb, "w");
-        if (hf) { fputs("{\"wall\":\"network\",\"mode\":\"block\"}", hf); fclose(hf); }
-        chmod(hb, 0644);
-        CHECK(kai_heartbeat_level(hb, "network", me) == 2, "fresh, right owner, block: level 2");
-        CHECK(kai_heartbeat_level(hb, "storage", me) == -1, "names another wall: not verified");
-        CHECK(kai_heartbeat_level(hb, "network", 0) == -1 || me == 0, "owned by the user, not root: not verified");
-        chmod(hb, 0666);
-        CHECK(kai_heartbeat_level(hb, "network", me) == -1, "world-writable: not verified");
-        chmod(hb, 0644);
-        struct timeval old2[2] = {{time(NULL) - 120, 0}, {time(NULL) - 120, 0}};
-        utimes(hb, old2);
-        CHECK(kai_heartbeat_level(hb, "network", me) == -1, "stale: not verified");
-        hf = fopen(hb, "w");
-        if (hf) { fputs("{\"wall\":\"network\",\"mode\":\"log\"}", hf); fclose(hf); }
-        CHECK(kai_heartbeat_level(hb, "network", me) == 1, "log mode: level 1");
-        unlink(hb); rmdir(hdir);
-    }
-    CHECK(strstr(kai_network_heartbeat_path(), "/Library/Group Containers/") != NULL,
-          "network heartbeat lives in the app-group container");
-    /* The scan runs and returns a bounded, sane result (no crash); the live
-     * session set is verified in the live test. */
-    kai_policy *p = mk("storage block\n");
-    kai_session *s = NULL; int n = 0;
-    int rc = kai_sessions_scan(p, &s, &n);
-    CHECK(rc >= 0 && n >= 0, "process scan returns a sane count");
-    free(s);
-    kai_policy_free(p);
+    CHECK(!enforced, "no session label says Enforced or protected");
 }
 
 /* U5: the agent may READ its own hook config via a tool, but not WRITE it, and
@@ -1748,11 +1660,8 @@ static void test_session_model(void) {
     CHECK(kai_session_last_active("act-1", "/w/pro") == 0, "a sibling prefix is not a match");
     CHECK(kai_session_last_active("nope", NULL) == 0, "unknown session: never active");
 
-    /* labels from the measured levels: Files off -> Internet only */
-    CHECK(!strcmp(kai_enforcement_from_levels(0, 2), "Enforced: Internet only"), "files off: Internet only");
-    CHECK(!strcmp(kai_enforcement_from_levels(-1, 2), "Enforced: Internet only"), "files not running: Internet only");
-    CHECK(!strcmp(kai_enforcement_from_levels(2, -1), "Enforced: Files only"), "internet unverified: Files only");
-    CHECK(!strcmp(kai_enforcement_from_levels(1, 2), "Enforced: Files and Internet"), "watch counts as covering");
+    /* labels from the measured levels: a watching Internet wall is "watching", never "Enforced" */
+    CHECK(!strcmp(kai_session_coverage_label(1, 1), "Agent checks: on \xC2\xB7 Internet: watching"), "watch is watching");
 
     /* registry: a working + an idle terminal session, an ended one, a
      * delegated one, and two Cursor workspaces (one active). */

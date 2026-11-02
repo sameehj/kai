@@ -374,12 +374,12 @@ int kai_sessions_scan(const kai_policy *p, kai_session **out, int *n);
 
 /* The enforcement label for a session given which walls are observed active.
  * Never claims "protected" for a session no active wall can attribute. */
-const char *kai_enforcement_label(int storage_active, int network_active);
+const char *kai_session_coverage_label(int agent_checks, int internet_level); /* never "Enforced" */
+int kai_agent_checks_on(const char *agent);   /* hooks installed and healthy: 1, 0 off, -1 not supported */
 /* A registry session is live: not ended, root process running and not a newer
  * process reusing its pid. */
 int kai_session_live(const kai_session *s);
 /* Session label from measured wall levels (>= 1 covers: Watch or Protect). */
-const char *kai_enforcement_from_levels(int files, int internet);
 /* Session activity: "working" = a command or hook in the last 15 minutes. */
 #define KAI_WORKING_WINDOW 900
 int kai_session_working(long long last_active, long long now);
