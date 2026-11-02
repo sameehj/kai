@@ -143,7 +143,7 @@ struct MenuView: View {
         VStack(alignment: .leading, spacing: 8) {
             if !grantManager.pendingPolicy.isEmpty || !grantManager.pending.isEmpty {
                 CapsLabel("Needs you")
-                ForEach(grantManager.pendingPolicy) { PendingPolicyCard(change: $0, manager: grantManager) }
+                ForEach(grantManager.pendingPolicyGroups, id: \.first!.id) { PendingPolicyCard(changes: $0, manager: grantManager) }
                 // Repeats within a session collapse into one card with a count.
                 ForEach(grantManager.pendingGroups) {
                     ApprovalCard(req: $0.rep, count: $0.count, manager: grantManager)
@@ -377,6 +377,8 @@ struct MenuView: View {
                         EventLine(event: g.event, count: g.count, plain: true).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    CopyButton(text: CardText.brief(g.event, sessionName: AgentsModel.shared.sessions
+                        .first { $0.id == g.event.session }?.name))
                     // dogfood: a kept-blocked host is one click from asking again
                     if g.event.isKeptBlocked, let r = grantManager.keptBlockedRule(g.event) {
                         Button("Unblock") { grantManager.removeRule(r) }
@@ -1027,5 +1029,31 @@ extension Theme {
         case .off, .notIncluded: return muted
         case .problem: return coral
         }
+    }
+}
+
+/// Nov 2: the copy icon on every card. Visible on hover (and always to
+/// VoiceOver, as "Copy details"); a click copies a plain-text brief and shows
+/// a checkmark for 1.5 s. The brief never holds secret values or file contents.
+struct CopyButton: View {
+    let text: String
+    @State private var copied = false
+    @State private var hover = false
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 11)).foregroundStyle(copied ? Theme.lime : Theme.muted)
+                .frame(width: 18, height: 18).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(hover || copied ? 1 : 0.35)
+        .onHover { hover = $0 }
+        .help(copied ? "Copied" : "Copy details")
+        .accessibilityLabel("Copy details")
     }
 }

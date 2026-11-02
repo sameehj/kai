@@ -1191,6 +1191,7 @@ private struct ActivityRow: View {
             }
             Spacer()
             if let d = event.date { Text(ago(d)).font(.system(size: 11)).foregroundStyle(Theme.muted) }
+            CopyButton(text: CardText.brief(event, sessionName: AgentsModel.shared.sessions.first { $0.id == event.session }?.name))
             Image(systemName: expanded ? "chevron.up" : "chevron.down")
                 .font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.muted)
         }

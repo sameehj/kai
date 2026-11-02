@@ -265,6 +265,11 @@ struct SessionDetail: View {
                         Text(session.displayAgent).font(.title2).fontWeight(.semibold)
                         if !session.name.isEmpty { Text(session.name).font(.callout).foregroundStyle(.secondary) }
                     }
+                    CopyButton(text: ["Session: \(session.displayAgent) · \(session.name)",
+                                      "Where: " + (session.project.isEmpty ? "—" : session.project),
+                                      "Coverage: " + (session.enforcement.isEmpty ? "—" : session.enforcement),
+                                      "Started: \(session.startedClock) · \(session.activeLabel)",
+                                      "Permissions: \(sessionGrants.count)"].joined(separator: "\n"))
                     Spacer()
                     if session.isActive {
                         // Item 4: pause acts through the storage wall by ES session
