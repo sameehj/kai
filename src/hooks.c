@@ -1418,6 +1418,15 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                          can_ask ? ", or to switch Claude Code out of bypass mode" : "");
             } else if (a == KAI_ACT_NONE || kai_cli_grant_allows("mcp", source, mcp_server, mcp_tool, cwd, tnow)) {
                 decision = KAI_ACT_NONE;                      /* policy or the user's grant allows it */
+            } else if (kai_mcp_tool_reads(mcp_tool)) {
+                /* Step 7 / rule 1: a read from a server the user configured is
+                 * ordinary: no prompt, recorded */
+                decision = KAI_ACT_NONE;
+                char rd[300];
+                snprintf(rd, sizeof rd, "MCP read tool %s from %s: allowed and recorded (read tools aren't asked about)",
+                         mcp_tool, mcp_server);
+                kai_audit_entry re = {source, "PreToolUse", "log", rule, rd, tool, NULL, NULL, session, cwd, NULL, NULL};
+                kai_audit_write(&re);
             } else if (human_prompt) {
                 decision = KAI_ACT_BLOCK; ask = 1;
                 snprintf(reason, sizeof reason, "%s \xC2\xB7 %s: MCP tools need your go-ahead "

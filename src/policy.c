@@ -403,6 +403,25 @@ int kai_mcp_tool_destructive(const char *tool, const char *status_arg) {
     return writes && people;
 }
 
+/* Nov 1 step 7: an MCP read tool, by its first word (get_page, list_posts,
+ * searchDocs). Reads of a server the user configured are ordinary activity:
+ * allowed and recorded (rule 1). Tool names are the server's, so a write named
+ * like a read passes as one: a known gap until MCP capability approval. */
+int kai_mcp_tool_reads(const char *tool) {
+    static const char *const reads[] = {"get", "list", "read", "search", "fetch", "query", "find", "describe", "view",
+                                        "show", "count", "lookup", "retrieve", "check", "status", "info", "ping",
+                                        "browse", "inspect", NULL};
+    if (!tool || kai_mcp_tool_destructive(tool, NULL)) return 0;
+    char w[32];
+    size_t l = 0;
+    for (const char *c = tool; *c && l + 1 < sizeof w; c++) {
+        if (*c == '_' || *c == '-' || *c == '.' || *c == ' ' || (l > 0 && isupper((unsigned char)*c))) break;
+        w[l++] = (char)tolower((unsigned char)*c);
+    }
+    w[l] = '\0';
+    return l > 0 && word_in(w, reads);
+}
+
 int kai_pid_cmdline(const kai_policy *p, int pid, char *out, size_t n) {
     if (!out || !n) return 0;
     out[0] = '\0';

@@ -639,6 +639,9 @@ int kai_pid_cmdline(const kai_policy *p, int pid, char *out, size_t n);
 /* An MCP tool that deletes, publishes or changes users/roles (by name, or a
  * status argument of publish/future/trash). 1 = destructive: always asks. */
 int kai_mcp_tool_destructive(const char *tool, const char *status_arg);
+/* An MCP read tool by its first word (get, list, read, search, ...): allowed
+ * and recorded. Names are the server's: a write named like a read passes. */
+int kai_mcp_tool_reads(const char *tool);
 /* A terminal grant for exactly this MCP tool (not a server-wide one). */
 int kai_cli_mcp_exact_grant(const char *agent, const char *server, const char *tool, long long now);
 /* Spec v2.1 B.3: what a host is, in plain words, and its group, or NULL.
