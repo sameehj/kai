@@ -1238,23 +1238,23 @@ static void test_enforcement_labels(void) {
     /* Phase B item 8: the one status sentence (popover, sidebar, kai status).
      * Levels: 0 off, 1 watch, 2 protect; agents < 0 = count unknown. */
     char st[128];
-    CHECK(!strcmp(kai_status_sentence(2, 2, 3, 0, st, sizeof st), "Protected \xC2\xB7 3 agents working"),
+    CHECK(!strcmp(kai_status_sentence(2, 2, 3, 0, st, sizeof st), "Files and Internet enforcing \xC2\xB7 3 agents working"),
           "both protecting, 3 agents");
-    CHECK(!strcmp(kai_status_sentence(2, 2, 1, 0, st, sizeof st), "Protected \xC2\xB7 1 agent working"),
+    CHECK(!strcmp(kai_status_sentence(2, 2, 1, 0, st, sizeof st), "Files and Internet enforcing \xC2\xB7 1 agent working"),
           "singular agent");
-    CHECK(!strcmp(kai_status_sentence(2, 2, 0, 0, st, sizeof st), "Protected"), "no agents: no count");
-    CHECK(!strcmp(kai_status_sentence(2, 2, -1, 0, st, sizeof st), "Protected"), "unknown count: no count");
+    CHECK(!strcmp(kai_status_sentence(2, 2, 0, 0, st, sizeof st), "Files and Internet enforcing"), "no agents: no count");
+    CHECK(!strcmp(kai_status_sentence(2, 2, -1, 0, st, sizeof st), "Files and Internet enforcing"), "unknown count: no count");
     CHECK(!strcmp(kai_status_sentence(1, 1, 2, 0, st, sizeof st), "Watching only"), "both watching");
-    CHECK(!strcmp(kai_status_sentence(2, 1, 2, 0, st, sizeof st), "Partly protected \xC2\xB7 Internet is watching only"),
+    CHECK(!strcmp(kai_status_sentence(2, 1, 2, 0, st, sizeof st), "Partly enforcing \xC2\xB7 Internet is watching only"),
           "one watching");
     CHECK(!strcmp(kai_status_sentence(0, 2, 2, 0, st, sizeof st), "Files protection is off"), "files off");
     CHECK(!strcmp(kai_status_sentence(2, 0, 2, 0, st, sizeof st), "Internet protection is off"), "internet off");
-    CHECK(!strcmp(kai_status_sentence(0, 0, 2, 0, st, sizeof st), "Not protected"), "both off");
+    CHECK(!strcmp(kai_status_sentence(0, 0, 2, 0, st, sizeof st), "No wall enforcing"), "both off");
     CHECK(!strcmp(kai_status_sentence(2, 2, 2, 1, st, sizeof st), "Kai is paused"), "paused wins");
 
     /* Fix 3: Internet is never inferred. Unverified (-1) is left out of the
      * headline, which then speaks for Files alone. */
-    CHECK(!strcmp(kai_status_sentence(2, -1, 3, 0, st, sizeof st), "Files protected \xC2\xB7 3 agents working"),
+    CHECK(!strcmp(kai_status_sentence(2, -1, 3, 0, st, sizeof st), "Files enforcing \xC2\xB7 3 agents working"),
           "internet unverified: headline is Files only");
     CHECK(!strcmp(kai_status_sentence(1, -1, 3, 0, st, sizeof st), "Files: watching only"),
           "internet unverified, files watching");
@@ -1263,11 +1263,11 @@ static void test_enforcement_labels(void) {
     CHECK(strstr(kai_status_sentence(2, -1, 3, 0, st, sizeof st), "Internet") == NULL,
           "unverified Internet never appears in the headline");
     /* Step 6: Files isn't in this release. The headline speaks for Internet
-     * alone and never says "Files protection is off" or "Not protected". */
+     * alone and never says "Files protection is off" or "No wall enforcing". */
     int NI = KAI_FILES_NOT_INCLUDED;
-    CHECK(!strcmp(kai_status_sentence(NI, 2, 2, 0, st, sizeof st), "Internet protected \xC2\xB7 2 agents working"),
+    CHECK(!strcmp(kai_status_sentence(NI, 2, 2, 0, st, sizeof st), "Internet: blocking unknown hosts (developer build) \xC2\xB7 2 agents working"),
           "Files not included: Internet protected with the agent count");
-    CHECK(!strcmp(kai_status_sentence(NI, 2, 0, 0, st, sizeof st), "Internet protected"), "...without agents");
+    CHECK(!strcmp(kai_status_sentence(NI, 2, 0, 0, st, sizeof st), "Internet: blocking unknown hosts (developer build)"), "...without agents");
     CHECK(!strcmp(kai_status_sentence(NI, 1, 0, 0, st, sizeof st),
                  "Internet: watching (records the connections it observes; blocks nothing in this release)"),
           "...Internet watching, said in full (Nov 1: Watch only)");
@@ -1276,6 +1276,16 @@ static void test_enforcement_labels(void) {
           "...Internet mode not confirmed by the extension: unknown, never watching by assumption");
     CHECK(!strcmp(kai_status_sentence(NI, 2, 1, 1, st, sizeof st), "Kai is paused"), "...paused still wins");
     CHECK(strstr(kai_status_sentence(NI, 0, 0, 0, st, sizeof st), "Files") == NULL, "...and never names Files");
+    /* Nov 1 step 5: no overall status says "protected", in any state */
+    {
+        int said = 0;
+        const int fs[] = {NI, -1, 0, 1, 2}, is[] = {-1, 0, 1, 2};
+        for (int f = 0; f < 5; f++) for (int i = 0; i < 4; i++) for (int a = 0; a < 3; a += 2) {
+            const char *x = kai_status_sentence(fs[f], is[i], a, 0, st, sizeof st);
+            if (strstr(x, "rotected")) { said = 1; printf("    says protected: %s\n", x); }
+        }
+        CHECK(!said, "no status sentence claims 'protected' (Files x Internet x agents)");
+    }
 
     /* Fix 3: a heartbeat counts only if it is fresh, names the wall, is owned
      * by the expected uid (root in production) and isn't group/world-writable,
@@ -2947,7 +2957,7 @@ static void test_decision_rules(void) {
               == KAI_RULE_KEEP_BLOCKED, "Keep blocked wins over an Allow");
     free(al);
 
-    CHECK(!strcmp(kai_wall_state_word(KAI_WALL_OS_ON, 2), "protecting")
+    CHECK(!strcmp(kai_wall_state_word(KAI_WALL_OS_ON, 2), "blocking")
               && !strcmp(kai_wall_state_word(KAI_WALL_OS_ON, 1), "watching")
               && !strcmp(kai_wall_state_word(KAI_WALL_OS_ON, -1), "unhealthy")
               && !strcmp(kai_wall_state_word(KAI_WALL_OS_STARTING, 2), "starting")

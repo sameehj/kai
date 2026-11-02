@@ -82,8 +82,10 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
             }
         }
         switch decision {
-        case "block": return "Blocked"
-        case "log": return "Noticed"
+        case "block": return (isNetwork || isStorage) ? "Blocked" : "Denied by agent check"
+        case "log": return isNetwork ? "Observed" : "Noticed"
+        case "note": return "Note"
+        case "allow": return "Allowed"
         case "exempt": return "Allowed by your exception"
         case "ask": return "Asked you"
         case "redact", "replace": return "Cleaned"

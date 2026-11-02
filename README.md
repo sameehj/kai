@@ -7,36 +7,33 @@
 
   ### Zero Trust. Zero Wrappers. Zero Friction.
 
-  **Turn off your agent's permission prompts. Kai stops it reading your secrets or sending data where it shouldn't.**
+  **Kai checks what your agents do, and shows you where they connect.**
 
   **Preview 2 · macOS 13+** · **Claude Code · Codex · Cursor** · **Open source**
 </div>
 
-## What Kai stops
+## What Kai does in this release
 
-- **Your agent's own secret reads and uploads**: Claude Code, Codex and Cursor reading your keys, `.env` files and credentials, or sending them out, stopped before the tool call runs.
+- **Agent checks enforce where the agent calls them.** When Claude Code, Codex or Cursor asks to read your keys, `.env` files or credentials, or to send them out, Kai denies that tool call before it runs, and says why, with a decision ID and the way to allow it if it was intended.
+- **Kai records the connections it observes.** The Kai app's Internet wall watches the connections agents open (host, agent, time; unknown hosts, bare IPs and odd ports included) and blocks nothing in this release.
 
-**Internet: Kai shows every connection your agents make. Blocking arrives in the next release.** The Kai app's Internet wall watches: it records each connection an agent opens (unknown hosts, bare IPs, odd ports included) and blocks none in this release.
+## What it doesn't do in this release
 
-## What it doesn't stop in this release
-
-- Files read or written by scripts the agent writes.
+- Kai does not prevent other programs from reading files or sending data over HTTPS in this release. That includes scripts the agent writes and runs.
 - Planted SSH keys or login items.
 - Untagged editors such as VS Code.
-- Exfiltration through allowed services like GitHub or npm.
-- Agent traffic to unknown hosts, bare IPs or odd ports: the Internet wall shows it and blocks nothing in this release.
+- Exfiltration through allowed services like GitHub or npm (`npm publish` included).
+- Encrypted request contents: not inspected.
 
 **Files protection: not included in this release.**
 
-Evidence for this release: the agent checks were verified live with Claude Code 2.1.312 (9 of 9 checks PASS, 2026-10-30) and with synthetic hook events for Codex and Cursor ([docs/COVERAGE.md](docs/COVERAGE.md)); the Internet wall's decisions (unknown host, bare IP, non-web port, no loadable policy) by tests. The end-to-end replay of attack cases has not run for this release: NOT COVERED.
+Evidence for this release: agent checks verified live with Claude Code 2.1.312 (9 of 9 checks PASS, 2026-10-30) and Codex 0.162.1 (the deny reason reached the model, 2026-11-02), synthetic hook events for Cursor ([docs/COVERAGE.md](docs/COVERAGE.md)); the release-blocking tests on the signed build are listed in the release notes. The end-to-end replay of attack cases hasn't run: NOT COVERED.
 
 ## First steps
 
-1. **Install the package and approve the Internet wall** when macOS asks (see [Install](#install)). Internet: Kai shows every connection your agents make. Blocking arrives in the next release.
+1. **Install the package and approve the Internet wall** when macOS asks (see [Install](#install)).
 2. **Check it:** `kai install all`, then `kai doctor` and `kai status`.
-3. **You decide, narrowly.** When Kai stops something legitimate, it tells you why and what to do: one agent, one operation, one target, with an expiry. The agent is told why, and to ask you instead of trying another way.
-
-Kai is an extra safety layer, not isolation: the agent checks run with your permissions and cover the actions each agent reports to them; the Internet wall sees connections, not what a program does with your files.
+3. **When Kai denies something legitimate,** the message names the decision, why, and the narrow way to allow it: one agent, one operation, one target, with an expiry. The agent is told why, and to ask you instead of trying another way.
 
 ## Install
 
@@ -49,7 +46,7 @@ shasum -a 256 -c SHA256SUMS
 spctl --assess --type install -vv Kai-Preview-0.2.0-preview.2.pkg   # "source=Notarized Developer ID"
 ```
 
-It installs the Kai app (with its Internet wall) and the `kai` command. Open Kai, approve the Internet wall when macOS asks (System Settings → Privacy & Security, or General → Login Items & Extensions → Network Extensions), and Kai starts showing every connection your agents make (it blocks none in this release). The installer refreshes Kai's checks in the agents that already have them. For another agent:
+It installs the Kai app (with its Internet wall) and the `kai` command. Open Kai, approve the Internet wall when macOS asks (System Settings → Privacy & Security, or General → Login Items & Extensions → Network Extensions), and Kai starts recording the connections it observes (it blocks none in this release). The installer refreshes Kai's checks in the agents that already have them. For another agent:
 
 ```sh
 kai install claude      # or codex, cursor, all
@@ -94,7 +91,7 @@ Exactly what each agent reports to Kai, at which stage, whether Kai can stop it,
 - Hooks run with your permissions. A program an agent writes and runs, or a detached process, can get around them.
 - Kai checks only what an agent reports to its hooks: not tool results, not the agent's other model traffic.
 - Kai's rules and policy are files a program with your permissions can edit. Kai notices some policy changes made outside Kai (`kai doctor`), never all, and prevents none.
-- Files protection: not included in this release. The Internet wall is the only OS-level protection, and it covers connections only.
+- Files protection: not included in this release. The Internet wall observes connections and blocks nothing in this release.
 - No browser coverage: Kai doesn't check AI chat sites in a browser (the Chrome extension was removed). `kai uninstall chrome` removes one an earlier Kai installed.
 - Screen and app control: Kai stops the commands and tools it recognizes (`screencapture`, `ffmpeg`/`sox` recording, `osascript` telling any app, computer-use tools) and names the app; you allow them per app. With the Kai app, those allows are made in the app (each agent's page), not with `kai allow-capture`. A program the agent writes can call the capture APIs directly. Kai can't change macOS privacy prompts: macOS grants these permissions per app, so every agent run in Terminal, iTerm or Cursor inherits what that app holds (`kai doctor` lists them where it can read them).
 

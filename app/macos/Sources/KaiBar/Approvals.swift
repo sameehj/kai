@@ -192,7 +192,9 @@ struct ActiveGrant: Decodable, Identifiable {
     /// until that session ends (its expiry is only a cap), so it never shows
     /// "this process · 7 days".
     var isSession: Bool { !(session_id ?? "").isEmpty }
-    var scopeLabel: String { scope == 1 ? "once" : isSession ? "this session" : "this process" }
+    var scopeLabel: String {   // step 5: "this session", "for 7 days" or "once"; never "this process"
+        GrantText.scope(scope: scope, session: isSession, created: Int(created_utc ?? "") ?? 0, expires: expiresEpoch)
+    }
     var signed: Bool { !hmac.isEmpty }
     var expiresEpoch: Int { Int(expires_utc) ?? 0 }
 }
@@ -244,12 +246,8 @@ struct GrantGroup: Identifiable {
     }
     /// Time left, in the same terms as the scope.
     var status: String {
-        let secs = expiresEpoch - Int(Date().timeIntervalSince1970)
-        if secs <= 0 { return "expired" }
-        if isSession { return "until the session ends" }
-        if secs < 60 { return "\(secs)s left" }
-        if secs < 3600 { return "\(secs / 60)m left" }
-        return "\(secs / 3600)h \((secs % 3600) / 60)m left"
+        let s = GrantText.status(session: isSession, expires: expiresEpoch)
+        return s == "ended" ? "expired" : s
     }
 }
 
@@ -785,15 +783,16 @@ final class GrantManager: ObservableObject {
     /// Identical grants collapsed with a count; soonest expiry wins.
     var grantGroups: [GrantGroup] {
         var map: [String: [ActiveGrant]] = [:]
-        for g in grants {
-            map["\(g.agent)|\(g.resource)|\(g.opLabel)|\(g.scopeLabel)", default: []].append(g)
+        for g in grants {   // step 5: one row per agent and target (and operation)
+            map["\(g.agent)|\(g.resource.lowercased())|\(g.opLabel)", default: []].append(g)
         }
         return map.map { key, gs in
-            let f = gs[0]
+            // the row speaks for the grant that lasts longest; revoking it revokes all
+            let f = gs.max { a, b in (a.isSession ? Int.max : a.expiresEpoch) < (b.isSession ? Int.max : b.expiresEpoch) } ?? gs[0]
             return GrantGroup(id: key, agent: f.agent, resource: f.resource, opLabel: f.opLabel,
                               scopeLabel: f.scopeLabel, isSession: f.isSession, count: gs.count,
                               signed: gs.allSatisfy { $0.signed },
-                              expiresEpoch: gs.map(\.expiresEpoch).min() ?? 0, members: gs)
+                              expiresEpoch: f.expiresEpoch, members: gs)
         }.sorted { $0.id < $1.id }
     }
 

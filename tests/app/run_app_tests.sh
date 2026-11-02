@@ -21,6 +21,11 @@ mkdir -p "$OUT/notify"
 cp "$ROOT/tests/app/notify_main.swift" "$OUT/notify/main.swift"
 swiftc -O -o "$OUT/notify/run" "$S/NotifyPlan.swift" "$OUT/notify/main.swift" || exit 1
 "$OUT/notify/run" || rc=1
+# Activity: icons, words, merges, scope and duration (ActivityRules.swift).
+mkdir -p "$OUT/activity"
+cp "$ROOT/tests/app/activity_main.swift" "$OUT/activity/main.swift"
+swiftc -O -o "$OUT/activity/run" "$S/AuditLog.swift" "$S/ActivityRules.swift" "$OUT/activity/main.swift" || exit 1
+"$OUT/activity/run" || rc=1
 rm -rf "$OUT"
 # The app decodes the built kai's real `kai snapshot --json` with its own
 # types, so app and CLI can't drift apart.

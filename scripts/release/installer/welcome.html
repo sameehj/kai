@@ -6,19 +6,19 @@ h1{font-size:18px;margin:0 0 6px} h2{font-size:14px;margin:12px 0 4px} .contract
 ol{padding-left:20px} li{margin:4px 0}</style></head>
 <body>
 <h1>Kai Preview</h1>
-<p class="contract"><b>Turn off your agent&rsquo;s permission prompts. Kai stops it reading your secrets or sending data where it shouldn&rsquo;t.</b></p>
-<h2>What Kai stops</h2>
+<p class="contract"><b>Kai checks what your agents do, and shows you where they connect.</b></p>
+<h2>What Kai does in this release</h2>
 <ul>
-<li><b>Your agent's own secret reads and uploads</b>: Claude Code, Codex and Cursor reading your keys, <code>.env</code> files and credentials, or sending them out, stopped before the tool call runs.</li>
+<li><b>Agent checks enforce where the agent calls them.</b> When Claude Code, Codex or Cursor asks to read your keys, <code>.env</code> files or credentials, or to send them out, Kai denies that tool call before it runs, and says why, with a decision ID and the way to allow it if it was intended.</li>
+<li><b>Kai records the connections it observes.</b> The Kai app&rsquo;s Internet wall watches the connections agents open (host, agent, time; unknown hosts, bare IPs and odd ports included) and blocks nothing in this release.</li>
 </ul>
-<p><b>Internet: Kai shows every connection your agents make. Blocking arrives in the next release.</b></p>
-<h2>What it doesn&rsquo;t stop in this release</h2>
+<h2>What it doesn&rsquo;t do in this release</h2>
 <ul>
-<li>Files read or written by scripts the agent writes.</li>
+<li>Kai does not prevent other programs from reading files or sending data over HTTPS in this release. That includes scripts the agent writes and runs.</li>
 <li>Planted SSH keys or login items.</li>
 <li>Untagged editors such as VS Code.</li>
-<li>Exfiltration through allowed services like GitHub or npm.</li>
-<li>Agent traffic to unknown hosts, bare IPs or odd ports: the Internet wall shows it and blocks nothing in this release.</li>
+<li>Exfiltration through allowed services like GitHub or npm (<code>npm publish</code> included).</li>
+<li>Encrypted request contents: not inspected.</li>
 </ul>
 <p><b>Files protection: not included in this release.</b></p>
 <ol>

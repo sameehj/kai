@@ -58,7 +58,7 @@ static void agent_measure(agent_state *a) {
 static const char *wall_word(int lvl, int app) {
     if (!app) return "not included";
     switch (lvl) {
-    case 2: return "protecting";
+    case 2: return "blocking";
     case 1: return "watching";
     case 0: return "off";
     default: return "not running";

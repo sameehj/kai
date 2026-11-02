@@ -297,7 +297,7 @@ struct MenuView: View {
         if alert != nil || model.health == .problem { return Theme.coral }
         if grantManager.pauseState(nil) != Int32(KAI_PAUSE_NONE) { return Theme.amber }
         if storage.stateWord == "unhealthy" || wall.stateWord == "unhealthy" { return Theme.amber }
-        if storage.stateWord == "protecting" || wall.stateWord == "protecting" { return Theme.lime }
+        if storage.stateWord == "blocking" || wall.stateWord == "blocking" || wall.stateWord == "watching" { return Theme.lime }
         return Theme.soft
     }
 
@@ -610,8 +610,8 @@ struct AgentCard: View {
 
     private func subtitle(_ info: KaiStatus.Agent) -> String {
         if info.broken { return "Not working: " + (info.problem ?? "check failed") }
-        if info.installed { return "Protected" }
-        return info.detected ? "Not protected" : "Not found on this Mac"
+        if info.installed { return "Agent checks on" }
+        return info.detected ? "Agent checks off" : "Not found on this Mac"
     }
 
     var body: some View {
@@ -787,7 +787,7 @@ struct EventLine: View {
     var plain = false
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Circle().fill(event.isBlock ? Theme.coral : Theme.amber).frame(width: 8, height: 8)
+            Circle().fill(Theme.tone(event.tone)).frame(width: 8, height: 8)
             Text((plain ? event.plainSentence : event.summary) + (count > 1 ? "  ×\(count)" : ""))
                 .lineLimit(nil)
                 .font(.system(size: 13)).foregroundStyle(Theme.soft)
@@ -936,6 +936,18 @@ enum ProtectionText {
         case 1: return "\(name): watching"
         case 0: return "\(name): off"
         default: return "\(name): not running"
+        }
+    }
+}
+
+/// Step 5: one colour per event tone, everywhere an event is shown.
+extension Theme {
+    static func tone(_ t: EventTone) -> Color {
+        switch t {
+        case .stopped: return coral
+        case .allowed, .cleaned: return lime
+        case .neutral: return muted
+        case .warning: return amber
         }
     }
 }

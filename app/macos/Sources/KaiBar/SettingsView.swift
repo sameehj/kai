@@ -1078,7 +1078,7 @@ private struct ActivityPage: View {
         var order: [String] = []
         var groups: [String: (event: AuditEvent, count: Int)] = [:]
         for e in shown {
-            let k = "\(e.agentName)|\(e.decision)|\(e.rule)|\(e.excerpt ?? "")|\(e.detail)"
+            let k = e.mergeKey   // step 5: one grant record per agent and target
             if let g = groups[k] { groups[k] = (g.event, g.count + 1) }
             else { groups[k] = (e, 1); order.append(k) }
         }
@@ -1135,19 +1135,8 @@ private struct ActivityRow: View {
     let toggle: () -> Void
     @State private var report: ReportInfo?
 
-    private var color: Color {
-        if event.isBlock { return Theme.coral }
-        if event.isExempt || event.decision == "log" { return Theme.muted }
-        if event.decision == "redact" || event.decision == "replace" { return Theme.lime }
-        return Theme.amber
-    }
-    private var icon: String {
-        if event.isBlock { return "hand.raised.fill" }
-        if event.isExempt { return "checkmark.circle" }
-        if event.decision == "log" { return "eye" }
-        if event.decision == "redact" || event.decision == "replace" { return "wand.and.stars" }
-        return "exclamationmark.triangle.fill"
-    }
+    private var color: Color { Theme.tone(event.tone) }
+    private var icon: String { event.iconName }   // step 5: an allow is never ⚠
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1298,7 +1287,7 @@ struct WallPill: View {
     let word: String
     private var color: Color {
         switch word {
-        case "protecting": return Theme.lime
+        case "blocking", "watching": return Theme.lime
         case "watching", "starting": return Theme.amber
         case "unhealthy": return Theme.coral
         default: return Theme.muted

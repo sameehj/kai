@@ -2,8 +2,8 @@
 
 ## 0.2.0-preview.2 (2026-11-01)
 
-First public pre-release: agent hooks plus the Kai app's Internet wall in Watch: Kai shows every connection
-your agents make; blocking arrives in the next release (Nov 1 corrective change). Files protection: not
+First public pre-release: agent hooks plus the Kai app's Internet wall in Watch: Kai records the connections
+it observes and blocks nothing; blocking arrives in the next release (Nov 1 corrective change). Files protection: not
 included in this release. Notes: [docs/release/0.2.0-preview.2.md](docs/release/0.2.0-preview.2.md).
 
 - Internet wall: Watch only in release builds (a policy asking for Protect is ignored and kai status says

@@ -146,14 +146,14 @@ final class AppModel: ObservableObject {
         switch health {
         case .protecting:
             let names = Agent.allCases.filter { installed($0) }.map(\.title)
-            return "Protecting " + (ListFormatter.localizedString(byJoining: names))
-        case .partial: return "Partly protected"
-        case .off: return "Not protecting any agent"
+            return "Agent checks on for " + (ListFormatter.localizedString(byJoining: names))
+        case .partial: return "Agent checks on for some agents"
+        case .off: return "No agent checks on"
         case .unknown: return "Checking…"
         case .problem:
             if cliPath == nil { return "kai command-line tool not found" }
             if let s = status, !s.policy.ok { return "Policy error: agents are blocked" }
-            if let a = brokenAgents.first { return "\(a.title) isn't protected right now" }
+            if let a = brokenAgents.first { return "\(a.title) isn't being checked right now" }
             return "Audit log was modified"
         }
     }
@@ -165,7 +165,7 @@ final class AppModel: ObservableObject {
         if !s.audit.intact { return s.audit.error }
         if health == .partial {
             let missed = Agent.allCases.filter { agentInfo($0).detected && !installed($0) }.map(\.title)
-            return missed.joined(separator: ", ") + " is not protected"
+            return missed.joined(separator: ", ") + " is not being checked"
         }
         return nil
     }

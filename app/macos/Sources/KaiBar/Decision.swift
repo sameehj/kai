@@ -54,7 +54,7 @@ struct DecisionSheet: View {
                     .font(.system(size: 11)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             }
             // Step 6 / NEVER-RERUN card: the triggering command (a redacted excerpt).
-            if !event.isNetwork, let cmd = event.target, !cmd.isEmpty {
+            if let cmd = event.whileRunning {   // the triggering command, or nothing
                 Text("While running: \(cmd)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.soft)
                     .lineLimit(3).truncationMode(.middle).textSelection(.enabled)
             }

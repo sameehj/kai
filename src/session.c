@@ -372,25 +372,26 @@ const char *kai_status_sentence(int files, int internet, int agents, int paused,
         else if (internet == 0) snprintf(out, n, "Internet protection is off");
         else if (internet == 1)
             snprintf(out, n, "Internet: watching (records the connections it observes; blocks nothing in this release)");
-        else if (agents > 0)
-            snprintf(out, n, "Internet protected \xC2\xB7 %d agent%s working", agents, agents == 1 ? "" : "s");
-        else snprintf(out, n, "Internet protected");
+        else if (agents > 0)   /* Protect: developer builds only */
+            snprintf(out, n, "Internet: blocking unknown hosts (developer build) \xC2\xB7 %d agent%s working",
+                     agents, agents == 1 ? "" : "s");
+        else snprintf(out, n, "Internet: blocking unknown hosts (developer build)");
     }
     /* Internet not verified: left out of the headline, which speaks for Files. */
     else if (internet < 0 && files <= 0) snprintf(out, n, "Files protection is off");
     else if (internet < 0 && files == 1) snprintf(out, n, "Files: watching only");
     else if (internet < 0 && agents > 0)
-        snprintf(out, n, "Files protected \xC2\xB7 %d agent%s working", agents, agents == 1 ? "" : "s");
-    else if (internet < 0) snprintf(out, n, "Files protected");
-    else if (files == 0 && internet == 0) snprintf(out, n, "Not protected");
+        snprintf(out, n, "Files enforcing \xC2\xB7 %d agent%s working", agents, agents == 1 ? "" : "s");
+    else if (internet < 0) snprintf(out, n, "Files enforcing");
+    else if (files == 0 && internet == 0) snprintf(out, n, "No wall enforcing");
     else if (files == 0) snprintf(out, n, "Files protection is off");
     else if (internet == 0) snprintf(out, n, "Internet protection is off");
     else if (files == 1 && internet == 1) snprintf(out, n, "Watching only");
-    else if (files == 1) snprintf(out, n, "Partly protected \xC2\xB7 Files is watching only");
-    else if (internet == 1) snprintf(out, n, "Partly protected \xC2\xB7 Internet is watching only");
+    else if (files == 1) snprintf(out, n, "Partly enforcing \xC2\xB7 Files is watching only");
+    else if (internet == 1) snprintf(out, n, "Partly enforcing \xC2\xB7 Internet is watching only");
     else if (agents > 0)
-        snprintf(out, n, "Protected \xC2\xB7 %d agent%s working", agents, agents == 1 ? "" : "s");
-    else snprintf(out, n, "Protected");
+        snprintf(out, n, "Files and Internet enforcing \xC2\xB7 %d agent%s working", agents, agents == 1 ? "" : "s");
+    else snprintf(out, n, "Files and Internet enforcing");
     return out;
 }
 
@@ -533,7 +534,7 @@ const char *kai_wall_state_word(int os, int level) {
     case KAI_WALL_OS_STARTING:      return "starting";
     case KAI_WALL_OS_FAILED:        return "unhealthy";
     default:
-        return level == 2 ? "protecting" : level == 1 ? "watching" : level == 0 ? "off" : "unhealthy";
+        return level == 2 ? "blocking" : level == 1 ? "watching" : level == 0 ? "off" : "unhealthy";
     }
 }
 

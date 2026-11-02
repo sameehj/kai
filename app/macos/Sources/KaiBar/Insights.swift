@@ -40,7 +40,7 @@ extension AppModel {
     /// incidents; they stay on the Activity page.
     var importantEvents: [AuditEvent] {
         // a block of a kept-blocked host shows too (with Unblock); telemetry and the QUIC fallback don't
-        events.filter { ($0.isBlock || $0.decision == "redact" || $0.decision == "replace")
+        AuditEvent.droppingAllowedBlocks(events).filter { ($0.isBlock || $0.decision == "redact" || $0.decision == "replace")
             && (!$0.isSilent || $0.isKeptBlocked) && !$0.isGrant }
     }
 
