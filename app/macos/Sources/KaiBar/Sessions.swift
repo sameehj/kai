@@ -35,6 +35,7 @@ struct AgentRow: Decodable, Identifiable, Equatable {
     var wallRecognized: Bool = false
     var activeSessions: Int = 0
     var detail: String? = nil
+    var detected: Bool = false   // found on this Mac (only these are listed)
     var id: String { name }
     var hooksLabel: String {
         switch hooks {
@@ -45,7 +46,7 @@ struct AgentRow: Decodable, Identifiable, Equatable {
         default: return "no Kai hooks"
         }
     }
-    enum CodingKeys: String, CodingKey { case name, hooks, wallRecognized, activeSessions, detail }
+    enum CodingKeys: String, CodingKey { case name, hooks, wallRecognized, activeSessions, detail, detected }
     init(name: String) { self.name = name }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -54,6 +55,7 @@ struct AgentRow: Decodable, Identifiable, Equatable {
         wallRecognized = c.value(.wallRecognized, false)
         activeSessions = c.value(.activeSessions, 0)
         detail = (try? c.decodeIfPresent(String.self, forKey: .detail)) ?? nil
+        detected = c.value(.detected, false)
     }
 }
 
@@ -147,8 +149,14 @@ struct SessionRow: Decodable, Identifiable, Equatable {
         }
         return project.isEmpty ? "—" : (project as NSString).lastPathComponent
     }
-    /// The terminal tab the session runs in ("ttys003"), "" when none.
-    var tab: String { tty.hasPrefix("/dev/") ? String(tty.dropFirst(5)) : tty }
+    /// The terminal tab the session runs in ("Terminal tab 3"), "" when none;
+    /// the raw tty is on the session's Details.
+    var tab: String {
+        let t = tty.hasPrefix("/dev/") ? String(tty.dropFirst(5)) : tty
+        guard !t.isEmpty else { return "" }
+        if t.hasPrefix("ttys"), let n = Int(t.dropFirst(4)) { return "Terminal tab \(n)" }
+        return t
+    }
 
     /// Step 6: what the session is about (the topic, else the project folder,
     /// else its workspaces) plus the terminal tab. Never the agent's or its

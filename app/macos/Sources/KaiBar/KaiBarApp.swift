@@ -99,6 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if Snapshot.requestedDir == nil && Bundle.main.bundleIdentifier != nil {
             UNUserNotificationCenter.current().delegate = self
             Notifier.registerCategories()
+            Notifier.requestPermission()   // Nov 2: ask on first launch (macOS asks once, then remembers)
             _ = GrantManager.shared   // cards notify from launch, popover opened or not
         }
         if let dir = Snapshot.requestedDir { Task { @MainActor in await Snapshot.run(to: dir) } }

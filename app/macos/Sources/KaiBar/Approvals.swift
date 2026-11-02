@@ -798,6 +798,13 @@ final class GrantManager: ObservableObject {
 
     func revokeGroup(_ g: GrantGroup) { g.members.forEach(revoke) }
 
+    /// Nov 2: identical protection-lowering requests as one card.
+    var pendingPolicyGroups: [[PendingPolicyChange]] {
+        PolicyWords.merge(pendingPolicy.map { ($0.id, $0.summary) }).map { g in
+            g.ids.compactMap { id in pendingPolicy.first { $0.id == id } }
+        }.filter { !$0.isEmpty }
+    }
+
     func revoke(_ grant: ActiveGrant) {
         kai_grant_audit("revoked", grant.id, grant.agent, grant.resource, Int32(grant.op),
                         "revoke", "revoked by user")
@@ -989,9 +996,13 @@ struct ApprovalCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\(req.agentTitle)\(req.sessionLabel) wanted to \(req.verb) \(req.thing)"
-                 + (count > 1 ? " (\(count) times)." : "."))
-                .font(.system(size: 13, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top) {
+                Text("\(req.agentTitle)\(req.sessionLabel) wanted to \(req.verb) \(req.thing)"
+                     + (count > 1 ? " (\(count) times)." : "."))
+                    .font(.system(size: 13, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 4)
+                CopyButton(text: brief)
+            }
             if req.op == "connect" && !req.unknownHost {
                 Text(HostCatalog.line(req.resource) + " Kai doesn't know why this was requested.")
                     .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -1059,6 +1070,18 @@ struct ApprovalCard: View {
         }
     }
 
+    /// Nov 2: the copy icon's brief for a waiting request. No secret values.
+    private var brief: String {
+        let t = Date(timeIntervalSince1970: TimeInterval(req.ts)).formatted(date: .numeric, time: .shortened)
+        return ["What happened: \(req.agentTitle) wants to \(req.verb) \(req.thing)",
+                "Where: " + [req.agentTitle, req.project.map { ($0 as NSString).lastPathComponent } ?? ""]
+                    .filter { !$0.isEmpty }.joined(separator: " · "),
+                "Who requested it: \(req.agentTitle) (\(req.verifiedIdentity.map { "signed \($0)" } ?? "signature not verified"))",
+                "Why Kai asks: \(req.whyItMatters)",
+                "Request ID: \(req.id) · \(t)",
+                "What you can do: allow it for this task in Kai, or keep it blocked"].joined(separator: "\n")
+    }
+
     /// "Allow for this task" (when there is one), then "Allow 1 hour".
     private var allowActions: [CardAction] {
         let session = !(req.session ?? "").isEmpty
@@ -1091,24 +1114,43 @@ struct ApprovalCard: View {
 
 /// A single pending policy-change card: a change that would reduce protection,
 /// shown with who asked and how, awaiting the user's explicit confirmation.
+/// Nov 2: a request to turn protection down, in plain words, with the real
+/// requester; Keep protection is the recommended default; the raw rule is
+/// behind Details; identical requests arrive as one card with a count.
 struct PendingPolicyCard: View {
-    let change: PendingPolicyChange
+    let changes: [PendingPolicyChange]          // identical requests, merged
     @ObservedObject var manager: GrantManager
+    @State private var details = false
+    private var change: PendingPolicyChange { changes[0] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("A change would turn protection down").font(.headline)
-            Text("It isn't active until you apply it.")
-                .font(.caption).foregroundColor(.secondary)
-            Text(change.summary).font(.system(.caption, design: .monospaced)).lineLimit(2)
-            Text("Requested by: \(change.callerChain)")
-                .font(.caption2).foregroundColor(.secondary).lineLimit(2)
-            Text("Code signature: \(change.callerTeam)")
-                .font(.caption2).foregroundColor(.secondary)
-            HStack {
-                Button("Keep protection") { manager.rejectPolicy(change) }
-                Button("Turn down") { manager.applyPolicy(change) }
+            HStack(alignment: .top) {
+                Text(PolicyWords.plain(change.summary) + (changes.count > 1 ? " (\(changes.count) requests)" : ""))
+                    .font(.system(size: 13, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 4)
+                CopyButton(text: CardText.policyBrief(summary: change.summary, chain: change.callerChain, team: change.callerTeam))
             }
+            Text("Requested by: \(PolicyWords.requester(change.callerChain))")
+                .font(.system(size: 12)).foregroundStyle(Theme.soft)
+            HStack(spacing: 10) {
+                Button { changes.forEach(manager.rejectPolicy) } label: {
+                    Text("Keep protection · Recommended").font(.system(size: 12, weight: .semibold))
+                }.buttonStyle(LimeButtonStyle())
+                Button("Turn down") {
+                    manager.applyPolicy(change)
+                    changes.dropFirst().forEach(manager.rejectPolicy)   // the duplicates are the same change
+                }.buttonStyle(GhostButtonStyle())
+            }
+            Text("Turning it down: " + PolicyWords.loses(change.summary))
+                .font(.system(size: 11)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            DisclosureGroup("Details", isExpanded: $details) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(change.summary).font(.system(size: 11, design: .monospaced))
+                    Text("Caller: \(change.callerChain.isEmpty ? "unknown" : change.callerChain)").font(.system(size: 11))
+                    Text("Code signature: \(change.callerTeam.isEmpty ? "unknown" : change.callerTeam)").font(.system(size: 11))
+                }.foregroundStyle(Theme.muted).textSelection(.enabled).padding(.top, 2)
+            }.font(.system(size: 11)).foregroundStyle(Theme.muted)
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
@@ -1124,7 +1166,7 @@ struct ApprovalsSection: View {
         VStack(alignment: .leading, spacing: 8) {
             if !manager.pendingPolicy.isEmpty {
                 Text("Pending policy changes").font(.caption).foregroundColor(.secondary)
-                ForEach(manager.pendingPolicy) { PendingPolicyCard(change: $0, manager: manager) }
+                ForEach(manager.pendingPolicyGroups, id: \.first!.id) { PendingPolicyCard(changes: $0, manager: manager) }
             }
             if !manager.pendingGroups.isEmpty {
                 HStack {

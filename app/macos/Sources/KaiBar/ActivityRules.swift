@@ -38,6 +38,16 @@ extension AuditEvent {
         }
     }
 
+    /// Nov 2: an event from a temporary test folder (Kai's own or a live check's
+    /// test run) that reached the real log: labelled "test" in Activity.
+    var isTest: Bool {
+        let c = cwd ?? ""
+        return ["/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/"].contains { c.hasPrefix($0) }
+    }
+
+    /// The verb Activity shows, with "· test" for a test event.
+    var verbLabel: String { isTest ? "\(verb) · test" : verb }
+
     /// The triggering command, only for a shell tool (a path or a host isn't one).
     var whileRunning: String? {
         guard !isNetwork, !isStorage, !isGrant, let t = target, !t.isEmpty else { return nil }

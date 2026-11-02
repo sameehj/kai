@@ -26,6 +26,11 @@ mkdir -p "$OUT/activity"
 cp "$ROOT/tests/app/activity_main.swift" "$OUT/activity/main.swift"
 swiftc -O -o "$OUT/activity/run" "$S/AuditLog.swift" "$S/ActivityRules.swift" "$OUT/activity/main.swift" || exit 1
 "$OUT/activity/run" || rc=1
+# Needs-you cards in plain words, the copy brief (CardText.swift).
+mkdir -p "$OUT/cardtext"
+cp "$ROOT/tests/app/cardtext_main.swift" "$OUT/cardtext/main.swift"
+swiftc -O -o "$OUT/cardtext/run" "$S/AuditLog.swift" "$S/CardText.swift" "$OUT/cardtext/main.swift" || exit 1
+"$OUT/cardtext/run" || rc=1
 rm -rf "$OUT"
 # The app decodes the built kai's real `kai snapshot --json` with its own
 # types, so app and CLI can't drift apart.

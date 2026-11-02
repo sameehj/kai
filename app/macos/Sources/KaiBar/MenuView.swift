@@ -23,6 +23,18 @@ struct MenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
+            if model.notificationsOff {   // Nov 2: a banner, not a footnote
+                HStack(alignment: .top, spacing: 8) {
+                    Text("Notifications are off, so you won't see when Kai stops an agent.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.soft).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Button("Turn on") { Notifier.openSettings() }.buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.lime)
+                        .help("Opens System Settings → Notifications → Kai.")
+                }
+                .padding(10)
+                .background(Theme.amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+            }
             // STEP 2c: an agent Kai's own broken hooks are blocking comes first
             ForEach(LiveCoverage.blocked(agents: AgentsModel.shared.loaded ? AgentsModel.shared.agents : []), id: \.agent) { b in
                 BlockedAgentBanner(banner: b) { Task { await AgentsModel.shared.refresh() } }
@@ -143,7 +155,7 @@ struct MenuView: View {
         VStack(alignment: .leading, spacing: 8) {
             if !grantManager.pendingPolicy.isEmpty || !grantManager.pending.isEmpty {
                 CapsLabel("Needs you")
-                ForEach(grantManager.pendingPolicy) { PendingPolicyCard(change: $0, manager: grantManager) }
+                ForEach(grantManager.pendingPolicyGroups, id: \.first!.id) { PendingPolicyCard(changes: $0, manager: grantManager) }
                 // Repeats within a session collapse into one card with a count.
                 ForEach(grantManager.pendingGroups) {
                     ApprovalCard(req: $0.rep, count: $0.count, manager: grantManager)
@@ -286,12 +298,15 @@ struct MenuView: View {
 
     /// Spec §4: orange is for problems. A protection you switched off is a
     /// state, not a problem: neutral, and "Files: off" in the protections line.
+    /// Nov 2: colours mean something. Red only for a real problem (a check
+    /// unhealthy, an agent blocked by a broken hook, Kai's own health); amber
+    /// while paused; green when agents are being checked; neutral for watching.
     private var glow: Color {
-        if alert != nil || model.health == .problem { return Theme.coral }
+        let ag = AgentsModel.shared.loaded ? AgentsModel.shared.agents : []
+        let tone = LiveCoverage.headlineTone(agents: ag, internetLevel: Int(kai_wall_observed_level("network")))
+        if tone == .problem || model.health == .problem { return Theme.coral }
         if grantManager.pauseState(nil) != Int32(KAI_PAUSE_NONE) { return Theme.amber }
-        if storage.stateWord == "unhealthy" || wall.stateWord == "unhealthy" { return Theme.amber }
-        if storage.stateWord == "blocking" || wall.stateWord == "blocking" || wall.stateWord == "watching" { return Theme.lime }
-        return Theme.soft
+        return Theme.coverage(tone)
     }
 
 
@@ -320,12 +335,6 @@ struct MenuView: View {
                 if !StorageWall.included {
                     Text(ProtectionText.filesNotIncluded).font(.system(size: 11)).foregroundStyle(Theme.muted)
                         .fixedSize(horizontal: false, vertical: true)
-                }
-                if model.notificationsOff {   // dogfood: cards you'd never see
-                    Button { Notifier.openSettings() } label: {
-                        Text("Notifications are off for Kai · Turn on ›").font(.system(size: 11)).foregroundStyle(Theme.amber)
-                    }.buttonStyle(.plain)
-                    .help("Kai can't tell you when an agent waits for you. Opens System Settings → Notifications.")
                 }
             }
             .layoutPriority(1)   // the status lines wrap rather than truncate
@@ -374,6 +383,8 @@ struct MenuView: View {
                         EventLine(event: g.event, count: g.count, plain: true).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    CopyButton(text: CardText.brief(g.event, sessionName: AgentsModel.shared.sessions
+                        .first { $0.id == g.event.session }?.name))
                     // dogfood: a kept-blocked host is one click from asking again
                     if g.event.isKeptBlocked, let r = grantManager.keptBlockedRule(g.event) {
                         Button("Unblock") { grantManager.removeRule(r) }
@@ -952,18 +963,27 @@ struct LiveCoverageList: View {
         // the heartbeat level, read live; -1 when the extension can't be confirmed
         let level = Int(kai_wall_observed_level("network"))
         let known = agents.loaded && agents.sourceError == nil
-        let rows = LiveCoverage.rows(agents: known ? agents.agents.filter { !compact || LiveCoverage.integrated.contains($0.name) } : [],
+        let rows = LiveCoverage.rows(agents: known ? agents.agents : [],
                                      internetLevel: level, protectAvailable: kai_internet_protect_available() == 1)
+        let others = known ? LiveCoverage.others(agents: agents.agents) : []
         VStack(alignment: .leading, spacing: compact ? 3 : 6) {
             CapsLabel("Coverage now")
             ForEach(rows, id: \.label) { r in
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Circle().fill(r.good ? Theme.lime : Theme.muted).frame(width: 6, height: 6)
-                    Text(r.label).font(.system(size: compact ? 12 : 13)).foregroundStyle(Theme.soft)
+                    Circle().fill(Theme.coverage(r.tone)).frame(width: 6, height: 6)
+                    Text(r.label).font(.system(size: compact ? 12 : 13)).foregroundStyle(Theme.soft).lineLimit(1)
                     Spacer(minLength: 8)
-                    Text(r.state).font(.system(size: compact ? 11 : 12)).foregroundStyle(Theme.muted)
-                        .multilineTextAlignment(.trailing).fixedSize(horizontal: false, vertical: true)
+                    Text(r.state).font(.system(size: compact ? 11 : 12))
+                        .foregroundStyle(r.tone == .problem ? Theme.coral : Theme.muted).lineLimit(1)
+                    InfoButton(text: r.info)
                 }
+            }
+            // Nov 2: agents Kai supports that aren't on this Mac: Settings only, collapsed
+            if !compact && !others.isEmpty {
+                DisclosureGroup("Other supported agents (\(others.count))") {
+                    Text(others.joined(separator: ", ")).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true).padding(.top, 2)
+                }.font(.system(size: 12)).foregroundStyle(Theme.muted)
             }
         }
     }
@@ -1003,5 +1023,43 @@ struct BlockedAgentBanner: View {
                 done()
             }
         }
+    }
+}
+
+extension Theme {
+    /// Nov 2: green checking, neutral watching, grey off or not included, red a problem.
+    static func coverage(_ t: LiveCoverage.Tone) -> Color {
+        switch t {
+        case .checking: return lime
+        case .watching: return soft
+        case .off, .notIncluded: return muted
+        case .problem: return coral
+        }
+    }
+}
+
+/// Nov 2: the copy icon on every card. Visible on hover (and always to
+/// VoiceOver, as "Copy details"); a click copies a plain-text brief and shows
+/// a checkmark for 1.5 s. The brief never holds secret values or file contents.
+struct CopyButton: View {
+    let text: String
+    @State private var copied = false
+    @State private var hover = false
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 11)).foregroundStyle(copied ? Theme.lime : Theme.muted)
+                .frame(width: 18, height: 18).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(hover || copied ? 1 : 0.35)
+        .onHover { hover = $0 }
+        .help(copied ? "Copied" : "Copy details")
+        .accessibilityLabel("Copy details")
     }
 }
