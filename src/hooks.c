@@ -291,7 +291,7 @@ static int terminal_stopped(const char *cmd, const char *hit, const char *agent,
 static void add_decision_id(char *msg, size_t n, const char *did) {
     if (!did || !*did) return;
     size_t l = strlen(msg);
-    snprintf(msg + l, n > l ? n - l : 0, " (Kai decision %s; the user can see it in Kai \xE2\x86\x92 Activity.)", did);
+    snprintf(msg + l, n > l ? n - l : 0, " (Kai decision %s, recorded in Kai \xE2\x86\x92 Activity.)", did);
 }
 
 /* NEVER-RERUN fix 5: what the agent should do after a Kai denial. */
