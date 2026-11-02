@@ -98,7 +98,7 @@ final class AppModel: ObservableObject {
     /// verified heartbeat has arrived; nil otherwise.
     func internetUnverifiedNote(networkOn: Bool) -> String? {
         guard networkOn else { return nil }
-        if kai_wall_observed_level("network") < 0 { return "Internet: on (not verified)" }
+        if kai_wall_observed_level("network") < 0 { return "Internet: unknown (Kai can't confirm the wall's mode)" }
         // G5: the wall couldn't load a policy and runs on built-in defaults (Protect).
         var buf = [CChar](repeating: 0, count: 16)
         if kai_heartbeat_field("network", "policy_state", &buf, buf.count) == 1, String(cString: buf) == "builtin" {

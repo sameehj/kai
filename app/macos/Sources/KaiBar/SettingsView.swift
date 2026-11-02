@@ -591,13 +591,13 @@ private struct NetworkPage: View {
                 // Nov 1 corrective change: Watch only in this release (Protect behind a developer flag).
                 let protect = DevFlags.internetProtect
                 let raw = model.policy?.switches["egress"] ?? "log"
-                ChoiceCards(options: [("log", "Watch", "Shows every agent connection; blocks nothing in this release.")]
+                ChoiceCards(options: [("log", "Watch", "Records the connections Kai observes; blocks nothing in this release.")]
                                      + (protect ? [("block", "Protect", "Only sites on your list are reachable.")] : [])
                                      + [("off", "Off", "Kai doesn't record agent connections.")],
                             selected: !protect && raw == "block" ? "log" : raw) { model.setSwitch("egress", $0) }
                     .disabled(model.busy || model.policy == nil)
                 if !protect {
-                    Text("Internet: Kai shows every connection your agents make. Blocking arrives in the next release.")
+                    Text("Internet: Kai records the connections it observes. Blocking arrives in the next release.")
                         .font(.system(size: 12)).foregroundStyle(Theme.soft).fixedSize(horizontal: false, vertical: true)
                 }
                 HStack(spacing: 10) {

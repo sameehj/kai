@@ -39,7 +39,7 @@ cp "$ROOT/policy/default.policy" "$H5/.kai/policy"
 sed -i '' 's/^egress  *log$/egress block/' "$H5/.kai/policy" 2>/dev/null || sed -i 's/^egress  *log$/egress block/' "$H5/.kai/policy"
 grep -q '^egress block' "$H5/.kai/policy" && pass "test policy asks for Protect (egress block)" || fail "couldn't set egress block in the test policy"
 st=$(HOME="$H5" KAI_NO_APP=1 "$REL" status 2>&1)
-case "$st" in *"blocks nothing in this release"*) pass "release status: Internet watching, blocks nothing in this release" ;;
+case "$st" in *"records the connections it observes; blocks nothing in this release"*) pass "release status: Internet watching, blocks nothing in this release" ;;
      *) fail "release status doesn't say Internet blocks nothing: $(printf '%s' "$st" | grep -i internet)" ;; esac
 case "$st" in *"your policy asks for Protect; this release only watches"*) pass "...and says the policy's Protect is ignored" ;;
      *) fail "release status doesn't say the policy's Protect is ignored" ;; esac

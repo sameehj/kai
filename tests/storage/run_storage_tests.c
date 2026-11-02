@@ -1269,10 +1269,11 @@ static void test_enforcement_labels(void) {
           "Files not included: Internet protected with the agent count");
     CHECK(!strcmp(kai_status_sentence(NI, 2, 0, 0, st, sizeof st), "Internet protected"), "...without agents");
     CHECK(!strcmp(kai_status_sentence(NI, 1, 0, 0, st, sizeof st),
-                 "Internet: watching (shows every agent connection; blocks nothing in this release)"),
+                 "Internet: watching (records the connections it observes; blocks nothing in this release)"),
           "...Internet watching, said in full (Nov 1: Watch only)");
     CHECK(!strcmp(kai_status_sentence(NI, 0, 0, 0, st, sizeof st), "Internet protection is off"), "...Internet off");
-    CHECK(!strcmp(kai_status_sentence(NI, -1, 1, 0, st, sizeof st), "Internet: not verified"), "...Internet unverified");
+    CHECK(!strcmp(kai_status_sentence(NI, -1, 1, 0, st, sizeof st), "Internet: unknown (Kai can't confirm the wall's mode)"),
+          "...Internet mode not confirmed by the extension: unknown, never watching by assumption");
     CHECK(!strcmp(kai_status_sentence(NI, 2, 1, 1, st, sizeof st), "Kai is paused"), "...paused still wins");
     CHECK(strstr(kai_status_sentence(NI, 0, 0, 0, st, sizeof st), "Files") == NULL, "...and never names Files");
 

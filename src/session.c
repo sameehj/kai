@@ -368,10 +368,10 @@ const char *kai_status_sentence(int files, int internet, int agents, int paused,
     if (!out || !n) return "";
     if (paused) snprintf(out, n, "Kai is paused");
     else if (files == KAI_FILES_NOT_INCLUDED) {   /* the header adds "Files: not included in this release" */
-        if (internet < 0) snprintf(out, n, "Internet: not verified");
+        if (internet < 0) snprintf(out, n, "Internet: unknown (Kai can't confirm the wall's mode)");
         else if (internet == 0) snprintf(out, n, "Internet protection is off");
         else if (internet == 1)
-            snprintf(out, n, "Internet: watching (shows every agent connection; blocks nothing in this release)");
+            snprintf(out, n, "Internet: watching (records the connections it observes; blocks nothing in this release)");
         else if (agents > 0)
             snprintf(out, n, "Internet protected \xC2\xB7 %d agent%s working", agents, agents == 1 ? "" : "s");
         else snprintf(out, n, "Internet protected");

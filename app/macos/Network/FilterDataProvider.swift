@@ -78,7 +78,8 @@ final class FilterDataProvider: NEFilterDataProvider {
     // guessing. Holds no flow data.
     private func writeHealth() {
         let m = engine.mode
-        let mode = m == KAI_EGRESS_BLOCK ? "block" : (m == KAI_EGRESS_LOG ? "log" : "off")
+        // the effective mode, as this extension applies it (Watch only in release)
+        let mode = m == KAI_EGRESS_BLOCK && !Engine.watchOnly ? "block" : (m == KAI_EGRESS_OFF ? "off" : "log")
         // What the wall actually did, not just its mode: outbound flows seen,
         // how many were an agent's, blocked; paused; can it write the audit log.
         // ("Enforcing" with zero agent flows is a claim, not a measurement.)
@@ -86,7 +87,8 @@ final class FilterDataProvider: NEFilterDataProvider {
         // B4: which policy this wall runs, so status can tell current from stale.
         var fp = [CChar](repeating: 0, count: 16)
         kai_policy_fingerprint(&fp, fp.count)
-        let json = "{\"wall\":\"network\",\"mode\":\"\(mode)\",\"enforcing\":\(m == KAI_EGRESS_BLOCK),"
+        let json = "{\"wall\":\"network\",\"mode\":\"\(mode)\",\"enforcing\":\(mode == "block"),"
+                 + "\"watch_only\":\(Engine.watchOnly),"
                  + "\"policy\":\"\(String(cString: fp))\",\"policy_state\":\"\(engine.policyState)\","
                  + "\"flows\":\(st.flows),\"agent_flows\":\(st.agentFlows),\"blocked\":\(st.blocked),"
                  + "\"paused\":\(st.paused),\"audit_writable\":\(st.auditWritable),\"policy_agents\":\(st.policyAgents),"
@@ -408,6 +410,9 @@ final class Engine {
 
     // MARK: the decision
 
+    /// Nov 1 corrective change: release builds watch only (libkai's release flag).
+    static let watchOnly = kai_internet_protect_available() == 0
+
     /// true = allow. host nil means we could not learn a hostname.
     func decide(host: String?, agent: String, ip: String, port: String, what: String? = nil,
                 pid: pid_t = 0, pidv: UInt32 = 0) -> Bool {
@@ -433,6 +438,8 @@ final class Engine {
         guard let p = policy else { return true }
         let mode = kai_policy_egress_mode(p)
         if mode == KAI_EGRESS_OFF { return true }
+        // Nov 1 corrective change: a release build never blocks or pauses a flow
+        // by policy, whatever the policy object says (libkai clamps it too).
         if paused { return true }   // wall paused (time-boxed, auto-resume): allow
         var why = [CChar](repeating: 0, count: 256)
         if kai_egress_endpoint_allowed(p, host, ip, Int32(port) ?? 0, &why, why.count) == 1 { return true }
@@ -440,7 +447,7 @@ final class Engine {
         // git/gh -> GitHub, npm -> its registry, pip -> PyPI: the tool opening the socket, by name
         if let h = host, pid > 0, kai_pid_tool_allows(Int32(pid), h) == 1 { return true }
         let target = host ?? "\(ip):\(port)"
-        let block = mode == KAI_EGRESS_BLOCK
+        let block = mode == KAI_EGRESS_BLOCK && !Engine.watchOnly
         // B2: telemetry and crash reports are an optional channel: denied
         // without a card, audited, and one passive hint per agent in the app.
         if let h = host, kai_host_is_telemetry(h) == 1 {
@@ -524,7 +531,9 @@ final class Engine {
     /// minutes, as "log": it is a fallback, not a decision about a site.
     func dropQUIC(agent: String, ip: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard let p = policy, kai_policy_egress_mode(p) != KAI_EGRESS_OFF, !paused else { return false }
+        // Watch only: QUIC isn't dropped either (dropping is blocking); those
+        // flows' hosts go unrecorded, which status calls unverified.
+        guard !Engine.watchOnly, let p = policy, kai_policy_egress_mode(p) != KAI_EGRESS_OFF, !paused else { return false }
         auditLocked(agent: agent, decision: "log", target: "QUIC",
                     detail: "QUIC (UDP 443) dropped so the agent uses HTTPS, where Kai can see the site")
         return true
