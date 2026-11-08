@@ -147,12 +147,13 @@ void kai_health_agent(const char *agent, const char *config, kai_health *h) {
     snprintf(needle, sizeof needle, " hook %s", agent);
     const cJSON *hooks = cJSON_GetObjectItemCaseSensitive(root, "hooks");
     const char *probe_cmd = NULL;
-    int found = 0, guarded = 1;
+    int found = 0, guarded = 0;   /* guarded: some tool hook fails closed (an earlier Kai) */
     char exe[1100] = "";
     const cJSON *ev;
     cJSON_ArrayForEach(ev, hooks) {
-        /* STEP 2c: tool hooks fail closed; prompt hooks must not (a broken Kai
-         * would brick every prompt), so they aren't counted here */
+        /* C1: no hook may fail closed. A tool hook that would stop the agent
+         * when Kai is missing (an earlier Kai's onFailure, failClosed or exit-2
+         * guard) is flagged, and doctor --fix rewrites it. */
         int blocking = !strcmp(ev->string, "PreToolUse") ||
                        !strcmp(ev->string, "beforeReadFile") || !strcmp(ev->string, "beforeShellExecution") ||
                        !strcmp(ev->string, "beforeMCPExecution");
@@ -175,7 +176,7 @@ void kai_health_agent(const char *agent, const char *config, kai_health *h) {
                                  ? (cJSON_IsString(of) && !strcmp(of->valuestring, "block")) ||
                                    strstr(c->valuestring, "exit 2") != NULL
                                  : strstr(c->valuestring, "exit 2") != NULL;
-                    if (!fc) guarded = 0;
+                    if (fc) guarded = 1;
                     if (!probe_cmd && (!strcmp(ev->string, "PreToolUse") || !strcmp(ev->string, "beforeReadFile")))
                         probe_cmd = c->valuestring;
                 }
@@ -191,14 +192,16 @@ void kai_health_agent(const char *agent, const char *config, kai_health *h) {
     }
     /* through the package's launcher: what matters is the kai it runs */
     if (!strcmp(exe, "/usr/local/libexec/kai-hook") && executable(exe) && !executable("/usr/local/bin/kai")) {
-        set_problem(h, "Kai's program is missing (%s): tool calls are blocked until Kai is repaired; prompts still "
-                       "go through", "/usr/local/bin/kai");
+        set_problem(h, "Kai's program is missing (%s): Kai's checks are off and its settings aren't protected; "
+                       "the agent keeps working unchecked until Kai is repaired", "/usr/local/bin/kai");
         cJSON_Delete(root);
         return;
     }
     if (!executable(exe)) {
-        set_problem(h, guarded ? "Kai's program is missing (%s): the agent is blocked until Kai is reinstalled"
-                               : "Kai's program is missing (%s): the agent runs unchecked",
+        set_problem(h, guarded ? "Kai's program is missing (%s): the agent is blocked until Kai is repaired "
+                                 "(these hooks are from an earlier Kai that stops the agent)"
+                               : "Kai's program is missing (%s): Kai's checks are off and its settings aren't "
+                                 "protected; the agent keeps working unchecked",
                     exe);
         cJSON_Delete(root);
         return;
@@ -216,9 +219,9 @@ void kai_health_agent(const char *agent, const char *config, kai_health *h) {
         char why[64];
         snprintf(why, sizeof why, rc < 0 ? "no answer" : "exit %d", rc);
         set_problem(h, "Kai's hook didn't block a test request (%s)", why);
-    } else if (!guarded) {
-        set_problem(h, "hooks are from an older Kai and let the agent run unchecked if Kai fails; "
-                       "run kai install %s or reopen the app", agent);
+    } else if (guarded) {
+        set_problem(h, "hooks are from an earlier Kai and stop the agent if Kai's program goes missing; "
+                       "click Repair, or run kai install %s", agent);
     }
     cJSON_Delete(root);
 }
