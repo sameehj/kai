@@ -1107,6 +1107,39 @@ static cJSON *mcp_server_named(const char *path, const char *proj, const char *n
     return copy;
 }
 
+/* C2: does this MCP call name a destination outside its own server? Only
+ * arguments whose name says "where to send" are read (url, endpoint, webhook,
+ * to, ...), never content: a page edit full of links is not a destination.
+ * A destination is foreign unless it is the server's own declared host (from
+ * .mcp.json, or a subdomain of it). 1 and the host in out when foreign. What
+ * a server sends on its own, without naming it in an argument, isn't visible
+ * here: that is the Internet wall's job. */
+static int mcp_foreign_destination(const cJSON *ti, const char *server, const char *cwd, char *out, size_t n) {
+    static const char *const keys[] = {"url", "uri", "endpoint", "webhook", "webhook_url", "webhookUrl", "callback",
+                                       "callback_url", "destination", "target_url", "to", "host", "server_url", NULL};
+    if (n) out[0] = '\0';
+    if (!cJSON_IsObject(ti)) return 0;
+    char own[256] = "";
+    kai_mcp_declared_host(server, cwd, own, sizeof own);
+    for (int i = 0; keys[i]; i++) {
+        const char *v = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(ti, keys[i]));
+        if (!v || !*v) continue;
+        const char *h = strstr(v, "://");
+        if (!h && strcmp(keys[i], "host") != 0) continue;   /* "to" may be an email or a name: only URLs count */
+        h = h ? h + 3 : v;
+        char host[256];
+        size_t k = 0;
+        while (h[k] && h[k] != '/' && h[k] != ':' && h[k] != '?' && k + 1 < sizeof host) { host[k] = h[k]; k++; }
+        host[k] = '\0';
+        if (!k) continue;
+        size_t ol = strlen(own);
+        int mine = ol && (!strcasecmp(host, own) ||
+                          (k > ol && host[k - ol - 1] == '.' && !strcasecmp(host + k - ol, own)));
+        if (!mine) { kai_strlcpy(out, host, n); return 1; }
+    }
+    return 0;
+}
+
 static void mcp_note_unpinned(const char *agent, const char *cwd, const char *server) {
     if (!agent || strcmp(agent, "claude") || !server || !*server) return;
     char *h = kai_expand_home("~/.claude.json");
@@ -1389,27 +1422,22 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             decision = KAI_ACT_NONE;   /* the user's kai allow-capture */
             kai_strlcpy(rule, "terminal_grant", sizeof rule);
         } else if (kai_mcp_parse_tool(tool, mcp_server, sizeof mcp_server, mcp_tool, sizeof mcp_tool)) {
-            /* MCP is Kai-card-only. The hook never reads grants or the approval
-             * key (an agent-tree process must not): it asks the app's control
-             * service, which runs as the signed app - the only reader of the key.
-             * The service derives the session from our audit token, honors a
-             * session grant (-> allow), or stages a Kai card (-> waiting). We
-             * NEVER return Claude's native "ask": auto mode could approve that
-             * with no Kai decision. */
-            /* Nov 1 step 3: never strand the agent. Claude Code asks in its own
-             * prompt (the same call continues on approval; in auto mode the
-             * prompt goes to the user, not the classifier). Codex can't ask:
-             * a deny that says what, why and the exact recovery. Destructive
-             * tools (delete, publish, users and roles) always ask, even on an
-             * approved server; where the agent can't put a prompt in front of
-             * the user (bypassPermissions, dontAsk, Codex) they need a grant
-             * for that exact tool. */
+            /* C2 (Nov 8 redesign): Kai asks only where it adds a boundary the
+             * agent's own approvals don't. Destructive tools (delete, publish,
+             * users and roles) ask every time, in the agent's own prompt (the
+             * same call continues on approval); where the agent can't put a
+             * prompt in front of the user (bypassPermissions, dontAsk, Codex)
+             * they need a grant for that exact tool. Every other MCP tool is
+             * the agent's own decision: Kai returns no decision and records
+             * the call, so the user's "don't ask again" holds. A policy
+             * `mcp ... block` still stops a tool. */
             kai_action a = kai_mcp_decide(p, mcp_server, mcp_tool);
             snprintf(rule, sizeof rule, "mcp:%.26s/%.26s", mcp_server, mcp_tool);
             mcp_note_unpinned(source, cwd, mcp_server);
             const char *pmode = cjstr(root, "permission_mode");
             int human_prompt = can_ask && !(pmode && (!strcmp(pmode, "bypassPermissions") || !strcmp(pmode, "dontAsk")));
             int destructive = kai_mcp_tool_destructive(mcp_tool, cjstr(ti, "status"));
+            char mcp_dest[256] = "";
             long long tnow = (long long)time(NULL);
             if (a == KAI_ACT_BLOCK) {
                 decision = KAI_ACT_BLOCK; ask = 0;
@@ -1431,28 +1459,36 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                          can_ask ? "Claude Code" : "this agent",
                          can_ask ? " in this permission mode" : "", mcp_server, mcp_tool, source,
                          can_ask ? ", or to switch Claude Code out of bypass mode" : "");
-            } else if (a == KAI_ACT_NONE || kai_cli_grant_allows("mcp", source, mcp_server, mcp_tool, cwd, tnow)) {
-                decision = KAI_ACT_NONE;                      /* policy or the user's grant allows it */
-            } else if (kai_mcp_tool_reads(mcp_tool)) {
-                /* Step 7 / rule 1: a read from a server the user configured is
-                 * ordinary: no prompt, recorded */
+            } else if (a == KAI_ACT_NONE) {
+                decision = KAI_ACT_NONE;                      /* the user's policy allows this tool */
+            } else if (mcp_foreign_destination(ti, mcp_server, cwd, mcp_dest, sizeof mcp_dest) &&
+                       !kai_cli_mcp_exact_grant(source, mcp_server, mcp_tool, tnow)) {
+                /* C2: sending to a new destination is a new permission, not
+                 * covered by using the server (nor by a whole-server grant) */
+                decision = KAI_ACT_BLOCK; ask = human_prompt;
+                if (human_prompt)
+                    snprintf(reason, sizeof reason, "%s \xC2\xB7 %s sends to %s, which isn't this server's own host, "
+                             "so Kai asks (to allow this tool without asking: kai allow-mcp %s %s --agent %s --for 1h).",
+                             mcp_server, mcp_tool, mcp_dest, mcp_server, mcp_tool, source);
+                else
+                    snprintf(reason, sizeof reason, "Kai stopped the MCP tool %s from %s: it sends to %s, which isn't "
+                             "this server's own host, and nobody can be asked here. Don't retry another way; ask the "
+                             "user to run kai allow-mcp %s %s --agent %s --for 1h, then retry.",
+                             mcp_tool, mcp_server, mcp_dest, mcp_server, mcp_tool, source);
+            } else if (kai_cli_grant_allows("mcp", source, mcp_server, mcp_tool, cwd, tnow)) {
+                decision = KAI_ACT_NONE;                      /* the user's grant allows it */
+            } else {
+                /* Step 7 / rule 1, C2: an MCP tool that isn't destructive, from
+                 * a server the user configured, is the agent's own decision: no
+                 * Kai prompt, recorded */
                 decision = KAI_ACT_NONE;
                 char rd[300];
-                snprintf(rd, sizeof rd, "MCP read tool %s from %s: allowed and recorded (read tools aren't asked about)",
+                snprintf(rd, sizeof rd, kai_mcp_tool_reads(mcp_tool)
+                             ? "MCP read tool %s from %s: allowed and recorded (read tools aren't asked about)"
+                             : "MCP tool %s from %s: left to the agent's own approval, and recorded",
                          mcp_tool, mcp_server);
                 kai_audit_entry re = {source, "PreToolUse", "log", rule, rd, tool, NULL, NULL, session, cwd, NULL, NULL};
                 kai_audit_write(&re);
-            } else if (human_prompt) {
-                decision = KAI_ACT_BLOCK; ask = 1;
-                snprintf(reason, sizeof reason, "%s \xC2\xB7 %s: MCP tools need your go-ahead "
-                         "(to skip this prompt: kai allow-mcp %s %s --agent %s --for 1h, or the whole server: "
-                         "kai allow-mcp %s --agent %s --for 1h).", mcp_server, mcp_tool, mcp_server, mcp_tool, source,
-                         mcp_server, source);
-            } else {
-                decision = KAI_ACT_BLOCK; ask = 0;
-                snprintf(reason, sizeof reason, "Kai stopped the MCP tool %s from %s: MCP tools need the user's "
-                         "go-ahead. Don't retry another way; ask the user to run: kai allow-mcp %s --agent %s --for 1h, "
-                         "then retry.", mcp_tool, mcp_server, mcp_server, source);
             }
             subject = strdup(mcp_tool);
         } else if (file_op && first_path &&
