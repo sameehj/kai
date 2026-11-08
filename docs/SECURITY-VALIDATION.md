@@ -117,7 +117,7 @@ A recognized secret in an MCP tool's arguments is stopped. Ordinary data passed 
 | Attempt | Without Kai (replayed) | With Kai's hooks | Meant to be closed by |
 |---|---|---|---|
 | Pass a token to an MCP tool | not replayed | ✅ stopped | Hooks |
-| Send ordinary project data out through an MCP tool | not replayed | ✅ stopped | Hooks: an MCP tool whose server has no rule waits for the user in Claude Code's own prompt (denied with the recovery step where no prompt can reach the user, and in Codex) until allowed (kai allow-mcp); once allowed, what it sends isn't checked beyond secrets. Destructive tools ask every time. The Internet wall only watches in this release |
+| Send ordinary project data out through an MCP tool | not replayed | ✅ stopped | Hooks (C2): an MCP call whose url, endpoint or other destination argument names a host that isn't the server's own asks in Claude Code's prompt (denied with the recovery where no prompt can reach the user, and in Codex); a whole-server grant doesn't cover it. Other MCP edits are left to the agent's own approval; destructive tools ask every time. What a server sends without naming it in an argument isn't visible to hooks. The Internet wall only watches in this release |
 
 ### A secret goes into the prompt sent to the model: BYPASSABLE
 

