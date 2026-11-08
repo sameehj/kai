@@ -18,8 +18,9 @@
 #   7b-4  Watch records, doesn't prevent: an agent's and its subprocess's
 #         HTTPS connections succeed and are recorded
 #   7b-5  audit log privacy: files 0600, no fixture value, no prompt text
-#   2c    with /usr/local/bin/kai deleted, prompts still go through and tool
-#         calls are denied naming Repair (asks for your sudo password once;
+#   2c    with /usr/local/bin/kai deleted (C1), prompts and tool calls go
+#         through, with a warning that Kai's checks are off and its settings
+#         aren't protected, naming Repair (asks for your sudo password once;
 #         kai is always put back)
 # 7b-3 (approval prompts) is interactive and isn't in this script.
 set -u
@@ -138,7 +139,7 @@ echo "  fixture value occurrences: $(grep -c fake-123 "$LOG")"
 echo "  prompt records holding prompt text (expect none):"
 /usr/bin/python3 -I "$W/recs.py" prompts < "$LOG"
 
-echo; echo "=== 2c: Kai's program deleted: agents aren't bricked, tool calls denied naming Repair"
+echo; echo "=== 2c (C1): Kai's program deleted: the agent keeps working; warned that checks are off and settings aren't protected"
 echo "(sudo moves /usr/local/bin/kai aside and puts it back at the end)"
 sudo -v || { echo "no sudo: 2c skipped"; rm -rf "$W"; exit 1; }
 restore() { [ -e "$K.7b-aside" ] && sudo mv "$K.7b-aside" "$K"; }
@@ -148,8 +149,12 @@ ls -la "$K" 2>&1 | head -1
 D=$(mktemp -d /tmp/kai-2c.XXXXXX); cd "$D" || exit 1
 echo "-- a prompt with no tool call (should get an answer):"
 lim 180 "$CLAUDE" -p "Reply with the single word PONG." 2>&1 | tail -3 | cut -c1-300
-echo "-- a tool call (should be denied naming Repair; the agent should not retry):"
-lim 180 "$CLAUDE" -p "Make exactly one Bash tool call: echo kai-2c-probe . If it is refused, don't retry; reply with REFUSAL: and the refusal text." --allowedTools Bash 2>&1 | tail -4 | cut -c1-300
+echo "-- a tool call (should run: expect kai-2c-probe in the reply; Claude Code's own permission applies):"
+lim 180 "$CLAUDE" -p "Make exactly one Bash tool call: echo kai-2c-probe . Reply with its output, or REFUSAL: and the refusal text." --allowedTools Bash 2>&1 | tail -4 | cut -c1-300
+echo "-- counted as unchecked (expect lines with \"decision\":\"unchecked\"):"
+tail -3 "$HOME/.kai/unchecked.log" 2>/dev/null
+echo "-- kai-hook --status (expect: missing, settings aren't protected):"
+/usr/local/libexec/kai-hook --status
 echo "-- the launcher directly, per agent:"
 printf '{"hook_event_name":"PreToolUse","tool_name":"Bash"}' | /usr/local/libexec/kai-hook hook claude; echo " rc=$?"
 printf '{"hook_event_name":"UserPromptSubmit","prompt":"x"}' | /usr/local/libexec/kai-hook hook claude; echo " rc=$?"

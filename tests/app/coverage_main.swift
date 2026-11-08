@@ -51,12 +51,12 @@ check(LiveCoverage.headlineTone(agents: [agent("claude", "failing")], internetLe
 
 print("blocked banner (STEP 2c)")
 var broken = AgentRow(name: "claude"); broken.hooks = "failing"; broken.detected = true
-broken.detail = "Kai's program is missing (/usr/local/bin/kai): the agent is blocked until Kai is reinstalled"
+broken.detail = "Kai's program is missing (/usr/local/bin/kai): Kai's checks are off and its settings aren't protected; the agent keeps working unchecked"
 var fine = AgentRow(name: "codex"); fine.hooks = "installed"
 var odd = AgentRow(name: "cursor"); odd.hooks = "failing"; odd.detail = "Kai's hook didn't block a test request (exit 1)"
 let banners = LiveCoverage.blocked(agents: [broken, fine, odd])
 check(banners.map(\.agent) == ["Claude Code", "Cursor"], "every agent whose checks can't run gets a banner (\(banners.map(\.agent)))")
-check(banners.first?.title == "Claude Code is blocked: Kai's checks can't run", "the banner names the agent and the cause")
+check(banners.first?.title == "Kai's checks are off for Claude Code", "the banner names the agent and the cause")
 check(banners.first?.actions == ["Repair", "Turn off checks for Claude Code"], "...with Repair and Turn off checks")
 check(LiveCoverage.blocked(agents: [fine]).isEmpty, "healthy agents: no banner")
 

@@ -922,8 +922,8 @@
       "scenario": "tamper",
       "attempt": "Kai's program is missing or crashes (Claude Code, Codex)",
       "special": "missing-binary",
-      "hooks": "stopped",
-      "closed_by": "Hooks: Kai installs Claude Code and Codex hooks fail-closed (exit 2 when Kai can't answer)"
+      "hooks": "gets through",
+      "closed_by": "By design (C1): a broken Kai never stops the agent; it says its checks are off and its settings aren't protected. Protection that outlives Kai needs a separate running enforcer (storage wall, planned)"
     },
     {
       "id": "kai-missing-cursor",
@@ -931,8 +931,8 @@
       "scenario": "tamper",
       "attempt": "Kai's program is missing or crashes (Cursor)",
       "special": "cursor-fail-closed",
-      "hooks": "stopped",
-      "closed_by": "Hooks: Kai installs Cursor hooks with failClosed"
+      "hooks": "gets through",
+      "closed_by": "By design (C1): a broken Kai never stops Cursor's agent (no failClosed); Cursor's own approval applies. Protection that outlives Kai needs a separate running enforcer (storage wall, planned)"
     },
     {
       "id": "key-letter-case",

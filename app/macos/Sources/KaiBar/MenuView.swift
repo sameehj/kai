@@ -989,7 +989,7 @@ struct LiveCoverageList: View {
     }
 }
 
-/// STEP 2c: an agent Kai's broken hooks are blocking, at the top of the popover.
+/// STEP 2c / C1: an agent whose Kai hooks can't run (it keeps working unchecked), at the top of the popover.
 /// Repair rewrites the hooks to the installed Kai (kai doctor --fix); Turn off
 /// removes Kai's hooks for that agent. Both run the installed CLI: no Terminal.
 struct BlockedAgentBanner: View {
