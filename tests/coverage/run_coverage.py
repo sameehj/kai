@@ -261,9 +261,10 @@ BYPASS = {
                    "Closed only by OS-level Files protection (not in Preview 1).",
     "upload": "Uploads by a script or an unrecognized tool, or to an allowed host, aren't recognized.",
     "shell_read": "Paths built at run time (variables, globs, base64) aren't recognized; see ESCAPES.md.",
-    "mcp": "By design (C2): a routine tool call is left to the agent's own approval and recorded. Kai asks "
-           "for a destructive tool, or one whose destination argument names a host other than the server's. "
-           "Cursor: its MCP event doesn't name the server, so Kai can't tell which server a call is for.",
+    "mcp": "By design (C2), Claude Code / Codex: a routine tool call is left to the agent's own approval and "
+           "recorded; Kai asks for a destructive tool, or one whose destination argument names a host other "
+           "than the server's. Cursor: its MCP event names no server, so Kai only scans the arguments for "
+           "secrets; the destructive and foreign-destination asks don't apply.",
     "file_write": "A script or shell command that writes the file isn't a file-tool write.",
     "web_fetch": "Only the URL is checked; by default fetches are allowed (on_fetch allow). Connections made "
                  "any other way aren't governed.",
