@@ -325,4 +325,4 @@ Run on a Mac with the network wall in **Protect** (a developer build until Prote
 - **Found while building, not yet built:**
   - When Kai doesn't deny, it answers Cursor with an explicit `"permission":"allow"` (`hooks.c`, end of `hook_cursor`). If Cursor treats that as approval, Kai is auto-approving every Cursor command. Needs a live check at a pinned Cursor version.
   - The credential, destructive-Git and new-remote gaps in §2.9.
-  - **Nov 12 review of `50fa3c7`:** the shared MCP note in `COVERAGE.md` reads as if Kai asks for destructive or foreign-destination MCP calls in every agent. In Cursor it doesn't: Cursor's MCP event names no server, and Kai only scans the arguments for secrets there. The Cursor rows should say so.
+  - **Nov 12 review of `50fa3c7`:** the shared MCP note in `COVERAGE.md` reads as if Kai asks for destructive or foreign-destination MCP calls in every agent. In Cursor it doesn't: Cursor's MCP event names no server, and Kai only scans the arguments for secrets there. The Cursor rows should say so. Fixed in `d49181a`.
