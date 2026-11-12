@@ -1,0 +1,30 @@
+---
+layout: post
+title: "Why ‘don’t ask again’ kept asking again"
+description: Kai added another approval system to an agent that already had one. Here is where the repeated prompts came from and what the redesign changes.
+category: Kai field notes
+author: Sameeh Jubran
+date: 2026-11-12 20:11:00 +0200
+---
+
+I clicked “don't ask again” in Claude Code and got asked again. The second prompt was Kai's doing. I had built an approval system next to the agent's approval system, and the two did not share a definition of “allowed.”
+
+The symptom appeared during a small WordPress edit. Claude Code had permission to use the MCP server, but Kai's hook returned Claude Code's native `ask` for each non-read MCP tool without a separate Kai grant. That hook decision could force another prompt even after Claude Code's own “Yes, and don't ask again.” To stop it, I needed a Kai grant from Terminal, such as `kai allow-mcp` for an hour. A permission that felt durable in one interface expired in the other. The [November incident record](https://github.com/sameehj/kai/blob/master/docs/security/FRICTION-POSTMORTEM.md) and [Preview 2 release notes](https://github.com/sameehj/kai/blob/master/docs/release/0.2.0-preview.2.md) describe the behavior we saw.
+
+The network wall added a different set of approvals. The WordPress MCP server needed the npm registry to start, the site to edit pages, and GitHub over SSH for Git work. Allowing one did not allow the others. At one point I approved the site “always,” used it, and then saw it blocked again. The rule was tied to a verified signing identity. For the later connection, that identity was absent, so the lookup skipped the rule. The record does not establish why identity was unavailable. It does establish that a rule I believed I had made permanent did not apply, without a clear explanation at the moment of failure.
+
+The wall's blocks were also hard to locate. A held or dropped connection surfaced to the agent as a stall or a connection error. The agent could reasonably report that the site was down. The actual decision lived in a Kai card or log, away from the failed tool call. An MCP denial said to approve and retry, but approval did not resume the original action. We were asking a person to diagnose three separate systems while trying to change a price.
+
+The redesign starts by giving routine work back to the agent's own controls. A configured MCP server doing a normal edit should follow the agent's permission mode and the user's choices there. Kai's hook has a useful job when a tool call names a protected secret, a destructive action or a destination outside the server's declared host. It can stop a supported call before it runs and explain why. It does not need to manufacture another approval for every page edit. [PR #12](https://github.com/sameehj/kai/pull/12) implements that narrower behavior for non-destructive MCP calls and keeps checks for destructive tools and explicit foreign destinations. It is branch work with passing CI, not a change in the latest installer.
+
+That distinction also matters across agents. Claude Code hooks can return a native ask, and we tested the branch's hook behavior in its suites. Cursor's hook response path is different; the PR itself flags an unresolved live question about an explicit allow response. I cannot claim that Cursor now defers exactly as Claude Code does. We need a pinned live check before saying so.
+
+Some checks in a hook are valuable even though the hook is inside the agent's tool path. It can recognize a supported request to read a key file or edit agent settings, apply a shared policy and give a legible denial. But a hook does not see every file open or network connection made by a script the agent starts, or by an editor extension acting on its own. Those require an independently enforced operating-system boundary if we want to make a prevention claim. Preview 2's Internet wall is set to Watch, and its planned Files boundary is not in the public package. The [coverage matrix](https://github.com/sameehj/kai/blob/master/docs/COVERAGE.md) lists the supported calls and the known ways around them.
+
+This is why I no longer like “fail closed” as a slogan. In the older launcher, a missing `kai` executable could stop every agent tool call. It made the session unusable while the checks themselves were unavailable. PR #12 changes the launcher so work can continue with a warning: Kai's checks are off, and its settings are not protected by Kai in that state. If another independently running boundary were active, we could describe what that boundary still enforced. We cannot infer it from a broken hook. The installed-release replay of this failure remains an open validation step for the branch.
+
+The next design work is about making each rare interruption accountable. A block should identify whether it came from the agent, Kai's hook, Kai's wall or macOS; show the target and rule; and say what will actually let the task resume. A task-scoped approval should survive the next day and avoid turning every host into a new decision. These are proposals in the [redesign report](https://github.com/sameehj/kai/pull/12), not claims about the current release. Secret-read-followed-by-network activity may be a useful signal for an extra check, but a missing observed secret read does not prove that a transfer is safe: hooks can miss reads, and a destination alone says little about content.
+
+The test I now care about is simple to experience and difficult to fake: grant an ordinary task once, finish it, and return tomorrow without another Kai prompt for the same scope. If Kai stops something, I should know exactly what stopped it before I start guessing at the network.
+
+*Previous: [I built an AI security tool. Then I uninstalled it to get work done.]({{ '/blog/i-built-an-ai-security-tool-then-uninstalled-it-to-get-work-done/' | relative_url }}). Next: [Let AI agents use your SSH keys without handing them the keys]({{ '/blog/let-ai-agents-use-your-ssh-keys-without-handing-them-the-keys/' | relative_url }}).*
