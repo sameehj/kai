@@ -1,6 +1,6 @@
 # Kai: protection you can leave on
 
-*Redesign proposal, November 8, 2026. Written in response to the author's uninstall feedback (Nov 1–3 incidents). Based on a read of `master` at `8e1bfa3` (the code shipped as 0.2.0-preview.2). Approved in direction on Nov 8; C1 and C2 are built on a branch (see §8). Nothing has run on a Mac yet.*
+*Redesign proposal, November 8, 2026. Written in response to the author's uninstall feedback (Nov 1–3 incidents). Based on a read of `master` at `8e1bfa3` (the code shipped as 0.2.0-preview.2). Approved in direction on Nov 8; C1 and C2 are built and pass every suite on macOS (PR #12, see §8); the live release check and the network changes haven't run yet.*
 
 **Evidence labels.** **Code**: read in the source at `8e1bfa3`, with file and line. **Record**: from a document in the repo (`FRICTION-POSTMORTEM.md`, Preview 2 release notes). **Inference**: my reasoning, not yet checked on a Mac.
 
@@ -310,7 +310,7 @@ Run on a Mac with the network wall in **Protect** (a developer build until Prote
 
 1. **Why the identity was empty on Nov 1** (RC2): unsigned `node` vs broken lineage. One live check with `kai sessions` and a `codesign -dv` of the Claude Code process settles it.
 2. **Claude Code's support** for PostToolUse added context on Bash results, and the exact behaviour of `onFailure` when the command is missing. Needs a pinned-version test before C1 and C4 can claim anything.
-3. **Whether moving the app to the Trash in Finder** deactivates the extension on macOS 14 and 15 without a restart. C5 doesn't rely on it either way.
+3. **Moving the app to the Trash in Finder** deactivates the extension but doesn't remove it until a restart. Seen Nov 12 on macOS 14.3: after `kai uninstall all`, the CLI removal and trashing the app, `systemextensionsctl` showed `[terminated waiting to uninstall on reboot]`. Before the app was trashed it stayed `[activated enabled]`, still running. C5's uninstall report must say "restart needed". macOS 15 not yet seen.
 4. **Decided Nov 8: fail open around a missing `kai` (C1)**, with the correction that a broken Kai makes no promise about its settings. "Every tool call stops" becomes "Kai is off and says so". Settings protection in that state waits for a separate running enforcer (Layer 1).
 5. **Ordering:** C1 and C2 are small and fix the Nov 2 trap and the double approvals now, with no change to the walls. C3–C5 are the next release. Protect comes back only when R1–R8 pass.
 
@@ -325,3 +325,4 @@ Run on a Mac with the network wall in **Protect** (a developer build until Prote
 - **Found while building, not yet built:**
   - When Kai doesn't deny, it answers Cursor with an explicit `"permission":"allow"` (`hooks.c`, end of `hook_cursor`). If Cursor treats that as approval, Kai is auto-approving every Cursor command. Needs a live check at a pinned Cursor version.
   - The credential, destructive-Git and new-remote gaps in §2.9.
+  - **Nov 12 review of `50fa3c7`:** the shared MCP note in `COVERAGE.md` reads as if Kai asks for destructive or foreign-destination MCP calls in every agent. In Cursor it doesn't: Cursor's MCP event names no server, and Kai only scans the arguments for secrets there. The Cursor rows should say so.
