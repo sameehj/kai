@@ -113,11 +113,20 @@ static cJSON *load_clean(const char *path) {
  */
 /* STEP 2c: hooks run a stable, installed program, never a build or a source
  * checkout: the package's launcher (/usr/local/libexec/kai-hook, which runs
- * /usr/local/bin/kai and, if kai is missing, lets prompts through with a
- * warning and denies tool calls naming Repair), or the running kai when it is
- * installed. The path is always quoted (a space split it once and bricked
- * Claude Code). Tests set KAI_TEST_ALLOW_DEV_HOOK in dev builds only. */
+ * /usr/local/bin/kai), or the running kai when it is installed. The path is
+ * always quoted (a space split it once and bricked Claude Code). Tests set
+ * KAI_TEST_ALLOW_DEV_HOOK in dev builds only.
+ *
+ * C1 (Nov 8 redesign): a missing or broken Kai never stops the agent. The
+ * launcher lets prompts and tool calls through and says Kai's checks are off
+ * and its settings aren't protected; no hook carries a fail-closed setting.
+ * Hooks never point into an app bundle: trashing the app must not leave them
+ * calling a missing program. */
 #define KAI_HOOK_LAUNCHER "/usr/local/libexec/kai-hook"
+
+static int in_app_bundle(const char *exe) {
+    return strstr(exe, ".app/Contents/") != NULL;
+}
 
 static int dev_path(const char *exe) {
     if (strstr(exe, "/build/") || strstr(exe, "/DerivedData/") || strstr(exe, "/.build/") ||
@@ -153,6 +162,13 @@ static const char *hook_target(void) {
 #ifdef KAI_RELEASE
     if (access(KAI_HOOK_LAUNCHER, X_OK) == 0) t = KAI_HOOK_LAUNCHER;
 #endif
+    if (t == exe && in_app_bundle(exe) && !allow_dev) {
+        fprintf(stderr, "kai install: %s is inside an app. Hooks must not depend on the app: moving it to the Trash "
+                        "would leave them calling a missing program.\n"
+                        "Reinstall the Kai package to restore its hook launcher (" KAI_HOOK_LAUNCHER "), then repair "
+                        "again.\n", exe);
+        return NULL;
+    }
     size_t o = 0;
     out[o++] = '\'';
     for (const char *c = t; *c && o + 5 < sizeof out; c++) {
@@ -164,37 +180,23 @@ static const char *hook_target(void) {
     return out;
 }
 
-/* The hook command. Only Codex keeps a shell guard (it has no fail-closed
- * option), and only on tool hooks: a missing Kai becomes exit 2 there.
- * Claude Code's tool hooks use onFailure "block"; Cursor's failClosed. Prompt
- * and lifecycle hooks are never guarded: a broken Kai must not brick a session
- * (exit 2 on UserPromptSubmit blocked every prompt; on Stop it traps the agent). */
-static void hook_command(char *cmd, size_t n, const char *exe, const char *agent, int guard,
-                         const char *settings) {
-    if (!guard) {
-        snprintf(cmd, n, "%s hook %s", exe, agent);
-        return;
-    }
-    snprintf(cmd, n,
-             "%s hook %s || { echo \"Kai couldn't check this: its program is missing or failed. "
-             "Reinstall Kai, or remove Kai's entries from %s.\" >&2; exit 2; }",
-             exe, agent, settings);
+/* The hook command: the program and the agent, nothing else. C1: no
+ * fail-closed guard on any event (Claude Code onFailure, Cursor failClosed,
+ * the Codex exit-2 wrapper are gone): a broken Kai is reported, not enforced
+ * by stopping the agent. */
+static void hook_command(char *cmd, size_t n, const char *exe, const char *agent) {
+    snprintf(cmd, n, "%s hook %s", exe, agent);
 }
 
-static int fails_closed(const char *event) {   /* tool hooks only (STEP 2c) */
-    return !strcmp(event, "PreToolUse");
-}
-
-static cJSON *claude_hook_entry(const char *matcher, const char *exe, int guard) {
+static cJSON *claude_hook_entry(const char *matcher, const char *exe) {
     cJSON *group = cJSON_CreateObject();
     if (matcher) cJSON_AddStringToObject(group, "matcher", matcher);
     cJSON *arr = cJSON_CreateArray();
     cJSON *h = cJSON_CreateObject();
     cJSON_AddStringToObject(h, "type", "command");
     char cmd[1600];
-    hook_command(cmd, sizeof cmd, exe, "claude", 0, "~/.claude/settings.json");
+    hook_command(cmd, sizeof cmd, exe, "claude");
     cJSON_AddStringToObject(h, "command", cmd);
-    if (guard) cJSON_AddStringToObject(h, "onFailure", "block");   /* Claude Code 2.1.295+ */
     cJSON_AddBoolToObject(h, "_kai", 1);
     cJSON_AddItemToArray(arr, h);
     cJSON_AddItemToObject(group, "hooks", arr);
@@ -209,7 +211,7 @@ static void ensure_event(cJSON *hooks, const char *event, const char *matcher,
         list = cJSON_CreateArray();
         cJSON_AddItemToObject(hooks, event, list);
     }
-    cJSON_AddItemToArray(list, claude_hook_entry(matcher, exe, fails_closed(event)));
+    cJSON_AddItemToArray(list, claude_hook_entry(matcher, exe));
 }
 
 /* NEVER-RERUN fix 5: a short note in each agent's own instructions file, so a
@@ -283,25 +285,6 @@ static void agent_instructions(const char *agent, int add) {
     free(path);
 }
 
-/* onFailure needs Claude Code 2.1.295 or later. 1 older, 0 new enough or unknown. */
-static int claude_too_old(char *ver, size_t n) {
-    if (n) ver[0] = '\0';
-    char *local = kai_expand_home("~/.claude/local/claude");
-    char cmd[PATH_MAX + 64];
-    snprintf(cmd, sizeof cmd, "claude --version 2>/dev/null || '%s' --version 2>/dev/null", local ? local : "");
-    free(local);
-    FILE *f = popen(cmd, "r");
-    if (!f) return 0;
-    char line[128] = "";
-    if (!fgets(line, sizeof line, f)) line[0] = '\0';
-    pclose(f);
-    int a = 0, b = 0, c = 0;
-    if (sscanf(line, "%d.%d.%d", &a, &b, &c) != 3) return 0;
-    snprintf(ver, n, "%d.%d.%d", a, b, c);
-    long v = a * 1000000L + b * 1000L + c, need = 2 * 1000000L + 1 * 1000L + 295;
-    return v < need;
-}
-
 static int install_claude(const char *exe) {
     char *path = kai_expand_home("~/.claude/settings.json");
     if (!settings_ok(path)) { free(path); return 3; }
@@ -324,17 +307,8 @@ static int install_claude(const char *exe) {
     free(out); cJSON_Delete(root);
     if (rc == 0) printf("Installed Kai hooks into %s (backup: %s.kai-bak)\n", path, path);
     else fprintf(stderr, "Failed to write %s\n", path);
-    char ver[32];
-    char *marker = NULL;
-    if (asprintf(&marker, "%s/claude-onfailure-unsupported", kai_home()) < 0) marker = NULL;
-    if (rc == 0 && claude_too_old(ver, sizeof ver)) {
-        printf("Claude Code %s is older than 2.1.295: tool checks may fail open if Kai is missing. "
-               "Update Claude Code.\n", ver);
-        if (marker) { FILE *m = fopen(marker, "w"); if (m) { fprintf(m, "%s\n", ver); fclose(m); } }
-        kai_audit("kai", "install", "note", "claude_onfailure",
-                  "Claude Code is older than 2.1.295: tool checks may fail open if Kai is missing");
-    } else if (marker) unlink(marker);
-    free(marker);
+    char *marker = NULL;   /* left by an earlier Kai's onFailure version check */
+    if (asprintf(&marker, "%s/claude-onfailure-unsupported", kai_home()) >= 0) { unlink(marker); free(marker); }
     free(path);
     return rc;
 }
@@ -433,14 +407,15 @@ int kai_codex_analytics_off(int set) {
 }
 
 /* ----- Cursor: ~/.cursor/hooks.json -----
- * { version:1, hooks:{ <event>:[ {command:"kai hook cursor", failClosed:true, _kai:true} ] } }
+ * { version:1, hooks:{ <event>:[ {command:"kai hook cursor", _kai:true} ] } }
+ * C1: no failClosed: a broken Kai never stops Cursor's agent.
  */
 static cJSON *cursor_hook_entry(const char *exe, const char *matcher, int tool) {
+    (void)tool;
     cJSON *h = cJSON_CreateObject();
     char cmd[1300];
     snprintf(cmd, sizeof cmd, "%s hook cursor", exe);
     cJSON_AddStringToObject(h, "command", cmd);
-    if (tool) cJSON_AddBoolToObject(h, "failClosed", 1);   /* tool hooks only: prompts never brick */
     if (matcher) cJSON_AddStringToObject(h, "matcher", matcher);
     cJSON_AddBoolToObject(h, "_kai", 1);
     return h;
@@ -663,7 +638,7 @@ static int install_codex(const char *exe) {
     const char *events[] = {"PreToolUse", "PostToolUse", "UserPromptSubmit"};
     char cmd[1600];
     for (size_t i = 0; i < sizeof events / sizeof events[0]; i++) {
-        hook_command(cmd, sizeof cmd, exe, "codex", fails_closed(events[i]), path);
+        hook_command(cmd, sizeof cmd, exe, "codex");
         cJSON *list = cJSON_GetObjectItemCaseSensitive(hooks, events[i]);
         if (!cJSON_IsArray(list)) {
             list = cJSON_CreateArray();

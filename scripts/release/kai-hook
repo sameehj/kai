@@ -1,28 +1,68 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
 #
-# Kai's hook launcher (STEP 2c). Agents' hooks call this stable path, which the
-# package installs at /usr/local/libexec/kai-hook:  kai-hook hook <agent>
-# It runs Kai. If Kai's program is missing, a broken Kai must never brick the
-# agent: prompts go through with a warning, tool calls are denied with a
-# message that names the Repair button, and other events pass silently.
+# Kai's hook launcher. Agents' hooks call this stable path, which the package
+# installs at /usr/local/libexec/kai-hook:  kai-hook hook <agent>
+# It runs Kai.
+#
+# C1 (Nov 8 redesign): if Kai's program is missing, a broken Kai never stops
+# the agent. Prompts and tool calls go through, and the user is told plainly
+# that Kai's checks are off and its settings aren't protected: nothing still
+# running enforces them, so nothing here claims to. Each unchecked call is
+# counted in <kai home>/unchecked.log (agent, event, time; never the input).
+#
+#   kai-hook --status    what the hooks run and whether Kai's program is there
 K=/usr/local/bin/kai
+KH="${KAI_HOME:-$HOME/.kai}"
+
+if [ "${1:-}" = --status ]; then
+    if [ -x "$K" ]; then echo "Kai's program: $K ($("$K" version 2>/dev/null | head -1))"
+    else echo "Kai's program: missing ($K). Kai's checks are off and its settings aren't protected."; fi
+    for f in "$HOME/.claude/settings.json" "${CODEX_HOME:-$HOME/.codex}/hooks.json" "$HOME/.cursor/hooks.json"; do
+        [ -f "$f" ] || continue
+        if grep -q 'kai-hook' "$f" 2>/dev/null; then echo "Hooks in $f: run this launcher"
+        elif grep -q ' hook \(claude\|codex\|cursor\)' "$f" 2>/dev/null; then echo "Hooks in $f: run another Kai program"
+        fi
+    done
+    [ -x "$K" ] || echo "To repair: open Kai and click Repair, or reinstall the Kai package."
+    exit 0
+fi
+
 [ "${1:-}" = hook ] && shift
 agent="${1:-claude}"
 if [ -x "$K" ]; then exec "$K" hook "$agent"; fi
 
 ev=$(cat)
-MSG="Kai's checks can't run: its program is missing. Open Kai and click Repair (or run kai doctor --fix in your own terminal)."
+MSG="Kai's checks are off: its program is missing, so this wasn't checked and Kai's settings aren't protected. Open Kai and click Repair, or reinstall the Kai package."
+event=other
 case "$ev" in
-    *'"UserPromptSubmit"'*|*'"beforeSubmitPrompt"'*)
-        if [ "$agent" = cursor ]; then printf '{"continue":true}\n'
-        else printf '{"systemMessage":"%s This prompt was not checked."}\n' "$MSG"; fi
-        exit 0 ;;
-    *'"PreToolUse"'*)
-        printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s Don'\''t retry another way; ask the user."}}\n' "$MSG"
-        exit 0 ;;
-    *'"beforeShellExecution"'*|*'"beforeMCPExecution"'*|*'"beforeReadFile"'*)
-        printf '{"permission":"deny","user_message":"%s","agent_message":"%s Don'\''t retry another way; ask the user."}\n' "$MSG" "$MSG"
-        exit 0 ;;
+    *'"UserPromptSubmit"'*|*'"beforeSubmitPrompt"'*) event=prompt ;;
+    *'"PreToolUse"'*) event=tool ;;
+    *'"beforeShellExecution"'*|*'"beforeMCPExecution"'*) event=cursor_tool ;;
+    *'"beforeReadFile"'*) event=cursor_read ;;
+esac
+[ "$event" = other ] && exit 0   # lifecycle events: nothing to say, never trap the session
+
+# Count it (no input recorded). Best effort: a failure here changes nothing.
+if mkdir -p "$KH" 2>/dev/null; then
+    printf '{"ts":"%s","agent":"%s","event":"%s","decision":"unchecked"}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$agent" "$event" >> "$KH/unchecked.log" 2>/dev/null
+fi
+
+# Say it at most once every 10 minutes per user, so a long task isn't flooded.
+mark="${TMPDIR:-/tmp}/kai-hook-warned-$(id -u)"
+say=1
+if [ -f "$mark" ] && [ -n "$(find "$mark" -mmin -10 2>/dev/null)" ]; then say=0; fi
+[ $say -eq 1 ] && : > "$mark" 2>/dev/null
+
+case "$agent:$event" in
+    cursor:prompt) printf '{"continue":true}\n' ;;
+    cursor:cursor_read) printf '{"permission":"allow"}\n' ;;
+    cursor:cursor_tool)
+        # Cursor's own approval decides: "ask" never grants more than the user does.
+        printf '{"permission":"ask","user_message":"%s","agent_message":"%s"}\n' "$MSG" "$MSG" ;;
+    codex:*) [ $say -eq 1 ] && printf '%s\n' "$MSG" >&2 ;;   # no decision: Codex's own approvals apply
+    *)  # Claude Code: no decision, so its own permission rules apply
+        [ $say -eq 1 ] && printf '{"systemMessage":"%s"}\n' "$MSG" ;;
 esac
 exit 0

@@ -83,8 +83,9 @@ def outcome(event):
 def missing_binary():
     """Install Claude Code hooks pointing at a copy of kai, delete the copy, then
     run the installed PreToolUse hook command. Claude Code blocks the tool when
-    the hook exits 2 or answers deny, and (2.1.295+) when the hook fails and its
-    entry says onFailure "block" (STEP 2c); any other failure lets the tool run."""
+    the hook exits 2 or answers deny, or when the hook fails and its entry says
+    onFailure "block"; any other failure lets the tool run. C1: Kai installs no
+    fail-closed setting, so this is expected to get through, by design."""
     h = tempfile.mkdtemp()
     os.makedirs(os.path.join(h, ".claude"))
     exe = os.path.join(h, "bin", "kai")
@@ -107,8 +108,8 @@ def missing_binary():
 
 def cursor_fail_closed():
     """Cursor runs the action when a hook fails unless the hook says failClosed.
-    STEP 2c: every tool hook is failClosed; the prompt hook isn't (a broken Kai
-    must not block prompts)."""
+    C1: no Kai hook is failClosed (a broken Kai never stops the agent), so this
+    reports "stopped" only if some tool hook still fails closed."""
     h = tempfile.mkdtemp()
     os.makedirs(os.path.join(h, ".cursor"))
     # a dev build in the checkout on purpose (STEP 2c's guard refuses that otherwise)
@@ -119,8 +120,7 @@ def cursor_fail_closed():
         entries = [x for v in cfg.get("hooks", {}).values() for x in v if " hook cursor" in x.get("command", "")]
         tools = {ev: x for ev, v in cfg.get("hooks", {}).items() for x in v
                  if " hook cursor" in x.get("command", "")}
-        ok = bool(entries) and all(x.get("failClosed") is True for ev, x in tools.items() if ev != "beforeSubmitPrompt") \
-            and tools.get("beforeSubmitPrompt", {}).get("failClosed") is not True
+        ok = bool(entries) and any(x.get("failClosed") is True for x in entries)
     except (OSError, ValueError):
         ok = False
     shutil.rmtree(h, ignore_errors=True)
