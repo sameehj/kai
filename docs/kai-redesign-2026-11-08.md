@@ -162,7 +162,7 @@ See C5. In short: five measured states, one owner (the app), and an uninstall th
 - But **any process that can reach the agent can authenticate as the user.** Keeping the key secret doesn't limit what is done with that access. The agent decides nothing about whether a push, a deletion or a remote command was intended; Kai has to.
 - **`gh`** (opening PRs) authenticates to the GitHub API with a **token**, usually in Keychain or `~/.config/gh/hosts.yml`, even when Git pushes go over SSH. Both paths must stay convenient.
 
-**Desired behaviour, and what Kai does today.** Hook decisions are synthetic results at `2600c36` (the real `kai hook claude`, default policy, throwaway home). Network results are from the code.
+**Desired behaviour, and what Kai does today.** Hook decisions are synthetic results at `c12d2bf` (the real `kai hook claude`, default policy, throwaway home). Network results are from the code.
 
 | Scenario | Desired | Hooks today | Network wall (Protect) today | Change |
 |---|---|---|---|---|
@@ -316,10 +316,11 @@ Run on a Mac with the network wall in **Protect** (a developer build until Prote
 
 ## 8. Implementation log
 
-- **Nov 8: C1 and C2 built** on branch `fix/c1-c2-launcher-defer` (commits `14ee31f`, `2600c36`, on `8e1bfa3`). Not yet pushed or run on a Mac.
+- **Nov 8: C1 and C2 built** on branch `fix/c1-c2-launcher-defer` (commits `14ee31f`, `2600c36`, on `8e1bfa3`; re-applied on the Mac as `6a04551`, `c12d2bf`).
   - C1: the launcher lets work through with "Kai's checks are off; its settings aren't protected", counts unchecked calls, and adds `--status`. No fail-closed settings anywhere. Install and Repair refuse to point hooks into an app bundle. Health flags hooks that would stop the agent.
   - C2: non-destructive MCP calls get no Kai decision and are recorded; destructive ones still ask. **Added during the build:** an MCP call whose destination argument names a host other than the server's own asks. Without it, C2 would have reopened the `mcp-send-data` escape case. A whole-server grant doesn't cover it.
   - Escape scorecard: 28 → 26 of 61 stopped. Both changes are the two "Kai's program is missing" rows, now *gets through, by design*. C2 opened none.
+  - **Nov 12, on macOS (Darwin 23.3):** `make`, `make test` and `make escape` all pass: unit, storage, hook, postinstall, app, release env/sign/guard, CLI (including the 3 checks that fail on Linux), gateway, TLS, corpus, coverage and escape (26/61, 0 mismatches). The coverage run showed the MCP row's note still described the old ask; fixed in `run_coverage.py`, and `COVERAGE.md` regenerated. Not run on the Mac: `tests/release/run-7b-final.sh` (needs an installed release).
   - `kai-hook --remove-hooks` moved to C5: a one-command way to turn Kai off needs a guard against agents first.
 - **Found while building, not yet built:**
   - When Kai doesn't deny, it answers Cursor with an explicit `"permission":"allow"` (`hooks.c`, end of `hook_cursor`). If Cursor treats that as approval, Kai is auto-approving every Cursor command. Needs a live check at a pinned Cursor version.
