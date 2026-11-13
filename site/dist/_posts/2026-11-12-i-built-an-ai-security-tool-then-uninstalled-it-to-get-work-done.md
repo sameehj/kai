@@ -33,4 +33,4 @@ Our acceptance criteria now include the task, not only the attack. The WordPress
 
 I still want Kai to stop an agent from crossing a real boundary. I also want to be able to leave it installed after lunch. This incident made those one acceptance test.
 
-*Next: [Why “don't ask again” kept asking again]({{ '/blog/why-dont-ask-again-kept-asking-again/' | relative_url }}). For what the current release actually checks, see the [coverage guide](https://github.com/sameehj/kai/blob/master/docs/COVERAGE.md).*
+*Next: [Why “don't ask again” kept asking again]({{ '/blog/repeated-approval-prompts/' | relative_url }}). For what the current release actually checks, see the [coverage guide](https://github.com/sameehj/kai/blob/master/docs/COVERAGE.md).*
