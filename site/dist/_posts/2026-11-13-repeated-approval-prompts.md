@@ -4,7 +4,7 @@ title: "Why ‘don’t ask again’ kept asking again"
 description: Kai added another approval system to an agent that already had one. Here is where the repeated prompts came from and what the redesign changes.
 category: Kai field notes
 author: Sameeh Jubran
-date: 2026-11-12 20:11:00 +0200
+date: 2026-11-13 08:31:00 +0200
 ---
 
 I clicked “don't ask again” in Claude Code and got asked again. The second prompt was Kai's doing. I had built an approval system next to the agent's approval system, and the two did not share a definition of “allowed.”

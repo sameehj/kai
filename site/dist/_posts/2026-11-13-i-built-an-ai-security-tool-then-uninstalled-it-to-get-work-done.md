@@ -4,7 +4,7 @@ title: "I built an AI security tool. Then I uninstalled it to get work done."
 description: A WordPress edit kept failing behind Kai's approvals. Turning off my own tool changed what I count as a passing security test.
 category: Kai field notes
 author: Sameeh Jubran
-date: 2026-11-12 20:10:00 +0200
+date: 2026-11-13 08:30:00 +0200
 ---
 
 I felt relief when I turned off the security tool I had built. That is an uncomfortable sentence to write, but it is the most useful fact in this story.

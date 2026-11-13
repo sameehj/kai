@@ -4,7 +4,7 @@ title: "Let AI agents use your SSH keys without handing them the keys"
 description: I want agents to pull, push a working branch and open PRs smoothly. That requires separating credential use from credential theft and controlling what a credential can do.
 category: Kai field notes
 author: Sameeh Jubran
-date: 2026-11-12 20:12:00 +0200
+date: 2026-11-13 08:32:00 +0200
 ---
 
 I want an agent to pull the repository I gave it, push its working branch and open a PR without stopping me at every step. That is routine development work. I also want the same agent unable to print my private key or ship a private project to somebody else's repository. Early Kai experiments made those wishes look contradictory. They are not, but the distinction is more precise than “allow GitHub.”
