@@ -704,6 +704,55 @@ static int holds_protected(path_scan_t *ps, const char *dir) {
     return 0;
 }
 
+/* S7 (0.3.0-preview.1): words that are text, not paths: a commit or PR
+ * message (git -m/--message, gh --title/--body) and the pattern of a search
+ * (grep/rg/ag: the first operand, or each -e value). Mentioning a path there
+ * isn't an access. File operands, -f/-F files and every other word are still
+ * checked. Marks skip[i] = 1 for each such word. */
+static void text_words(char **argv, int argc, int start, char *skip) {
+    if (start >= argc) return;
+    const char *b = strrchr(argv[start], '/') ? strrchr(argv[start], '/') + 1 : argv[start];
+    if (!strcmp(b, "git") || !strcmp(b, "gh")) {
+        int gh = b[1] == 'h';
+        for (int k = start + 1; k < argc; k++) {
+            const char *a = argv[k];
+            int msg = !gh ? (!strcmp(a, "-m") || !strcmp(a, "--message"))
+                          : (!strcmp(a, "--title") || !strcmp(a, "-t") || !strcmp(a, "--body") || !strcmp(a, "-b"));
+            if (msg && k + 1 < argc) { skip[++k] = 1; continue; }
+            if ((!gh && (!strncmp(a, "--message=", 10) || (!strncmp(a, "-m", 2) && a[2]))) ||
+                (gh && (!strncmp(a, "--title=", 8) || !strncmp(a, "--body=", 7))))
+                skip[k] = 1;
+        }
+        return;
+    }
+    int search = !strcmp(b, "grep") || !strcmp(b, "egrep") || !strcmp(b, "fgrep") || !strcmp(b, "rg") ||
+                 !strcmp(b, "ag");
+    if (!search) return;
+    int explicit = 0;
+    for (int k = start + 1; k < argc; k++) {
+        const char *a = argv[k];
+        if (!strcmp(a, "--")) break;
+        if (!strcmp(a, "-e") || !strcmp(a, "--regexp")) { if (k + 1 < argc) skip[++k] = 1; explicit = 1; continue; }
+        if (!strncmp(a, "--regexp=", 9)) { skip[k] = 1; explicit = 1; continue; }
+        if (!strcmp(a, "-f") || !strcmp(a, "--file")) explicit = 1;   /* its value is a file: checked */
+    }
+    if (explicit) return;
+    for (int k = start + 1; k < argc; k++) {
+        const char *a = argv[k];
+        if (!strcmp(a, "--")) { if (k + 1 < argc) skip[k + 1] = 1; return; }
+        if (a[0] == '-' && a[1]) {
+            /* options that take a separate value */
+            static const char *const val[] = {"-A", "-B", "-C", "-m", "-d", "-D", "-g", "-t", "-T", "--max-count",
+                                              "--context", "--after-context", "--before-context", "--glob",
+                                              "--type", "--include", "--exclude", "--exclude-dir", NULL};
+            for (int v = 0; val[v]; v++) if (!strcmp(a, val[v])) { k++; break; }
+            continue;
+        }
+        skip[k] = 1;   /* the first operand: the pattern */
+        return;
+    }
+}
+
 static void scan_cmd_words(char **argv, int argc, void *ud) {
     path_scan_t *ps = ud;
     int start = kai_shell_command_start(argv, argc);
@@ -719,9 +768,13 @@ static void scan_cmd_words(char **argv, int argc, void *ud) {
             return;
         }
     }
-    for (int i = 0; i < argc; i++) scan_string(ud, argv[i]);
-    if (ps->hit || start >= argc || !tree_command(argv, argc, start)) return;
+    char *skip = calloc((size_t)argc + 1, 1);
+    if (!skip) return;
+    text_words(argv, argc, start, skip);
+    for (int i = 0; i < argc; i++) if (!skip[i]) scan_string(ud, argv[i]);
+    if (ps->hit || start >= argc || !tree_command(argv, argc, start)) { free(skip); return; }
     for (int k = start + 1; k < argc && !ps->hit; k++) {
+        if (skip[k]) continue;
         const char *a = argv[k];
         if (a[0] == '-' || strchr(a, '=') || strstr(a, "://")) continue;
         char *ex = kai_expand_home(a);
@@ -734,6 +787,7 @@ static void scan_cmd_words(char **argv, int argc, void *ud) {
         }
         free(n);
     }
+    free(skip);
 }
 
 static void scan_text_paths(const char *text, void *ud) {
@@ -1087,4 +1141,29 @@ void kai_report_summary(const kai_report *rep, char *out, size_t outlen) {
     char *s = sb_take(&b);
     kai_strlcpy(out, s, outlen);
     free(s);
+}
+
+/* S7 (0.3.0-preview.1): Kai's canonical fake test tokens. A token (a run of
+ * letters, digits and _-+/=.) that contains EXAMPLE (the AWS documentation
+ * convention, e.g. the docs' sample access key) or KAIFAKE is a test fixture,
+ * not a credential: a random token contains either by chance with negligible
+ * odds. Used only when Kai decides whether a FILE's contents may be sent to
+ * the model: prompts and tool arguments are still scanned unchanged, so a
+ * fixture pasted into a prompt is still caught (the suites rely on that).
+ * Rewrites the fake in place with 'x'. */
+static int tok_char(unsigned char c) { return isalnum(c) || strchr("_-+/=.", c); }
+
+void kai_blank_test_fakes(char *t) {
+    if (!t) return;
+    for (char *s = t; *s;) {
+        if (!tok_char((unsigned char)*s)) { s++; continue; }
+        char *e = s;
+        while (*e && tok_char((unsigned char)*e)) e++;
+        char save = *e;
+        *e = '\0';
+        int fake = strstr(s, "EXAMPLE") || strstr(s, "KAIFAKE");
+        *e = save;
+        if (fake) for (char *q = s; q < e; q++) *q = 'x';
+        s = e;
+    }
 }

@@ -561,6 +561,7 @@ static int file_holds_sensitive(const kai_policy *p, const char *file, const cha
         size_t n = 0;
         char *txt = kai_read_file(abs, p->max_scan, &n);
         if (txt && n && !memchr(txt, '\0', n)) {
+            kai_blank_test_fakes(txt);   /* S7: Kai's own canonical fake test tokens */
             kai_report rep;
             char *clean = kai_scan_text(p, txt, &rep);
             free(clean);

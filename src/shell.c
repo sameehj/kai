@@ -49,6 +49,37 @@ static const char *base(const char *w) {
     return s ? s + 1 : w;
 }
 
+/* S7 (0.3.0-preview.1): a heredoc read by one of these is a message or a
+ * file's text, not code that runs: `cat > notes.md <<EOF`, `tee f <<EOF`,
+ * `git commit -F - <<EOF`, `gh pr create --body-file - <<EOF`. Paths named in
+ * such a body aren't accesses. cat/tee count only with a target word (a
+ * redirect or file): a bare `cat <<EOF | sh` still has its body checked. The
+ * redirect target itself is a word of the command and is checked as usual.
+ * Writing a script and running it later is the known script bypass
+ * (ESCAPES: script-*), the same as the agent's Write tool. */
+
+static int is_text_sink(const words_t *w) {
+    int i = 0;
+    while (i < w->n && strchr(w->v[i], '=') && w->v[i][0] != '=' && w->v[i][0] != '-') i++;
+    if (i >= w->n) return 0;
+    const char *b = base(w->v[i]);
+    if (!strcmp(b, "cat") || !strcmp(b, "tee")) {
+        for (int k = i + 1; k < w->n; k++) if (w->v[k][0] != '-') return 1;   /* has a target */
+        return 0;
+    }
+    if (!strcmp(b, "git")) {                 /* git commit|tag|notes … -F - */
+        for (int k = i + 1; k + 1 < w->n; k++)
+            if ((!strcmp(w->v[k], "-F") || !strcmp(w->v[k], "--file")) && !strcmp(w->v[k + 1], "-")) return 1;
+        return 0;
+    }
+    if (!strcmp(b, "gh")) {                  /* gh pr|issue … --body-file - / -F - */
+        for (int k = i + 1; k + 1 < w->n; k++)
+            if ((!strcmp(w->v[k], "--body-file") || !strcmp(w->v[k], "-F")) && !strcmp(w->v[k + 1], "-")) return 1;
+        return 0;
+    }
+    return 0;
+}
+
 static int is_shell(const char *w) {
     const char *b = base(w);
     return !strcmp(b, "sh") || !strcmp(b, "bash") || !strcmp(b, "zsh") || !strcmp(b, "dash") ||
@@ -110,7 +141,7 @@ static void walk(const walker_t *wk, const char *s, size_t len, int depth) {
     sb_t word;
     sb_init(&word);
     int in_word = 0;
-    struct { char delim[64]; int strip_tabs, shell; } hd[MAX_HEREDOCS];
+    struct { char delim[64]; int strip_tabs, shell, text; } hd[MAX_HEREDOCS];
     int nhd = 0;
 
 #define END_WORD()                                         \
@@ -199,6 +230,7 @@ static void walk(const walker_t *wk, const char *s, size_t len, int depth) {
                 kai_strlcpy(hd[nhd].delim, d, sizeof hd[nhd].delim);
                 hd[nhd].strip_tabs = strip;
                 hd[nhd].shell = argv.n > 0 && is_shell(argv.v[0]);
+                hd[nhd].text = argv.n > 0 && is_text_sink(&argv);
                 nhd++;
             }
             i = j - 1;
@@ -218,6 +250,7 @@ static void walk(const walker_t *wk, const char *s, size_t len, int depth) {
                     if (e - ls == strlen(hd[h].delim) && !strncmp(s + ls, hd[h].delim, e - ls)) {
                         size_t blen = p - body;
                         if (hd[h].shell && depth < MAX_DEPTH) walk(wk, s + body, blen, depth + 1);
+                        else if (hd[h].text) { /* a message or file body: text, not code (S7) */ }
                         else if (wk->on_text) {
                             char *t = malloc(blen + 1);
                             if (t) { memcpy(t, s + body, blen); t[blen] = '\0'; wk->on_text(t, wk->ud); free(t); }

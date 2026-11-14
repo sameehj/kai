@@ -204,4 +204,7 @@ int kai_cmd_not_right(int argc, char **argv);
 int kai_cmd_why_decision(int argc, char **argv);
 int kai_cmd_stats(int argc, char **argv);
 
+/* S7: blank Kai's canonical fake test tokens in a file's text (scan.c). */
+void kai_blank_test_fakes(char *t);
+
 #endif

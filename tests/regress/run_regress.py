@@ -213,6 +213,76 @@ def _git_local():
     return "Observed"
 
 
+# ---- S7: false stops seen in the Nov 14 session (one case per decision id) ------
+# A path named in a message, a search pattern or a text body isn't an access;
+# Write/Edit are judged by their target; Kai's canonical fake test tokens (a
+# token containing EXAMPLE or KAIFAKE) don't make a file "secret".
+REPO = os.path.join(H, "repo")
+os.makedirs(os.path.join(REPO, "src"), exist_ok=True)
+os.makedirs(os.path.join(REPO, "tests"), exist_ok=True)
+with open(os.path.join(REPO, "src", "policy.c"), "w") as fh:
+    fh.write("x\n")
+FIXTURE = os.path.join(REPO, "tests", "fixtures.sh")
+with open(FIXTURE, "w") as fh:
+    fh.write("AWS=" + "AKIA" + "IOSFODNN7" + "EXAMPLE\nGH=ghp_" + "KAIFAKE" + "0123456789abcdefghijABCDEFGHIJ\n"
+             "password = \"" + "KAIFAKE" + "pw-123\"\n")
+
+
+def rcc(tool, ti):
+    return {"hook_event_name": "PreToolUse", "tool_name": tool, "session_id": "r7", "tool_input": ti, "cwd": REPO}
+
+
+for cid, what, ev in [
+    ("k-c8f9e21d", "git commit -m naming a protected path",
+     rcc("Bash", {"command": "git commit -q -m \"regress: public files under ~/.ssh readable\""})),
+    ("k-c8f9e21d-F", "git commit -F - heredoc naming Kai's settings",
+     rcc("Bash", {"command": "git commit -q -F - <<'EOF'\nfix ~/.claude/settings.json handling\nEOF"})),
+    ("k-c8f9e21d-gh", "gh pr create --body naming a protected path",
+     rcc("Bash", {"command": "gh pr create --title t --body 'protects ~/.config/gh/hosts.yml'"})),
+    ("k-b1e54d30", "grep whose pattern names a protected path",
+     rcc("Bash", {"command": "grep -rn '~/.netrc' src/*.c"})),
+    ("k-b1e54d30-e", "grep -e pattern naming a key path", rcc("Bash", {"command": "grep -n -e '~/.ssh/id_rsa' src/scan.c"})),
+    ("k-3a68b9f2", "the same policy-source edit through the Edit tool",
+     rcc("Edit", {"file_path": REPO + "/src/policy.c", "old_string": "x",
+                  "new_string": "\"protect ~/.config/gcloud\\n\"\n\"protect ~/.config/gh/hosts.yml\\n\""})),
+    ("k-ae79f78e", "cat > source file whose text removes Kai's files",
+     rcc("Bash", {"command": "cat > src/Uninstall.swift <<'EOF'\nlet s = \"rm -f /usr/local/bin/kai; rm -rf ~/.kai\"\nEOF"})),
+    ("k-ae79f78e-W", "Write of a source file whose text removes Kai's files",
+     rcc("Write", {"file_path": REPO + "/src/U.swift", "content": "let s = \"rm -f /usr/local/bin/kai\"\n"})),
+    ("k-2a88ee0c", "Edit of a test whose text runs sed -i on Kai's policy",
+     rcc("Edit", {"file_path": REPO + "/src/policy.c", "old_string": "x",
+                  "new_string": "let c = \"sed -i '' s/a/b/ ~/.kai/policy\""})),
+    ("k-0101e012", "Read of a test file holding canonical fakes", rcc("Read", {"file_path": FIXTURE})),
+    ("k-338f063f", "grep of a test file holding canonical fakes",
+     rcc("Bash", {"command": "grep -nE '^(export )?HOME=' " + FIXTURE})),
+    ("k-9eebb08b", "sed -n of a test file holding canonical fakes", rcc("Bash", {"command": "sed -n 1,40p " + FIXTURE})),
+]:
+    hook_case("S7-" + cid, "S7", what, "Observed", "claude", ev)
+
+# still stopped: the real accesses next to each false stop
+for cid, what, ev in [
+    ("k-c8e091b3", "agent runs kai allow-mcp (correct stop, kept)", rcc("Bash", {"command": "./kai allow-mcp srv del --agent claude"})),
+    ("k-3a68b9f2-py", "a Python heredoc naming a protected path (code that runs: kept)",
+     rcc("Bash", {"command": "python3 - <<'EOF'\nprint(open('" + H + "/.ssh/id_rsa').read())\nEOF"})),
+    ("cat-into-settings", "cat > Kai's settings from a heredoc",
+     rcc("Bash", {"command": "cat > ~/.claude/settings.json <<'EOF'\n{}\nEOF"})),
+    ("cat-heredoc-pipe-sh", "a cat heredoc piped into sh still has its body checked",
+     rcc("Bash", {"command": "cat <<'EOF' | sh\ncat ~/.ssh/id_rsa\nEOF"})),
+    ("grep-in-ssh", "grep whose FILE operand is a protected folder", rcc("Bash", {"command": "grep -r BEGIN ~/.ssh"})),
+    ("commit-F-key", "git commit -F <a key file>", rcc("Bash", {"command": "git commit -F ~/.ssh/id_rsa"})),
+    ("prompt-fake", "a canonical fake pasted into a prompt is still caught",
+     {"hook_event_name": "UserPromptSubmit", "session_id": "r7", "cwd": REPO,
+      "prompt": "deploy with " + "AKIA" + "IOSFODNN7" + "EXAMPLE"}),
+]:
+    hook_case("S7-keep-" + cid, "S7", what, "Stopped", "claude", ev)
+
+for cid, rel in [("k-0101e012-real", "tests/hooks/run_hook_tests.sh"), ("k-338f063f-real", "tests/cli/run_cli_tests.sh")]:
+    hook_case("S7-" + cid, "S7", "Read of the repo's " + rel, "Observed", "claude",
+              {"hook_event_name": "PreToolUse", "tool_name": "Read", "session_id": "r7",
+               "tool_input": {"file_path": os.path.join(ROOT, rel)}, "cwd": ROOT},
+              status="xfail", note="its GitHub/OpenAI/password fixtures need KAIFAKE in each fake (owner patch)")
+
+
 # ---- S8: missing CLI / launcher, repair (R4a-c) --------------------------------
 def launcher_copy(kai_path):
     with open(LAUNCHER) as f:
