@@ -9,13 +9,26 @@
 
   **Kai checks what your agents do, and shows you where they connect.**
 
-  **Preview 2 · macOS 13+** · **Claude Code · Codex · Cursor** · **Open source**
+  **0.3.0-preview.1 · macOS 13+** · **Claude Code · Codex · Cursor** · **Open source**
 </div>
+
+**Kai is a guardrail, not a sandbox.** It checks the tool calls your agents report to it, through each agent's own hooks, and leaves everything else to the agent's own approvals. A program the agent writes and runs, or anything that doesn't go through the agent's tools, isn't checked.
 
 ## What Kai does in this release
 
-- **Agent checks enforce where the agent calls them.** When Claude Code, Codex or Cursor asks to read your keys, `.env` files or credentials, or to send them out, Kai denies that tool call before it runs, and says why, with a decision ID and the way to allow it if it was intended.
-- **Kai records the connections it observes.** The Kai app's Internet wall watches the connections agents open (host, agent, time; unknown hosts, bare IPs and odd ports included) and blocks nothing in this release.
+- **Agent checks enforce where the agent calls them.** When Claude Code, Codex or Cursor asks to read your keys, `.env` files or credentials, print a saved token, change Kai's or the agents' hook settings, or send a secret out, Kai stops that tool call before it runs, and says why, with a decision ID (`kai why <id>`).
+- **Kai stays out of ordinary work.** Routine MCP tools, Git, `gh`, builds and tests are left to the agent's own approvals. Kai asks only for destructive MCP tools and MCP calls that send to another host.
+- **A broken Kai never stops your agent.** If Kai's program is missing, the agent keeps working, and Kai says plainly that its checks are off and its settings aren't protected. Repair is one click in the app.
+- **Internet (preview), off by default.** If you switch it on, Kai records the connections agents open and blocks nothing.
+
+| | Checked by Kai | Observed only | Not covered |
+|---|---|---|---|
+| Claude Code | file tools, shell commands, prompts, MCP and web-fetch calls | | scripts it writes and runs, subprocesses' own file access |
+| Codex | shell commands, prompts, MCP calls | | the same |
+| Cursor | shell commands, file reads, prompts, MCP arguments (secrets only) | | file writes, editor extensions |
+| Network (if switched on) | | connections from agent processes | encrypted contents |
+
+Details per agent and operation: [docs/COVERAGE.md](docs/COVERAGE.md). What still gets through: [docs/ESCAPES.md](docs/ESCAPES.md).
 
 ## What it doesn't do in this release
 
@@ -34,8 +47,8 @@ How this release was verified: see the [release notes](https://github.com/sameeh
 **macOS 13 or later; Linux and Windows aren't supported.** Works with Claude Code, Codex and Cursor.
 
 1. **Download** `Kai-Preview-<version>.pkg` from the newest release on the [Releases page](https://github.com/sameehj/kai/releases), and double-click it. It installs the Kai app and the `kai` command.
-2. **Open Kai** (Applications → Kai). It lives in the menu bar. Click its icon and switch **Internet** on.
-3. **Approve Kai's network extension** when macOS asks. This is what lets Kai see where your agents connect.
+2. **Open Kai** (Applications → Kai). It lives in the menu bar. The agent checks work without anything else. Optional: in Settings, switch on **Internet (preview): Watching — nothing is blocked**.
+3. **If you switched Internet on, approve Kai's network extension** when macOS asks. This is what lets Kai see where your agents connect.
    - macOS 13–14: System Settings → Privacy & Security, then click Allow next to Kai.
    - macOS 15: System Settings → General → Login Items & Extensions → Network Extensions, then turn Kai on.
 4. **Add Kai's checks to your agents** in Terminal:

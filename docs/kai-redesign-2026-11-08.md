@@ -322,6 +322,15 @@ Run on a Mac with the network wall in **Protect** (a developer build until Prote
   - Escape scorecard: 28 → 26 of 61 stopped. Both changes are the two "Kai's program is missing" rows, now *gets through, by design*. C2 opened none.
   - **Nov 12, on macOS (Darwin 23.3):** `make`, `make test` and `make escape` all pass: unit, storage, hook, postinstall, app, release env/sign/guard, CLI (including the 3 checks that fail on Linux), gateway, TLS, corpus, coverage and escape (26/61, 0 mismatches). The coverage run showed the MCP row's note still described the old ask; fixed in `run_coverage.py`, and `COVERAGE.md` regenerated. Not run on the Mac: `tests/release/run-7b-final.sh` (needs an installed release).
   - `kai-hook --remove-hooks` moved to C5: a one-command way to turn Kai off needs a guard against agents first.
+- **Nov 14: PR #12 merged** (`6cd3a5c`), after a rebase onto master, all suites and green CI.
+- **Nov 14–15: 0.3.0-preview.1** on `release/0.3.0-preview.1`. Not pushed. Full record in `docs/release/0.3.0-preview.1-report.md`.
+  - **C4 lite:** `kai why --json` with attribution, recovery and "Retry would now be"; `kai not-right`; the Why sheet.
+  - **C5:** Settings → Uninstall; Repair puts back a missing launcher.
+  - **Cursor:** gets `{}`, not `"allow"`.
+  - **Stops:** credential printing is stopped; symlinked settings writes are stopped.
+  - **False stops (S7):** messages, patterns and text heredocs aren't accesses, and canonical test fakes are recognized.
+  - **Escape:** 28/62.
+  - **Not built:** C3; C4's network explanation in PostToolUse; C5's measured states and upgrade check.
 - **Found while building, not yet built:**
   - When Kai doesn't deny, it answers Cursor with an explicit `"permission":"allow"` (`hooks.c`, end of `hook_cursor`). If Cursor treats that as approval, Kai is auto-approving every Cursor command. Needs a live check at a pinned Cursor version.
   - The credential, destructive-Git and new-remote gaps in §2.9.
