@@ -20,40 +20,20 @@ struct MenuView: View {
         return b
     }
 
+    // 0.3 order, top to bottom: header from measured state · Needs you (only
+    // when something waits) · one row per agent · the coverage line (opens
+    // the coverage screen) · Recent stops · footer (Pause 15 min · Settings).
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            if model.notificationsOff {   // Nov 2: a banner, not a footnote
-                HStack(alignment: .top, spacing: 8) {
-                    Text("Notifications are off, so you won't see when Kai stops an agent.")
-                        .font(.system(size: 12)).foregroundStyle(Theme.soft).fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 4)
-                    Button("Turn on") { Notifier.openSettings() }.buttonStyle(.plain)
-                        .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.lime)
-                        .help("Opens System Settings → Notifications → Kai.")
-                }
-                .padding(10)
-                .background(Theme.amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
-            }
-            // STEP 2c: an agent Kai's own broken hooks are blocking comes first
-            ForEach(LiveCoverage.blocked(agents: AgentsModel.shared.loaded ? AgentsModel.shared.agents : []), id: \.agent) { b in
-                BlockedAgentBanner(banner: b) { Task { await AgentsModel.shared.refresh() } }
-            }
-            needsYou   // Step 6: a waiting connection comes first
-            if let msg = model.errorMessage { ErrorBanner(message: msg) { model.errorMessage = nil } }
-            if let b = alert {
-                BlockNotice(event: b,
-                            dismiss: { withAnimation { dismissedBlock = b.id } },
-                            details: { open(.activity) })
-            }
-            hero
+            alerts
+            if !grantManager.pendingPolicy.isEmpty || !grantManager.pending.isEmpty { needsYou }
+            migratedConfirm
             pausedBanner
             if DevFlags.perSessionPause { pauseBanner }
-            migratedConfirm
-            activeNow
-            Button { open(.files) } label: { LiveCoverageList(compact: true).contentShape(Rectangle()) }
-                .buttonStyle(.plain).help("From live checks. Open Settings to change Internet or an agent's checks.")
+            agentRows
             permissions
+            coverageLine
             recent
             footer
         }
@@ -68,67 +48,98 @@ struct MenuView: View {
         .task { await model.refresh(); wall.refresh(); await agents.refresh() }
     }
 
-    // Batch 2: one large number and one value line, from meaningful events.
-    private var hero: some View {
-        let n = agents.workingNow.count
-        return VStack(alignment: .leading, spacing: 2) {
-            if let err = agents.sourceError {
-                // Never a false "0 agents working": the list couldn't be read.
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text("Kai can't list sessions right now ·").font(.system(size: 13)).foregroundStyle(Theme.amber)
-                    Button("Details") { openDecision = openDecision == "sessions-error" ? nil : "sessions-error" }
-                        .buttonStyle(.plain).font(.system(size: 13)).foregroundStyle(Theme.lime)
-                        .popover(isPresented: Binding(get: { openDecision == "sessions-error" },
-                                                      set: { if !$0 { openDecision = nil } }), arrowEdge: .leading) {
-                            Text(err).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true).padding(14).frame(width: 340)
-                        }
-                }
-            } else if !agents.loaded {
-                Text("Looking for agent sessions…").font(.system(size: 13)).foregroundStyle(Theme.soft)
-            } else {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("\(n)").font(Theme.display(34)).foregroundStyle(glow)
-                    Text("agent\(n == 1 ? "" : "s") working").font(.system(size: 13)).foregroundStyle(Theme.soft)
-                }
+    /// Things that change what the header means: notifications off, an
+    /// agent Kai's broken hooks can't check, an error from the last action.
+    @ViewBuilder private var alerts: some View {
+        if model.notificationsOff {   // Nov 2: a banner, not a footnote
+            HStack(alignment: .top, spacing: 8) {
+                Text("Notifications are off, so you won't see when Kai stops an agent.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.soft).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 4)
+                Button("Turn on") { Notifier.openSettings() }.buttonStyle(.plain)
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.lime)
+                    .help("Opens System Settings → Notifications → Kai.")
             }
+            .padding(10)
+            .background(Theme.amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        }
+        // STEP 2c: an agent Kai's own broken hooks can't check
+        ForEach(LiveCoverage.blocked(agents: agents.loaded ? agents.agents : []), id: \.agent) { b in
+            BlockedAgentBanner(banner: b) { Task { await AgentsModel.shared.refresh() } }
+        }
+        if let msg = model.errorMessage { ErrorBanner(message: msg) { model.errorMessage = nil } }
+    }
+
+    /// One row per agent found on this Mac: its check state in words and how
+    /// many of its sessions are working. A row opens Agent Control.
+    @ViewBuilder private var agentRows: some View {
+        if let err = agents.sourceError {
+            // Never a false "no agents": the list couldn't be read.
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                // Step 6: "N actions stopped today" opens the list (reason, command, choices).
-                if model.stoppedTodayCount > 0 {
-                    Button { openDecision = openDecision == "stopped" ? nil : "stopped" } label: {
-                        Text(model.valueLine + " ›").font(.system(size: 12)).foregroundStyle(Theme.soft)
-                            .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
+                Text("Kai can't list agents right now ·").font(.system(size: 12)).foregroundStyle(Theme.amber)
+                Button("Details") { openDecision = openDecision == "sessions-error" ? nil : "sessions-error" }
+                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
+                    .popover(isPresented: Binding(get: { openDecision == "sessions-error" },
+                                                  set: { if !$0 { openDecision = nil } }), arrowEdge: .leading) {
+                        Text(err).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true).padding(14).frame(width: 340)
+                    }
+            }
+        } else if !agents.loaded {
+            Text("Looking for agents…").font(.system(size: 12)).foregroundStyle(Theme.soft)
+        } else {
+            let found = agents.agents.filter(\.detected)
+            VStack(alignment: .leading, spacing: 4) {
+                if found.isEmpty {
+                    Text("No supported agent found on this Mac.").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                }
+                ForEach(found) { a in
+                    let (word, tone) = Self.agentState(a)
+                    let working = agents.workingNow.filter { $0.displayAgent == LiveCoverage.title(a.name) }.count
+                    Button { openAgentControl() } label: {
+                        HStack(spacing: 8) {
+                            Circle().fill(Theme.coverage(tone)).frame(width: 7, height: 7)
+                            Text(LiveCoverage.title(a.name)).font(.system(size: 13, weight: .medium))
+                            Text(word).font(.system(size: 12)).foregroundStyle(tone == .problem ? Theme.coral : Theme.muted)
+                            Spacer()
+                            if working > 0 {
+                                Text("\(working) working").font(.system(size: 11)).foregroundStyle(Theme.soft)
+                            }
+                            Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(Theme.muted)
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(Theme.sidebar, in: RoundedRectangle(cornerRadius: 8))
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .popover(isPresented: Binding(get: { openDecision == "stopped" },
-                                                  set: { if !$0 { openDecision = nil } }), arrowEdge: .leading) {
-                        StoppedTodayList(grants: grantManager, open: { open(.activity) }).environmentObject(model)
-                    }
-                } else {
-                    Text(model.valueLine).font(.system(size: 12)).foregroundStyle(Theme.muted)
-                }
-                InfoButton(text: InfoText.actionsStopped)
-            }
-            // The most repeated stop today (exact, from the log), with Review.
-            if let m = model.topToday {
-                HStack(spacing: 4) {
-                    Text("Most: \(m.item), \(m.count) times ·").font(.system(size: 12)).foregroundStyle(Theme.muted)
-                    Button("Review") { openDecision = openDecision == "top" ? nil : "top" }
-                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
-                        .popover(isPresented: Binding(get: { openDecision == "top" },
-                                                      set: { if !$0 { openDecision = nil } }), arrowEdge: .leading) {
-                            if let e = model.events.first(where: { $0.target == m.item && $0.isBlock }) {
-                                DecisionSheet(event: e, count: m.count, grants: grantManager)
-                                    .environmentObject(model).padding(14).frame(width: 340)
-                            } else {
-                                Text("\(m.item): stopped \(m.count) times today. Details are in Activity.")
-                                    .font(.system(size: 12)).padding(14).frame(width: 300)
-                            }
-                        }
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    static func agentState(_ a: AgentRow) -> (String, LiveCoverage.Tone) {
+        switch a.hooks {
+        case "installed": return ("Checking", .checking)
+        case "failing": return ("Checks off: broken", .problem)
+        default: return ("Not checking", .off)
+        }
+    }
+
+    /// One line; the details are on the coverage screen.
+    private var coverageLine: some View {
+        Button { openDecision = openDecision == "coverage" ? nil : "coverage" } label: {
+            HStack(spacing: 6) {
+                Text("Coverage: what Kai checks, and what it can't see").font(.system(size: 12)).foregroundStyle(Theme.soft)
+                Spacer()
+                Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(Theme.muted)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: Binding(get: { openDecision == "coverage" },
+                                      set: { if !$0 { openDecision = nil } }), arrowEdge: .leading) {
+            CoverageScreen()
+        }
     }
 
     // Migration: one line; the details (Keep, Remove) are on the
@@ -163,47 +174,6 @@ struct MenuView: View {
                 if grantManager.pendingGroups.count > 1 {
                     Button("Keep all blocked") { grantManager.dismissAllPending() }
                         .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.muted)
-                }
-            }
-        }
-    }
-
-    // Working now — sessions with a command or hook in the last 15 minutes
-    // (opens Agent Control); idle ones are counted, not listed.
-    private var activeNow: some View {
-        let running = agents.workingNow
-        let idleCount = agents.idle.count
-        let groups = Dictionary(grouping: running, by: { $0.displayAgent })
-        return VStack(alignment: .leading, spacing: 6) {
-            if !running.isEmpty || idleCount > 0 {
-                HStack {
-                    InfoHeading(title: "Working now", info: InfoText.workingNow)
-                    Spacer()
-                    Button("Open Agent Control") { openAgentControl() }
-                        .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
-                }
-                ForEach(groups.keys.sorted(), id: \.self) { ag in
-                    let rows = groups[ag] ?? []
-                    Text("\(ag) · \(rows.count)")
-                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.muted)
-                    ForEach(rows.prefix(4)) { s in
-                        let gc = grantManager.grants.filter { $0.session_id == s.id }.count
-                        Button { openAgentControl() } label: {
-                            PopoverSessionRow(session: s, grants: gc)
-                        }
-                            .buttonStyle(.plain)
-                        if DevFlags.perSessionPause && grantManager.pauseState(s.id) == Int32(KAI_PAUSE_NONE) {
-                            PauseControl(state: Int32(KAI_PAUSE_NONE), until: nil,
-                                         pause: { grantManager.pauseSession(s.id, minutes: 15) },
-                                         resume: {}, extend: {})
-                                .padding(.leading, 15)
-                        }
-                    }
-                }
-                if idleCount > 0 {
-                    Button { openAgentControl() } label: {
-                        Text("\(idleCount) idle session\(idleCount == 1 ? "" : "s") ›").font(.system(size: 11)).foregroundStyle(Theme.muted)
-                    }.buttonStyle(.plain)
                 }
             }
         }
@@ -336,16 +306,36 @@ struct MenuView: View {
     }
 
     @ViewBuilder private var recent: some View {
-        if !recentItems.isEmpty { recentList }
+        if !recentItems.isEmpty || alert != nil || model.stoppedTodayCount > 0 { recentList }
     }
 
     private var recentList: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                CapsLabel("Recent")
+                CapsLabel("Recent stops")
                 Spacer()
                 Button("See all") { open(.activity) }
                     .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
+            }
+            if let b = alert {
+                BlockNotice(event: b,
+                            dismiss: { withAnimation { dismissedBlock = b.id } },
+                            details: { open(.activity) })
+            }
+            // Step 6: "N actions stopped today" opens the list (reason, command, choices).
+            if model.stoppedTodayCount > 0 {
+                HStack(spacing: 4) {
+                    Button { openDecision = openDecision == "stopped" ? nil : "stopped" } label: {
+                        Text(model.valueLine + " ›").font(.system(size: 12)).foregroundStyle(Theme.soft)
+                            .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: Binding(get: { openDecision == "stopped" },
+                                                  set: { if !$0 { openDecision = nil } }), arrowEdge: .leading) {
+                        StoppedTodayList(grants: grantManager, open: { open(.activity) }).environmentObject(model)
+                    }
+                    InfoButton(text: InfoText.actionsStopped)
+                }
             }
             // Spec §5.1: every row opens its decision sheet.
             ForEach(recentItems) { g in
@@ -383,7 +373,7 @@ struct MenuView: View {
         HStack(spacing: 14) {
             if grantManager.pauseState(nil) == Int32(KAI_PAUSE_NONE) {
                 Button { grantManager.pauseAll(minutes: 15) } label: {
-                    Label("Pause Kai · 15 min", systemImage: "pause.circle")
+                    Label("Pause 15 min", systemImage: "pause.circle")
                 }
                 .help("Pauses Kai's checks for 15 minutes, then they resume by themselves.")
             }
