@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define KAI_VERSION "0.2.0-preview.2"
+#define KAI_VERSION "0.3.0-preview.1"
 /* MAJOR.MINOR.PATCH[-preview.N]; a pre-release is older than its release. */
 int kai_version_cmp(const char *a, const char *b);
 
