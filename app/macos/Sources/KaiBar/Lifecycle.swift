@@ -16,13 +16,20 @@ enum Lifecycle {
 
     /// The kai inside this Kai.app (Contents/Resources/kai), if any.
     static var bundledProgram: String? { Bundle.main.url(forResource: "kai", withExtension: nil)?.path }
+    /// The hook launcher inside this Kai.app (Contents/Resources/kai-hook), if any.
+    static var bundledLauncher: String? { Bundle.main.url(forResource: "kai-hook", withExtension: nil)?.path }
 
     /// The hooks can't run Kai: the package's launcher is there but the
     /// program it runs is gone. (No launcher at all is a different install:
     /// `kai snapshot` reports those hooks as failing when they can't run.)
     static var programMissing: Bool {
         let fm = FileManager.default
-        return fm.fileExists(atPath: launcherPath) && !fm.isExecutableFile(atPath: programPath)
+        if fm.fileExists(atPath: launcherPath) { return !fm.isExecutableFile(atPath: programPath) }
+        // No launcher, but the hooks still call it: every hook fails (C1 lets
+        // the agent through; nothing is checked).
+        return !UninstallSteps.hookFilesStillCallingKai().filter { f in
+            (try? String(contentsOfFile: f, encoding: .utf8))?.contains(launcherPath) == true
+        }.isEmpty
     }
 
     /// 'text' for /bin/sh.
@@ -45,23 +52,36 @@ enum Lifecycle {
         return (true, "")
     }
 
-    /// Repair: program first (from the app's copy), then the hooks. Returns
-    /// one plain sentence per step.
+    /// Repair: put back whatever the hooks need, from the copies inside Kai.app,
+    /// behind ONE admin prompt (program and/or launcher), then rewrite the
+    /// hooks with `kai doctor --fix`, which points them at the launcher, never
+    /// into the app bundle. Returns one plain sentence per step.
     @MainActor
     static func repair() async -> [String] {
         var out: [String] = []
         let fm = FileManager.default
+        var cmds: [String] = [], what: [String] = [], missing: [String] = []
+        if !fm.isExecutableFile(atPath: launcherPath) {
+            if let src = bundledLauncher {
+                cmds.append("/bin/mkdir -p /usr/local/libexec && /bin/cp -f \(shellQuote(src)) \(shellQuote(launcherPath))"
+                            + " && /bin/chmod 755 \(shellQuote(launcherPath))")
+                what.append("hook launcher")
+            } else { missing.append("hook launcher") }
+        }
         if !fm.isExecutableFile(atPath: programPath) {
-            if !fm.fileExists(atPath: launcherPath) {
-                out.append("Kai's hook launcher (\(launcherPath)) is missing and Kai.app doesn't carry one: reinstall the Kai package.")
-            } else if let src = bundledProgram {
-                let cmd = "/bin/mkdir -p /usr/local/bin && /bin/cp -f \(shellQuote(src)) \(shellQuote(programPath))"
-                    + " && /bin/chmod 755 \(shellQuote(programPath))"
-                let r = runAsAdmin(cmd, prompt: "Kai wants to put its program back at \(programPath) so the agents' checks can run.")
-                out.append(r.ok ? "Put Kai's program back at \(programPath)." : "Kai's program wasn't put back: \(r.message).")
-            } else {
-                out.append("Kai's program is missing and this Kai.app doesn't carry a copy: reinstall the Kai package.")
-            }
+            if let src = bundledProgram {
+                cmds.append("/bin/mkdir -p /usr/local/bin && /bin/cp -f \(shellQuote(src)) \(shellQuote(programPath))"
+                            + " && /bin/chmod 755 \(shellQuote(programPath))")
+                what.append("program")
+            } else { missing.append("program") }
+        }
+        if !missing.isEmpty {
+            out.append("This Kai.app doesn't carry Kai's \(missing.joined(separator: " or ")): reinstall the Kai package.")
+        }
+        if !cmds.isEmpty {
+            let r = runAsAdmin(cmds.joined(separator: " && "),
+                               prompt: "Kai wants to put back its \(what.joined(separator: " and ")) so the agents' checks can run.")
+            out.append(r.ok ? "Put back Kai's \(what.joined(separator: " and "))." : "Kai's \(what.joined(separator: " and ")) wasn't put back: \(r.message).")
         }
         let r = await KaiCLI.run(["doctor", "--fix"])
         out.append(r.ok ? "Hooks checked and repaired." : "Hooks weren't repaired: \(r.message)")

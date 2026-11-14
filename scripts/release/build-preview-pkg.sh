@@ -63,6 +63,9 @@ notarize() {
 
 # Kai.app and its network extension (Step 7): built unsigned for the release
 # team, then Developer ID signed, checked, notarized, stapled and checked again.
+# The app's build compiles src/ (manage.c needs src/kai_commit.h): generate it
+# first, so the app's bundled kai names this commit, not a stale header.
+make src/kai_commit.h >/dev/null
 ( cd app/macos && KAI_APP_ID=io.github.sameehj.kai KAI_TEAM="${KAI_TEAM:-}" xcodegen generate --quiet )
 # With signing off, Xcode leaves $(TeamIdentifierPrefix) empty, so the
 # extension's NEMachServiceName would lose its team prefix: set it here.

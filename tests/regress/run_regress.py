@@ -359,6 +359,27 @@ def _s8_bundle():
     return "Stopped" if ".app/" not in t else "mismatch: hooks point into the bundle"
 
 
+@case("S8-doctor-fix-bundle", "S8", "Repair (kai doctor --fix) run from the app's bundled kai never writes the bundle path",
+      "Stopped")
+def _s8_doctor_bundle():
+    app = os.path.join(H, "Kai2.app", "Contents", "Resources")
+    os.makedirs(app, exist_ok=True)
+    k2 = os.path.join(app, "kai")
+    shutil.copy2(KAI, k2)
+    h2 = tempfile.mkdtemp(prefix="kai-regress-fix.")
+    os.makedirs(os.path.join(h2, ".claude"))
+    old = {"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "'/gone/kai' hook claude"}]}]}}
+    with open(os.path.join(h2, ".claude", "settings.json"), "w") as f:
+        json.dump(old, f)
+    env = dict(ENV, HOME=h2, KAI_HOME=os.path.join(h2, ".kai"))
+    env.pop("KAI_TEST_ALLOW_DEV_HOOK", None)
+    subprocess.run([k2, "doctor", "--fix"], capture_output=True, text=True, env=env, timeout=60)
+    with open(os.path.join(h2, ".claude", "settings.json")) as f:
+        t = f.read()
+    shutil.rmtree(h2, ignore_errors=True)
+    return "Stopped" if ".app/" not in t else "mismatch: doctor --fix wrote the bundle path"
+
+
 def main():
     bad = 0
     xpass = 0

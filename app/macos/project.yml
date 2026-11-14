@@ -179,6 +179,9 @@ targets:
             make -C "$SRCROOT/../.." kai >/dev/null
             cp "$SRCROOT/../../kai" "$dest"
           fi
+          # Repair puts a missing hook launcher back from this copy (C5).
+          cp "$SRCROOT/../../scripts/release/kai-hook" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/kai-hook"
+          chmod 755 "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/kai-hook"
           # Notification sounds must be top-level app resources; NSSound uses
           # the same files for in-app approval feedback and previews.
           cp "$SRCROOT/../../kai-sfx/"*.wav "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/"

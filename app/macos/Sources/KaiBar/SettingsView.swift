@@ -7,7 +7,7 @@ import KaiCore
 /// settings pages named for what they protect - Files, Internet - and
 /// Advanced for everything technical.
 enum SettingsPage: String, CaseIterable, Identifiable {
-    case agentControl, activity, files, internet, advanced
+    case agentControl, activity, files, internet, advanced, uninstall
     var id: String { rawValue }
     /// A page saved by an older Kai ("storage", "network", "general", ...).
     init(stored raw: String) {
@@ -25,6 +25,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .files: return "Files"
         case .internet: return "Internet"
         case .advanced: return "Advanced"
+        case .uninstall: return "Uninstall"
         }
     }
     var icon: String {
@@ -34,6 +35,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .files: return "folder"
         case .internet: return "globe"
         case .advanced: return "slider.horizontal.3"
+        case .uninstall: return "trash"
         }
     }
 }
@@ -125,6 +127,7 @@ struct SettingsView: View {
         case .files: VStack(alignment: .leading, spacing: 18) { StoragePage(); FilesPage() }
         case .internet: NetworkPage()
         case .advanced: AdvancedPage()
+        case .uninstall: UninstallPage()
         }
     }
 }
