@@ -139,8 +139,8 @@ static void gather_strings(const cJSON *node, sb_t *b, int depth) {
 /* ---- Spec v2.1 A.5: what Kai tells the agent (and you) when it stops something ----
  * what · why · what you can do. Fixed text, never generated. The agent relays
  * these, so they double as instructions to ask the user rather than retry.
- * Verb: "stopped" (Preview 1 never says "blocked", which is for the OS walls). */
-#define KAI_NOT_A_BOUNDARY "(Preview 1 can't stop a program with your permissions from changing them another way.)"
+ * Verb: "stopped" (the hooks never say "blocked", which is for the OS walls). */
+#define KAI_NOT_A_BOUNDARY "(Kai's checks can't stop a program with your permissions from changing them another way.)"
 
 static void path_matters(const char *path, const char **why, const char **tip) {
     const char *r = path ? path : "";
@@ -366,6 +366,63 @@ static int command_controls_kai(const char *cmd) {
     kai_shell_walk(cmd, check_kai_control, NULL, &hit);
     return hit;
 }
+
+/* R8c: commands whose job is to PRINT a credential. gh and git keep using
+ * their tokens internally (their own requests aren't tool calls); only asking
+ * for the token itself is stopped. Hooks see command text only: a script the
+ * agent writes can still do it (ESCAPES: credential-print-script). */
+static int short_flag_has(const char *a, const char *letters) {
+    if (a[0] != '-' || a[1] == '-' || !a[1]) return 0;
+    for (const char *c = a + 1; *c; c++) {
+        if (!isalpha((unsigned char)*c)) return 0;
+        if (strchr(letters, *c)) return 1;
+    }
+    return 0;
+}
+
+static void check_credential_print(char **argv, int argc, void *ud) {
+    const char **what = ud;
+    int i = kai_shell_command_start(argv, argc);
+    if (i >= argc || *what) return;
+    const char *w = argv[i];
+    const char *b = strrchr(w, '/') ? strrchr(w, '/') + 1 : w;
+    /* the first non-flag words after the command, skipping -C dir / -R repo style values */
+    const char *sub[3] = {NULL, NULL, NULL};
+    int ns = 0;
+    for (int k = i + 1; k < argc && ns < 3; k++) {
+        if (argv[k][0] == '-') {
+            if ((!strcmp(argv[k], "-C") || !strcmp(argv[k], "-c") || !strcmp(argv[k], "-R") ||
+                 !strcmp(argv[k], "--repo") || !strcmp(argv[k], "--hostname") || !strcmp(argv[k], "-h")) && k + 1 < argc)
+                k++;
+            continue;
+        }
+        sub[ns++] = argv[k];
+    }
+    if (!strcmp(b, "gh") && sub[0] && !strcmp(sub[0], "auth")) {
+        if (sub[1] && !strcmp(sub[1], "token")) { *what = "gh auth token"; return; }
+        for (int k = i + 1; k < argc; k++)
+            if (!strcmp(argv[k], "--show-token") || !strcmp(argv[k], "-t")) { *what = "gh auth status --show-token"; return; }
+    }
+    if (!strcmp(b, "git") && sub[0] && !strcmp(sub[0], "credential") && sub[1] &&
+        (!strcmp(sub[1], "fill") || !strcmp(sub[1], "get"))) { *what = "git credential fill"; return; }
+    if (!strncmp(b, "git-credential-", 15) && sub[0] && !strcmp(sub[0], "get")) { *what = "git credential helper get"; return; }
+    if (!strcmp(b, "security") && sub[0] &&
+        (!strcmp(sub[0], "find-internet-password") || !strcmp(sub[0], "find-generic-password"))) {
+        for (int k = i + 1; k < argc; k++)
+            if (short_flag_has(argv[k], "wg")) { *what = "security find-*-password -w"; return; }
+    }
+}
+
+/* The name of the credential-printing command, or NULL. */
+static const char *command_prints_credential(const char *cmd) {
+    const char *what = NULL;
+    if (cmd) kai_shell_walk(cmd, check_credential_print, NULL, &what);
+    return what;
+}
+
+#define CRED_PRINT_REASON "Kai stopped `%s`: it prints a saved login token or password, which gives whoever " \
+    "reads it the same access. gh and git keep working; they use the token without printing it. If you need " \
+    "it, run the command in your own terminal."
 
 /* Does a shell command make a terminal app (or System Events, which can type
  * into any app) run something? Those commands run in the terminal's process
@@ -1547,6 +1604,10 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 kai_strlcpy(rule, "kai_self_protect", sizeof rule);
                 snprintf(reason, sizeof reason,
                          "Kai never allows agents to change its settings through its checks. " KAI_NOT_A_BOUNDARY);
+            } else if (command_prints_credential(cmd)) {
+                decision = KAI_ACT_BLOCK;
+                kai_strlcpy(rule, "credential_print", sizeof rule);
+                snprintf(reason, sizeof reason, CRED_PRINT_REASON, command_prints_credential(cmd));
             } else if (rules_decide(cmd, source, rhost, sizeof rhost) == 2) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, "terminal_rule", sizeof rule);
@@ -1861,6 +1922,10 @@ static int hook_cursor(const char *json) {
             kai_strlcpy(why, "kai_self_protect", sizeof why);
             snprintf(reason, sizeof reason,
                      "Kai never allows agents to change its settings through its checks. " KAI_NOT_A_BOUNDARY);
+        } else if (cmd && command_prints_credential(cmd)) {
+            deny = 1;
+            kai_strlcpy(why, "credential_print", sizeof why);
+            snprintf(reason, sizeof reason, CRED_PRINT_REASON, command_prints_credential(cmd));
         } else if (cmd && rules_decide(cmd, "cursor", rhost, sizeof rhost) == 2) {
             deny = 1;
             kai_strlcpy(why, "terminal_rule", sizeof why);
@@ -1968,7 +2033,7 @@ static int hook_cursor(const char *json) {
         kai_audit_entry e = {"cursor", ev ? ev : "unknown", "would-block", why, reason,
                              tool, ctx, mctx, session, cwd, NULL};
         kai_audit_write(&e);
-        printf("{\"permission\":\"allow\"}\n");
+        printf("{}\n");   /* no opinion: Cursor's own approval decides */
         deny = 0;
     } else if (deny) {
         maybe_wait_note(reason, sizeof reason, session, why, subject);
@@ -1984,8 +2049,12 @@ static int hook_cursor(const char *json) {
                                  "allowed by your exception", tool, ctx, mctx, session, cwd, NULL};
             kai_audit_write(&e);
         }
-        /* explicit allow keeps Cursor's own flow */
-        printf("{\"permission\":\"allow\"}\n");
+        /* No opinion. An explicit "allow" would read as Kai approving the call
+         * for the user; Cursor 3.27.22 treats a reply without "permission"
+         * exactly like "allow" (it acts only on "deny" and "ask"), and if a
+         * later Cursor starts honouring "allow" as approval, Kai still won't
+         * be granting anything. */
+        printf("{}\n");
     }
     if (tool || kind == NEXT_PROMPT)
         follow_up(p, "cursor", session, kind, tool, subject, cwd, deny && !cursor_ask ? why : NULL, ctx);

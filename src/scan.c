@@ -2,6 +2,7 @@
 #include "internal.h"
 
 #include <ctype.h>
+#include <limits.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -521,12 +522,57 @@ int kai_rule_is_builtin(const char *rule) {
            (n >= 11 && !strcmp(rule + n - 11, "config.toml"));
 }
 
+/* G4 / S3: the same file reached through a symlinked folder ("~/link/x" where
+ * ~/link -> ~/.claude) must get the same decision. The deepest existing prefix
+ * is resolved (the file itself may not exist yet: a Write creates it) and the
+ * rest appended. NULL when nothing resolves differently. */
+static char *resolved_variant(const char *np) {
+    char buf[PATH_MAX];
+    size_t n = strlen(np);
+    if (n >= sizeof buf) return NULL;
+    memcpy(buf, np, n + 1);
+    char real[PATH_MAX];
+    for (;;) {
+        if (realpath(buf, real)) break;
+        char *slash = strrchr(buf, '/');
+        if (!slash || slash == buf) return NULL;
+        *slash = '\0';
+    }
+    size_t kept = strlen(buf);
+    sb_t out;
+    sb_init(&out);
+    sb_adds(&out, real);
+    sb_adds(&out, np + kept);
+    char *r = sb_take(&out);
+    if (r && strcmp(r, np) == 0) { free(r); return NULL; }
+    return r;
+}
+
+static int path_protected_norm(const kai_policy *p, char *np, char *why, size_t whylen);
+
 int kai_path_protected(const kai_policy *p, const char *path, const char *cwd,
                        char *why, size_t whylen) {
     if (why && whylen) why[0] = '\0';
     if (!p || !path) return 0;
     char *np = kai_normalize_path(path, cwd);
     if (!np) return 0;
+    char *rv = resolved_variant(np);
+    if (path_protected_norm(p, np, why, whylen)) { free(rv); return 1; }
+    if (!rv) return 0;
+    /* A protected root written from $HOME may itself sit behind a symlink
+     * (/var -> /private/var): try the resolved path with and without it. */
+    int hit = 0;
+    if (strncmp(rv, "/private/", 9) == 0) {
+        char *bare = strdup(rv + 8);
+        hit = bare && path_protected_norm(p, bare, why, whylen);
+    }
+    if (!hit) hit = path_protected_norm(p, rv, why, whylen);
+    else free(rv);
+    return hit;
+}
+
+/* Takes ownership of np. */
+static int path_protected_norm(const kai_policy *p, char *np, char *why, size_t whylen) {
     if (agent_control_path(np, why, whylen)) { free(np); return 1; }
     /* The trust store is classified before `allow`/`protect` so CA bundles get
      * read-allow + override-tier writes, not a blunt allow or a secret block. */

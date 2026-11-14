@@ -57,7 +57,7 @@ if [ -f "$mark" ] && [ -n "$(find "$mark" -mmin -10 2>/dev/null)" ]; then say=0;
 
 case "$agent:$event" in
     cursor:prompt) printf '{"continue":true}\n' ;;
-    cursor:cursor_read) printf '{"permission":"allow"}\n' ;;
+    cursor:cursor_read) printf '{}\n' ;;   # no opinion: Cursor's own flow
     cursor:cursor_tool)
         # Cursor's own approval decides: "ask" never grants more than the user does.
         printf '{"permission":"ask","user_message":"%s","agent_message":"%s"}\n' "$MSG" "$MSG" ;;

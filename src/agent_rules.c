@@ -43,7 +43,7 @@
 #include <readpassphrase.h>
 #endif
 
-#define LIMIT_LINE "Preview 1 can't stop a program with your permissions from editing Kai's rules; " \
+#define LIMIT_LINE "Kai's checks can't stop a program with your permissions from editing Kai's rules; " \
                    "the app release adds a protected writer."
 
 static const char *rules_path(void) {
