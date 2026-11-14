@@ -12,7 +12,7 @@ enum LiveCoverage {
     /// Nov 2: colours mean something. Green: checking. Neutral: watching.
     /// Grey: off, not included, not inspected or unknown. Red only for a real
     /// problem (a check unhealthy, an agent blocked by a broken hook).
-    enum Tone { case checking, watching, off, notIncluded, problem }
+    enum Tone { case checking, watching, partial, off, notIncluded, problem }
     struct Row: Equatable { let label: String; let state: String; let tone: Tone; let info: String }
 
     /// The agents Kai has checks for (the compact list shows only these).
@@ -79,6 +79,64 @@ enum LiveCoverage {
         if agents.contains(where: { $0.detected && $0.hooks == "failing" }) { return .problem }
         if agents.contains(where: { $0.detected && $0.hooks == "installed" }) { return .checking }
         return internetLevel == 1 ? .watching : .off
+    }
+
+    // MARK: 0.3 status words
+
+    /// The header, from measured state. In this release the agents' hooks are
+    /// the only thing that stops anything, so the words are about checking,
+    /// never "protected". Always words, never a colour alone.
+    ///   Checking         (green)  hooks installed and healthy for every agent found
+    ///   Partly checking  (amber)  an agent without hooks, a paused session, or a check set to warn
+    ///   Not checking     (grey)   no hooks installed, or Kai paused
+    ///   broken           (red)    Kai's program or launcher missing, or a hook failing
+    enum Status: Equatable { case checking, partly, notChecking, broken, unknown }
+    struct Headline: Equatable {
+        let status: Status
+        let words: String
+        let detail: String?
+        var tone: Tone {
+            switch status {
+            case .checking: return .checking
+            case .partly: return .partial
+            case .notChecking, .unknown: return .off
+            case .broken: return .problem
+            }
+        }
+    }
+    static let brokenWords = "Kai's checks are off; its settings aren't protected"
+
+    /// agents nil: the list couldn't be read. programMissing: Kai's program or
+    /// its hook launcher is gone (the hooks can't run Kai).
+    static func headline(agents: [AgentRow]?, programMissing: Bool, pausedAll: Bool,
+                         pausedSessions: Int = 0, warnOnly: Bool = false) -> Headline {
+        let failing = (agents ?? []).filter { $0.hooks == "failing" }
+        if programMissing || !failing.isEmpty {
+            let d = failing.first?.detail
+                ?? (programMissing ? "Kai's program is missing, so agents run unchecked. Click Repair." : nil)
+            return Headline(status: .broken, words: brokenWords, detail: d)
+        }
+        guard let agents else { return Headline(status: .unknown, words: "Looking for agents…", detail: nil) }
+        if pausedAll { return Headline(status: .notChecking, words: "Not checking", detail: "Kai is paused; it resumes by itself.") }
+        let found = agents.filter(\.detected)
+        let checked = found.filter { $0.hooks == "installed" }
+        if checked.isEmpty {
+            return Headline(status: .notChecking, words: "Not checking",
+                            detail: found.isEmpty ? "No supported agent found on this Mac." : "No agent has Kai's checks installed.")
+        }
+        let missing = found.filter { $0.hooks != "installed" }.map { title($0.name) }
+        if !missing.isEmpty {
+            return Headline(status: .partly, words: "Partly checking",
+                            detail: "Not checked: " + missing.joined(separator: ", "))
+        }
+        if pausedSessions > 0 {
+            return Headline(status: .partly, words: "Partly checking",
+                            detail: "\(pausedSessions) session\(pausedSessions == 1 ? " is" : "s are") paused.")
+        }
+        if warnOnly {
+            return Headline(status: .partly, words: "Partly checking", detail: "Some checks only warn; they don't stop anything.")
+        }
+        return Headline(status: .checking, words: "Checking", detail: checked.map { title($0.name) }.joined(separator: ", "))
     }
 
     /// STEP 2c / C1: an agent whose Kai hooks are installed but don't answer

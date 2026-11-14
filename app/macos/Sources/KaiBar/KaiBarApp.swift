@@ -129,7 +129,7 @@ struct MenuBarLabel: View {
 
     var body: some View {
         Image(systemName: model.menuBarSymbol)
-            .accessibilityLabel("Kai: \(model.health == .problem ? model.headline : model.statusSentence(storageOn: storage.isOn, networkOn: wall.isOn))")
+            .accessibilityLabel("Kai: \(model.health == .problem ? model.headline : model.headline(AgentsModel.shared).words)")
             .onReceive(NotificationCenter.default.publisher(for: .kaiOpenSettings)) { _ in
                 openWindow(id: "settings")
                 NSApp.activate(ignoringOtherApps: true)

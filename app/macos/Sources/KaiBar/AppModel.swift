@@ -83,8 +83,6 @@ final class AppModel: ObservableObject {
     // is off; Files unverified = not running = off; Internet unverified is
     // never inferred from the policy: it stays out of the headline and shows
     // as "Internet: on (not verified)".
-    enum ObservedProtection { case protected, partial, notProtected }
-
     func levels(storageOn: Bool, networkOn: Bool) -> (files: Int32, internet: Int32, paused: Bool) {
         // Step 6: an edition without the Files extension says so, never "Files off".
         let files: Int32 = !StorageWall.included ? KAI_FILES_NOT_INCLUDED
@@ -107,12 +105,16 @@ final class AppModel: ObservableObject {
         return nil
     }
 
-    func observedProtection(storageOn: Bool, networkOn: Bool) -> ObservedProtection {
-        let l = levels(storageOn: storageOn, networkOn: networkOn)
-        let none = l.files == KAI_FILES_NOT_INCLUDED
-        if (l.files == 2 || none) && l.internet == 2 && !l.paused { return .protected }
-        if (l.files == 0 || none) && l.internet == 0 { return .notProtected }
-        return .partial
+    /// 0.3: the status words everywhere (popover header, Settings sidebar,
+    /// menu-bar label), from measured state: the agents' hooks as `kai
+    /// snapshot` measured them, Kai's program on disk, and pauses.
+    func headline(_ agents: AgentsModel) -> LiveCoverage.Headline {
+        let known = agents.loaded && agents.sourceError == nil
+        let warn = (policy?.switches ?? [:]).contains { $0.key.hasPrefix("on_") && $0.value == "warn" }
+        return LiveCoverage.headline(agents: known ? agents.agents : nil,
+                                     programMissing: cliPath == nil || Lifecycle.programMissing,
+                                     pausedAll: GrantManager.shared.pauseState(nil) != Int32(KAI_PAUSE_NONE),
+                                     pausedSessions: agents.pausedSessions.count, warnOnly: warn)
     }
 
     /// The one status sentence ("Protected · 3 agents working", "Watching only",

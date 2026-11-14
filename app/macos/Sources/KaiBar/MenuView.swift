@@ -258,26 +258,6 @@ struct MenuView: View {
         }
     }
 
-    // B3: one line of protections, from measured state. Durable changes
-    // (Watch, Off) live in Settings, behind owner authentication.
-    private var protectionsLine: some View {
-        let l = model.levels(storageOn: storage.isOn, networkOn: wall.isOn)
-        return Button { open(.files) } label: {
-            HStack(spacing: 6) {
-                if StorageWall.included {   // otherwise the header says Files isn't included
-                    Text(ProtectionText.mark("Files", level: storage.isOn ? (l.files > 0 ? l.files : -1) : 0))
-                    Text("·").foregroundStyle(Theme.muted)
-                }
-                Text(ProtectionText.mark("Internet", level: l.internet))
-                Spacer()
-                Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(Theme.muted)
-            }
-            .font(.system(size: 12)).foregroundStyle(Theme.soft).contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help("Open Settings to change Files or Internet.")
-    }
-
     // Item 1: a persistent banner while any session is paused, with Resume.
     // (Pauses auto-resume and are capped at 1 day in the engine.)
     @ViewBuilder private var pauseBanner: some View {
@@ -296,19 +276,14 @@ struct MenuView: View {
 
     private func openAgentControl() { open(.agentControl) }
 
-    /// Spec §4: orange is for problems. A protection you switched off is a
-    /// state, not a problem: neutral, and "Files: off" in the protections line.
-    /// Nov 2: colours mean something. Red only for a real problem (a check
-    /// unhealthy, an agent blocked by a broken hook, Kai's own health); amber
-    /// while paused; green when agents are being checked; neutral for watching.
-    private var glow: Color {
-        let ag = AgentsModel.shared.loaded ? AgentsModel.shared.agents : []
-        let tone = LiveCoverage.headlineTone(agents: ag, internetLevel: Int(kai_wall_observed_level("network")))
-        if tone == .problem || model.health == .problem { return Theme.coral }
-        if grantManager.pauseState(nil) != Int32(KAI_PAUSE_NONE) { return Theme.amber }
-        return Theme.coverage(tone)
-    }
+    /// 0.3: the header's words and colour, from measured state (LiveCoverage.headline).
+    /// Red only when Kai itself is broken; a routine stop is never red.
+    private var status: LiveCoverage.Headline { model.headline(agents) }
 
+    private var glow: Color {
+        if model.health == .problem { return Theme.coral }
+        return Theme.coverage(status.tone)
+    }
 
     private var background: some View {
         ZStack {
@@ -318,23 +293,29 @@ struct MenuView: View {
         .animation(.easeInOut(duration: 0.6), value: glow)
     }
 
-    // B3: one header line from capability state ("Protected · 3 agents
-    // working", "Partly protected · Files is watching only", "Kai is paused").
+    // 0.3: the header says what Kai is doing, in words next to the colour:
+    // Checking · Partly checking · Not checking, or, when Kai is broken,
+    // "Kai's checks are off; its settings aren't protected" with Repair.
     private var header: some View {
         HStack(spacing: 10) {
             Image("KaiLogo").resizable().frame(width: 26, height: 26).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
-                Text(model.statusSentence(storageOn: storage.isOn, networkOn: wall.isOn,
-                                          agents: agents.countKnown ? agents.workingNow.count : -1))
+                let h = status
+                let otherProblem = model.health == .problem && h.status != .broken
+                Text(otherProblem ? model.headline : h.words)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(model.health == .problem ? Theme.coral : glow)
+                    .foregroundStyle(otherProblem ? Theme.coral : Theme.coverage(h.tone))
                     .fixedSize(horizontal: false, vertical: true)
+                if let d = otherProblem ? model.detailLine : h.detail {
+                    Text(d).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                        .lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                }
+                // Per-agent banners carry their own Repair; otherwise it's here.
+                if h.status == .broken && LiveCoverage.blocked(agents: agents.loaded ? agents.agents : []).isEmpty {
+                    RepairButton { Task { await model.refresh(); await agents.refresh() } }
+                }
                 if let note = model.internetUnverifiedNote(networkOn: wall.isOn) {
                     Text(note).font(.system(size: 11)).foregroundStyle(Theme.amber)
-                }
-                if !StorageWall.included {
-                    Text(ProtectionText.filesNotIncluded).font(.system(size: 11)).foregroundStyle(Theme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .layoutPriority(1)   // the status lines wrap rather than truncate
@@ -353,15 +334,6 @@ struct MenuView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Settings")
         }
-    }
-
-    private var stats: some View {
-        HStack(alignment: .top, spacing: 8) {
-            StatTile(value: model.blockedThisWeek, label: "blocked this week", accent: model.blockedThisWeek > 0)
-            StatTile(value: model.cleanedThisWeek, label: "requests cleaned")
-            StatTile(value: model.reachedHosts.count, label: "hosts noticed")
-        }
-        .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder private var recent: some View {
@@ -414,7 +386,7 @@ struct MenuView: View {
                 Button { grantManager.pauseAll(minutes: 15) } label: {
                     Label("Pause Kai · 15 min", systemImage: "pause.circle")
                 }
-                .help("Pauses Kai for 15 minutes, then it resumes by itself. Kai's own settings stay protected.")
+                .help("Pauses Kai's checks for 15 minutes, then they resume by themselves.")
             }
             Button("Settings") { open(.files) }
             Spacer()
@@ -430,63 +402,6 @@ struct MenuView: View {
         settingsPage = page.rawValue
         openWindow(id: "settings")
         NSApp.activate(ignoringOtherApps: true)
-    }
-}
-
-// MARK: - Hero
-
-struct StatusHero: View {
-    @EnvironmentObject var model: AppModel
-    @EnvironmentObject var wall: NetworkWall
-    @EnvironmentObject var storage: StorageWall
-
-    // U1: the hero shows OBSERVED wall enforcement (the walls' live OS state),
-    // not configured policy. A Kai problem (policy unreadable, audit tampered)
-    // still takes precedence.
-    private var obs: AppModel.ObservedProtection {
-        model.observedProtection(storageOn: storage.isOn, networkOn: wall.isOn)
-    }
-    private var color: Color {
-        if model.health == .problem { return Theme.coral }
-        switch obs {
-        case .protected: return Theme.lime
-        case .partial: return Theme.amber
-        case .notProtected: return Theme.coral
-        }
-    }
-
-    private var title: String {
-        if model.health == .problem { return model.headline }
-        return model.statusSentence(storageOn: storage.isOn, networkOn: wall.isOn)
-    }
-
-    private var subtitle: String {
-        if model.health == .problem, let d = model.detailLine { return d }
-        switch obs {
-        case .protected: return "Both walls are enforcing on this Mac."
-        case .partial: return "A wall is not enforcing — open Settings to check it."
-        case .notProtected: return "No wall is enforcing. Agents are not restricted."
-        }
-    }
-
-    var body: some View {
-        VStack(spacing: 8) {
-            ZStack {
-                Circle().fill(RadialGradient(colors: [color.opacity(0.22), .clear], center: .center,
-                                             startRadius: 0, endRadius: 64))
-                Circle().stroke(color.opacity(0.10), lineWidth: 10).padding(-5)
-                Circle().stroke(color, lineWidth: 2)
-                Image("KaiLogo").resizable().frame(width: 70, height: 70)
-                    .saturation(obs == .protected ? 1 : 0.2)
-            }
-            .frame(width: 120, height: 120)
-            .shadow(color: color.opacity(0.35), radius: 24)
-            .padding(.top, 4)
-            Text(title).font(Theme.display(24)).multilineTextAlignment(.center)
-            Text(subtitle).font(.system(size: 13)).foregroundStyle(Theme.muted)
-                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity)
     }
 }
 
@@ -535,10 +450,10 @@ struct BlockNotice: View {
     @State private var showWhy = false
 
     var body: some View {
-        Card(stroke: Color(hex: 0x4A2A27)) {
+        Card(stroke: Color(hex: 0x27354A)) {   // a routine stop: neutral blue, never red
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
-                    Image(systemName: "xmark.shield").foregroundStyle(Theme.coral)
+                    Image(systemName: "hand.raised").foregroundStyle(Theme.blue)
                     Text("\(event.agentName) was stopped").font(.system(size: 13, weight: .semibold))
                     Spacer()
                     if let d = event.date { Text(ago(d)).font(.system(size: 11)).foregroundStyle(Theme.muted) }
@@ -553,7 +468,7 @@ struct BlockNotice: View {
                 if showWhy {
                     VStack(alignment: .leading, spacing: 4) {
                         if let x = event.excerpt {
-                            Text(x).font(Theme.mono).foregroundStyle(Color(hex: 0xFFB4AC)).lineLimit(4)
+                            Text(x).font(Theme.mono).foregroundStyle(Theme.soft).lineLimit(4)
                         }
                         if !event.rule.isEmpty {
                             Text("Rule: \(event.rule)").font(.system(size: 11)).foregroundStyle(Theme.muted)
@@ -576,23 +491,6 @@ struct BlockNotice: View {
 }
 
 // MARK: - Pieces
-
-struct StatTile: View {
-    let value: Int
-    let label: String
-    var accent = false
-    var body: some View {
-        Card(padding: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(value)").font(Theme.display(22)).foregroundStyle(accent ? Theme.lime : .white)
-                Text(label).font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(2)
-                Spacer(minLength: 0)
-            }
-            .frame(maxHeight: .infinity, alignment: .topLeading)
-        }
-        .frame(maxHeight: .infinity)
-    }
-}
 
 struct AgentBadge: View {
     let agent: Agent
@@ -641,108 +539,6 @@ struct AgentCard: View {
                     .disabled(model.busy || model.status == nil)
             }
         }
-    }
-}
-
-struct NetworkCard: View {
-    @EnvironmentObject var model: AppModel
-    @EnvironmentObject var wall: NetworkWall
-
-    private var subtitle: String {
-        guard wall.isOn else { return wall.summary }
-        switch model.policy?.switches["egress"] ?? "log" {
-        case "block": return "Protect · agents reach only sites you allowed"
-        case "off": return "Off"
-        default: return "Watch · see where agents go, nothing blocked"
-        }
-    }
-
-    private var warn: Bool {
-        switch wall.state {
-        case .needsApproval, .failed: return true
-        default: return false
-        }
-    }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "globe")
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.lime)
-                .frame(width: 32, height: 32)
-                .background(Theme.lime.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Internet").font(.system(size: 14, weight: .semibold))
-                Text(subtitle).font(.system(size: 12))
-                    .foregroundStyle(warn ? Theme.amber : Theme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
-            Toggle("Internet", isOn: Binding(get: { wall.isOn },
-                                                 set: { on in
-                                                     if on { wall.turnOn(); return }
-                                                     Task { if await OwnerAuth.shared.confirm("turn off Internet protection") { wall.turnOff() } }
-                                                 }))
-                .toggleStyle(KaiToggleStyle()).labelsHidden()
-                .disabled(wall.state == .activating || wall.state == .checking)
-        }
-        .padding(10)
-        .background(LinearGradient(colors: [Theme.surface, Color(hex: 0x1D2318)],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color(hex: 0x3A4420)))
-    }
-}
-
-struct StorageCard: View {
-    @EnvironmentObject var model: AppModel
-    @EnvironmentObject var storage: StorageWall
-
-    private var subtitle: String {
-        switch storage.state {
-        case .off: return "Off: agents can open your keys and passwords"
-        case .on:
-            switch model.policy?.switches["storage"] ?? "off" {
-            case "block": return "Protect · agents can't open your keys and passwords"
-            case "log": return "Watch · see what would be blocked"
-            default: return "On"
-            }
-        default: return storage.summary
-        }
-    }
-
-    private var warn: Bool {
-        if case .needsApproval = storage.state { return true }
-        if case .failed = storage.state { return true }
-        return false
-    }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "externaldrive")
-                .font(.system(size: 15)).foregroundStyle(Theme.lime)
-                .frame(width: 32, height: 32)
-                .background(Theme.lime.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Files").font(.system(size: 14, weight: .semibold))
-                Text(subtitle).font(.system(size: 12))
-                    .foregroundStyle(warn ? Theme.amber : Theme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
-            Toggle("Files", isOn: Binding(get: { storage.isOn },
-                                                 set: { on in
-                                                     if on { storage.turnOn(); return }
-                                                     Task { if await OwnerAuth.shared.confirm("turn off Files protection") { storage.turnOff() } }
-                                                 }))
-                .toggleStyle(KaiToggleStyle()).labelsHidden()
-                .disabled(storage.state == .activating || storage.state == .checking)
-        }
-        .padding(10)
-        .background(LinearGradient(colors: [Theme.surface, Color(hex: 0x1D2318)],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color(hex: 0x3A4420)))
     }
 }
 
@@ -857,7 +653,7 @@ struct PauseControl: View {
     let until: Date?
     var pauseLabel = "Pause 15 min"
     var title: String? = nil
-    var note = "Kai's own settings stay protected."
+    var note = "Kai still stops agents changing its own settings."
     let pause: () -> Void
     let resume: () -> Void
     let extend: () -> Void
@@ -894,7 +690,7 @@ struct PauseControl: View {
                 Label(pauseLabel, systemImage: "pause.circle").font(.system(size: 12))
             }
             .buttonStyle(.plain).foregroundStyle(Theme.muted)
-            .help("Lets this through for 15 minutes, logged, then resumes by itself. Kai's own settings stay protected.")
+            .help("Lets this through for 15 minutes, logged, then resumes by itself. Kai still stops agents changing its own settings.")
         }
     }
 }
@@ -927,8 +723,8 @@ enum PauseText {
     /// What a global pause means, exactly: the hooks and Files let soft blocks
     /// through and log them; the Internet wall lets everything through
     /// unrecorded; Kai's own files stay blocked.
-    static let global = "Agents aren't being checked and nothing is blocked. Files notes what it would have "
-        + "blocked; Internet activity isn't recorded. Kai's own settings stay protected."
+    static let global = "Agents aren't being checked and nothing is stopped, except agents changing Kai's own "
+        + "settings. Internet activity isn't recorded."
 }
 
 enum ProtectionText {
@@ -949,7 +745,7 @@ enum ProtectionText {
 extension Theme {
     static func tone(_ t: EventTone) -> Color {
         switch t {
-        case .stopped: return coral
+        case .stopped: return blue   // a routine stop is information, not an alarm
         case .allowed, .cleaned: return lime
         case .neutral: return muted
         case .warning: return amber
@@ -1006,7 +802,7 @@ struct BlockedAgentBanner: View {
             Text(result ?? banner.detail).font(.system(size: 11)).foregroundStyle(Theme.soft)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 12) {
-                Button("Repair") { run(["doctor", "--fix"]) }.buttonStyle(.plain).foregroundStyle(Theme.lime)
+                Button("Repair") { repair() }.buttonStyle(.plain).foregroundStyle(Theme.lime)
                 Button(banner.actions.last ?? "Turn off checks") { run(["uninstall", banner.agentKey]) }
                     .buttonStyle(.plain).foregroundStyle(Theme.muted)
                 if busy { ProgressView().controlSize(.small) }
@@ -1014,6 +810,15 @@ struct BlockedAgentBanner: View {
         }
         .padding(10)
         .background(Theme.coral.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+    }
+    private func repair() {
+        busy = true
+        Task {
+            let lines = await Lifecycle.repair()
+            busy = false
+            result = lines.joined(separator: " ")
+            done()
+        }
     }
     private func run(_ args: [String]) {
         busy = true
@@ -1029,12 +834,43 @@ struct BlockedAgentBanner: View {
     }
 }
 
+/// 0.3 / §2.6: Repair when Kai itself is broken: puts a missing program back
+/// from Kai.app's copy (one admin prompt), then repairs the hooks.
+struct RepairButton: View {
+    var done: () -> Void
+    @State private var busy = false
+    @State private var result: String?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                Button("Repair") {
+                    busy = true
+                    Task {
+                        let lines = await Lifecycle.repair()
+                        busy = false
+                        result = lines.joined(separator: " ")
+                        done()
+                    }
+                }
+                .buttonStyle(.plain).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.lime)
+                .disabled(busy)
+                if busy { ProgressView().controlSize(.small) }
+            }
+            if let r = result {
+                Text(r).font(.system(size: 11)).foregroundStyle(Theme.soft).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.top, 2)
+    }
+}
+
 extension Theme {
     /// Nov 2: green checking, neutral watching, grey off or not included, red a problem.
     static func coverage(_ t: LiveCoverage.Tone) -> Color {
         switch t {
         case .checking: return lime
         case .watching: return soft
+        case .partial: return amber
         case .off, .notIncluded: return muted
         case .problem: return coral
         }

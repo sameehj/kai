@@ -49,6 +49,28 @@ check(LiveCoverage.headlineTone(agents: [agent("claude", "installed")], internet
 check(LiveCoverage.headlineTone(agents: [agent("claude", "failing")], internetLevel: 1) == .problem,
       "headline: red only for a real problem (a check unhealthy or an agent blocked)")
 
+print("status words (0.3)")
+func hl(_ a: [AgentRow]?, missing: Bool = false, paused: Bool = false, sessions: Int = 0, warn: Bool = false) -> LiveCoverage.Headline {
+    LiveCoverage.headline(agents: a, programMissing: missing, pausedAll: paused, pausedSessions: sessions, warnOnly: warn)
+}
+let ok2 = [agent("claude", "installed"), agent("codex", "installed"), agent("gemini", "n/a", detected: false)]
+check(hl(ok2).words == "Checking" && hl(ok2).tone == .checking, "every agent found has healthy hooks: Checking, green")
+check(hl(ok2).detail == "Claude Code, Codex", "...naming the agents checked")
+let part = [agent("claude", "installed"), agent("cursor", "missing")]
+check(hl(part).words == "Partly checking" && hl(part).tone == .partial, "an agent without hooks: Partly checking, amber")
+check(hl(part).detail == "Not checked: Cursor", "...naming what isn't checked")
+check(hl(ok2, sessions: 1).words == "Partly checking", "a paused session: Partly checking")
+check(hl(ok2, warn: true).words == "Partly checking", "a check set to warn: Partly checking")
+check(hl([agent("cursor", "missing")]).words == "Not checking" && hl([agent("cursor", "missing")]).tone == .off,
+      "nothing installed: Not checking, grey")
+check(hl(ok2, paused: true).words == "Not checking", "Kai paused: Not checking")
+check(hl(ok2, missing: true).words == "Kai's checks are off; its settings aren't protected" && hl(ok2, missing: true).tone == .problem,
+      "Kai's program missing: the broken words, red")
+check(hl([agent("claude", "failing")]).status == .broken, "a failing hook: broken")
+check(hl(nil).status == .unknown && hl(nil).tone != .problem, "agents unknown: no claim, not red")
+let allWords = [hl(ok2), hl(part), hl([]), hl(ok2, missing: true), hl(nil)].map { $0.words + ($0.detail ?? "") }
+check(!allWords.contains { $0.contains("Protected") || $0.contains("Always protected") }, "no status says Protected")
+
 print("blocked banner (STEP 2c)")
 var broken = AgentRow(name: "claude"); broken.hooks = "failing"; broken.detected = true
 broken.detail = "Kai's program is missing (/usr/local/bin/kai): Kai's checks are off and its settings aren't protected; the agent keeps working unchecked"

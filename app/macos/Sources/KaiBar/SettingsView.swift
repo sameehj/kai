@@ -84,7 +84,7 @@ struct SettingsView: View {
                     // Item 4: observed enforcement only, never a blanket "All
                     // protected" from agent-hook state.
                     Text(model.health == .problem ? model.headline
-                         : model.statusSentence(storageOn: storage.isOn, networkOn: wall.isOn))
+                         : model.headline(AgentsModel.shared).words)
                         .font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(1)
                     if !StorageWall.included {
                         Text(ProtectionText.filesNotIncluded).font(.system(size: 11)).foregroundStyle(Theme.muted)
@@ -1289,7 +1289,7 @@ struct WallPill: View {
     let word: String
     private var color: Color {
         switch word {
-        case "blocking", "watching": return Theme.lime
+        case "blocking": return Theme.lime
         case "watching", "starting": return Theme.amber
         case "unhealthy": return Theme.coral
         default: return Theme.muted
