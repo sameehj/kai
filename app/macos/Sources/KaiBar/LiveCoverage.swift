@@ -58,7 +58,7 @@ enum LiveCoverage {
                 : Row(label: "Internet", state: "Unhealthy", tone: .problem,
                       info: "The Internet wall reports blocking, which this release never does.")
         case 1: internet = Row(label: "Internet", state: "Watching, not blocking", tone: .watching,
-                               info: "Connections Kai observes are recorded, not blocked. Blocking arrives in the next release.")
+                               info: "Connections Kai observes are recorded, not blocked.")
         case 0: internet = Row(label: "Internet", state: "Off", tone: .off, info: "The Internet wall is off.")
         default: internet = Row(label: "Internet", state: "Unknown", tone: .off,
                                 info: "Kai can't confirm the Internet wall's mode.")

@@ -597,7 +597,7 @@ private struct NetworkPage: View {
                             selected: !protect && raw == "block" ? "log" : raw) { model.setSwitch("egress", $0) }
                     .disabled(model.busy || model.policy == nil)
                 if !protect {
-                    Text("Internet: Kai records the connections it observes. Blocking arrives in the next release.")
+                    Text("Internet: Kai records the connections it observes.")
                         .font(.system(size: 12)).foregroundStyle(Theme.soft).fixedSize(horizontal: false, vertical: true)
                 }
                 HStack(spacing: 10) {

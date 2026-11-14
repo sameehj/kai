@@ -42,9 +42,15 @@ struct DecisionSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if showHeader {
-                Text(event.isNetwork && !event.isUnknownHost
-                     ? "\(event.agentName)\(sessionName) tried to reach \(host)" : event.plainSentence)
-                    .font(.system(size: 13, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(event.isNetwork && !event.isUnknownHost
+                         ? "\(event.agentName)\(sessionName) tried to reach \(host)" : event.plainSentence)
+                        .font(.system(size: 13, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    // The same brief as Activity's copy icon.
+                    CopyButton(text: CardText.brief(event, sessionName: agents.sessions
+                        .first { $0.id == event.session }?.name))
+                }
                 Text(whenLine).font(.system(size: 11)).foregroundStyle(Theme.muted)
             }
             if event.isNetwork && event.isBlock && !event.isUnknownHost && !event.isSilent {

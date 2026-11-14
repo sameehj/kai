@@ -542,6 +542,9 @@ struct BlockNotice: View {
                     Text("\(event.agentName) was stopped").font(.system(size: 13, weight: .semibold))
                     Spacer()
                     if let d = event.date { Text(ago(d)).font(.system(size: 11)).foregroundStyle(Theme.muted) }
+                    // The same brief as Activity's copy icon.
+                    CopyButton(text: CardText.brief(event, sessionName: AgentsModel.shared.sessions
+                        .first { $0.id == event.session }?.name))
                 }
                 Text((event.isPrompt ? "The prompt wasn't sent" : "The action didn't run")
                      + (event.detail.isEmpty ? "." : ": \(event.detail)."))
