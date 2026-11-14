@@ -131,7 +131,7 @@ struct MenuView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // Migration: one line; the details (Keep with Touch ID, Remove) are on the
+    // Migration: one line; the details (Keep, Remove) are on the
     // agent's page behind Review.
     @AppStorage("agentControlOpen") private var agentControlOpen = ""
     @ViewBuilder private var migratedConfirm: some View {
@@ -232,8 +232,7 @@ struct MenuView: View {
                                  + (g.count > 1 ? " ×\(g.count)" : "")).font(.system(size: 12))
                                 .lineLimit(1).truncationMode(.middle)
                                 .help(g.resource)
-                            Text(g.status).font(.system(size: 11))
-                                .foregroundStyle(g.status == "expired" ? Theme.muted : Theme.lime)
+                            Text(g.status).font(.system(size: 11)).foregroundStyle(Theme.lime)
                         }
                         Spacer()
                         Button(g.count > 1 ? "Revoke all" : "Revoke") { grantManager.revokeGroup(g) }
@@ -707,10 +706,12 @@ struct DevBadge: View {
 }
 
 /// B3: per-session pause is out of the release contract until it is verified
-/// end to end on the real extensions. Hidden unless a developer turns it on:
-///   defaults write io.github.sameehj.kai devPerSessionPause -bool YES
+/// end to end on the real extensions. Development copies only (never the
+/// release /Applications/Kai.app, whatever its defaults say), and only when a
+/// developer turns it on:
+///   defaults write io.github.sameehj.kai.dev devPerSessionPause -bool YES
 enum DevFlags {
-    static var perSessionPause: Bool { UserDefaults.standard.bool(forKey: "devPerSessionPause") }
+    static var perSessionPause: Bool { !KaiInstance.isRelease && UserDefaults.standard.bool(forKey: "devPerSessionPause") }
     /// Nov 1 corrective change: Protect for the Internet wall waits for Guard.
     /// Release builds never offer it (libkai keeps them in Watch); a developer
     /// build shows it only with `defaults write io.github.sameehj.kai.dev devInternetProtect -bool YES`.

@@ -502,22 +502,18 @@ final class GrantManager: ObservableObject {
     /// B2: a persistent Allow rule, made deliberately (More… → Create a rule),
     /// confirmed with owner authentication, bound to the verified identity.
     func createRule(_ req: PendingRequest) {
+        // 0.3: a routine allow is one deliberate click (the confirm dialog);
+        // Touch ID is kept for lowering a wall and break-glass only.
         guard req.rememberable, let ident = req.verifiedIdentity else { return }
-        Task {
-            guard await OwnerAuth.shared.confirm("allow \(req.agentTitle) to connect to \(req.resource) in every future session")
-            else { return }
-            await MainActor.run {
-                if self.writeRule(kind: Int32(KAI_RULE_ALLOW), req: req, identity: ident, authenticated: true) {
-                    KaiSounds.permissionGranted()
-                    Notifier.say("Kai rule: \(req.agentTitle) may connect to \(req.resource)", "In every session, until you remove it.")
-                    kai_grant_audit("approved", req.id, req.agent, req.resource, 2, "sign",
-                                    "rule created with owner authentication for \(ident)")
-                    for r in self.pending where r.op == "connect" && r.resource == req.resource
-                        && r.identity == req.identity { self.clearPending(r) }
-                }
-                self.refresh()
+        if writeRule(kind: Int32(KAI_RULE_ALLOW), req: req, identity: ident, authenticated: false) {
+            KaiSounds.permissionGranted()
+            Notifier.say("Kai rule: \(req.agentTitle) may connect to \(req.resource)", "In every session, until you remove it.")
+            kai_grant_audit("approved", req.id, req.agent, req.resource, 2, "sign", "rule created by console user for \(ident)")
+            for r in pending where r.op == "connect" && r.resource == req.resource && r.identity == req.identity {
+                clearPending(r)
             }
         }
+        refresh()
     }
 
     /// Fix 2: no session to bind to: allow this signed agent to reach this
@@ -744,30 +740,25 @@ final class GrantManager: ObservableObject {
     /// Keep a migrated rule: a fresh owner authentication (never the
     /// 30-minute window), then a normal permanent rule replaces it.
     func confirmMigrated(_ r: DecisionRule) {
-        Task {
-            guard await OwnerAuth.shared.confirm("keep allowing \(r.agentTitle) to reach \(r.dest) in every session",
-                                                 everyTime: true) else { return }
-            await MainActor.run {
-                guard let key = KaiApprovalKey.ensure() else { return }
-                let rid = UUID().uuidString
-                let json: String? = key.withUnsafeBytes { raw -> String? in
-                    guard let base = raw.bindMemory(to: UInt8.self).baseAddress,
-                          let c = kai_rule_build_json_until(rid, Int32(KAI_RULE_ALLOW), r.identity, r.agent, r.dest, 2,
-                                                            Int64(Date().timeIntervalSince1970), 0, 1, base, key.count)
-                    else { return nil }
-                    defer { free(c) }
-                    return String(cString: c)
-                }
-                if let json, FileManager.default.createFile(atPath: self.rulesDir + "/" + rid + ".json",
-                                                            contents: Data(json.utf8),
-                                                            attributes: [.posixPermissions: 0o600]) {
-                    kai_grant_audit("approved", rid, r.agent, r.dest, 2, "sign",
-                                    "migrated rule confirmed with owner authentication")
-                    try? FileManager.default.removeItem(atPath: self.rulesDir + "/" + r.id + ".json")
-                }
-                self.refresh()
-            }
+        // 0.3: keeping an allow is routine: no Touch ID.
+        guard let key = KaiApprovalKey.ensure() else { return }
+        let rid = UUID().uuidString
+        let json: String? = key.withUnsafeBytes { raw -> String? in
+            guard let base = raw.bindMemory(to: UInt8.self).baseAddress,
+                  let c = kai_rule_build_json_until(rid, Int32(KAI_RULE_ALLOW), r.identity, r.agent, r.dest, 2,
+                                                    Int64(Date().timeIntervalSince1970), 0, 0, base, key.count)
+            else { return nil }
+            defer { free(c) }
+            return String(cString: c)
         }
+        if let json, FileManager.default.createFile(atPath: self.rulesDir + "/" + rid + ".json",
+                                                    contents: Data(json.utf8),
+                                                    attributes: [.posixPermissions: 0o600]) {
+            kai_grant_audit("approved", rid, r.agent, r.dest, 2, "sign",
+                            "migrated rule kept by console user")
+            try? FileManager.default.removeItem(atPath: self.rulesDir + "/" + r.id + ".json")
+        }
+        self.refresh()
     }
 
     var migratedRules: [DecisionRule] { rules.filter { ($0.migrated ?? 0) == 1 && !$0.hasEnded } }
@@ -1223,6 +1214,11 @@ enum KaiSounds {
     static func approvalNeeded() { play(.approvalNeeded, key: "soundApprovalNeeded", default: true) }
     static func permissionGranted() { play(.allowed, key: "soundPermissionGranted", default: true) }
     static func blocked() { play(.blocked, key: "soundBlocked", default: false) }
+    /// The blocked cue is off by default, on banners as well as in the app.
+    static var blockedEnabled: Bool {
+        (UserDefaults.standard.object(forKey: "playSounds") as? Bool ?? true)
+            && (UserDefaults.standard.object(forKey: "soundBlocked") as? Bool ?? false)
+    }
 }
 
 /// B2: a persistent decision the user made (Keep blocked, or an Allow rule).
@@ -1267,7 +1263,7 @@ enum RuleText {
     static func covers(agent: String, identity: String, host: String) -> String {
         "Covers \(agent) signed as \(identity), in every session from now on, until you remove it in "
         + "Settings → Permissions. Only \(host), not its subdomains or other agents. "
-        + "Kai can't tell what is sent over this encrypted connection. Needs Touch ID or your password."
+        + "Kai can't tell what is sent over this encrypted connection."
     }
     /// B2: one passive hint per agent whose telemetry was blocked.
     static func telemetry(_ agent: String) -> String {

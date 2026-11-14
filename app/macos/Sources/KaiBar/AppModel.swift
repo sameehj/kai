@@ -294,7 +294,7 @@ final class AppModel: ObservableObject {
             if let t = lastNotified[key], now.timeIntervalSince(t) < 600 { continue }
             lastNotified[key] = now
             let g = groups[key]!
-            Notifier.post(g.last!, count: g.count, sound: playSounds ? .blocked : nil)
+            Notifier.post(g.last!, count: g.count, sound: KaiSounds.blockedEnabled ? .blocked : nil)
         }
     }
 

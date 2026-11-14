@@ -158,7 +158,7 @@ struct DecisionSheet: View {
                                       grants.allowForHour(grants.request(from: event)); done = .hour(Date().addingTimeInterval(3600)) },
                                     CardAction(title: "Keep blocked") {
                                       grants.keepBlocked(grants.request(from: event)); done = .kept }] : []),
-                        more: [CardAction(title: "Always allow (Touch ID)", enabled: signed,
+                        more: [CardAction(title: "Always allow", enabled: signed,
                                           help: signed ? "" : "Kai didn't record which signed agent this was (an older record).") {
                                    confirmRule = true }],
                         moreInfo: InfoText.always,
@@ -192,7 +192,7 @@ struct DecisionSheet: View {
         case .session: return "Allowed for this session"
         case .kept: return "Kept blocked for this session · permanent blocks are in Settings"
         case .always:
-            return ruleFor(allow: true, temporary: false) == nil ? "Waiting for Touch ID…" : "Always allowed"
+            return ruleFor(allow: true, temporary: false) == nil ? "Saving…" : "Always allowed"
         }
     }
 
@@ -257,7 +257,7 @@ struct AgentReachView: View {
                     ForEach(allowedRules) { r in
                         row(r.dest, r.untilLabel) {
                             if (r.migrated ?? 0) == 1 {
-                                Button("Keep (Touch ID)") { grants.confirmMigrated(r) }.buttonStyle(GhostButtonStyle())
+                                Button("Keep") { grants.confirmMigrated(r) }.buttonStyle(GhostButtonStyle())
                             }
                             Button("Remove") { grants.removeRule(r) }.buttonStyle(GhostButtonStyle())
                         }

@@ -516,7 +516,6 @@ private struct NetworkPage: View {
 
     private func turnOffCodexTelemetry() {
         Task {
-            guard await OwnerAuth.shared.confirm("change Codex's settings to turn off its analytics") else { return }
             let rc = kai_codex_analytics_off(1)
             await MainActor.run {
                 telemetryNote = rc == 1 ? "Done. Restart Codex for it to apply. (Kai kept a backup of config.toml.)"
@@ -529,7 +528,6 @@ private struct NetworkPage: View {
 
     private func turnOffClaudeTelemetry() {
         Task {
-            guard await OwnerAuth.shared.confirm("change Claude Code's settings to turn off its telemetry") else { return }
             let rc = kai_claude_set_env("DISABLE_TELEMETRY", "1")
             let rc2 = rc == 0 ? kai_claude_set_env("DISABLE_ERROR_REPORTING", "1") : rc
             await MainActor.run {
