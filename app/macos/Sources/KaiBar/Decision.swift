@@ -19,6 +19,10 @@ struct DecisionSheet: View {
     @State private var done: Choice?
     @State private var confirmRule = false
     @State private var showWhy = false
+    /// C4: `kai why <id> --json`; nil hides the lines (older CLI, or it failed).
+    @State private var why: WhyRecord?
+    @State private var notRight: String?
+    @State private var markingNotRight = false
 
     enum Choice: Equatable { case hour(Date), session, kept, always }
 
@@ -51,8 +55,17 @@ struct DecisionSheet: View {
                     CopyButton(text: CardText.brief(event, sessionName: agents.sessions
                         .first { $0.id == event.session }?.name))
                 }
-                Text(whenLine).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                HStack(spacing: 6) {
+                    Text(whenLine).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    if why?.isUnattributed == true {
+                        Text("Unattributed").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.amber)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .overlay(Capsule().stroke(Theme.amber.opacity(0.5)))
+                            .help("Kai couldn't tie this to an agent session.")
+                    }
+                }
             }
+            whyLines
             if event.isNetwork && event.isBlock && !event.isUnknownHost && !event.isSilent {
                 Text(HostCatalog.line(host)).font(.system(size: 12)).foregroundStyle(Theme.soft)
                 Text("If you allow it: \(event.agentName) can connect to this host for the time you choose. Kai can't "
@@ -75,11 +88,50 @@ struct DecisionSheet: View {
                 .font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.muted).textSelection(.enabled)
             }
         }
+        .task(id: event.decision_id) {
+            guard let id = event.decision_id, !id.isEmpty else { return }
+            let r = await KaiCLI.run(["why", id, "--json"])
+            why = r.ok ? WhyRecord.parse(r.out) : nil
+        }
         .confirmationDialog("Always allow \(event.agentName) to reach \(host)?", isPresented: $confirmRule) {
             Button("Always allow") { grants.createRule(grants.request(from: event)); done = .always }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(RuleText.covers(agent: event.agentName, identity: event.identity ?? "", host: host))
+        }
+    }
+
+    /// C4: what a retry would get now, the exact recovery, and "Not right".
+    @ViewBuilder private var whyLines: some View {
+        if let w = why {
+            if let line = w.retryLine {
+                Text(line).font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.soft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let rec = w.recovery, !rec.isEmpty {
+                Text("What you can do: \(rec)").font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        if let id = event.decision_id, !id.isEmpty, event.isBlock || event.decision == "ask" || why != nil {
+            HStack(spacing: 6) {
+                if let n = notRight {
+                    Text(n).font(.system(size: 11)).foregroundStyle(Theme.soft)
+                } else {
+                    Button("Not right") {
+                        markingNotRight = true
+                        Task {
+                            let r = await KaiCLI.run(["not-right", id])
+                            markingNotRight = false
+                            notRight = r.ok ? "Marked. Thanks." : "Couldn't mark it: \(r.message)"
+                        }
+                    }
+                    .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    .help("Tell Kai this stop was wrong. It's recorded on this Mac as a false positive.")
+                    .disabled(markingNotRight)
+                    if markingNotRight { ProgressView().controlSize(.mini) }
+                }
+            }
         }
     }
 

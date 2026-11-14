@@ -396,3 +396,32 @@ enum PlainDetail {
         return out
     }
 }
+
+/// C4: `kai why <decision-id> --json`, one decision record re-checked against
+/// the current rules. Every field is optional: an older CLI without `why`
+/// (or a failed run) gives nil, and the sheet hides these lines.
+struct WhyRecord: Decodable, Equatable {
+    var id: String? = nil
+    var ts: String? = nil
+    var agent: String? = nil
+    var component: String? = nil     // "agent hook" | "network wall" | "storage wall"
+    var rule: String? = nil
+    var target: String? = nil
+    var session: String? = nil
+    var attribution: String? = nil   // "hook: Claude Code session ab12" | "Unattributed"
+    var recovery: String? = nil
+    var reason: String? = nil
+    var retry: String? = nil         // "stopped (rule …)" | "allowed" | "not re-checkable: …"
+
+    static func parse(_ json: String) -> WhyRecord? {
+        guard let d = json.data(using: .utf8), let r = try? JSONDecoder().decode(WhyRecord.self, from: d) else { return nil }
+        return r
+    }
+    /// "Retry would now be: allowed", or nil when the CLI didn't say.
+    var retryLine: String? {
+        guard let r = retry?.trimmingCharacters(in: .whitespacesAndNewlines), !r.isEmpty else { return nil }
+        return "Retry would now be: \(r)"
+    }
+    /// Kai couldn't tie the stop to an agent session.
+    var isUnattributed: Bool { attribution?.lowercased().hasPrefix("unattributed") ?? false }
+}
