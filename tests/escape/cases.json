@@ -1024,6 +1024,26 @@
     {
       "what": "When the network extension isn't running (app quit, extension switched off or crashed), macOS doesn't filter anything. Not measured yet.",
       "where": "macOS content-filter behaviour; no test yet"
+    },
+    {
+      "what": "An MCP approval (kai allow-mcp without --for) now holds until you undo it. Kai doesn't re-check it when the server's program, version or tool list changes (redesign C3, not built), so an approval covers whatever the server becomes.",
+      "where": "src/agent_rules.c (`kai_cmd_allow_mcp`); ID mcp-grant-sticky"
+    },
+    {
+      "what": "Cursor: when Kai has no objection it answers {} (no opinion). Cursor 3.27.22's agent code acts only on \"deny\" and \"ask\" (extensions/cursor-agent-host/dist/462.js), so this matches the old explicit \"allow\" there; other Cursor versions aren't checked, and the live check with auto-run off is a manual step. Cursor 3.27.22 also sends the MCP server's name and URL, which Kai's Cursor hook doesn't use yet: Cursor MCP calls get the secret scan only, not the destructive or other-host asks.",
+      "where": "src/hooks.c (`hook_cursor`)"
+    },
+    {
+      "what": "Text a command carries isn't treated as an access: commit and PR messages (git -m, gh --title/--body), search patterns (grep/rg/ag), and heredoc bodies read by cat/tee with a target, git ... -F - or gh ... --body-file -. A script written that way and run later is the same known bypass as a script written with the agent's file tool. Interpreter and shell heredocs are still checked.",
+      "where": "src/scan.c (`text_words`), src/shell.c (`is_text_sink`)"
+    },
+    {
+      "what": "A file whose only secrets are Kai's canonical test fakes (a token containing EXAMPLE or KAIFAKE) is sent to the model. Prompts and tool arguments with such a token are still stopped.",
+      "where": "src/scan.c (`kai_blank_test_fakes`), src/hooks.c (`file_holds_sensitive`)"
+    },
+    {
+      "what": "Audit finding (no code change): the Files wall constrains only processes attributed to an agent; every other process is allowed. RECONCILED-PLAN principle 1 requires asset protection that never depends on attribution (Layer 1, host-wide). Not shipped in this release (the Files wall isn't in it); recorded so Layer 1 doesn't inherit it.",
+      "where": "src/storage.c (`kai_storage_open_allowed`, lines 56-58); docs/audit/walls-audit.md section 0.7"
     }
   ]
 }
