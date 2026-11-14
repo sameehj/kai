@@ -195,4 +195,13 @@ void kai_proc_free(kai_proc *pr);
  * the last 15 minutes). The one count for the popover and `kai status`. */
 int kai_sessions_working_count(void);
 
+
+/* C4: re-run the shell-command checks for `kai why` (hooks.c). */
+int kai_hook_recheck_command(const kai_policy *p, const char *agent, const char *cmd, const char *cwd,
+                             char *rule, size_t n);
+/* Phase 5: kai not-right / kai stats (stats.c). */
+int kai_cmd_not_right(int argc, char **argv);
+int kai_cmd_why_decision(int argc, char **argv);
+int kai_cmd_stats(int argc, char **argv);
+
 #endif

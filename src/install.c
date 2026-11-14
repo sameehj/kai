@@ -827,6 +827,7 @@ static int remove_tree(const char *path) {
 
 int kai_cmd_uninstall(int argc, char **argv) {
     const char *which = argc > 0 && strcmp(argv[0], "--purge") ? argv[0] : "all";
+    kai_audit("kai", "uninstall", "note", "uninstall", which);   /* counted by kai stats (no paths) */
     int purge = 0;
     for (int i = 0; i < argc; i++) if (!strcmp(argv[i], "--purge")) purge = 1;
     int rc = 0;

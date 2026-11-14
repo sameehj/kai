@@ -211,6 +211,9 @@ static void usage(void) {
         "  kai doctor                        check policy and installs\n"
         "  kai demo [--live]                 prove Kai's hooks work (--live: with a real agent session)\n"
         "  kai status [--json]               same as doctor; --json for scripts/app\n"
+        "  kai why <decision-id> [--json]    one stop: cause, recovery, and what a retry would get now\n"
+        "  kai not-right <decision-id>       mark a stop as wrong (counted by kai stats)\n"
+        "  kai stats --export [--days N]     local counts for the tester study; nothing is sent\n"
         "  kai policy [show|set|add|remove]  view or change the policy safely\n"
         "  kai allow-file <path> --read|--write --agent A [--for 1h]\n"
         "  kai allow-fetch <domain> --agent claude [--for 1h]\n"
@@ -257,7 +260,9 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "pending") == 0) return kai_cmd_pending(rest, restv);
     if (strcmp(cmd, "session") == 0) return kai_cmd_session(rest, restv);
     if (strcmp(cmd, "agents") == 0) return kai_cmd_agents(rest, restv);
-    if (strcmp(cmd, "why") == 0) return kai_cmd_why(rest, restv);
+    if (strcmp(cmd, "why") == 0) return kai_cmd_why_decision(rest, restv);
+    if (strcmp(cmd, "not-right") == 0) return kai_cmd_not_right(rest, restv);
+    if (strcmp(cmd, "stats") == 0) return kai_cmd_stats(rest, restv);
     if (strcmp(cmd, "denials") == 0) return kai_cmd_denials(rest, restv);
     if (strcmp(cmd, "demo") == 0) return kai_cmd_demo(rest, restv);
     if (strcmp(cmd, "allow") == 0) return kai_cmd_allow(rest, restv);

@@ -420,6 +420,24 @@ static const char *command_prints_credential(const char *cmd) {
     return what;
 }
 
+/* C4 "Retry would now be": the shell-command part of the decision, re-run
+ * against today's policy for `kai why`. Returns 1 and the rule when Kai would
+ * stop it now. The record's target is the redacted command, so a command whose
+ * secret was redacted is re-checked without it. */
+int kai_hook_recheck_command(const kai_policy *p, const char *agent, const char *cmd, const char *cwd,
+                             char *rule, size_t n) {
+    if (n) rule[0] = '\0';
+    if (!cmd || !*cmd) return 0;
+    if (command_controls_kai(cmd)) { kai_strlcpy(rule, "kai_self_protect", n); return 1; }
+    if (command_prints_credential(cmd)) { kai_strlcpy(rule, "credential_print", n); return 1; }
+    char why[256] = "";
+    if (p && kai_command_touches_protected_as(p, agent, cmd, cwd, why, sizeof why, NULL, NULL)) {
+        kai_strlcpy(rule, why[0] ? why : "protected_path", n);
+        return 1;
+    }
+    return 0;
+}
+
 #define CRED_PRINT_REASON "Kai stopped `%s`: it prints a saved login token or password, which gives whoever " \
     "reads it the same access. gh and git keep working; they use the token without printing it. If you need " \
     "it, run the command in your own terminal."
