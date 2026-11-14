@@ -1525,12 +1525,12 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 decision = KAI_ACT_BLOCK; ask = 1;
                 snprintf(reason, sizeof reason, "%s \xC2\xB7 %s deletes, publishes or changes users, so Kai asks every "
                          "time, even on an approved server (to allow this tool without asking: "
-                         "kai allow-mcp %s %s --agent %s --for 1h).", mcp_server, mcp_tool, mcp_server, mcp_tool, source);
+                         "kai allow-mcp %s %s --agent %s).", mcp_server, mcp_tool, mcp_server, mcp_tool, source);
             } else if (destructive) {
                 decision = KAI_ACT_BLOCK; ask = 0;
                 snprintf(reason, sizeof reason, "Kai stopped the MCP tool %s from %s: it deletes, publishes or changes "
                          "users, and %s can't ask the user here%s. Don't retry another way; ask the user to run "
-                         "kai allow-mcp %s %s --agent %s --for 1h, then retry%s.", mcp_tool, mcp_server,
+                         "kai allow-mcp %s %s --agent %s, then retry%s.", mcp_tool, mcp_server,
                          can_ask ? "Claude Code" : "this agent",
                          can_ask ? " in this permission mode" : "", mcp_server, mcp_tool, source,
                          can_ask ? ", or to switch Claude Code out of bypass mode" : "");
@@ -1543,12 +1543,12 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 decision = KAI_ACT_BLOCK; ask = human_prompt;
                 if (human_prompt)
                     snprintf(reason, sizeof reason, "%s \xC2\xB7 %s sends to %s, which isn't this server's own host, "
-                             "so Kai asks (to allow this tool without asking: kai allow-mcp %s %s --agent %s --for 1h).",
+                             "so Kai asks (to allow this tool without asking: kai allow-mcp %s %s --agent %s).",
                              mcp_server, mcp_tool, mcp_dest, mcp_server, mcp_tool, source);
                 else
                     snprintf(reason, sizeof reason, "Kai stopped the MCP tool %s from %s: it sends to %s, which isn't "
                              "this server's own host, and nobody can be asked here. Don't retry another way; ask the "
-                             "user to run kai allow-mcp %s %s --agent %s --for 1h, then retry.",
+                             "user to run kai allow-mcp %s %s --agent %s, then retry.",
                              mcp_tool, mcp_server, mcp_dest, mcp_server, mcp_tool, source);
             } else if (kai_cli_grant_allows("mcp", source, mcp_server, mcp_tool, cwd, tnow)) {
                 decision = KAI_ACT_NONE;                      /* the user's grant allows it */

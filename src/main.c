@@ -217,7 +217,7 @@ static void usage(void) {
         "  kai policy [show|set|add|remove]  view or change the policy safely\n"
         "  kai allow-file <path> --read|--write --agent A [--for 1h]\n"
         "  kai allow-fetch <domain> --agent claude [--for 1h]\n"
-        "  kai allow-mcp <server> [<tool>] --agent A [--for 1h]\n"
+        "  kai allow-mcp <server> [<tool>] --agent A [--for 1h]   (default: until kai undo)\n"
         "  kai allow-upload <file> --to <host> --agent A [--for 1h]\n"
         "  kai allow-capture --app <name> --agent A [--for 15m]  screen and app control\n"
         "  kai block <host> [--agent A]      keep agents from reaching a host\n"

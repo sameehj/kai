@@ -742,7 +742,7 @@ static const char *agent_supports(const char *op, int write, const char *agent) 
     return NULL;
 }
 
-typedef struct { const char *target, *to, *tool, *agent; long long secs; int read, write; } args_t;
+typedef struct { const char *target, *to, *tool, *agent; long long secs; int read, write, timed; } args_t;
 
 static int parse_args(const char *verb, int argc, char **argv, args_t *a, int want_two) {
     memset(a, 0, sizeof *a);
@@ -753,6 +753,7 @@ static int parse_args(const char *verb, int argc, char **argv, args_t *a, int wa
         else if (!strcmp(argv[i], "--read")) a->read = 1;
         else if (!strcmp(argv[i], "--write")) a->write = 1;
         else if (!strcmp(argv[i], "--for") && i + 1 < argc) {
+            a->timed = 1;
             if ((a->secs = parse_for(argv[++i])) < 0 || a->secs > 7 * 86400) {
                 fprintf(stderr, "kai %s: --for takes a duration up to 7d, like 30m, 1h or 1d\n", verb); return 2;
             }
@@ -825,10 +826,14 @@ int kai_cmd_allow_mcp(int argc, char **argv) {
     args_t a;
     int rc = parse_args("allow-mcp", argc, argv, &a, 1);
     if (rc) return rc;
-    if (!a.target || !a.agent) { fprintf(stderr, "usage: kai allow-mcp <server> [<tool>] --agent claude|codex [--for 1h]\n"); return 2; }
+    if (!a.target || !a.agent) { fprintf(stderr, "usage: kai allow-mcp <server> [<tool>] --agent claude|codex [--for 1h]   (default: until kai undo)\n"); return 2; }
     const char *no = agent_supports("mcp", 0, a.agent);
     if (no) { fprintf(stderr, "kai allow-mcp: %s.\n", no); return 2; }
     if ((rc = gatekeep("allow-mcp"))) return rc;
+    /* Phase 4 (redesign §3): an MCP approval holds until you undo it, not for
+     * an hour; --for still sets a limit. (Revalidation when the server's
+     * executable or tools change is C3, not built: ESCAPES mcp-grant-sticky.) */
+    if (!a.timed) a.secs = 365LL * 86400;
     long long until = (long long)time(NULL) + a.secs;
     if (kai_cli_grant_add(1, "mcp", a.agent, a.target, a.tool ? a.tool : "", until, NULL, NULL, 0) != 0) {
         fprintf(stderr, "kai allow-mcp: couldn't save the grant\n"); return 1;
