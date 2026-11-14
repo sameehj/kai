@@ -340,19 +340,23 @@ final class GrantManager: ObservableObject {
         for r in pending where !live.contains(where: { $0.id == r.id }) {
             try? FileManager.default.removeItem(atPath: pendingDir + "/" + r.id + ".json")
         }
-        let fresh = live.filter { r in !seenPending.contains(r.id) }
+        // 0.3: the Internet wall only watches in this release, so per-host
+        // connection cards are never shown or notified (a developer build in
+        // Protect still gets them). Their files expire as above.
+        let shown = DevFlags.internetProtect ? live : live.filter { $0.op != "connect" }
+        let fresh = shown.filter { r in !seenPending.contains(r.id) }
         if primed && !fresh.isEmpty { KaiSounds.approvalNeeded() }
         if postsNotifications {
             // Dogfood: a waiting card notifies (it used to only play a sound), one
             // per agent and host, with Allow for this task / Keep blocked on it.
-            let cards = live.map { NotifyPlan.Card(id: $0.id, agent: $0.agent, host: $0.resource) }
+            let cards = shown.map { NotifyPlan.Card(id: $0.id, agent: $0.agent, host: $0.resource) }
             let post = notifyPlan.cardsToNotify(cards)
-            if primed { for c in post { if let r = live.first(where: { $0.id == c.id }) { Notifier.card(r) } } }
-            let gone = pending.filter { r in !live.contains { $0.agent == r.agent && $0.resource == r.resource } }
+            if primed { for c in post { if let r = shown.first(where: { $0.id == c.id }) { Notifier.card(r) } } }
+            let gone = pending.filter { r in !shown.contains { $0.agent == r.agent && $0.resource == r.resource } }
             Notifier.withdraw(gone.map { NotifyPlan.cardID(agent: $0.agent, host: $0.resource) })
         }
-        seenPending.formUnion(live.map(\.id)); primed = true
-        pending = live
+        seenPending.formUnion(shown.map(\.id)); primed = true
+        pending = shown
         grants = loadJSON(dir: grantsDir).compactMap { try? JSONDecoder().decode(ActiveGrant.self, from: $0) }
             .sorted { $0.id < $1.id }
         rules = loadJSON(dir: rulesDir).compactMap { try? JSONDecoder().decode(DecisionRule.self, from: $0) }

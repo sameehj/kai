@@ -572,17 +572,25 @@ private struct NetworkPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             PageHeader(icon: "globe", title: "Internet",
-                       subtitle: "Agents can only reach sites you've allowed. Other apps are never touched.",
+                       subtitle: "Off unless you turn it on. When on, Kai records where agents connect; nothing is blocked.",
                        trailing: AnyView(statusPill))
-            if !wall.isOn {
-                Card(padding: 14, stroke: Color(hex: 0x3A4420)) {
+            // 0.3: opt-in. Off by default; Kai never turns the extension on by itself.
+            Card(padding: 14, stroke: Color(hex: 0x3A4420)) {
+                VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Text(wall.summary).font(.system(size: 13))
-                            .foregroundStyle(wall.state == .off ? Theme.soft : Theme.amber)
+                        Text("Internet (preview): Watching — nothing is blocked").font(.system(size: 13, weight: .semibold))
                         Spacer()
-                        Button("Turn on") { wall.turnOn() }.buttonStyle(LimeButtonStyle())
-                            .disabled(wall.state == .activating)
+                        Toggle("Internet (preview): Watching — nothing is blocked",
+                               isOn: Binding(get: { wall.isOn || wall.state == .activating },
+                                             set: { $0 ? wall.turnOn() : wall.turnOff() }))
+                            .toggleStyle(KaiToggleStyle()).labelsHidden()
+                            .disabled(wall.state == .activating || wall.state == .checking)
                     }
+                    Text(wall.isOn ? "On: Kai records the connections agents make. Turning it off removes the filter from this Mac."
+                                   : wall.summary + ". Turning it on asks macOS to approve Kai's network extension.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(wall.state == .off || wall.isOn ? Theme.muted : Theme.amber)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             VStack(alignment: .leading, spacing: 8) {
@@ -612,16 +620,14 @@ private struct NetworkPage: View {
             }
             EditableList(kind: "egress_allow", title: "Your allowed destinations",
                          help: "A host (also covers its subdomains), an IP address or range, optionally with :port: "
-                             + "db.yourcompany.com:5432, 10.0.0.0/8, 203.0.113.5:22. Built in: this Mac and each agent's model and sign-in hosts. GitHub "
-                             + "and package registries are asked about per host.",
+                             + "db.yourcompany.com:5432, 10.0.0.0/8, 203.0.113.5:22. Built in: this Mac and each agent's model and sign-in hosts.",
                          items: model.policy?.egressAllow ?? [], placeholder: "artifacts.yourcompany.com or 10.0.0.0/8")
             telemetry
             profileHosts
             // B2 agent profiles: what the built-in model hosts allow, and the limit.
             Text("Built in for every agent: this Mac and the model and sign-in hosts (anthropic.com, openai.com, "
                + "cursor.sh and others). Kai can't tell the model connection from other data sent to the same host. "
-               + "Everything else, such as GitHub or a package registry, is asked about per host the first time "
-               + "an agent tries it.")
+               + "Everything else is recorded, not blocked.")
                 .font(.system(size: 12)).foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }

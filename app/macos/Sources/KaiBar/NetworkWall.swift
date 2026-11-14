@@ -117,16 +117,55 @@ final class NetworkWall: NSObject, ObservableObject {
         OSSystemExtensionManager.shared.submitRequest(req)
     }
 
+    /// Off means off: the filter is disabled AND removed from the system's
+    /// network settings (it no longer shows under VPN & Filters).
     func turnOff() {
         let m = NEFilterManager.shared()
-        m.loadFromPreferences { [weak self] _ in
+        m.loadFromPreferences { [weak self] error in
+            if let error {
+                Task { @MainActor in self?.state = .failed(error.localizedDescription) }
+                return
+            }
             m.isEnabled = false
-            m.saveToPreferences { error in
-                Task { @MainActor in
-                    if let error { self?.state = .failed(error.localizedDescription) } else { self?.state = .off }
+            m.saveToPreferences { _ in
+                m.removeFromPreferences { error in
+                    Task { @MainActor in
+                        if let error { self?.state = .failed(error.localizedDescription) } else { self?.state = .off }
+                    }
                 }
             }
         }
+    }
+
+    /// Uninstall (C5): disable and remove the filter, then ask macOS to
+    /// deactivate the extension. `done` gets one line per step.
+    func removeForUninstall(_ done: @escaping @MainActor ([String]) -> Void) {
+        let m = NEFilterManager.shared()
+        m.loadFromPreferences { [weak self] error in
+            var lines: [String] = []
+            if let error { lines.append("Internet filter: couldn't read its settings (\(error.localizedDescription)).") }
+            let hadFilter = m.providerConfiguration != nil
+            m.isEnabled = false
+            m.saveToPreferences { _ in
+                m.removeFromPreferences { error in
+                    Task { @MainActor in
+                        if !hadFilter { lines.append("Internet filter: none was set up.") }
+                        else if let error { lines.append("Internet filter: not removed (\(error.localizedDescription)).") }
+                        else { lines.append("Internet filter: turned off and removed.") }
+                        self?.state = .off
+                        self?.deactivate { lines.append($0); done(lines) }
+                    }
+                }
+            }
+        }
+    }
+
+    private var deactivateDone: (@MainActor (String) -> Void)?
+    private func deactivate(_ done: @escaping @MainActor (String) -> Void) {
+        deactivateDone = done
+        let req = OSSystemExtensionRequest.deactivationRequest(forExtensionWithIdentifier: Self.extensionID, queue: .main)
+        req.delegate = self
+        OSSystemExtensionManager.shared.submitRequest(req)
     }
 
     /// After the extension is active, register it as the system's content filter.
@@ -172,6 +211,12 @@ extension NetworkWall: OSSystemExtensionRequestDelegate {
     nonisolated func request(_ request: OSSystemExtensionRequest,
                              didFinishWithResult result: OSSystemExtensionRequest.Result) {
         Task { @MainActor in
+            if let d = self.deactivateDone {
+                self.deactivateDone = nil
+                d(result == .willCompleteAfterReboot ? "Internet extension: Restart needed to finish removing it."
+                                                     : "Internet extension: removed.")
+                return
+            }
             // Remember what's now running, so we don't reactivate it next launch.
             if let v = self.embeddedExtensionVersion {
                 UserDefaults.standard.set(v, forKey: Self.activatedVersionKey)
@@ -181,6 +226,16 @@ extension NetworkWall: OSSystemExtensionRequestDelegate {
     }
 
     nonisolated func request(_ request: OSSystemExtensionRequest, didFailWithError error: Error) {
-        Task { @MainActor in self.state = .failed(error.localizedDescription) }
+        Task { @MainActor in
+            if let d = self.deactivateDone {
+                self.deactivateDone = nil
+                let ns = error as NSError
+                // 4 = not found: it was never installed, nothing to remove
+                d(ns.domain == OSSystemExtensionErrorDomain && ns.code == 4 ? "Internet extension: not installed."
+                  : "Internet extension: still listed (\(ns.localizedDescription)).")
+                return
+            }
+            self.state = .failed(error.localizedDescription)
+        }
     }
 }
