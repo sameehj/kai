@@ -99,6 +99,7 @@ test: kai tests/cli/kai-test
 	sh tests/gateway/run_gateway_tests.sh tests/cli/kai-test
 	sh tests/gateway/run_tls_tests.sh tests/cli/kai-test
 	python3 -I tests/corpus/run_corpus.py ./kai
+	python3 -I tests/regress/run_regress.py ./kai
 	python3 -I tests/coverage/run_coverage.py ./kai
 	@if sh tests/hook_writes_ok.sh; then python3 -I tests/escape/run_escape.py ./kai; \
 	 else echo "escape suite: skipped - needs a non-agent shell (Files protection blocks agent hook settings)"; fi
