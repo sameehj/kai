@@ -12,7 +12,7 @@ enum InfoText {
     static let protect = "Kai stops anything you haven't allowed."
     static let thisSession = "For this task: until this agent session ends. Durable rules stay in Settings."
     static let oneHour = "For one hour, even if the session ends sooner."
-    static let always = "Until you remove it. Needs Touch ID."
+    static let always = "Until you remove it."
     static let askedRecently = "Sites this agent tried that you haven't decided on."
     static let screenAppControl = "Screenshots, recording from the microphone or camera, and scripts that control "
         + "other apps (osascript). Kai asks per app: allowing Safari doesn't allow Terminal or screencapture. macOS "

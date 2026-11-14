@@ -47,8 +47,6 @@ final class AppModel: ObservableObject {
     private var tail: AuditTail?
     private var timer: Timer?
     private var ticks = 0
-    /// When each agent+rule last notified: repeats within 10 minutes stay quiet.
-    private var lastNotified: [String: Date] = [:]
 
     init() {
         notifyOnBlock = UserDefaults.standard.object(forKey: "notifyOnBlock") as? Bool ?? true
@@ -83,8 +81,6 @@ final class AppModel: ObservableObject {
     // is off; Files unverified = not running = off; Internet unverified is
     // never inferred from the policy: it stays out of the headline and shows
     // as "Internet: on (not verified)".
-    enum ObservedProtection { case protected, partial, notProtected }
-
     func levels(storageOn: Bool, networkOn: Bool) -> (files: Int32, internet: Int32, paused: Bool) {
         // Step 6: an edition without the Files extension says so, never "Files off".
         let files: Int32 = !StorageWall.included ? KAI_FILES_NOT_INCLUDED
@@ -107,12 +103,16 @@ final class AppModel: ObservableObject {
         return nil
     }
 
-    func observedProtection(storageOn: Bool, networkOn: Bool) -> ObservedProtection {
-        let l = levels(storageOn: storageOn, networkOn: networkOn)
-        let none = l.files == KAI_FILES_NOT_INCLUDED
-        if (l.files == 2 || none) && l.internet == 2 && !l.paused { return .protected }
-        if (l.files == 0 || none) && l.internet == 0 { return .notProtected }
-        return .partial
+    /// 0.3: the status words everywhere (popover header, Settings sidebar,
+    /// menu-bar label), from measured state: the agents' hooks as `kai
+    /// snapshot` measured them, Kai's program on disk, and pauses.
+    func headline(_ agents: AgentsModel) -> LiveCoverage.Headline {
+        let known = agents.loaded && agents.sourceError == nil
+        let warn = (policy?.switches ?? [:]).contains { $0.key.hasPrefix("on_") && $0.value == "warn" }
+        return LiveCoverage.headline(agents: known ? agents.agents : nil,
+                                     programMissing: cliPath == nil || Lifecycle.programMissing,
+                                     pausedAll: GrantManager.shared.pauseState(nil) != Int32(KAI_PAUSE_NONE),
+                                     pausedSessions: agents.pausedSessions.count, warnOnly: warn)
     }
 
     /// The one status sentence ("Protected · 3 agents working", "Watching only",
@@ -275,9 +275,10 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// One notification per agent and rule, however many blocks arrived, and
-    /// none for a rule that already notified in the last 10 minutes: an agent
-    /// retrying the same thing shouldn't turn into a stream of banners.
+    /// C4: one notification per incident (agent, reason, target). Repeats
+    /// within 10 minutes update that notification with a count instead of
+    /// posting another; the sound plays only for a new incident.
+    private var incidents = IncidentPlan(window: 600)
     private func notify(_ blocks: [AuditEvent]) {
         var groups: [String: [AuditEvent]] = [:]
         var order: [String] = []
@@ -287,12 +288,11 @@ final class AppModel: ObservableObject {
             if groups[key] == nil { order.append(key) }
             groups[key, default: []].append(e)
         }
-        let now = Date()
         for key in order {
-            if let t = lastNotified[key], now.timeIntervalSince(t) < 600 { continue }
-            lastNotified[key] = now
             let g = groups[key]!
-            Notifier.post(g.last!, count: g.count, sound: playSounds ? .blocked : nil)
+            let p = incidents.add(key: key, n: g.count)
+            Notifier.post(g.last!, count: p.count, id: p.id,
+                          sound: p.isNew && KaiSounds.blockedEnabled ? .blocked : nil)
         }
     }
 
@@ -572,15 +572,16 @@ enum Notifier {
     }
 
     /// count > 1: several blocks of the same rule arrived together.
-    static func post(_ e: AuditEvent, count: Int = 1, sound: KaiSound.Cue? = nil) {
+    /// `id`: the incident's notification; posting it again replaces it.
+    static func post(_ e: AuditEvent, count: Int = 1, id: String? = nil, sound: KaiSound.Cue? = nil) {
         guard available else { return }
         let c = UNMutableNotificationContent()
-        c.title = "Kai blocked \(e.agentName)" + (count > 1 ? " \(count) times" : "")
+        c.title = "Kai stopped \(e.agentName)" + (count > 1 ? " · \(count) times" : "")
         var body = e.detail.isEmpty ? e.rule : e.detail
         if let t = e.excerpt { body += "\n" + (t.split(separator: "\n").first.map(String.init) ?? t) }
         c.body = body
         if let sound { c.sound = UNNotificationSound(named: UNNotificationSoundName(rawValue: sound.fileName)) }
-        let req = UNNotificationRequest(identifier: e.id, content: c, trigger: nil)
+        let req = UNNotificationRequest(identifier: id ?? e.id, content: c, trigger: nil)
         // Asking is a no-op once the user has answered; the first block asks.
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
             if granted { UNUserNotificationCenter.current().add(req) }

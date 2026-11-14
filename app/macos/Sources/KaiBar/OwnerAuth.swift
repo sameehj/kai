@@ -3,9 +3,11 @@
 // B2: owner authentication only where it buys real safety. Touch ID or Apple
 // Watch where available, else the login password (.deviceOwnerAuthentication).
 //
-//   one click, no prompt   Allow for this session, Keep blocked, Revoke, Pause 15 min
-//   owner authentication   Files or Internet to Watch or Off; creating a rule
-//   every time             break-glass access to secrets (SSH keys, cloud credentials)
+//   one click, no prompt   every routine allow (this task, 1 hour, an Allow rule, keeping
+//                          a migrated rule), Keep blocked, Revoke, Pause 15 min, telemetry switches
+//   owner authentication   lowering a wall: turning a check down in policy, Files to Off
+//   every time             break-glass: access to secrets (SSH keys, cloud credentials),
+//                          commands run in another app outside Kai's checks
 //
 // One authentication covers 30 minutes of further protection-lowering actions
 // (never break-glass) while the Mac stays unlocked; locking or sleeping the

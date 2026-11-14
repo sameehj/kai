@@ -45,3 +45,25 @@ struct NotifyPlan {
     /// You answered (from the card or the notification): the next card notifies.
     mutating func answered(agent: String, host: String) { waiting[Self.cardID(agent: agent, host: host)] = nil }
 }
+
+/// C4: one notification per incident. An incident is one agent, reason and
+/// target; repeats within the window update the same notification with a
+/// count ("3 times") instead of posting a new one or going silent.
+struct IncidentPlan {
+    struct Post: Equatable { let id: String; let count: Int; let isNew: Bool }
+    private var open: [String: (id: String, count: Int, last: Date)] = [:]
+    let window: TimeInterval
+
+    init(window: TimeInterval = 600) { self.window = window }
+
+    /// `n` more stops for this incident key: the notification to post.
+    mutating func add(key: String, n: Int = 1, now: Date = Date()) -> Post {
+        if let o = open[key], now.timeIntervalSince(o.last) < window {
+            open[key] = (o.id, o.count + n, now)
+            return Post(id: o.id, count: o.count + n, isNew: false)
+        }
+        let id = "kai.incident.\(key).\(Int(now.timeIntervalSince1970))"
+        open[key] = (id, n, now)
+        return Post(id: id, count: n, isNew: true)
+    }
+}
