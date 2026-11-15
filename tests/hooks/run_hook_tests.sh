@@ -270,14 +270,21 @@ has "prompt block record says what happened in plain words" 'Prompt blocked: it 
 lacks "prompt block record shows no configured action" '(redact)'
 lacks "prompt block record shows no rule id in the detail" 'x1'
 P_GEN='{"hook_event_name":"UserPromptSubmit","session_id":"C5","prompt":"use api_key=KAIFAKEK7pLr4 for this"}'
-expect "claude prompt block names a password-like secret" claude "$P_GEN" 'Prompt blocked: it contained a password-like secret.'
-refute "claude prompt block message has no rule id" claude "$P_GEN" 'generic_secret_assign'
-refute "claude prompt block message has no (redact)" claude "$P_GEN" '(redact)'
-refute "claude prompt block message isn't prefixed twice" claude "$P_GEN" 'Kai stopped this: Prompt'
-expect "codex prompt block names Codex" codex "$P_GEN" 'Codex can'"'"'t redact prompts'
+# Nov 15: a generic key=value match alone is a guess, so the prompt goes through
+# with a warning; only known token formats and private keys block a prompt.
+expect "claude prompt with only a password-like value: sent with a warning" claude "$P_GEN" 'Prompt sent with a warning: it may contain a password-like secret.'
+refute "...not blocked" claude "$P_GEN" '"decision":"block"'
+refute "claude prompt warning has no rule id" claude "$P_GEN" 'generic_secret_assign'
+refute "claude prompt warning has no (redact)" claude "$P_GEN" '(redact)'
+refute "codex prompt with only a password-like value: not blocked" codex "$P_GEN" '"decision":"block"'
+refute "cursor prompt with only a password-like value: not blocked" cursor \
+  '{"hook_event_name":"beforeSubmitPrompt","prompt":"use api_key=KAIFAKEK7pLr4 for this"}' '"continue":false'
+P_GH='{"hook_event_name":"UserPromptSubmit","session_id":"C5","prompt":"use ghp_KAIFAKEabcdefghijklmnopqrstuvwx01 for this"}'
+refute "claude prompt block message isn't prefixed twice" claude "$P_GH" 'Kai stopped this: Prompt'
+expect "codex prompt block names Codex" codex "$P_GH" 'Codex can'"'"'t redact prompts'
 expect "cursor prompt block in plain words" cursor \
-  '{"hook_event_name":"beforeSubmitPrompt","prompt":"use api_key=KAIFAKEK7pLr4 for this"}' \
-  'Prompt blocked: it contained a password-like secret. Cursor can'"'"'t redact prompts'
+  '{"hook_event_name":"beforeSubmitPrompt","prompt":"use ghp_KAIFAKEabcdefghijklmnopqrstuvwx01 for this"}' \
+  'Prompt blocked: it contained a GitHub token. Cursor can'"'"'t redact prompts'
 expect "claude MCP arguments with a secret: plain words" claude \
   '{"hook_event_name":"PreToolUse","cwd":"/tmp/proj","tool_name":"mcp__srv__send","tool_input":{"text":"api_key=KAIFAKEK7pLr4"}}' \
   'its arguments contain a password-like secret'
