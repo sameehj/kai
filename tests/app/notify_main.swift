@@ -36,5 +36,20 @@ check(NotifyPlan.blockKey(agent: "Claude Code", rule: "secret", target: "/u/.env
       != NotifyPlan.blockKey(agent: "Claude Code", rule: "secret", target: "/u/.aws/credentials"),
       "block banners are keyed by target too: two files never fold into one banner")
 
+print("one notification per incident (C4)")
+var inc = IncidentPlan(window: 600)
+let i0 = Date(timeIntervalSince1970: 1_000_000)
+let ik = NotifyPlan.blockKey(agent: "Claude Code", rule: "curl_upload", target: "curl -T a example.org")
+let p1 = inc.add(key: ik, now: i0)
+let p2 = inc.add(key: ik, now: i0.addingTimeInterval(30))
+let p3 = inc.add(key: ik, n: 2, now: i0.addingTimeInterval(60))
+check(p1.isNew && p1.count == 1, "the first stop posts a new notification")
+check(p2.id == p1.id && p2.count == 2 && !p2.isNew, "a repeat updates the same notification with a count")
+check(p3.id == p1.id && p3.count == 4, "repeats keep counting (\(p3.count))")
+let other = inc.add(key: NotifyPlan.blockKey(agent: "Claude Code", rule: "curl_upload", target: "other"), now: i0.addingTimeInterval(61))
+check(other.isNew && other.id != p1.id, "another target is another incident")
+let later = inc.add(key: ik, now: i0.addingTimeInterval(60 + 601))
+check(later.isNew && later.id != p1.id && later.count == 1, "after the window a stop is a new incident")
+
 print(fails == 0 ? "notify tests: all passed" : "notify tests: \(fails) failed")
 exit(fails == 0 ? 0 : 1)

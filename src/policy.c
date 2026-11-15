@@ -32,6 +32,7 @@ static const char DEFAULT_POLICY[] =
     "protect ~/.ssh\n"
     "protect ~/.aws\n"
     "protect ~/.config/gcloud\n"
+    "protect ~/.config/gh/hosts.yml\n"
     "protect ~/.kube\n"
     "protect ~/.docker/config.json\n"
     "protect ~/.netrc\n"
@@ -88,9 +89,12 @@ static const struct {
     {"jwt", "eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}"},
     {"db_url_with_password",
      "(postgres|postgresql|mysql|mongodb)(\\+srv)?://[^ :@/]+:[^ :@/]+@"},
-    /* "password: …" / "pw=…": an explicit password field, any real value */
+    /* "password: …" / "pw=…": an explicit password field with a literal value
+     * (quoted, or bare as in a config file); kai_plausible_password_value
+     * drops code. An optional type annotation ("let password: String = …")
+     * is skipped so the literal after it is what's checked. */
     {"password_assign",
-     "(password|passwd|passcode|pwd|pw)[\"']?[ ]*[:=][ \"']*[^ \"']{6,}"},
+     "(password|passwd|passcode|pwd|pw)[\"']?[ ]*(:[ ]*[A-Za-z_][A-Za-z0-9_.<>?!]*[ ]*)?[:=][ \"']*[^ \"']{6,}"},
     /* vaguer key names that also appear in prose: value must look random */
     {"generic_secret_assign",
      "(secret|api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)[\"'= :]+[^ \"']{8,}"},

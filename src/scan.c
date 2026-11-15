@@ -2,6 +2,7 @@
 #include "internal.h"
 
 #include <ctype.h>
+#include <limits.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -166,16 +167,64 @@ int kai_plausible_secret_value(const char *match, size_t len) {
 }
 
 /* A value given for an explicit password field is a credential however weak
- * it is (all digits included); only placeholders and plain words such as
- * "required" or "unknown" are let through. Examples: tests/run_tests.c. */
+ * it is (all digits included), but only when the value is a literal: a quoted
+ * string, or a bare value as in a config file (a key, a colon, a literal).
+ * Code is not a secret: a function call, a pointer, a struct member, a type
+ * declaration or another variable ("pw = getpwuid(uid)", "password: String",
+ * "pass = user.password", "pw = *p", "password = $PW") never matches.
+ * Placeholders and plain words such as "required" are let through.
+ * Examples: tests/regress (S12). */
+static int ident_char(unsigned char c) { return isalnum(c) || c == '_'; }
+
 int kai_plausible_password_value(const char *match, size_t len) {
     size_t i = 0;
     while (i < len && isalpha((unsigned char)match[i])) i++;
-    while (i < len && strchr("\"'= :", match[i])) i++;
+    int quoted = 0, colon = 0, equals = 0;
+    while (i < len && strchr("\"'= :", match[i])) {
+        if (match[i] == '"' || match[i] == '\'') quoted = 1;
+        colon |= match[i] == ':'; equals |= match[i] == '=';
+        i++;
+    }
+    /* "password: String = …": a type annotation; the value is after the '=' */
+    if (colon && !equals && !quoted) {
+        size_t j = i;
+        while (j < len && (ident_char((unsigned char)match[j]) || strchr(".<>?!", match[j]))) j++;
+        size_t t = j;
+        while (t < len && match[t] == ' ') t++;
+        if (j > i && t < len && match[t] == '=' && (t + 1 >= len || match[t + 1] != '=')) {
+            i = t;
+            while (i < len && strchr("\"'= :", match[i])) {
+                if (match[i] == '"' || match[i] == '\'') quoted = 1;
+                i++;
+            }
+        }
+    }
     const char *v = match + i;
     size_t n = len - i;
     while (n && strchr(".,;:!?)]}*_`", v[n - 1])) n--;
     if (n < 6) return 0;
+    if (!quoted) {
+        /* "==" / "=>" / ":=": a comparison or an arrow, not a value */
+        if (v[0] == '=' || v[0] == '>') return 0;
+        /* pointer, address, shell/template variable, a call, an index, a cast */
+        if (strchr("*&$@%({[<", v[0])) return 0;
+        int digit = 0, ident = isalpha((unsigned char)v[0]) || v[0] == '_';
+        for (size_t k = 0; k < n; k++) {
+            unsigned char c = (unsigned char)v[k];
+            if (c == '(' || c == '[' || c == '{') return 0;              /* f(x), a[i] */
+            if (c == '-' && k + 1 < n && v[k + 1] == '>') return 0;     /* p->pw_name */
+            if (c == ':' && k + 1 < n && v[k + 1] == ':') return 0;     /* Type::member */
+            if (c == '.' && k > 0 && k + 1 < n && ident_char((unsigned char)v[k - 1]) &&
+                (isalpha((unsigned char)v[k + 1]) || v[k + 1] == '_'))
+                return 0;                                               /* user.password */
+            if (isdigit(c)) digit = 1;
+            if (!ident_char(c)) ident = 0;
+        }
+        /* a bare name with no digit is a variable or a type ("userPassword",
+         * "String", "None"); a literal password in a config file has a digit
+         * or a symbol in it */
+        if (ident && !digit) return 0;
+    }
     char low[128];
     size_t ln = n < sizeof low - 1 ? n : sizeof low - 1;
     for (size_t k = 0; k < ln; k++) low[k] = (char)tolower((unsigned char)v[k]);
@@ -187,6 +236,21 @@ int kai_plausible_password_value(const char *match, size_t len) {
     int word = 1;
     for (size_t k = 0; k < n && word; k++) word = islower((unsigned char)v[k]) || v[k] == '-';
     return !word;
+}
+
+/* Generic key=value detectors: a match is a guess, not a known secret format. */
+static int generic_secret_rule(const char *rule) {
+    return !strcmp(rule, "secret:password_assign") || !strcmp(rule, "secret:generic_secret_assign");
+}
+
+/* Did the scan find a high-confidence secret (a known token format, a private
+ * key, or a rule the user added), not only a generic key=value guess? Prompts
+ * are blocked only for these; a generic match alone warns. */
+int kai_report_high_confidence(const kai_report *rep) {
+    if (!rep) return 0;
+    for (int i = 0; i < rep->nhits; i++)
+        if (rep->hits[i].action >= KAI_ACT_REDACT && !generic_secret_rule(rep->hits[i].rule)) return 1;
+    return 0;
 }
 
 /* ---- path matching ---- */
@@ -256,8 +320,203 @@ static const char *const AGENT_CONTROL[] = {
     "/NativeMessagingHosts/io.github.sameehj.kai.json",
 };
 
+/* ---- Kai's installed files (Nov 15) ----
+ * Reading or running them is fine (kai why, kai-hook --status). Deleting,
+ * moving, overwriting or chmod-ing them switches Kai off, so it is
+ * self-protect. A script the agent runs can still do it (documented bypass:
+ * hooks see only the interpreter command); the root-owned program folder is
+ * what stops a program that isn't root. */
+static const struct { const char *path; int kind; } KAI_FILES[] = {   /* 0 file, 1 tree, 2 name prefix */
+    {KAI_CLI_LINK, 0},
+    {KAI_HOOK_LAUNCHER, 0},
+    {"/Library/Application Support/Kai", 1},
+    {"/Applications/Kai.app", 1},
+    {"/usr/local/share/kai", 1},
+    {"/var/db/receipts/" KAI_PACKAGE_ID ".", 2},
+    {"/private/var/db/receipts/" KAI_PACKAGE_ID ".", 2},
+};
+
+int kai_path_is_kai_program(const char *np) {
+    if (!np || np[0] != '/') return 0;
+    for (size_t i = 0; i < sizeof KAI_FILES / sizeof KAI_FILES[0]; i++) {
+        const char *r = KAI_FILES[i].path;
+        size_t l = strlen(r);
+        if (strncasecmp(np, r, l)) continue;
+        if (KAI_FILES[i].kind == 2) return 1;
+        if (np[l] == '\0' || (KAI_FILES[i].kind == 1 && np[l] == '/')) return 1;
+        if (KAI_FILES[i].kind == 0 && np[l] == '/' && np[l + 1] == '\0') return 1;
+    }
+    return 0;
+}
+
+int kai_rule_is_kai_program(const char *rule) {
+    return rule && !strcmp(rule, "kai_program");
+}
+
+/* A folder that holds one of Kai's files: moving or deleting it takes Kai along. */
+static int holds_kai_program(const char *np) {
+    size_t n = strlen(np);
+    while (n > 1 && np[n - 1] == '/') n--;
+    for (size_t i = 0; i < sizeof KAI_FILES / sizeof KAI_FILES[0]; i++) {
+        const char *r = KAI_FILES[i].path;
+        if (n == 1 && np[0] == '/') return 1;
+        if (strlen(r) > n && !strncasecmp(r, np, n) && r[n] == '/') return 1;
+    }
+    return 0;
+}
+
+static char *resolved_variant(const char *np);
+
+/* the absolute path a shell word names, or NULL */
+static char *tamper_norm(const char *w, const char *cwd) {
+    if (!w || !*w) return NULL;
+    char *ex = kai_expand_home(w);
+    char *n = ex ? kai_normalize_path(ex, cwd) : NULL;
+    free(ex);
+    return n;
+}
+
+/* 1 = names Kai's files, 2 = a folder holding them, 0 = neither (also
+ * through a symlinked folder, and /private/var vs /var) */
+static int tamper_class(const char *w, const char *cwd) {
+    char *n = tamper_norm(w, cwd);
+    if (!n) return 0;
+    int c = kai_path_is_kai_program(n) ? 1 : holds_kai_program(n) ? 2 : 0;
+    if (!c) {
+        char *rv = resolved_variant(n);
+        if (rv) {
+            const char *v = strncmp(rv, "/private/", 9) == 0 && !kai_path_is_kai_program(rv) ? rv + 8 : rv;
+            c = kai_path_is_kai_program(rv) || kai_path_is_kai_program(v) ? 1 : holds_kai_program(v) ? 2 : 0;
+            free(rv);
+        }
+    }
+    free(n);
+    return c;
+}
+
+typedef struct { const char *cwd; int hit; char cwdbuf[PATH_MAX]; } tamper_t;
+
+static int has_flag_letter(char **argv, int argc, int from, const char *letters, const char *longf) {
+    for (int k = from; k < argc; k++) {
+        const char *a = argv[k];
+        if (longf && !strcmp(a, longf)) return 1;
+        if (a[0] == '-' && a[1] && a[1] != '-')
+            for (const char *c = a + 1; *c; c++) if (strchr(letters, *c)) return 1;
+    }
+    return 0;
+}
+
+static void check_tamper(char **argv, int argc, void *ud) {
+    tamper_t *t = ud;
+    int i = kai_shell_command_start(argv, argc);
+    if (t->hit || i >= argc) return;
+    const char *b = strrchr(argv[i], '/') ? strrchr(argv[i], '/') + 1 : argv[i];
+    if (!strcmp(b, "cd") || !strcmp(b, "pushd")) {   /* later relative paths resolve against it */
+        char *n = tamper_norm(i + 1 < argc ? argv[i + 1] : "~", t->cwd);
+        if (n) { kai_strlcpy(t->cwdbuf, n, sizeof t->cwdbuf); t->cwd = t->cwdbuf; free(n); }
+        return;
+    }
+    /* operands: words after the command that aren't options */
+    int ops[256], no = 0;
+    for (int k = i + 1; k < argc && no < 256; k++) {
+        if (argv[k][0] == '-' && argv[k][1]) continue;
+        ops[no++] = k;
+    }
+    if (!strcmp(b, "pkgutil")) {
+        int forget = 0, ours = 0;
+        for (int k = i + 1; k < argc; k++) {
+            if (!strcmp(argv[k], "--forget") || !strcmp(argv[k], "--unlink")) forget = 1;
+            if (strstr(argv[k], "io.github.sameehj.kai")) ours = 1;
+        }
+        t->hit = forget && ours;
+        return;
+    }
+    int del = !strcmp(b, "rm") || !strcmp(b, "unlink") || !strcmp(b, "rmdir") || !strcmp(b, "srm") ||
+              !strcmp(b, "shred") || !strcmp(b, "trash") || !strcmp(b, "mv");
+    int attr = !strcmp(b, "chmod") || !strcmp(b, "chown") || !strcmp(b, "chgrp") || !strcmp(b, "chflags") ||
+               !strcmp(b, "xattr") || !strcmp(b, "setfacl");
+    int write = !strcmp(b, "tee") || !strcmp(b, "truncate") ||
+                ((!strcmp(b, "sed") || !strcmp(b, "gsed") || !strcmp(b, "perl")) &&
+                 has_flag_letter(argv, argc, i + 1, "i", "--in-place"));
+    int copy = !strcmp(b, "cp") || !strcmp(b, "ln") || !strcmp(b, "install") || !strcmp(b, "ditto") ||
+               !strcmp(b, "rsync") || !strcmp(b, "scp") || !strcmp(b, "gcp") || !strcmp(b, "rename");
+    if (del || attr || write) {
+        int rec = del || has_flag_letter(argv, argc, i + 1, "R", "--recursive");
+        for (int o = 0; o < no && !t->hit; o++) {
+            int c = tamper_class(argv[ops[o]], t->cwd);
+            if (c == 1 || (c == 2 && rec)) t->hit = 1;
+        }
+        return;
+    }
+    if (copy && no >= 1) {   /* the destination: the last operand, or a file inside it */
+        const char *dst = argv[ops[no - 1]];
+        int c = tamper_class(dst, t->cwd);
+        if (c == 1) { t->hit = 1; return; }
+        if (c == 2 && !strcmp(b, "rename")) { t->hit = 1; return; }
+        if (c == 2)
+            for (int o = 0; o + 1 < no && !t->hit; o++) {
+                const char *src = argv[ops[o]];
+                const char *bn = strrchr(src, '/') ? strrchr(src, '/') + 1 : src;
+                char cand[PATH_MAX];
+                snprintf(cand, sizeof cand, "%s/%s", dst, bn);
+                if (tamper_class(cand, t->cwd) == 1) t->hit = 1;
+            }
+        return;
+    }
+    if (!strcmp(b, "dd")) {
+        for (int k = i + 1; k < argc && !t->hit; k++)
+            if (!strncmp(argv[k], "of=", 3) && tamper_class(argv[k] + 3, t->cwd) == 1) t->hit = 1;
+        return;
+    }
+    if (!strcmp(b, "find")) {   /* find <Kai's folder> ... -delete / -exec rm|mv|chmod ... */
+        int act = 0;
+        for (int k = i + 1; k < argc; k++) {
+            if (!strcmp(argv[k], "-delete")) act = 1;
+            if ((!strcmp(argv[k], "-exec") || !strcmp(argv[k], "-execdir") || !strcmp(argv[k], "-ok")) && k + 1 < argc) {
+                const char *x = strrchr(argv[k + 1], '/') ? strrchr(argv[k + 1], '/') + 1 : argv[k + 1];
+                if (!strcmp(x, "rm") || !strcmp(x, "mv") || !strcmp(x, "chmod") || !strcmp(x, "chown") ||
+                    !strcmp(x, "unlink") || !strcmp(x, "chflags")) act = 1;
+            }
+        }
+        for (int k = i + 1; act && k < argc && argv[k][0] != '-' && !t->hit; k++)
+            if (tamper_class(argv[k], t->cwd)) t->hit = 1;
+    }
+}
+
+/* `> path` / `>> path` / `>| path` anywhere in the command text */
+static int redirect_tampers(const char *cmd, const char *cwd) {
+    for (const char *s = strchr(cmd, '>'); s; s = strchr(s + 1, '>')) {
+        const char *p = s + 1;
+        while (*p == '>' || *p == '|' || *p == '&') p++;
+        while (*p == ' ' || *p == '\t') p++;
+        char w[PATH_MAX];
+        size_t n = 0;
+        char q = 0;
+        if (*p == '"' || *p == '\'') q = *p++;
+        while (*p && n + 1 < sizeof w && (q ? *p != q : !strchr(" \t\n;&|<>()", *p))) {
+            if (!q && *p == '\\' && p[1]) p++;
+            w[n++] = *p++;
+        }
+        w[n] = '\0';
+        if (n && tamper_class(w, cwd) == 1) return 1;
+    }
+    return 0;
+}
+
+int kai_command_tampers_kai(const char *cmd, const char *cwd) {
+    if (!cmd || !*cmd) return 0;
+    if (redirect_tampers(cmd, cwd)) return 1;
+    tamper_t t = {cwd, 0, ""};
+    kai_shell_walk(cmd, check_tamper, NULL, &t);
+    return t.hit;
+}
+
 static int agent_control_path(const char *np, char *why, size_t whylen) {
     size_t n = strlen(np);
+    if (kai_path_is_kai_program(np)) {
+        if (why) kai_strlcpy(why, "kai_program", whylen);
+        return 1;
+    }
     for (size_t i = 0; i < sizeof AGENT_CONTROL / sizeof AGENT_CONTROL[0]; i++) {
         size_t l = strlen(AGENT_CONTROL[i]);
         if (n >= l && strcasecmp(np + n - l, AGENT_CONTROL[i]) == 0) {
@@ -491,6 +750,7 @@ const char *kai_rule_explanation(const char *rule) {
     if (kai_rule_is_persistence(rule)) return "makes a program start automatically when you log in";
     /* never tier: the "Always protected" card's one-line reason */
     if (kai_rule_is_kai_home(rule)) return "holds Kai's own settings and keys, so no agent may touch it";
+    if (kai_rule_is_kai_program(rule)) return "is Kai's own program, so agents may run it but not remove or change it";
     if (kai_rule_is_builtin(rule)) return "switches Kai's checks for this agent on and off, so agents may not change it";
     return NULL;
 }
@@ -509,7 +769,7 @@ int kai_control_read_allowed(const char *rule) {
 
 int kai_rule_is_builtin(const char *rule) {
     if (!rule || !*rule) return 0;
-    if (!strcmp(rule, "kai_self_protect") || !strcmp(rule, "~/.kai")) return 1;
+    if (!strcmp(rule, "kai_self_protect") || !strcmp(rule, "~/.kai") || !strcmp(rule, "kai_program")) return 1;
     size_t n = strlen(rule);
     for (size_t i = 0; i < sizeof AGENT_CONTROL / sizeof AGENT_CONTROL[0]; i++) {
         const char *c = AGENT_CONTROL[i] + 1; /* the name agent_control_path reports */
@@ -521,12 +781,57 @@ int kai_rule_is_builtin(const char *rule) {
            (n >= 11 && !strcmp(rule + n - 11, "config.toml"));
 }
 
+/* G4 / S3: the same file reached through a symlinked folder ("~/link/x" where
+ * ~/link -> ~/.claude) must get the same decision. The deepest existing prefix
+ * is resolved (the file itself may not exist yet: a Write creates it) and the
+ * rest appended. NULL when nothing resolves differently. */
+static char *resolved_variant(const char *np) {
+    char buf[PATH_MAX];
+    size_t n = strlen(np);
+    if (n >= sizeof buf) return NULL;
+    memcpy(buf, np, n + 1);
+    char real[PATH_MAX];
+    for (;;) {
+        if (realpath(buf, real)) break;
+        char *slash = strrchr(buf, '/');
+        if (!slash || slash == buf) return NULL;
+        *slash = '\0';
+    }
+    size_t kept = strlen(buf);
+    sb_t out;
+    sb_init(&out);
+    sb_adds(&out, real);
+    sb_adds(&out, np + kept);
+    char *r = sb_take(&out);
+    if (r && strcmp(r, np) == 0) { free(r); return NULL; }
+    return r;
+}
+
+static int path_protected_norm(const kai_policy *p, char *np, char *why, size_t whylen);
+
 int kai_path_protected(const kai_policy *p, const char *path, const char *cwd,
                        char *why, size_t whylen) {
     if (why && whylen) why[0] = '\0';
     if (!p || !path) return 0;
     char *np = kai_normalize_path(path, cwd);
     if (!np) return 0;
+    char *rv = resolved_variant(np);
+    if (path_protected_norm(p, np, why, whylen)) { free(rv); return 1; }
+    if (!rv) return 0;
+    /* A protected root written from $HOME may itself sit behind a symlink
+     * (/var -> /private/var): try the resolved path with and without it. */
+    int hit = 0;
+    if (strncmp(rv, "/private/", 9) == 0) {
+        char *bare = strdup(rv + 8);
+        hit = bare && path_protected_norm(p, bare, why, whylen);
+    }
+    if (!hit) hit = path_protected_norm(p, rv, why, whylen);
+    else free(rv);
+    return hit;
+}
+
+/* Takes ownership of np. */
+static int path_protected_norm(const kai_policy *p, char *np, char *why, size_t whylen) {
     if (agent_control_path(np, why, whylen)) { free(np); return 1; }
     /* The trust store is classified before `allow`/`protect` so CA bundles get
      * read-allow + override-tier writes, not a blunt allow or a secret block. */
@@ -566,11 +871,34 @@ typedef struct {
     void *skip_ud;
     const char *agent;          /* the requesting agent: its own state is exempt */
     char cwdbuf[4096];          /* G14: the folder after a `cd` earlier in the command */
+    int reader;                 /* S9: this simple command only prints files */
+    int writes;                 /* S9: the whole command line redirects or tees somewhere */
 } path_scan_t;
+
+/* S9 (0.3.0-preview.1): the public files in ~/.ssh (known_hosts, config and
+ * *.pub) hold no secret; ssh and git print them all the time. Reading one
+ * with a command that only prints (cat, head, grep, ...) in a command line
+ * that writes nowhere (no '>' and no tee) is not stopped. Every write stays
+ * protected, and so does every other file in the folder. */
+static int public_ssh_file(const char *path, const char *cwd) {
+    char *np = kai_normalize_path(path, cwd);
+    if (!np) return 0;
+    char *home = kai_expand_home("~/.ssh/");
+    int in = home && strncasecmp(np, home, strlen(home)) == 0 && !strchr(np + strlen(home), '/');
+    const char *b = in ? np + strlen(home) : "";
+    size_t l = strlen(b);
+    int pub = in && (!strcasecmp(b, "known_hosts") || !strcasecmp(b, "known_hosts.old") || !strcasecmp(b, "config") ||
+                     (l > 4 && !strcasecmp(b + l - 4, ".pub")));
+    free(home);
+    free(np);
+    return pub;
+}
 
 /* A protected path was found: it counts unless the user exempted its rule. */
 static int path_hit(path_scan_t *ps, const char *path) {
     if (!kai_path_protected_as(ps->p, ps->agent, path, ps->cwd, ps->why, ps->whylen)) return 0;
+    if (kai_rule_is_kai_program(ps->why)) return 0;   /* judged by kai_command_tampers_kai */
+    if (ps->reader && !ps->writes && public_ssh_file(path, ps->cwd)) return 0;
     return !(ps->skip && ps->skip(ps->why, ps->skip_ud));
 }
 
@@ -658,9 +986,67 @@ static int holds_protected(path_scan_t *ps, const char *dir) {
     return 0;
 }
 
+/* S7 (0.3.0-preview.1): words that are text, not paths: a commit or PR
+ * message (git -m/--message, gh --title/--body) and the pattern of a search
+ * (grep/rg/ag: the first operand, or each -e value). Mentioning a path there
+ * isn't an access. File operands, -f/-F files and every other word are still
+ * checked. Marks skip[i] = 1 for each such word. */
+static void text_words(char **argv, int argc, int start, char *skip) {
+    if (start >= argc) return;
+    const char *b = strrchr(argv[start], '/') ? strrchr(argv[start], '/') + 1 : argv[start];
+    if (!strcmp(b, "git") || !strcmp(b, "gh")) {
+        int gh = b[1] == 'h';
+        for (int k = start + 1; k < argc; k++) {
+            const char *a = argv[k];
+            int msg = !gh ? (!strcmp(a, "-m") || !strcmp(a, "--message"))
+                          : (!strcmp(a, "--title") || !strcmp(a, "-t") || !strcmp(a, "--body") || !strcmp(a, "-b"));
+            if (msg && k + 1 < argc) { skip[++k] = 1; continue; }
+            if ((!gh && (!strncmp(a, "--message=", 10) || (!strncmp(a, "-m", 2) && a[2]))) ||
+                (gh && (!strncmp(a, "--title=", 8) || !strncmp(a, "--body=", 7))))
+                skip[k] = 1;
+        }
+        return;
+    }
+    int search = !strcmp(b, "grep") || !strcmp(b, "egrep") || !strcmp(b, "fgrep") || !strcmp(b, "rg") ||
+                 !strcmp(b, "ag");
+    if (!search) return;
+    int explicit = 0;
+    for (int k = start + 1; k < argc; k++) {
+        const char *a = argv[k];
+        if (!strcmp(a, "--")) break;
+        if (!strcmp(a, "-e") || !strcmp(a, "--regexp")) { if (k + 1 < argc) skip[++k] = 1; explicit = 1; continue; }
+        if (!strncmp(a, "--regexp=", 9)) { skip[k] = 1; explicit = 1; continue; }
+        if (!strcmp(a, "-f") || !strcmp(a, "--file")) explicit = 1;   /* its value is a file: checked */
+    }
+    if (explicit) return;
+    for (int k = start + 1; k < argc; k++) {
+        const char *a = argv[k];
+        if (!strcmp(a, "--")) { if (k + 1 < argc) skip[k + 1] = 1; return; }
+        if (a[0] == '-' && a[1]) {
+            /* options that take a separate value */
+            static const char *const val[] = {"-A", "-B", "-C", "-m", "-d", "-D", "-g", "-t", "-T", "--max-count",
+                                              "--context", "--after-context", "--before-context", "--glob",
+                                              "--type", "--include", "--exclude", "--exclude-dir", NULL};
+            for (int v = 0; val[v]; v++) if (!strcmp(a, val[v])) { k++; break; }
+            continue;
+        }
+        skip[k] = 1;   /* the first operand: the pattern */
+        return;
+    }
+}
+
+static int print_only(const char *b) {
+    static const char *const R[] = {"cat", "head", "tail", "less", "more", "bat", "nl", "wc", "grep", "egrep",
+                                    "fgrep", "rg", "diff", "file", "stat", "ls", NULL};
+    for (int i = 0; R[i]; i++) if (!strcmp(b, R[i])) return 1;
+    return 0;
+}
+
 static void scan_cmd_words(char **argv, int argc, void *ud) {
     path_scan_t *ps = ud;
     int start = kai_shell_command_start(argv, argc);
+    ps->reader = start < argc &&
+                 print_only(strrchr(argv[start], '/') ? strrchr(argv[start], '/') + 1 : argv[start]);
     if (start < argc) {
         const char *b = strrchr(argv[start], '/') ? strrchr(argv[start], '/') + 1 : argv[start];
         if (!strcmp(b, "cd") || !strcmp(b, "pushd")) {   /* G14: later paths are relative to it */
@@ -673,9 +1059,13 @@ static void scan_cmd_words(char **argv, int argc, void *ud) {
             return;
         }
     }
-    for (int i = 0; i < argc; i++) scan_string(ud, argv[i]);
-    if (ps->hit || start >= argc || !tree_command(argv, argc, start)) return;
+    char *skip = calloc((size_t)argc + 1, 1);
+    if (!skip) return;
+    text_words(argv, argc, start, skip);
+    for (int i = 0; i < argc; i++) if (!skip[i]) scan_string(ud, argv[i]);
+    if (ps->hit || start >= argc || !tree_command(argv, argc, start)) { free(skip); return; }
     for (int k = start + 1; k < argc && !ps->hit; k++) {
+        if (skip[k]) continue;
         const char *a = argv[k];
         if (a[0] == '-' || strchr(a, '=') || strstr(a, "://")) continue;
         char *ex = kai_expand_home(a);
@@ -688,10 +1078,12 @@ static void scan_cmd_words(char **argv, int argc, void *ud) {
         }
         free(n);
     }
+    free(skip);
 }
 
 static void scan_text_paths(const char *text, void *ud) {
     /* heredoc bodies (python, cat > file, ...): look for paths line by line */
+    ((path_scan_t *)ud)->reader = 0;   /* S9: a body is never a print-only read */
     const char *s = text;
     while (*s && !((path_scan_t *)ud)->hit) {
         const char *e = strchr(s, '\n');
@@ -713,7 +1105,8 @@ int kai_command_touches_protected_as(const kai_policy *p, const char *agent, con
     if (!p || !cmd) return 0;
     char scratch[256];
     if (!why || !whylen) { why = scratch; whylen = sizeof scratch; } /* path_hit reads it */
-    path_scan_t ps = {p, cwd, why, whylen, 0, skip, ud, agent, ""};
+    path_scan_t ps = {p, cwd, why, whylen, 0, skip, ud, agent, "", 0, 0};
+    ps.writes = strchr(cmd, '>') != NULL || strstr(cmd, "tee") != NULL;   /* S9: any write: no exemption */
     kai_shell_walk(cmd, scan_cmd_words, scan_text_paths, &ps);
     if (!ps.hit) why[0] = '\0';
     return ps.hit;
@@ -1041,4 +1434,29 @@ void kai_report_summary(const kai_report *rep, char *out, size_t outlen) {
     char *s = sb_take(&b);
     kai_strlcpy(out, s, outlen);
     free(s);
+}
+
+/* S7 (0.3.0-preview.1): Kai's canonical fake test tokens. A token (a run of
+ * letters, digits and _-+/=.) that contains EXAMPLE (the AWS documentation
+ * convention, e.g. the docs' sample access key) or KAIFAKE is a test fixture,
+ * not a credential: a random token contains either by chance with negligible
+ * odds. Used only when Kai decides whether a FILE's contents may be sent to
+ * the model: prompts and tool arguments are still scanned unchanged, so a
+ * fixture pasted into a prompt is still caught (the suites rely on that).
+ * Rewrites the fake in place with 'x'. */
+static int tok_char(unsigned char c) { return isalnum(c) || strchr("_-+/=.", c); }
+
+void kai_blank_test_fakes(char *t) {
+    if (!t) return;
+    for (char *s = t; *s;) {
+        if (!tok_char((unsigned char)*s)) { s++; continue; }
+        char *e = s;
+        while (*e && tok_char((unsigned char)*e)) e++;
+        char save = *e;
+        *e = '\0';
+        int fake = strstr(s, "EXAMPLE") || strstr(s, "KAIFAKE");
+        *e = save;
+        if (fake) for (char *q = s; q < e; q++) *q = 'x';
+        s = e;
+    }
 }

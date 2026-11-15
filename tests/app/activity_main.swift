@@ -57,5 +57,13 @@ check(!GrantText.scope(scope: 2, session: false, created: now, expires: now + 86
       "never 'this process'")
 check(GrantText.scope(scope: 1, session: false, created: now, expires: now + 600) == "once", "a one-shot grant says 'once'")
 
+print("why record (C4)")
+let why = WhyRecord.parse(#"{"id":"k-1a2b3c4d","ts":"2026-11-14T10:00:00Z","agent":"Claude Code","component":"agent hook","rule":"curl_upload","target":"curl -T a example.org","session":"ab12","attribution":"Unattributed","recovery":"Allow it in Kai if it was intended.","reason":"uploads a file","retry":"allowed"}"#)
+check(why?.retryLine == "Retry would now be: allowed", "the retry line comes from the CLI's answer")
+check(why?.isUnattributed == true, "an unattributed record is labelled so")
+let why2 = WhyRecord.parse(#"{"id":"k-1","attribution":"hook: Claude Code session ab12","retry":""}"#)
+check(why2?.retryLine == nil && why2?.isUnattributed == false, "no retry answer: no line; attributed: no label")
+check(WhyRecord.parse("kai: unknown command 'why'") == nil, "an older CLI (no JSON): nothing shown")
+
 print(fails == 0 ? "activity tests: all passed" : "activity tests: \(fails) failed")
 exit(fails == 0 ? 0 : 1)

@@ -13,6 +13,8 @@ enum Theme {
     static let lime = Color(hex: 0xD9FF3F)
     static let coral = Color(hex: 0xFF6B5E)
     static let amber = Color(hex: 0xFFB547)
+    /// Neutral information: a routine stop (red is only for Kai itself broken).
+    static let blue = Color(hex: 0x7DB4FF)
     static let muted = Color(hex: 0xA7ABB4)
     static let soft = Color(hex: 0xC9CCD3)
 

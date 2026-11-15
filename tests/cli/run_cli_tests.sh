@@ -65,7 +65,7 @@ has "...in Kai's own words" "$o" "Kai stopped reading"
 hasnt "Preview 1 never says blocked" "$o" "Blocked by Kai"
 o=$(k allow-file .env --read --agent claude --for 1h)
 has "allow-file says what it covers" "$o" "with its file tool (Read) only"
-has "...and its limit" "$o" "Preview 1 can't stop a program with your permissions from editing Kai's rules"
+has "...and its limit" "$o" "Kai's checks can't stop a program with your permissions"
 [ -z "$(hk claude "$rd")" ] && pass "after allow-file, that read goes through" || fail "read still stopped"
 has "a read grant doesn't allow writing" "$(hk claude "$wr")" "deny"
 has "a read grant on .env doesn't allow uploading it" "$(hk claude "$upenv")" "deny"
@@ -110,7 +110,7 @@ has "...naming the destination" "$o" "sends to attacker.example"
 k allow-mcp web --agent claude --for 1h >/dev/null
 has "...a whole-server grant doesn't cover a new destination" "$(hk claude "$post")" '"permissionDecision":"ask"'
 o=$(hk codex "$(printf '%s' "$post" | sed 's/"permission_mode":"auto",//')")
-has "...Codex (no prompt): denied with the recovery" "$o" "kai allow-mcp web post --agent codex --for 1h, then retry"
+has "...Codex (no prompt): denied with the recovery" "$o" "kai allow-mcp web post --agent codex, then retry"
 printf '{"mcpServers":{"hooksrv":{"url":"https://hooks.example.com/mcp"}}}' > "$G/.mcp.json"
 own=$(printf '%s' "$post" | sed 's/mcp__web__post/mcp__hooksrv__post/; s#https://attacker.example/in#https://api.hooks.example.com/in#')
 [ -z "$(hk claude "$own")" ] && pass "...the server's own declared host (or a subdomain) isn't foreign" || fail "own host treated as foreign"
@@ -135,7 +135,7 @@ o=$(hk codex "$cxread")
 cxdel=$(printf '%s' "$wpdel" | sed 's/"permission_mode":"auto",//')
 k allow-mcp wp --agent codex --for 1h >/dev/null
 o=$(hk codex "$cxdel")
-has "Codex: a destructive tool needs a grant for that exact tool, not the server" "$o" "kai allow-mcp wp delete_page --agent codex --for 1h"
+has "Codex: a destructive tool needs a grant for that exact tool, not the server" "$o" "kai allow-mcp wp delete_page --agent codex,"
 k allow-mcp wp delete_page --agent codex --for 1h >/dev/null
 [ -z "$(hk codex "$cxdel")" ] && pass "...and goes through with one" || fail "codex destructive still stopped with an exact grant"
 
@@ -337,7 +337,7 @@ hasnt "a local executable isn't noted" "$al" "MCP server local runs from an unpi
 [ -n "$(printf '%s' "$al" | grep 'unpinned npx spec' | grep '"decision":"note"')" ] && pass "...as a note (shown in Activity, not a block)" || fail "unpinned record isn't a note"
 
 echo "== every denial: decision ID, reason, recovery (Nov 1 step 4) =="
-DH="$TMP/decid"; mkdir -p "$DH/.kai" "$DH/proj"; printf 'KAI_TEST_SECRET=fake-123\n' > "$DH/proj/.env"
+DH="$TMP/decid"; mkdir -p "$DH/.kai" "$DH/proj"; printf 'KAI_TEST_SECRET=KAIFAKE1\n' > "$DH/proj/.env"
 dk() { printf '%s' "$2" | HOME="$DH" KAI_HOME="$DH/.kai" KAI_NO_APP=1 "$KAI" hook "$1"; }
 o=$(dk claude '{"hook_event_name":"PreToolUse","tool_name":"Bash","session_id":"d","tool_input":{"command":"cat .env"},"cwd":"'"$DH"'/proj"}')
 id=$(printf '%s' "$o" | grep -o 'Kai decision k-[0-9a-f]\{8\}' | head -1 | sed 's/Kai decision //')
@@ -350,7 +350,7 @@ o=$(dk codex '{"hook_event_name":"PreToolUse","tool_name":"shell","session_id":"
 has "a Codex denial too" "$o" "Kai decision k-"
 o=$(dk cursor '{"hook_event_name":"beforeShellExecution","command":"cat '"$DH"'/proj/.env","workspace_roots":["'"$DH"'/proj"]}')
 has "a Cursor denial too (agent_message)" "$o" "Kai decision k-"
-o=$(dk claude '{"hook_event_name":"UserPromptSubmit","session_id":"d","prompt":"use ghp_abcdefghijklmnopqrstuvwxyz0123456789 please","cwd":"'"$DH"'/proj"}')
+o=$(dk claude '{"hook_event_name":"UserPromptSubmit","session_id":"d","prompt":"use ghp_KAIFAKEhijklmnopqrstuvwxyz0123456789 please","cwd":"'"$DH"'/proj"}')
 has "a stopped prompt too" "$o" "Kai decision k-"
 o1=$(dk claude '{"hook_event_name":"PreToolUse","tool_name":"Bash","session_id":"d","tool_input":{"command":"cat .env"},"cwd":"'"$DH"'/proj"}')
 id2=$(printf '%s' "$o1" | grep -o 'k-[0-9a-f]\{8\}' | head -1)
@@ -403,7 +403,7 @@ has "...and its control tool" "$(cap claude "" mcp__computer-use__left_click)" "
 o=$(ac --agent claude --for 15m); [ $? = 2 ] && has "allow-capture needs --app" "$o" "--app" || fail "allow-capture without --app: $o"
 o=$(ac --app Safari --agent claude --for 15m)
 has "allow-capture says what it covers" "$o" "Allowed Claude Code to use or control Safari"
-has "...with the lower-assurance note" "$o" "Preview 1 can't stop a program with your permissions from editing Kai's rules"
+has "...with the lower-assurance note" "$o" "Kai's checks can't stop a program with your permissions"
 [ -z "$(cap claude "osascript -e 'tell application \\\"safari\\\" to activate'")" ] && pass "a grant covers its app (any case)" || fail "Safari still stopped"
 has "a grant for one app doesn't cover another" "$(cap claude "osascript -e 'tell application \\\"Music\\\" to pause'")" "wants to control Music"
 has "...nor screencapture" "$(cap claude "screencapture -x /tmp/s.png")" "deny"
@@ -730,7 +730,9 @@ o=$(lo codex '{"hook_event_name":"UserPromptSubmit","prompt":"hi"}' 2>/dev/null)
 o=$(lo cursor '{"hook_event_name":"beforeShellExecution","command":"ls"}')
 has "launcher, kai missing: a Cursor shell command goes to Cursor's own approval (ask)" "$o" '"permission":"ask"'
 hasnt "...never denied" "$o" '"deny"'
-has "launcher, kai missing: a Cursor file read is allowed" "$(lo cursor '{"hook_event_name":"beforeReadFile","file_path":"x"}')" '"permission":"allow"'
+o=$(lo cursor '{"hook_event_name":"beforeReadFile","file_path":"x"}')
+has "launcher, kai missing: a Cursor file read gets no opinion ({})" "$o" '{}'
+hasnt "...never an explicit allow" "$o" '"permission":"allow"'
 has "launcher, kai missing: a Cursor prompt continues" "$(lo cursor '{"hook_event_name":"beforeSubmitPrompt","prompt":"hi"}')" '"continue":true'
 u=$(cat "$KAI_HOME/unchecked.log" 2>/dev/null)
 [ "$(printf '%s\n' "$u" | grep -c unchecked)" -ge 6 ] && pass "launcher counts each unchecked call in unchecked.log" || fail "unchecked.log: [$u]"

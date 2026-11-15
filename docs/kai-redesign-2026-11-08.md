@@ -64,6 +64,7 @@ Today a user can be asked to decide in **seven places**:
   - **Inference.** So a repair can make the hooks depend on the app bundle. Moving Kai.app to the Trash then rebuilds the same trap.
 - **Design.** Protecting `~/.claude/settings.json` from the agent is correct (`src/scan.c:251`). But together with "deny every tool call", the only working recovery is a human in Terminal.
 - **Security reasoning.** Preview 2's hooks are documented as a guardrail, not a boundary: a script the agent runs can get around them. Failing closed on a missing binary therefore **costs the whole session and buys almost no security**. The pkg installs the binary as root, so an agent can't remove it without admin rights. A missing binary is an install, upgrade or uninstall bug, not an attack.
+  - **Nov 15 correction: that premise is false on Macs where `/usr/local/bin` belongs to the user** (Homebrew's layout; measured on the development Mac: `/usr/local/bin` is `user:admin`, mode 775). Removing a file needs write access to its folder, not to the file, so any program the user runs could delete or replace a root-owned `/usr/local/bin/kai`. Fixed in 0.3.0-preview.1: the program lives in `/Library/Application Support/Kai/bin` (root-owned), `/usr/local/bin/kai` is a symlink, the hooks stop agents changing Kai's files, and `kai doctor` reports the degraded state. The C1 conclusion (fail open, loudly) is unchanged.
 
 ### RC5. No lifecycle model
 
@@ -322,7 +323,24 @@ Run on a Mac with the network wall in **Protect** (a developer build until Prote
   - Escape scorecard: 28 → 26 of 61 stopped. Both changes are the two "Kai's program is missing" rows, now *gets through, by design*. C2 opened none.
   - **Nov 12, on macOS (Darwin 23.3):** `make`, `make test` and `make escape` all pass: unit, storage, hook, postinstall, app, release env/sign/guard, CLI (including the 3 checks that fail on Linux), gateway, TLS, corpus, coverage and escape (26/61, 0 mismatches). The coverage run showed the MCP row's note still described the old ask; fixed in `run_coverage.py`, and `COVERAGE.md` regenerated. Not run on the Mac: `tests/release/run-7b-final.sh` (needs an installed release).
   - `kai-hook --remove-hooks` moved to C5: a one-command way to turn Kai off needs a guard against agents first.
+- **Nov 14: PR #12 merged** (`6cd3a5c`), after a rebase onto master, all suites and green CI.
+- **Nov 14–15: 0.3.0-preview.1** on `release/0.3.0-preview.1`. Not pushed. Full record in `docs/release/0.3.0-preview.1-report.md`.
+  - **C4 lite:** `kai why --json` with attribution, recovery and "Retry would now be"; `kai not-right`; the Why sheet.
+  - **C5:** Settings → Uninstall; Repair puts back a missing launcher.
+  - **Cursor:** gets `{}`, not `"allow"`.
+  - **Stops:** credential printing is stopped; symlinked settings writes are stopped.
+  - **False stops (S7):** messages, patterns and text heredocs aren't accesses, and canonical test fakes are recognized.
+  - **Escape:** 28/62.
+  - **Not built:** C3; C4's network explanation in PostToolUse; C5's measured states and upgrade check.
 - **Found while building, not yet built:**
   - When Kai doesn't deny, it answers Cursor with an explicit `"permission":"allow"` (`hooks.c`, end of `hook_cursor`). If Cursor treats that as approval, Kai is auto-approving every Cursor command. Needs a live check at a pinned Cursor version.
   - The credential, destructive-Git and new-remote gaps in §2.9.
   - **Nov 12 review of `50fa3c7`:** the shared MCP note in `COVERAGE.md` reads as if Kai asks for destructive or foreign-destination MCP calls in every agent. In Cursor it doesn't: Cursor's MCP event names no server, and Kai only scans the arguments for secrets there. The Cursor rows should say so. Fixed in `d49181a`.
+- **Nov 15: Kai's own files (0.3.0-preview.1, before the test package).** The owner removed Kai by hand (`sudo rm` of Kai.app, the program, the launcher and `/usr/local/share/kai`, then `pkgutil --forget`). The agents' hooks kept calling the missing launcher, and every call ran unchecked with no warning.
+  - **RC4's premise was false here:** `/usr/local/bin` is the user's, so the program was never admin-only (see RC4).
+  - **Fixed:**
+    - the program is in a root-owned folder, with `/usr/local/bin/kai` a symlink;
+    - the installer and `kai doctor` check every folder on the launcher's and the program's path;
+    - the hooks stop rm, mv, overwrite and chmod on Kai's files (`kai_program`, `kai_command_tampers_kai`);
+    - the hook command prints "Kai is missing: its checks are off…" when its launcher is gone. Live on Claude Code 2.1.325; synthetic for Cursor 3.27.22 and Codex.
+  - **Still open:** a script the agent runs (ESCAPES `kai-program-script`).

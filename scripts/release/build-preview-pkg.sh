@@ -51,8 +51,15 @@ fi
 grep -q "#define KAI_VERSION \"$VERSION\"" include/kai.h || {
     echo "include/kai.h KAI_VERSION isn't \"$VERSION\""; [ "$MODE" = "--test" ] || exit 2; }
 
-rm -rf "$OUT" && mkdir -p "$STAGE/usr/local/bin" "$STAGE/usr/local/share/kai" "$STAGE/usr/local/libexec" \
-                          "$STAGE/Applications" "$OUT/scripts"
+# Kai's program goes in a root-owned folder (Nov 15: /usr/local/bin is often
+# the user's, so a kai there can be removed by any program the user runs). The
+# launcher runs the real path. /usr/local/bin is NOT in the payload: listing it
+# would let the installer apply root:wheel to the user's Homebrew folder.
+# Postinstall makes the /usr/local/bin/kai symlink, for the Terminal.
+PROG_DIR="Library/Application Support/Kai/bin"
+rm -rf "$OUT" && mkdir -p "$STAGE/usr/local/share/kai" "$STAGE/usr/local/libexec" \
+                          "$STAGE/$PROG_DIR" "$STAGE/Applications" "$OUT/scripts"
+chmod 755 "$STAGE/Library" "$STAGE/Library/Application Support" "$STAGE/Library/Application Support/Kai" "$STAGE/$PROG_DIR"
 
 # notarytool exits 0 for a rejected submission too: require "status: Accepted".
 notarize() {
@@ -63,6 +70,9 @@ notarize() {
 
 # Kai.app and its network extension (Step 7): built unsigned for the release
 # team, then Developer ID signed, checked, notarized, stapled and checked again.
+# The app's build compiles src/ (manage.c needs src/kai_commit.h): generate it
+# first, so the app's bundled kai names this commit, not a stale header.
+make src/kai_commit.h >/dev/null
 ( cd app/macos && KAI_APP_ID=io.github.sameehj.kai KAI_TEAM="${KAI_TEAM:-}" xcodegen generate --quiet )
 # With signing off, Xcode leaves $(TeamIdentifierPrefix) empty, so the
 # extension's NEMachServiceName would lose its team prefix: set it here.
@@ -101,9 +111,10 @@ lipo -info "$K" | grep -q "x86_64 arm64\|arm64 x86_64" || { echo "kai isn't univ
 "$K" version | grep -q "(release build)" || { echo "kai isn't a release build"; exit 1; }
 "$K" version | grep -q "commit $(git rev-parse --short=12 HEAD)$" || [ "$MODE" = "--test" ] || {
     echo "kai doesn't carry this commit: $("$K" version)"; exit 1; }
-cp "$K" "$STAGE/usr/local/bin/kai"
+install -m 0755 "$K" "$STAGE/$PROG_DIR/kai"
 # STEP 2c: the stable hook launcher agents' hooks call (never a build path)
 install -m 0755 scripts/release/kai-hook "$STAGE/usr/local/libexec/kai-hook"
+grep -q "^K=\"/$PROG_DIR/kai\"$" "$STAGE/usr/local/libexec/kai-hook" || { echo "the launcher doesn't run /$PROG_DIR/kai"; exit 1; }
 if [ "$MODE" != "--test" ]; then
     # one clean, tagged commit everywhere: the generated header, the CLI and the
     # kai bundled in Kai.app, with no -dirty suffix; the build left the tree clean
@@ -157,12 +168,29 @@ RES="$OUT/resources"
 mkdir -p "$RES"
 cp scripts/release/installer/welcome.html scripts/release/installer/readme.html "$RES/"
 [ "$MODE" = "--test" ] || {
-    codesign --force --options runtime --timestamp --sign "$KAI_DEVID_APP" "$STAGE/usr/local/bin/kai"
-    codesign --verify --strict "$STAGE/usr/local/bin/kai"
+    codesign --force --options runtime --timestamp --sign "$KAI_DEVID_APP" "$STAGE/$PROG_DIR/kai"
+    codesign --verify --strict "$STAGE/$PROG_DIR/kai"
 }
 COMP="$OUT/component.pkg"
-pkgbuild --root "$STAGE" --identifier "$ID" --version "$VERSION" --scripts "$OUT/scripts" \
-         --install-location / "$COMP" >/dev/null
+# Kai.app installs to /Applications, always. By default the installer
+# "relocates" a bundle to wherever another copy with the same bundle ID
+# already is (a build folder, an old download), so /Applications/Kai.app
+# never appears (seen Nov 15). Bundles are marked not relocatable.
+CPLIST="$OUT/component.plist"
+pkgbuild --analyze --root "$STAGE" "$CPLIST" >/dev/null
+n=0
+while /usr/libexec/PlistBuddy -c "Print :$n:BundleIsRelocatable" "$CPLIST" >/dev/null 2>&1; do
+    /usr/libexec/PlistBuddy -c "Set :$n:BundleIsRelocatable false" "$CPLIST"
+    n=$((n + 1))
+done
+[ "$n" -gt 0 ] || { echo "no bundles in the component list"; exit 1; }
+! /usr/libexec/PlistBuddy -c Print "$CPLIST" | grep -q "BundleIsRelocatable = true" || { echo "a bundle is still relocatable"; exit 1; }
+pkgbuild --root "$STAGE" --component-plist "$CPLIST" --identifier "$ID" --version "$VERSION" --scripts "$OUT/scripts" \
+         --ownership recommended --install-location / "$COMP" >/dev/null
+for f in "./$PROG_DIR/kai" ./usr/local/libexec/kai-hook; do
+    pkgutil --payload-files "$COMP" | grep -qxF "$f" || { echo "the package has no $f"; exit 1; }
+done
+! pkgutil --payload-files "$COMP" | grep -q "^\./usr/local/bin" || { echo "the payload lists /usr/local/bin"; exit 1; }
 DIST="$OUT/distribution.xml"
 productbuild --synthesize --package "$COMP" "$DIST" >/dev/null
 # add the pages and a title right after the opening tag
@@ -181,7 +209,6 @@ else
                  --sign "$KAI_DEVID_INSTALLER" --timestamp "$PKG" >/dev/null
     rm -f "$COMP"
     ! pkgutil --payload-files "$PKG" | grep -q "kai.storage" || { echo "the package contains the storage extension"; exit 1; }
-    pkgutil --payload-files "$PKG" | grep -q "usr/local/libexec/kai-hook" || { echo "the package has no hook launcher"; exit 1; }
     pkgutil --check-signature "$PKG" | grep -q "Developer ID Installer" || { echo "package isn't Developer ID Installer signed"; exit 1; }
     notarize "$PKG"
     xcrun stapler staple "$PKG"

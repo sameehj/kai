@@ -27,7 +27,7 @@ out=$(PATH="$TMP/bin:$PATH" KAI_CONSOLE_USER="$me" sh "$PI"); rc=$?
 call=$(cat "$TMP/calls" 2>/dev/null)
 [ "$rc" = 0 ] && pass "exits 0" || fail "exit $rc"
 case "$call" in
-    *"asuser $myuid sudo -u $me -H env HOME=$myhome /usr/local/bin/kai uninstall chrome"*) pass "removes an earlier Kai's Chrome helper as the console user, with that user's HOME" ;;
+    *"asuser $myuid sudo -u $me -H env HOME=$myhome /Library/Application Support/Kai/bin/kai uninstall chrome"*) pass "removes an earlier Kai's Chrome helper as the console user, with that user's HOME" ;;
     *) fail "unexpected call: $call" ;;
 esac
 case "$out" in *"removed any earlier Kai Chrome helper for $me"*) pass "notes it in the installer log" ;; *) fail "no note: $out" ;; esac
@@ -54,7 +54,7 @@ calls=$(cat "$TMP/calls" 2>/dev/null)
 case "$calls" in *"kai install claude"*) pass "re-installs Claude Code's hooks (it had them)" ;; *) fail "no claude reinstall: $calls" ;; esac
 case "$calls" in *"kai install codex"*) pass "re-installs Codex's hooks (it had them)" ;; *) fail "no codex reinstall: $calls" ;; esac
 case "$calls" in *"kai install cursor"*) fail "touched Cursor, which had no Kai hooks" ;; *) pass "leaves an agent without Kai's hooks alone" ;; esac
-case "$calls" in *"asuser $myuid sudo -u $me -H env HOME=$CH /usr/local/bin/kai install claude"*) pass "...as the console user, with that user's HOME" ;; *) fail "wrong user/home: $calls" ;; esac
+case "$calls" in *"asuser $myuid sudo -u $me -H env HOME=$CH /Library/Application Support/Kai/bin/kai install claude"*) pass "...as the console user, with that user's HOME" ;; *) fail "wrong user/home: $calls" ;; esac
 case "$out" in *"Claude Code: hooks updated"*"backups kept"*) pass "logs what changed, and that backups are kept" ;; *) fail "no change log: $out" ;; esac
 case "$out" in *"Codex: hooks already current"*) pass "...and what didn't change" ;; *) fail "no unchanged note: $out" ;; esac
 

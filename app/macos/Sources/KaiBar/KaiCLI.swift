@@ -125,6 +125,7 @@ enum KaiCLI {
         }
         let home = fm.homeDirectoryForCurrentUser.path
         candidates += [
+            Lifecycle.programPath,
             "/opt/homebrew/bin/kai",
             "/usr/local/bin/kai",
             "\(home)/.local/bin/kai",

@@ -166,6 +166,26 @@ session" flags work done in the current Scoped-Approvals effort (offline).
 | 22 | Consent inside ES callback | **Exists (offline)** | deny-then-retry + async pending implemented (`StorageClient.swift`), **not live** |
 | 23 | Approvals forged | Partial (offline) | app-only click-only signing, grant store protected, audited; approver auth / interface separation partial |
 
+## 0.9 Nov 15: Kai's program could be removed without admin rights
+
+**Finding.** RC4 in `docs/kai-redesign-2026-11-08.md` assumed "the pkg installs the binary as root, so an agent can't remove it without admin rights". On the development Mac that's false:
+
+- `/usr/local/bin` is `user:admin`, mode 775, which is Homebrew's layout.
+- Deleting or replacing a file needs write access to its folder, not to the file. So any program the user runs, agent or script, could delete or replace the root-owned `/usr/local/bin/kai`.
+- `/usr/local/libexec` (the launcher) and `/usr/local` are root:wheel 755, so the launcher was safe there.
+- A manual removal then left the agents' hooks calling a missing launcher. Every call ran unchecked, with no warning.
+
+**Fix (0.3.0-preview.1):**
+
+| Part | Where | Evidence |
+|---|---|---|
+| Program in `/Library/Application Support/Kai/bin` (root:wheel 755); `/usr/local/bin/kai` is a symlink; the launcher runs the real path | `scripts/release/kai-hook`, `build-preview-pkg.sh`, `include/kai.h` | package build checks |
+| Installer (postinstall) and `kai doctor` check that every folder on both paths, and both files, are root-owned and not group- or world-writable. Otherwise: "Kai can be switched off by any program you run" (degraded) | `scripts/release/postinstall`, `src/health.c` (`kai_install_trusted`), `src/status.c`, `kai status --json` `install` | regress S10-doctor-* (synthetic) |
+| Hooks stop rm, mv, overwrite, chmod/chown/chflags, ln/cp/install onto, and parent-folder moves of Kai's files and receipt, in Claude Code, Codex and Cursor. Reads and runs still work | `src/scan.c` (`kai_program`, `kai_command_tampers_kai`), `src/hooks.c` | regress S10-* (synthetic) |
+| A missing launcher is never silent: the hook command prints "Kai is missing: its checks are off. Reinstall Kai or run kai uninstall." | `src/install.c` (`hook_command`) | Claude Code 2.1.325 live (notice shown, call went through); Cursor 3.27.22 and Codex synthetic |
+
+**Still open.** A script the agent writes and runs can still delete Kai's files when the folder lets it. Once the program is root-owned, that needs admin rights. The symlink `/usr/local/bin/kai` stays user-replaceable: a program could point the user's `kai` command elsewhere. The hooks don't use the symlink. The Kai.app menu doesn't show the degraded state yet; `kai status --json` carries it.
+
 ## Summary for the human checkpoint
 
 - The **grant half is substantially built but storage-only and not live** (#9,

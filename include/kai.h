@@ -17,7 +17,19 @@
 extern "C" {
 #endif
 
-#define KAI_VERSION "0.2.0-preview.2"
+#define KAI_VERSION "0.3.0-preview.1"
+
+/* Where the package installs Kai (Nov 15). The program lives in a root-owned
+ * folder: /usr/local/bin is often owned by the user (Homebrew), so any program
+ * the user runs could delete or replace a kai there. /usr/local/bin/kai is
+ * only a symlink to it, for the Terminal. The launcher agents' hooks call runs
+ * KAI_PROGRAM_PATH directly. */
+#define KAI_PROGRAM_DIR "/Library/Application Support/Kai/bin"
+#define KAI_PROGRAM_PATH KAI_PROGRAM_DIR "/kai"
+#define KAI_CLI_LINK "/usr/local/bin/kai"
+#define KAI_HOOK_LAUNCHER "/usr/local/libexec/kai-hook"
+#define KAI_PACKAGE_ID "io.github.sameehj.kai.preview"
+#define KAI_MISSING_MSG "Kai is missing: its checks are off. Reinstall Kai or run kai uninstall."
 /* MAJOR.MINOR.PATCH[-preview.N]; a pre-release is older than its release. */
 int kai_version_cmp(const char *a, const char *b);
 
@@ -159,6 +171,21 @@ int kai_rule_is_kai_home(const char *rule);
  * READS are safe to allow (so the agent can start and Kai's hooks can load);
  * WRITES to it must still be blocked by the caller (anti-tamper). */
 int kai_control_read_allowed(const char *rule);
+/* Kai's installed files (program, launcher, Kai.app, shared files, the
+ * package receipt): reads and runs are fine; changing them is self-protect. */
+int kai_path_is_kai_program(const char *abs_path);
+int kai_rule_is_kai_program(const char *rule);
+/* Does a shell command delete, move, overwrite or chmod Kai's installed
+ * files (or a folder holding them), or forget its package receipt? */
+int kai_command_tampers_kai(const char *cmd, const char *cwd);
+/* Can any program the user runs switch Kai off? Checks that every folder on
+ * the launcher's and the program's path, and both files, are root-owned and
+ * not group- or world-writable. 1 = safe; 0 = not, with the first offender
+ * described in bad. */
+int kai_install_trusted(char *bad, size_t n);
+int kai_path_root_only(const char *path, char *bad, size_t n);
+/* the installed hook launcher (KAI_HOOK_LAUNCHER; tests may override it in dev builds) */
+const char *kai_launcher_path(void);
 /* True if `rule` (the value kai_path_protected fills into `why`) is the
  * trust-store class: CA trust bundles (Homebrew ca-certificates, OpenSSL
  * cert bundles, certifi cacert), /etc/ssl, and keychain trust-settings files.
@@ -894,6 +921,9 @@ const char *kai_action_name(kai_action a);
 void kai_report_summary(const kai_report *rep, char *out, size_t outlen);
 /* The same in plain words, for messages ("a password-like secret"). */
 void kai_report_plain(const kai_report *rep, char *out, size_t outlen);
+/* 1 if the scan found a known token format, a private key or a user rule,
+ * not only a generic key=value guess (password_assign, generic_secret_assign). */
+int kai_report_high_confidence(const kai_report *rep);
 /* One rule id in plain words, or NULL for a rule the user defined. */
 const char *kai_rule_plain(const char *rule);
 

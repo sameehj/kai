@@ -24,11 +24,11 @@ settings:
     # it in the developer portal: that needs a live login and makes Xcode
     # report "profile doesn't support the App Groups capability" when it can't.
     REGISTER_APP_GROUPS: NO
-    MARKETING_VERSION: "0.2.0"   # the release without its pre-release suffix (checked by make release)
+    MARKETING_VERSION: "0.3.0"   # the release without its pre-release suffix (checked by make release)
     # The app's build number. Bump freely for app changes (menu bar, signing);
     # this does NOT touch the network extension, so app updates never replace
     # it and never drop agents' live connections.
-    CURRENT_PROJECT_VERSION: "8"
+    CURRENT_PROJECT_VERSION: "9"
     # The network extension's own build number. Bump ONLY when the extension's
     # code (app/macos/Network) changes: macOS replaces an activated extension
     # when this differs, which tears down the content filter.
@@ -179,6 +179,9 @@ targets:
             make -C "$SRCROOT/../.." kai >/dev/null
             cp "$SRCROOT/../../kai" "$dest"
           fi
+          # Repair puts a missing hook launcher back from this copy (C5).
+          cp "$SRCROOT/../../scripts/release/kai-hook" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/kai-hook"
+          chmod 755 "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/kai-hook"
           # Notification sounds must be top-level app resources; NSSound uses
           # the same files for in-app approval feedback and previews.
           cp "$SRCROOT/../../kai-sfx/"*.wav "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/"

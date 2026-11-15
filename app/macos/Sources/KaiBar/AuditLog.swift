@@ -71,7 +71,7 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
     var actionLabel: String? {
         if isPrompt { return "Prompt" }
         if isNetwork { return "Connection" }
-        if isStorage { return "Protected file" }
+        if isStorage { return "File access" }
         switch tool ?? "" {
         case "Bash", "Shell", "shell": return "Command"
         case "Read": return "File read"
@@ -175,8 +175,11 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
         }
         // Spec §4/§8: an agent check, in words; the rule stays behind Why?.
         if isBlock && isBuiltinRule {
-            let changes = rule == "kai_self_protect" || ["Write", "Edit", "MultiEdit"].contains(tool ?? "")
-            return "\(who) tried to \(changes ? "change" : "read") Kai's settings. "
+            // "change" unless it was a read: a shell `sed -i` or `mv` on a
+            // settings file changes it, whatever the tool is called.
+            let reads = ["Read", "Grep", "Glob", "NotebookRead"].contains(tool ?? "")
+                || detail.hasPrefix("Kai stopped reading") || isPlainShellRead
+            return "\(who) tried to \(reads ? "read" : "change") Kai's settings. "
                 + (AuditEvent.filesEnforcing ? "Always protected." : "Stopped.")
         }
         if isBlock && detail.hasPrefix("Kai blocked ") {
@@ -212,6 +215,14 @@ struct AuditEvent: Decodable, Identifiable, Equatable {
     }
 
     private var isShell: Bool { ["Bash", "Shell", "shell"].contains(tool ?? "") }
+    /// A single shell command that only reads (`cat f`, `head f`): no
+    /// redirect, pipe, chain or in-place flag. Anything else counts as a change.
+    private var isPlainShellRead: Bool {
+        guard isShell, let cmd = excerpt?.trimmingCharacters(in: .whitespaces), !cmd.isEmpty else { return false }
+        if cmd.contains(where: { ">|;&`$".contains($0) }) || cmd.contains(" -i") { return false }
+        let first = String(cmd.prefix { !$0.isWhitespace })
+        return ["cat", "head", "tail", "less", "more", "grep", "rg", "ls", "stat", "wc", "file", "diff", "jq"].contains(first)
+    }
     private var isFileTool: Bool {
         ["Read", "Edit", "MultiEdit", "Write", "NotebookEdit", "Grep", "Glob", "LS"].contains(tool ?? "")
     }
@@ -384,4 +395,33 @@ enum PlainDetail {
         }
         return out
     }
+}
+
+/// C4: `kai why <decision-id> --json`, one decision record re-checked against
+/// the current rules. Every field is optional: an older CLI without `why`
+/// (or a failed run) gives nil, and the sheet hides these lines.
+struct WhyRecord: Decodable, Equatable {
+    var id: String? = nil
+    var ts: String? = nil
+    var agent: String? = nil
+    var component: String? = nil     // "agent hook" | "network wall" | "storage wall"
+    var rule: String? = nil
+    var target: String? = nil
+    var session: String? = nil
+    var attribution: String? = nil   // "hook: Claude Code session ab12" | "Unattributed"
+    var recovery: String? = nil
+    var reason: String? = nil
+    var retry: String? = nil         // "stopped (rule …)" | "allowed" | "not re-checkable: …"
+
+    static func parse(_ json: String) -> WhyRecord? {
+        guard let d = json.data(using: .utf8), let r = try? JSONDecoder().decode(WhyRecord.self, from: d) else { return nil }
+        return r
+    }
+    /// "Retry would now be: allowed", or nil when the CLI didn't say.
+    var retryLine: String? {
+        guard let r = retry?.trimmingCharacters(in: .whitespacesAndNewlines), !r.isEmpty else { return nil }
+        return "Retry would now be: \(r)"
+    }
+    /// Kai couldn't tie the stop to an agent session.
+    var isUnattributed: Bool { attribution?.lowercased().hasPrefix("unattributed") ?? false }
 }

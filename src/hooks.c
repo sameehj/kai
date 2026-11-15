@@ -139,8 +139,8 @@ static void gather_strings(const cJSON *node, sb_t *b, int depth) {
 /* ---- Spec v2.1 A.5: what Kai tells the agent (and you) when it stops something ----
  * what · why · what you can do. Fixed text, never generated. The agent relays
  * these, so they double as instructions to ask the user rather than retry.
- * Verb: "stopped" (Preview 1 never says "blocked", which is for the OS walls). */
-#define KAI_NOT_A_BOUNDARY "(Preview 1 can't stop a program with your permissions from changing them another way.)"
+ * Verb: "stopped" (the hooks never say "blocked", which is for the OS walls). */
+#define KAI_NOT_A_BOUNDARY "(Kai's checks can't stop a program with your permissions from changing them another way.)"
 
 static void path_matters(const char *path, const char **why, const char **tip) {
     const char *r = path ? path : "";
@@ -308,7 +308,10 @@ static void add_ask_user(char *msg, size_t n) {
 static void prompt_reason(const char *agent, const char *what, int blocked, char *out, size_t n) {
     const char *name = !strcmp(agent, "claude") ? "Claude Code" : !strcmp(agent, "codex") ? "Codex"
                      : !strcmp(agent, "cursor") ? "Cursor" : "This agent";
-    if (blocked)
+    if (blocked == 2)   /* only a generic key=value guess: warn, never block */
+        snprintf(out, n, "Prompt sent with a warning: it may contain %s. Kai blocks a prompt only for a "
+                 "known token format or a private key; check that you meant to share it.", what);
+    else if (blocked)
         snprintf(out, n, "Prompt blocked: it contained %s. %s can't redact prompts, so Kai blocked it. "
                  "Remove the secret and send the prompt again.", what, name);
     else
@@ -357,7 +360,7 @@ static void check_kai_control(char **argv, int argc, void *ud) {
                   !strncmp(sub, "allow-", 6);
     if (!strcmp(sub, "policy") && k + 1 < argc)
         control = !strcmp(argv[k + 1], "set") || !strcmp(argv[k + 1], "add") ||
-                  !strcmp(argv[k + 1], "remove");
+                  !strcmp(argv[k + 1], "remove") || !strcmp(argv[k + 1], "accept");
     if (control) *(int *)ud = 1;
 }
 
@@ -366,6 +369,85 @@ static int command_controls_kai(const char *cmd) {
     kai_shell_walk(cmd, check_kai_control, NULL, &hit);
     return hit;
 }
+
+/* R8c: commands whose job is to PRINT a credential. gh and git keep using
+ * their tokens internally (their own requests aren't tool calls); only asking
+ * for the token itself is stopped. Hooks see command text only: a script the
+ * agent writes can still do it (ESCAPES: credential-print-script). */
+static int short_flag_has(const char *a, const char *letters) {
+    if (a[0] != '-' || a[1] == '-' || !a[1]) return 0;
+    for (const char *c = a + 1; *c; c++) {
+        if (!isalpha((unsigned char)*c)) return 0;
+        if (strchr(letters, *c)) return 1;
+    }
+    return 0;
+}
+
+static void check_credential_print(char **argv, int argc, void *ud) {
+    const char **what = ud;
+    int i = kai_shell_command_start(argv, argc);
+    if (i >= argc || *what) return;
+    const char *w = argv[i];
+    const char *b = strrchr(w, '/') ? strrchr(w, '/') + 1 : w;
+    /* the first non-flag words after the command, skipping -C dir / -R repo style values */
+    const char *sub[3] = {NULL, NULL, NULL};
+    int ns = 0;
+    for (int k = i + 1; k < argc && ns < 3; k++) {
+        if (argv[k][0] == '-') {
+            if ((!strcmp(argv[k], "-C") || !strcmp(argv[k], "-c") || !strcmp(argv[k], "-R") ||
+                 !strcmp(argv[k], "--repo") || !strcmp(argv[k], "--hostname") || !strcmp(argv[k], "-h")) && k + 1 < argc)
+                k++;
+            continue;
+        }
+        sub[ns++] = argv[k];
+    }
+    if (!strcmp(b, "gh") && sub[0] && !strcmp(sub[0], "auth")) {
+        if (sub[1] && !strcmp(sub[1], "token")) { *what = "gh auth token"; return; }
+        for (int k = i + 1; k < argc; k++)
+            if (!strcmp(argv[k], "--show-token") || !strcmp(argv[k], "-t")) { *what = "gh auth status --show-token"; return; }
+    }
+    if (!strcmp(b, "git") && sub[0] && !strcmp(sub[0], "credential") && sub[1] &&
+        (!strcmp(sub[1], "fill") || !strcmp(sub[1], "get"))) { *what = "git credential fill"; return; }
+    if (!strncmp(b, "git-credential-", 15) && sub[0] && !strcmp(sub[0], "get")) { *what = "git credential helper get"; return; }
+    if (!strcmp(b, "security") && sub[0] &&
+        (!strcmp(sub[0], "find-internet-password") || !strcmp(sub[0], "find-generic-password"))) {
+        for (int k = i + 1; k < argc; k++)
+            if (short_flag_has(argv[k], "wg")) { *what = "security find-*-password -w"; return; }
+    }
+}
+
+/* The name of the credential-printing command, or NULL. */
+static const char *command_prints_credential(const char *cmd) {
+    const char *what = NULL;
+    if (cmd) kai_shell_walk(cmd, check_credential_print, NULL, &what);
+    return what;
+}
+
+/* C4 "Retry would now be": the shell-command part of the decision, re-run
+ * against today's policy for `kai why`. Returns 1 and the rule when Kai would
+ * stop it now. The record's target is the redacted command, so a command whose
+ * secret was redacted is re-checked without it. */
+int kai_hook_recheck_command(const kai_policy *p, const char *agent, const char *cmd, const char *cwd,
+                             char *rule, size_t n) {
+    if (n) rule[0] = '\0';
+    if (!cmd || !*cmd) return 0;
+    if (command_controls_kai(cmd) || kai_command_tampers_kai(cmd, cwd)) { kai_strlcpy(rule, "kai_self_protect", n); return 1; }
+    if (command_prints_credential(cmd)) { kai_strlcpy(rule, "credential_print", n); return 1; }
+    char why[256] = "";
+    if (p && kai_command_touches_protected_as(p, agent, cmd, cwd, why, sizeof why, NULL, NULL)) {
+        kai_strlcpy(rule, why[0] ? why : "protected_path", n);
+        return 1;
+    }
+    return 0;
+}
+
+#define KAI_TAMPER_REASON "Kai never allows agents to delete, move or change Kai's own program files " \
+    "(its program, hook launcher, Kai.app or package receipt) through its checks: that would switch Kai off. " \
+    "To remove Kai, the user uninstalls it from Kai's Settings > Uninstall. " KAI_NOT_A_BOUNDARY
+
+#define CRED_PRINT_REASON "Kai stopped `%s`: it prints a saved login token or password, which gives whoever " \
+    "reads it the same access. gh and git keep working; they use the token without printing it. If you need " \
+    "it, run the command in your own terminal."
 
 /* Does a shell command make a terminal app (or System Events, which can type
  * into any app) run something? Those commands run in the terminal's process
@@ -486,6 +568,7 @@ static int file_holds_sensitive(const kai_policy *p, const char *file, const cha
         size_t n = 0;
         char *txt = kai_read_file(abs, p->max_scan, &n);
         if (txt && n && !memchr(txt, '\0', n)) {
+            kai_blank_test_fakes(txt);   /* S7: Kai's own canonical fake test tokens */
             kai_report rep;
             char *clean = kai_scan_text(p, txt, &rep);
             free(clean);
@@ -1361,9 +1444,10 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
         free(cleaned);
         if (rep.worst >= KAI_ACT_REDACT) {
             kai_action a = kai_policy_prompt_action(p);
-            decision = a >= KAI_ACT_REDACT ? KAI_ACT_BLOCK : KAI_ACT_WARN;
+            int sure = kai_report_high_confidence(&rep);
+            decision = a >= KAI_ACT_REDACT && sure ? KAI_ACT_BLOCK : KAI_ACT_WARN;
             char what[300]; kai_report_plain(&rep, what, sizeof what);
-            prompt_reason(source, what, decision >= KAI_ACT_BLOCK, reason, sizeof reason);
+            prompt_reason(source, what, decision >= KAI_ACT_BLOCK ? 1 : !sure ? 2 : 0, reason, sizeof reason);
             kai_strlcpy(rule, "prompt_secret", sizeof rule);
         }
     } else if (ev && (strcmp(ev, "PreToolUse") == 0)) {
@@ -1450,12 +1534,12 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 decision = KAI_ACT_BLOCK; ask = 1;
                 snprintf(reason, sizeof reason, "%s \xC2\xB7 %s deletes, publishes or changes users, so Kai asks every "
                          "time, even on an approved server (to allow this tool without asking: "
-                         "kai allow-mcp %s %s --agent %s --for 1h).", mcp_server, mcp_tool, mcp_server, mcp_tool, source);
+                         "kai allow-mcp %s %s --agent %s).", mcp_server, mcp_tool, mcp_server, mcp_tool, source);
             } else if (destructive) {
                 decision = KAI_ACT_BLOCK; ask = 0;
                 snprintf(reason, sizeof reason, "Kai stopped the MCP tool %s from %s: it deletes, publishes or changes "
                          "users, and %s can't ask the user here%s. Don't retry another way; ask the user to run "
-                         "kai allow-mcp %s %s --agent %s --for 1h, then retry%s.", mcp_tool, mcp_server,
+                         "kai allow-mcp %s %s --agent %s, then retry%s.", mcp_tool, mcp_server,
                          can_ask ? "Claude Code" : "this agent",
                          can_ask ? " in this permission mode" : "", mcp_server, mcp_tool, source,
                          can_ask ? ", or to switch Claude Code out of bypass mode" : "");
@@ -1468,12 +1552,12 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 decision = KAI_ACT_BLOCK; ask = human_prompt;
                 if (human_prompt)
                     snprintf(reason, sizeof reason, "%s \xC2\xB7 %s sends to %s, which isn't this server's own host, "
-                             "so Kai asks (to allow this tool without asking: kai allow-mcp %s %s --agent %s --for 1h).",
+                             "so Kai asks (to allow this tool without asking: kai allow-mcp %s %s --agent %s).",
                              mcp_server, mcp_tool, mcp_dest, mcp_server, mcp_tool, source);
                 else
                     snprintf(reason, sizeof reason, "Kai stopped the MCP tool %s from %s: it sends to %s, which isn't "
                              "this server's own host, and nobody can be asked here. Don't retry another way; ask the "
-                             "user to run kai allow-mcp %s %s --agent %s --for 1h, then retry.",
+                             "user to run kai allow-mcp %s %s --agent %s, then retry.",
                              mcp_tool, mcp_server, mcp_dest, mcp_server, mcp_tool, source);
             } else if (kai_cli_grant_allows("mcp", source, mcp_server, mcp_tool, cwd, tnow)) {
                 decision = KAI_ACT_NONE;                      /* the user's grant allows it */
@@ -1547,6 +1631,14 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 kai_strlcpy(rule, "kai_self_protect", sizeof rule);
                 snprintf(reason, sizeof reason,
                          "Kai never allows agents to change its settings through its checks. " KAI_NOT_A_BOUNDARY);
+            } else if (kai_command_tampers_kai(cmd, cwd)) {
+                decision = KAI_ACT_BLOCK;
+                kai_strlcpy(rule, "kai_self_protect", sizeof rule);
+                snprintf(reason, sizeof reason, "%s", KAI_TAMPER_REASON);
+            } else if (command_prints_credential(cmd)) {
+                decision = KAI_ACT_BLOCK;
+                kai_strlcpy(rule, "credential_print", sizeof rule);
+                snprintf(reason, sizeof reason, CRED_PRINT_REASON, command_prints_credential(cmd));
             } else if (rules_decide(cmd, source, rhost, sizeof rhost) == 2) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, "terminal_rule", sizeof rule);
@@ -1738,6 +1830,16 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             free(s); cJSON_Delete(o);
         }
     }
+    /* A prompt Kai warned about goes through; Claude Code shows the user why
+     * (systemMessage). Codex validates hook output strictly: log only. */
+    if (decision == KAI_ACT_WARN && ev && strcmp(ev, "UserPromptSubmit") == 0 && source &&
+        !strcmp(source, "claude") && reason[0]) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "systemMessage", reason);
+        char *s = cJSON_PrintUnformatted(o);
+        if (s) printf("%s\n", s);
+        free(s); cJSON_Delete(o);
+    }
     /* Item 7: before a git/ssh/scp/gh command that Kai is allowing, if the
      * ssh-agent holds no keys, tell the agent up front how to make it work (ask
      * the user to load a key / use gh) instead of letting it fail on ~/.ssh and
@@ -1839,7 +1941,8 @@ static int hook_cursor(const char *json) {
         subject = fp;
         if (fp && kai_cli_grant_allows("read", "cursor", fp, NULL, cwd, (long long)time(NULL))) {
             /* the user's kai allow-file for exactly this file */
-        } else if (fp && kai_path_protected_as(p, "cursor", fp, cwd, why, sizeof why)) {
+        } else if (fp && kai_path_protected_as(p, "cursor", fp, cwd, why, sizeof why) &&
+                   !kai_rule_is_kai_program(why)) {   /* reading Kai's program files is fine */
             deny = 1; say_protected(reason, sizeof reason, "read", fp, why, "cursor", cwd);
         } else if (fp && (strength = file_holds_sensitive(p, fp, cwd, held, sizeof held)) &&
                    (strength == 2 || kai_policy_file_secret_action(p) >= KAI_ACT_BLOCK) &&
@@ -1861,6 +1964,14 @@ static int hook_cursor(const char *json) {
             kai_strlcpy(why, "kai_self_protect", sizeof why);
             snprintf(reason, sizeof reason,
                      "Kai never allows agents to change its settings through its checks. " KAI_NOT_A_BOUNDARY);
+        } else if (cmd && kai_command_tampers_kai(cmd, cwd)) {
+            deny = 1;
+            kai_strlcpy(why, "kai_self_protect", sizeof why);
+            snprintf(reason, sizeof reason, "%s", KAI_TAMPER_REASON);
+        } else if (cmd && command_prints_credential(cmd)) {
+            deny = 1;
+            kai_strlcpy(why, "credential_print", sizeof why);
+            snprintf(reason, sizeof reason, CRED_PRINT_REASON, command_prints_credential(cmd));
         } else if (cmd && rules_decide(cmd, "cursor", rhost, sizeof rhost) == 2) {
             deny = 1;
             kai_strlcpy(why, "terminal_rule", sizeof why);
@@ -1924,7 +2035,15 @@ static int hook_cursor(const char *json) {
         subject = prompt;
         kai_report rep;
         char *c = kai_scan_text(p, prompt ? prompt : "", &rep); free(c);
-        if (rep.worst >= KAI_ACT_REDACT &&
+        if (rep.worst >= KAI_ACT_REDACT && !kai_report_high_confidence(&rep)) {
+            /* only a generic key=value guess: the prompt goes through, logged as a warning */
+            char sm[512], what[300], ctx[KAI_AUDIT_TARGET_MAX];
+            kai_report_plain(&rep, what, sizeof what);
+            prompt_reason("cursor", what, 2, sm, sizeof sm);
+            prompt_context(prompt, ctx, sizeof ctx);
+            kai_audit_entry e = {"cursor", ev, "warn", "prompt", sm, NULL, ctx, NULL, session, cwd, NULL};
+            kai_audit_write(&e);
+        } else if (rep.worst >= KAI_ACT_REDACT &&
             kai_policy_prompt_action(p) >= KAI_ACT_REDACT) {
             /* beforeSubmitPrompt uses {continue:false} */
             cJSON *o = cJSON_CreateObject();
@@ -1968,7 +2087,7 @@ static int hook_cursor(const char *json) {
         kai_audit_entry e = {"cursor", ev ? ev : "unknown", "would-block", why, reason,
                              tool, ctx, mctx, session, cwd, NULL};
         kai_audit_write(&e);
-        printf("{\"permission\":\"allow\"}\n");
+        printf("{}\n");   /* no opinion: Cursor's own approval decides */
         deny = 0;
     } else if (deny) {
         maybe_wait_note(reason, sizeof reason, session, why, subject);
@@ -1984,8 +2103,12 @@ static int hook_cursor(const char *json) {
                                  "allowed by your exception", tool, ctx, mctx, session, cwd, NULL};
             kai_audit_write(&e);
         }
-        /* explicit allow keeps Cursor's own flow */
-        printf("{\"permission\":\"allow\"}\n");
+        /* No opinion. An explicit "allow" would read as Kai approving the call
+         * for the user; Cursor 3.27.22 treats a reply without "permission"
+         * exactly like "allow" (it acts only on "deny" and "ask"), and if a
+         * later Cursor starts honouring "allow" as approval, Kai still won't
+         * be granting anything. */
+        printf("{}\n");
     }
     if (tool || kind == NEXT_PROMPT)
         follow_up(p, "cursor", session, kind, tool, subject, cwd, deny && !cursor_ask ? why : NULL, ctx);

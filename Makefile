@@ -23,7 +23,7 @@ endif
 
 CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
        src/net.c src/storage.c src/storage_prof.c src/grant.c src/approval_store.c src/proc.c src/shell.c src/gateway.c src/session.c src/agent_rules.c third_party/cjson/cJSON.c
-APP  = src/main.c src/hooks.c src/install.c src/manage.c src/report.c src/health.c src/storaged.c src/grant_cli.c src/status.c src/demo.c
+APP  = src/main.c src/hooks.c src/install.c src/manage.c src/report.c src/health.c src/storaged.c src/grant_cli.c src/status.c src/demo.c src/stats.c
 
 OBJ      = $(CORE:.c=.o) $(APP:.c=.o)
 COREOBJ  = $(CORE:.c=.o)
@@ -99,6 +99,7 @@ test: kai tests/cli/kai-test
 	sh tests/gateway/run_gateway_tests.sh tests/cli/kai-test
 	sh tests/gateway/run_tls_tests.sh tests/cli/kai-test
 	python3 -I tests/corpus/run_corpus.py ./kai
+	python3 -I tests/regress/run_regress.py ./kai
 	python3 -I tests/coverage/run_coverage.py ./kai
 	@if sh tests/hook_writes_ok.sh; then python3 -I tests/escape/run_escape.py ./kai; \
 	 else echo "escape suite: skipped - needs a non-agent shell (Files protection blocks agent hook settings)"; fi

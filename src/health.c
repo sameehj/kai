@@ -10,6 +10,8 @@
 #include "internal.h"
 
 #include <errno.h>
+#include <limits.h>
+#include <pwd.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
@@ -22,6 +24,85 @@
 #include <unistd.h>
 
 #define PROBE_TIMEOUT_MS 5000
+
+/* ---- Can any program the user runs switch Kai off? (Nov 15) ----
+ * A program running as the user can delete or replace any file in a folder
+ * the user can write to. /usr/local/bin is often the user's (Homebrew), so a
+ * kai there can be removed without admin rights. Safe means: the file and
+ * every folder above it (as written and as resolved) are owned by root and
+ * not group- or world-writable. */
+static int one_root_only(const char *p, char *bad, size_t n) {
+    struct stat st;
+    if (lstat(p, &st) != 0) { snprintf(bad, n, "%s is missing", p); return 0; }
+    if (st.st_uid != 0 || (st.st_mode & (S_IWGRP | S_IWOTH))) {
+        struct passwd *owner = getpwuid(st.st_uid);
+        snprintf(bad, n, "%s is owned by %s%s", p, owner ? owner->pw_name : "another user",
+                 (st.st_mode & S_IWOTH) ? " and anyone can change it"
+                 : (st.st_mode & S_IWGRP) ? " and its group can change it" : "");
+        return 0;
+    }
+    return 1;
+}
+
+static int chain_root_only(const char *path, char *bad, size_t n) {
+    char buf[PATH_MAX];
+    kai_strlcpy(buf, path, sizeof buf);
+    for (;;) {
+        if (!one_root_only(buf, bad, n)) return 0;
+        char *s = strrchr(buf, '/');
+        if (!s) return 1;
+        if (s == buf) { if (buf[1] == '\0') return 1; buf[1] = '\0'; continue; }
+        *s = '\0';
+    }
+}
+
+int kai_path_root_only(const char *path, char *bad, size_t n) {
+    if (n) bad[0] = '\0';
+    if (!path || path[0] != '/') { snprintf(bad, n, "%s isn't an absolute path", path ? path : "(none)"); return 0; }
+    if (!chain_root_only(path, bad, n)) return 0;
+    char real[PATH_MAX];
+    if (!realpath(path, real)) { snprintf(bad, n, "%s is missing", path); return 0; }
+    return strcmp(real, path) == 0 || chain_root_only(real, bad, n);
+}
+
+/* The program the installed launcher runs: its K="..." line (an older
+ * launcher names /usr/local/bin/kai). */
+/* dev/test builds only (release builds ignore them, like KAI_POLICY) */
+static const char *test_env(const char *name) {
+    const char *v = KAI_ENV_OVERRIDES ? getenv(name) : NULL;
+    return v && *v ? v : NULL;
+}
+
+const char *kai_launcher_path(void) {
+    const char *t = test_env("KAI_TEST_LAUNCHER");
+    return t ? t : KAI_HOOK_LAUNCHER;
+}
+
+static void launcher_program(char *out, size_t n) {
+    const char *tp = test_env("KAI_TEST_PROGRAM");
+    kai_strlcpy(out, tp ? tp : KAI_PROGRAM_PATH, n);
+    if (tp) return;
+    size_t len = 0;
+    char *t = kai_read_file(kai_launcher_path(), 1 << 16, &len);
+    if (!t) return;
+    for (char *l = t; l && *l; l = strchr(l, '\n') ? strchr(l, '\n') + 1 : NULL) {
+        if (strncmp(l, "K=", 2)) continue;
+        char *v = l + 2, *e = strchr(v, '\n');
+        if (e) *e = '\0';
+        size_t vl = strlen(v);
+        if (vl >= 2 && (v[0] == '"' || v[0] == '\'') && v[vl - 1] == v[0]) { v[vl - 1] = '\0'; v++; }
+        kai_strlcpy(out, v, n);
+        break;
+    }
+    free(t);
+}
+
+int kai_install_trusted(char *bad, size_t n) {
+    if (!kai_path_root_only(kai_launcher_path(), bad, n)) return 0;
+    char prog[PATH_MAX];
+    launcher_program(prog, sizeof prog);
+    return kai_path_root_only(prog, bad, n);
+}
 
 /* Run cmd with /bin/sh, input on stdin; collect stdout. Returns the exit
  * status (or -1 on timeout / failure to run). */
@@ -191,9 +272,11 @@ void kai_health_agent(const char *agent, const char *config, kai_health *h) {
         return;
     }
     /* through the package's launcher: what matters is the kai it runs */
-    if (!strcmp(exe, "/usr/local/libexec/kai-hook") && executable(exe) && !executable("/usr/local/bin/kai")) {
+    char prog[PATH_MAX];
+    launcher_program(prog, sizeof prog);
+    if (!strcmp(exe, KAI_HOOK_LAUNCHER) && executable(exe) && !executable(prog)) {
         set_problem(h, "Kai's program is missing (%s): Kai's checks are off and its settings aren't protected; "
-                       "the agent keeps working unchecked until Kai is repaired", "/usr/local/bin/kai");
+                       "the agent keeps working unchecked until Kai is repaired", prog);
         cJSON_Delete(root);
         return;
     }
