@@ -276,6 +276,73 @@ for cid, what, ev in [
 ]:
     hook_case("S7-keep-" + cid, "S7", what, "Stopped", "claude", ev)
 
+# ---- S7-adv: adversarial cases for the 2a275ab exemptions ------------------------
+# Only the *bodies* of a message, a search pattern or a heredoc are exempt. An
+# argument, a redirection or a command substitution that reads a key is still an
+# access. K is a fake key at a protected path in the throwaway HOME.
+TK = "~/.ssh/id_rsa"
+ENVF = os.path.join(REPO, ".env")
+with open(ENVF, "w") as fh:
+    fh.write("AWS_ACCESS_KEY_ID=" + "AKIA" + "IOSFODNN7" + "EXAMPLE\n")
+MIXED = os.path.join(REPO, "notes.txt")
+with open(MIXED, "w") as fh:   # one real-format token (built at run time) next to a canonical fake
+    fh.write("fake: ghp_" + "KAIFAKE" + "0123456789abcdefghijABCDEFGHIJ\n"
+             "real: ghp_" + "R7tq" + "Lx92mWc4ZpVb8NkD" + "s3Hf6Yj1Qa5Ue0Ko\n")
+ADV = [
+    ("commit-m-subst", "git commit -m \"$(cat <key>)\"", "git commit -m \"$(cat " + K + ")\""),
+    ("commit-m-subst-tilde", "git commit -m \"$(cat ~/<key>)\"", "git commit -m \"$(cat " + TK + ")\""),
+    ("commit-m-backtick", "git commit -m \"`cat <key>`\"", "git commit -m \"`cat " + K + "`\""),
+    ("commit-m-unquoted-subst", "git commit -m $(cat <key>)", "git commit -m $(cat " + K + ")"),
+    ("commit-message-eq-subst", "git commit --message=\"$(cat <key>)\"", "git commit --message=\"$(cat " + K + ")\""),
+    ("commit-m-redirect-subst", "git commit -m \"$(< <key>)\"", "git commit -m \"$(< " + K + ")\""),
+    ("gh-body-file-stdin-key", "gh pr create --body-file - < <key>", "gh pr create --title t --body-file - < " + K),
+    ("gh-body-file-key", "gh pr create --body-file <key>", "gh pr create --title t --body-file " + K),
+    ("gh-body-subst", "gh pr edit --body \"$(cat <key>)\"", "gh pr edit 3 --body \"$(cat " + K + ")\""),
+    ("gh-title-subst", "gh pr create --title \"$(cat <key>)\"", "gh pr create --title \"$(cat " + K + ")\" --body b"),
+    ("gh-body-eq-subst", "gh pr create --body=\"$(cat <key>)\"", "gh pr create --title t --body=\"$(cat " + K + ")\""),
+    ("commit-F-key", "git commit -F <key>", "git commit -F " + K),
+    ("commit-F-key-tilde", "git commit -F ~/<key>", "git commit -F " + TK),
+    ("commit-file-eq-key", "git commit --file=<key>", "git commit --file=" + K),
+    ("commit-F-stdin-key", "git commit -F - < <key>", "git commit -F - < " + K),
+    ("grep-x-key", "grep x <key>", "grep x " + K),
+    ("grep-x-key-tilde", "grep x ~/<key>", "grep x " + TK),
+    ("grep-f-key", "grep -f <key> .", "grep -f " + K + " ."),
+    ("grep-e-x-key", "grep -e x <key>", "grep -e x " + K),
+    ("grep-pattern-subst", "grep \"$(cat <key>)\" file", "grep \"$(cat " + K + ")\" main.c"),
+    ("rg-x-key", "rg x <key>", "rg x " + K),
+    ("tee-settings-heredoc", "tee <settings> <<EOF", "tee " + SET + " <<'EOF'\n{}\nEOF"),
+    ("tee-a-settings-heredoc", "tee -a ~/<settings> <<EOF", "tee -a ~/.claude/settings.json <<'EOF'\n{}\nEOF"),
+    ("cat-heredoc-gt-settings", "cat <<EOF > <settings>", "cat <<'EOF' > " + SET + "\n{}\nEOF"),
+    ("cat-key-heredoc", "cat <key> <<EOF", "cat " + K + " <<'EOF'\nhi\nEOF"),
+    ("cat-gt-file-key-body", "cat > f <<EOF with $(cat <key>) in an unquoted body",
+     "cat > out.txt <<EOF\n$(cat " + K + ")\nEOF"),
+    ("git-F-stdin-backtick-body", "git commit -F - <<EOF with `cat <key>` in an unquoted body",
+     "git commit -F - <<EOF\nmsg `cat " + K + "`\nEOF"),
+    ("tee-body-subst", "tee f <<EOF with $(cat ~/<key>) in an unquoted body",
+     "tee out.txt <<EOF\n$(cat " + TK + ")\nEOF"),
+    ("python-heredoc", "python3 <<EOF reading the key (D5)", "python3 - <<'EOF'\nprint(open('" + K + "').read())\nEOF"),
+    ("sh-heredoc", "sh <<EOF reading the key (D5)", "sh <<'EOF'\ncat " + K + "\nEOF"),
+    ("bash-s-heredoc", "bash -s <<EOF reading the key (D5)", "bash -s <<'EOF'\ncat " + TK + "\nEOF"),
+    ("node-heredoc", "node <<EOF reading the key (D5)",
+     "node <<'EOF'\nconsole.log(require('fs').readFileSync('" + K + "','utf8'))\nEOF"),
+]
+for cid, what, cmd in ADV:
+    hook_case("S7-adv-" + cid, "S7", what, "Stopped", "claude", rcc("Bash", {"command": cmd}))
+for cid, what, cmd in [("commit-m-subst", "git commit -m \"$(cat <key>)\"", "git commit -m \"$(cat " + K + ")\""),
+                       ("grep-x-key", "grep x <key>", "grep x " + K),
+                       ("tee-settings-heredoc", "tee <settings> <<EOF", "tee " + SET + " <<'EOF'\n{}\nEOF")]:
+    hook_case("S7-adv-cursor-" + cid, "S7", "Cursor shell: " + what, "Stopped", "cursor", cursor_shell(cmd))
+hook_case("S7-adv-env-example", "S7", "Read of a .env holding only an EXAMPLE token (path rule still applies)",
+          "Stopped", "claude", rcc("Read", {"file_path": ENVF}))
+hook_case("S7-adv-cat-env-example", "S7", "cat of that .env", "Stopped", "claude", rcc("Bash", {"command": "cat .env"}))
+hook_case("S7-adv-mixed-fake-real", "S7", "Read of a file with one real-format token next to a KAIFAKE token",
+          "Stopped", "claude", rcc("Read", {"file_path": MIXED}))
+# the exemptions themselves still hold: a literal (single-quoted) $(...) is text, not a substitution
+hook_case("S7-adv-literal-subst", "S7", "git commit -m '$(cat <key>)' in single quotes is text", "Observed", "claude",
+          rcc("Bash", {"command": "git commit -q -m 'doc: never run $(cat ~/.ssh/id_rsa)'"}))
+hook_case("S7-adv-quoted-body-subst", "S7", "cat > f <<'EOF' with $(cat <key>) in a quoted body is text", "Observed",
+          "claude", rcc("Bash", {"command": "cat > out.md <<'EOF'\nnever run $(cat ~/.ssh/id_rsa)\nEOF"}))
+
 for cid, rel in [("k-0101e012-real", "tests/hooks/run_hook_tests.sh"), ("k-338f063f-real", "tests/cli/run_cli_tests.sh")]:
     hook_case("S7-" + cid, "S7", "Read of the repo's " + rel, "Observed", "claude",
               {"hook_event_name": "PreToolUse", "tool_name": "Read", "session_id": "r7",

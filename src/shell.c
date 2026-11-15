@@ -136,12 +136,31 @@ static size_t match_paren(const char *s, size_t i, size_t len) {
     return len;
 }
 
+/* Text the shell expands but doesn't run as a command (an unquoted heredoc
+ * body): walk only the $(...) and `...` inside it. Quotes don't stop
+ * expansion here, so they aren't special. */
+static void walk_substs(const walker_t *wk, const char *s, size_t len, int depth) {
+    for (size_t i = 0; i < len; i++) {
+        if (s[i] == '\\') { i++; continue; }
+        if (s[i] == '$' && i + 1 < len && s[i + 1] == '(') {
+            size_t e = match_paren(s, i + 2, len);
+            walk(wk, s + i + 2, e - i - 2, depth);
+            i = e;
+        } else if (s[i] == '`') {
+            size_t e = i + 1;
+            while (e < len && s[e] != '`') { if (s[e] == '\\') e++; e++; }
+            walk(wk, s + i + 1, (e < len ? e : len) - i - 1, depth);
+            i = e;
+        }
+    }
+}
+
 static void walk(const walker_t *wk, const char *s, size_t len, int depth) {
     words_t argv = {0};
     sb_t word;
     sb_init(&word);
     int in_word = 0;
-    struct { char delim[64]; int strip_tabs, shell, text; } hd[MAX_HEREDOCS];
+    struct { char delim[64]; int strip_tabs, shell, text, quoted; } hd[MAX_HEREDOCS];
     int nhd = 0;
 
 #define END_WORD()                                         \
@@ -183,6 +202,12 @@ static void walk(const walker_t *wk, const char *s, size_t len, int depth) {
                     if (depth < MAX_DEPTH) walk(wk, s + j + 2, e - j - 2, depth + 1);
                     sb_add(&word, s + j, (e < len ? e + 1 : len) - j);
                     j = e;
+                } else if (s[j] == '`') {   /* "...`cmd`...": runs, like $(cmd) */
+                    size_t e = j + 1;
+                    while (e < len && s[e] != '`') { if (s[e] == '\\') e++; e++; }
+                    if (depth < MAX_DEPTH) walk(wk, s + j + 1, (e < len ? e : len) - j - 1, depth + 1);
+                    sb_add(&word, s + j, (e < len ? e + 1 : len) - j);
+                    j = e < len ? e : len - 1;
                 } else {
                     sb_add(&word, &s[j], 1);
                 }
@@ -221,8 +246,10 @@ static void walk(const walker_t *wk, const char *s, size_t len, int depth) {
             while (j < len && (s[j] == ' ' || s[j] == '\t')) j++;
             char d[64];
             size_t dn = 0;
+            int quoted = 0;
             while (j < len && !isspace((unsigned char)s[j]) && !strchr(";&|<>()", s[j])) {
-                if (s[j] != '\'' && s[j] != '"' && s[j] != '\\' && dn < sizeof d - 1) d[dn++] = s[j];
+                if (s[j] == '\'' || s[j] == '"' || s[j] == '\\') quoted = 1;
+                else if (dn < sizeof d - 1) d[dn++] = s[j];
                 j++;
             }
             d[dn] = '\0';
@@ -231,6 +258,7 @@ static void walk(const walker_t *wk, const char *s, size_t len, int depth) {
                 hd[nhd].strip_tabs = strip;
                 hd[nhd].shell = argv.n > 0 && is_shell(argv.v[0]);
                 hd[nhd].text = argv.n > 0 && is_text_sink(&argv);
+                hd[nhd].quoted = quoted;
                 nhd++;
             }
             i = j - 1;
@@ -250,7 +278,12 @@ static void walk(const walker_t *wk, const char *s, size_t len, int depth) {
                     if (e - ls == strlen(hd[h].delim) && !strncmp(s + ls, hd[h].delim, e - ls)) {
                         size_t blen = p - body;
                         if (hd[h].shell && depth < MAX_DEPTH) walk(wk, s + body, blen, depth + 1);
-                        else if (hd[h].text) { /* a message or file body: text, not code (S7) */ }
+                        else if (hd[h].text) {
+                            /* a message or file body: text, not code (S7). With an
+                             * unquoted delimiter the shell still runs $(...) and
+                             * `...` inside it, so those are walked as commands. */
+                            if (!hd[h].quoted && depth < MAX_DEPTH) walk_substs(wk, s + body, blen, depth + 1);
+                        }
                         else if (wk->on_text) {
                             char *t = malloc(blen + 1);
                             if (t) { memcpy(t, s + body, blen); t[blen] = '\0'; wk->on_text(t, wk->ud); free(t); }
