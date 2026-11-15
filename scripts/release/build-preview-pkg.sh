@@ -172,7 +172,20 @@ cp scripts/release/installer/welcome.html scripts/release/installer/readme.html 
     codesign --verify --strict "$STAGE/$PROG_DIR/kai"
 }
 COMP="$OUT/component.pkg"
-pkgbuild --root "$STAGE" --identifier "$ID" --version "$VERSION" --scripts "$OUT/scripts" \
+# Kai.app installs to /Applications, always. By default the installer
+# "relocates" a bundle to wherever another copy with the same bundle ID
+# already is (a build folder, an old download), so /Applications/Kai.app
+# never appears (seen Nov 15). Bundles are marked not relocatable.
+CPLIST="$OUT/component.plist"
+pkgbuild --analyze --root "$STAGE" "$CPLIST" >/dev/null
+n=0
+while /usr/libexec/PlistBuddy -c "Print :$n:BundleIsRelocatable" "$CPLIST" >/dev/null 2>&1; do
+    /usr/libexec/PlistBuddy -c "Set :$n:BundleIsRelocatable false" "$CPLIST"
+    n=$((n + 1))
+done
+[ "$n" -gt 0 ] || { echo "no bundles in the component list"; exit 1; }
+! /usr/libexec/PlistBuddy -c Print "$CPLIST" | grep -q "BundleIsRelocatable = true" || { echo "a bundle is still relocatable"; exit 1; }
+pkgbuild --root "$STAGE" --component-plist "$CPLIST" --identifier "$ID" --version "$VERSION" --scripts "$OUT/scripts" \
          --ownership recommended --install-location / "$COMP" >/dev/null
 for f in "./$PROG_DIR/kai" ./usr/local/libexec/kai-hook; do
     pkgutil --payload-files "$COMP" | grep -qxF "$f" || { echo "the package has no $f"; exit 1; }
