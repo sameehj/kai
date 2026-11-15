@@ -51,8 +51,13 @@ fi
 grep -q "#define KAI_VERSION \"$VERSION\"" include/kai.h || {
     echo "include/kai.h KAI_VERSION isn't \"$VERSION\""; [ "$MODE" = "--test" ] || exit 2; }
 
+# Kai's program goes in a root-owned folder; /usr/local/bin/kai is a symlink to
+# it (Nov 15: /usr/local/bin is often the user's, so a kai there can be
+# removed by any program the user runs). The launcher runs the real path.
+PROG_DIR="Library/Application Support/Kai/bin"
 rm -rf "$OUT" && mkdir -p "$STAGE/usr/local/bin" "$STAGE/usr/local/share/kai" "$STAGE/usr/local/libexec" \
-                          "$STAGE/Applications" "$OUT/scripts"
+                          "$STAGE/$PROG_DIR" "$STAGE/Applications" "$OUT/scripts"
+chmod 755 "$STAGE/Library" "$STAGE/Library/Application Support" "$STAGE/Library/Application Support/Kai" "$STAGE/$PROG_DIR"
 
 # notarytool exits 0 for a rejected submission too: require "status: Accepted".
 notarize() {
@@ -104,9 +109,11 @@ lipo -info "$K" | grep -q "x86_64 arm64\|arm64 x86_64" || { echo "kai isn't univ
 "$K" version | grep -q "(release build)" || { echo "kai isn't a release build"; exit 1; }
 "$K" version | grep -q "commit $(git rev-parse --short=12 HEAD)$" || [ "$MODE" = "--test" ] || {
     echo "kai doesn't carry this commit: $("$K" version)"; exit 1; }
-cp "$K" "$STAGE/usr/local/bin/kai"
+install -m 0755 "$K" "$STAGE/$PROG_DIR/kai"
+ln -s "/$PROG_DIR/kai" "$STAGE/usr/local/bin/kai"
 # STEP 2c: the stable hook launcher agents' hooks call (never a build path)
 install -m 0755 scripts/release/kai-hook "$STAGE/usr/local/libexec/kai-hook"
+grep -q "^K=\"/$PROG_DIR/kai\"$" "$STAGE/usr/local/libexec/kai-hook" || { echo "the launcher doesn't run /$PROG_DIR/kai"; exit 1; }
 if [ "$MODE" != "--test" ]; then
     # one clean, tagged commit everywhere: the generated header, the CLI and the
     # kai bundled in Kai.app, with no -dirty suffix; the build left the tree clean
@@ -160,12 +167,15 @@ RES="$OUT/resources"
 mkdir -p "$RES"
 cp scripts/release/installer/welcome.html scripts/release/installer/readme.html "$RES/"
 [ "$MODE" = "--test" ] || {
-    codesign --force --options runtime --timestamp --sign "$KAI_DEVID_APP" "$STAGE/usr/local/bin/kai"
-    codesign --verify --strict "$STAGE/usr/local/bin/kai"
+    codesign --force --options runtime --timestamp --sign "$KAI_DEVID_APP" "$STAGE/$PROG_DIR/kai"
+    codesign --verify --strict "$STAGE/$PROG_DIR/kai"
 }
 COMP="$OUT/component.pkg"
 pkgbuild --root "$STAGE" --identifier "$ID" --version "$VERSION" --scripts "$OUT/scripts" \
-         --install-location / "$COMP" >/dev/null
+         --ownership recommended --install-location / "$COMP" >/dev/null
+for f in "./$PROG_DIR/kai" ./usr/local/libexec/kai-hook ./usr/local/bin/kai; do
+    pkgutil --payload-files "$COMP" | grep -qxF "$f" || { echo "the package has no $f"; exit 1; }
+done
 DIST="$OUT/distribution.xml"
 productbuild --synthesize --package "$COMP" "$DIST" >/dev/null
 # add the pages and a title right after the opening tag
@@ -184,7 +194,6 @@ else
                  --sign "$KAI_DEVID_INSTALLER" --timestamp "$PKG" >/dev/null
     rm -f "$COMP"
     ! pkgutil --payload-files "$PKG" | grep -q "kai.storage" || { echo "the package contains the storage extension"; exit 1; }
-    pkgutil --payload-files "$PKG" | grep -q "usr/local/libexec/kai-hook" || { echo "the package has no hook launcher"; exit 1; }
     pkgutil --check-signature "$PKG" | grep -q "Developer ID Installer" || { echo "package isn't Developer ID Installer signed"; exit 1; }
     notarize "$PKG"
     xcrun stapler staple "$PKG"

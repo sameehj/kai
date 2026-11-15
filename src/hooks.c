@@ -428,7 +428,7 @@ int kai_hook_recheck_command(const kai_policy *p, const char *agent, const char 
                              char *rule, size_t n) {
     if (n) rule[0] = '\0';
     if (!cmd || !*cmd) return 0;
-    if (command_controls_kai(cmd)) { kai_strlcpy(rule, "kai_self_protect", n); return 1; }
+    if (command_controls_kai(cmd) || kai_command_tampers_kai(cmd, cwd)) { kai_strlcpy(rule, "kai_self_protect", n); return 1; }
     if (command_prints_credential(cmd)) { kai_strlcpy(rule, "credential_print", n); return 1; }
     char why[256] = "";
     if (p && kai_command_touches_protected_as(p, agent, cmd, cwd, why, sizeof why, NULL, NULL)) {
@@ -437,6 +437,10 @@ int kai_hook_recheck_command(const kai_policy *p, const char *agent, const char 
     }
     return 0;
 }
+
+#define KAI_TAMPER_REASON "Kai never allows agents to delete, move or change Kai's own program files " \
+    "(its program, hook launcher, Kai.app or package receipt) through its checks: that would switch Kai off. " \
+    "To remove Kai, the user uninstalls it from Kai's Settings > Uninstall. " KAI_NOT_A_BOUNDARY
 
 #define CRED_PRINT_REASON "Kai stopped `%s`: it prints a saved login token or password, which gives whoever " \
     "reads it the same access. gh and git keep working; they use the token without printing it. If you need " \
@@ -1623,6 +1627,10 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 kai_strlcpy(rule, "kai_self_protect", sizeof rule);
                 snprintf(reason, sizeof reason,
                          "Kai never allows agents to change its settings through its checks. " KAI_NOT_A_BOUNDARY);
+            } else if (kai_command_tampers_kai(cmd, cwd)) {
+                decision = KAI_ACT_BLOCK;
+                kai_strlcpy(rule, "kai_self_protect", sizeof rule);
+                snprintf(reason, sizeof reason, "%s", KAI_TAMPER_REASON);
             } else if (command_prints_credential(cmd)) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, "credential_print", sizeof rule);
@@ -1919,7 +1927,8 @@ static int hook_cursor(const char *json) {
         subject = fp;
         if (fp && kai_cli_grant_allows("read", "cursor", fp, NULL, cwd, (long long)time(NULL))) {
             /* the user's kai allow-file for exactly this file */
-        } else if (fp && kai_path_protected_as(p, "cursor", fp, cwd, why, sizeof why)) {
+        } else if (fp && kai_path_protected_as(p, "cursor", fp, cwd, why, sizeof why) &&
+                   !kai_rule_is_kai_program(why)) {   /* reading Kai's program files is fine */
             deny = 1; say_protected(reason, sizeof reason, "read", fp, why, "cursor", cwd);
         } else if (fp && (strength = file_holds_sensitive(p, fp, cwd, held, sizeof held)) &&
                    (strength == 2 || kai_policy_file_secret_action(p) >= KAI_ACT_BLOCK) &&
@@ -1941,6 +1950,10 @@ static int hook_cursor(const char *json) {
             kai_strlcpy(why, "kai_self_protect", sizeof why);
             snprintf(reason, sizeof reason,
                      "Kai never allows agents to change its settings through its checks. " KAI_NOT_A_BOUNDARY);
+        } else if (cmd && kai_command_tampers_kai(cmd, cwd)) {
+            deny = 1;
+            kai_strlcpy(why, "kai_self_protect", sizeof why);
+            snprintf(reason, sizeof reason, "%s", KAI_TAMPER_REASON);
         } else if (cmd && command_prints_credential(cmd)) {
             deny = 1;
             kai_strlcpy(why, "credential_print", sizeof why);

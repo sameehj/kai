@@ -113,7 +113,8 @@ static cJSON *load_clean(const char *path) {
  */
 /* STEP 2c: hooks run a stable, installed program, never a build or a source
  * checkout: the package's launcher (/usr/local/libexec/kai-hook, which runs
- * /usr/local/bin/kai), or the running kai when it is installed. The path is
+ * KAI_PROGRAM_PATH in a root-owned folder), or the running kai when it is
+ * installed. The path is
  * always quoted (a space split it once and bricked Claude Code). Tests set
  * KAI_TEST_ALLOW_DEV_HOOK in dev builds only.
  *
@@ -122,7 +123,6 @@ static cJSON *load_clean(const char *path) {
  * and its settings aren't protected; no hook carries a fail-closed setting.
  * Hooks never point into an app bundle: trashing the app must not leave them
  * calling a missing program. */
-#define KAI_HOOK_LAUNCHER "/usr/local/libexec/kai-hook"
 
 static int in_app_bundle(const char *exe) {
     return strstr(exe, ".app/Contents/") != NULL;
@@ -184,8 +184,22 @@ static const char *hook_target(void) {
  * fail-closed guard on any event (Claude Code onFailure, Cursor failClosed,
  * the Codex exit-2 wrapper are gone): a broken Kai is reported, not enforced
  * by stopping the agent. */
+/* Nov 15: a missing launcher is never silent. If the program the hook names
+ * can't be run (the shell's 126/127: deleted by hand, a manual sudo rm), the
+ * hook still answers, in the agent's own format, that Kai is missing and its
+ * checks are off. It never blocks (C1). Any other exit is Kai's own answer
+ * and passes through. Every agent runs hook commands through a shell (the
+ * quoted path already relies on that). The command still starts with
+ * "<program> hook <agent>", which kai doctor and the app parse. */
 static void hook_command(char *cmd, size_t n, const char *exe, const char *agent) {
-    snprintf(cmd, n, "%s hook %s", exe, agent);
+    const char *say =
+        !strcmp(agent, "cursor")
+            ? "printf '%s\\n' '{\"continue\":true,\"permission\":\"ask\",\"user_message\":\"" KAI_MISSING_MSG
+              "\",\"agent_message\":\"" KAI_MISSING_MSG "\"}'"
+        : !strcmp(agent, "codex")
+            ? "printf '%s\\n' '" KAI_MISSING_MSG "' >&2"
+            : "printf '%s\\n' '{\"systemMessage\":\"" KAI_MISSING_MSG "\"}'";
+    snprintf(cmd, n, "%s hook %s; r=$?; [ $r -lt 126 ] || { cat >/dev/null; %s; r=0; }; exit $r", exe, agent, say);
 }
 
 static cJSON *claude_hook_entry(const char *matcher, const char *exe) {
@@ -194,7 +208,7 @@ static cJSON *claude_hook_entry(const char *matcher, const char *exe) {
     cJSON *arr = cJSON_CreateArray();
     cJSON *h = cJSON_CreateObject();
     cJSON_AddStringToObject(h, "type", "command");
-    char cmd[1600];
+    char cmd[PATH_MAX + 1024];
     hook_command(cmd, sizeof cmd, exe, "claude");
     cJSON_AddStringToObject(h, "command", cmd);
     cJSON_AddBoolToObject(h, "_kai", 1);
@@ -413,8 +427,8 @@ int kai_codex_analytics_off(int set) {
 static cJSON *cursor_hook_entry(const char *exe, const char *matcher, int tool) {
     (void)tool;
     cJSON *h = cJSON_CreateObject();
-    char cmd[1300];
-    snprintf(cmd, sizeof cmd, "%s hook cursor", exe);
+    char cmd[PATH_MAX + 1024];
+    hook_command(cmd, sizeof cmd, exe, "cursor");
     cJSON_AddStringToObject(h, "command", cmd);
     if (matcher) cJSON_AddStringToObject(h, "matcher", matcher);
     cJSON_AddBoolToObject(h, "_kai", 1);
@@ -636,7 +650,7 @@ static int install_codex(const char *exe) {
     }
     /* No matcher: Kai sees every tool (shell, apply_patch, MCP) and decides itself. */
     const char *events[] = {"PreToolUse", "PostToolUse", "UserPromptSubmit"};
-    char cmd[1600];
+    char cmd[PATH_MAX + 1024];
     for (size_t i = 0; i < sizeof events / sizeof events[0]; i++) {
         hook_command(cmd, sizeof cmd, exe, "codex");
         cJSON *list = cJSON_GetObjectItemCaseSensitive(hooks, events[i]);

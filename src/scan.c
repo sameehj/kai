@@ -257,8 +257,203 @@ static const char *const AGENT_CONTROL[] = {
     "/NativeMessagingHosts/io.github.sameehj.kai.json",
 };
 
+/* ---- Kai's installed files (Nov 15) ----
+ * Reading or running them is fine (kai why, kai-hook --status). Deleting,
+ * moving, overwriting or chmod-ing them switches Kai off, so it is
+ * self-protect. A script the agent runs can still do it (documented bypass:
+ * hooks see only the interpreter command); the root-owned program folder is
+ * what stops a program that isn't root. */
+static const struct { const char *path; int kind; } KAI_FILES[] = {   /* 0 file, 1 tree, 2 name prefix */
+    {KAI_CLI_LINK, 0},
+    {KAI_HOOK_LAUNCHER, 0},
+    {"/Library/Application Support/Kai", 1},
+    {"/Applications/Kai.app", 1},
+    {"/usr/local/share/kai", 1},
+    {"/var/db/receipts/" KAI_PACKAGE_ID ".", 2},
+    {"/private/var/db/receipts/" KAI_PACKAGE_ID ".", 2},
+};
+
+int kai_path_is_kai_program(const char *np) {
+    if (!np || np[0] != '/') return 0;
+    for (size_t i = 0; i < sizeof KAI_FILES / sizeof KAI_FILES[0]; i++) {
+        const char *r = KAI_FILES[i].path;
+        size_t l = strlen(r);
+        if (strncasecmp(np, r, l)) continue;
+        if (KAI_FILES[i].kind == 2) return 1;
+        if (np[l] == '\0' || (KAI_FILES[i].kind == 1 && np[l] == '/')) return 1;
+        if (KAI_FILES[i].kind == 0 && np[l] == '/' && np[l + 1] == '\0') return 1;
+    }
+    return 0;
+}
+
+int kai_rule_is_kai_program(const char *rule) {
+    return rule && !strcmp(rule, "kai_program");
+}
+
+/* A folder that holds one of Kai's files: moving or deleting it takes Kai along. */
+static int holds_kai_program(const char *np) {
+    size_t n = strlen(np);
+    while (n > 1 && np[n - 1] == '/') n--;
+    for (size_t i = 0; i < sizeof KAI_FILES / sizeof KAI_FILES[0]; i++) {
+        const char *r = KAI_FILES[i].path;
+        if (n == 1 && np[0] == '/') return 1;
+        if (strlen(r) > n && !strncasecmp(r, np, n) && r[n] == '/') return 1;
+    }
+    return 0;
+}
+
+static char *resolved_variant(const char *np);
+
+/* the absolute path a shell word names, or NULL */
+static char *tamper_norm(const char *w, const char *cwd) {
+    if (!w || !*w) return NULL;
+    char *ex = kai_expand_home(w);
+    char *n = ex ? kai_normalize_path(ex, cwd) : NULL;
+    free(ex);
+    return n;
+}
+
+/* 1 = names Kai's files, 2 = a folder holding them, 0 = neither (also
+ * through a symlinked folder, and /private/var vs /var) */
+static int tamper_class(const char *w, const char *cwd) {
+    char *n = tamper_norm(w, cwd);
+    if (!n) return 0;
+    int c = kai_path_is_kai_program(n) ? 1 : holds_kai_program(n) ? 2 : 0;
+    if (!c) {
+        char *rv = resolved_variant(n);
+        if (rv) {
+            const char *v = strncmp(rv, "/private/", 9) == 0 && !kai_path_is_kai_program(rv) ? rv + 8 : rv;
+            c = kai_path_is_kai_program(rv) || kai_path_is_kai_program(v) ? 1 : holds_kai_program(v) ? 2 : 0;
+            free(rv);
+        }
+    }
+    free(n);
+    return c;
+}
+
+typedef struct { const char *cwd; int hit; char cwdbuf[PATH_MAX]; } tamper_t;
+
+static int has_flag_letter(char **argv, int argc, int from, const char *letters, const char *longf) {
+    for (int k = from; k < argc; k++) {
+        const char *a = argv[k];
+        if (longf && !strcmp(a, longf)) return 1;
+        if (a[0] == '-' && a[1] && a[1] != '-')
+            for (const char *c = a + 1; *c; c++) if (strchr(letters, *c)) return 1;
+    }
+    return 0;
+}
+
+static void check_tamper(char **argv, int argc, void *ud) {
+    tamper_t *t = ud;
+    int i = kai_shell_command_start(argv, argc);
+    if (t->hit || i >= argc) return;
+    const char *b = strrchr(argv[i], '/') ? strrchr(argv[i], '/') + 1 : argv[i];
+    if (!strcmp(b, "cd") || !strcmp(b, "pushd")) {   /* later relative paths resolve against it */
+        char *n = tamper_norm(i + 1 < argc ? argv[i + 1] : "~", t->cwd);
+        if (n) { kai_strlcpy(t->cwdbuf, n, sizeof t->cwdbuf); t->cwd = t->cwdbuf; free(n); }
+        return;
+    }
+    /* operands: words after the command that aren't options */
+    int ops[256], no = 0;
+    for (int k = i + 1; k < argc && no < 256; k++) {
+        if (argv[k][0] == '-' && argv[k][1]) continue;
+        ops[no++] = k;
+    }
+    if (!strcmp(b, "pkgutil")) {
+        int forget = 0, ours = 0;
+        for (int k = i + 1; k < argc; k++) {
+            if (!strcmp(argv[k], "--forget") || !strcmp(argv[k], "--unlink")) forget = 1;
+            if (strstr(argv[k], "io.github.sameehj.kai")) ours = 1;
+        }
+        t->hit = forget && ours;
+        return;
+    }
+    int del = !strcmp(b, "rm") || !strcmp(b, "unlink") || !strcmp(b, "rmdir") || !strcmp(b, "srm") ||
+              !strcmp(b, "shred") || !strcmp(b, "trash") || !strcmp(b, "mv");
+    int attr = !strcmp(b, "chmod") || !strcmp(b, "chown") || !strcmp(b, "chgrp") || !strcmp(b, "chflags") ||
+               !strcmp(b, "xattr") || !strcmp(b, "setfacl");
+    int write = !strcmp(b, "tee") || !strcmp(b, "truncate") ||
+                ((!strcmp(b, "sed") || !strcmp(b, "gsed") || !strcmp(b, "perl")) &&
+                 has_flag_letter(argv, argc, i + 1, "i", "--in-place"));
+    int copy = !strcmp(b, "cp") || !strcmp(b, "ln") || !strcmp(b, "install") || !strcmp(b, "ditto") ||
+               !strcmp(b, "rsync") || !strcmp(b, "scp") || !strcmp(b, "gcp") || !strcmp(b, "rename");
+    if (del || attr || write) {
+        int rec = del || has_flag_letter(argv, argc, i + 1, "R", "--recursive");
+        for (int o = 0; o < no && !t->hit; o++) {
+            int c = tamper_class(argv[ops[o]], t->cwd);
+            if (c == 1 || (c == 2 && rec)) t->hit = 1;
+        }
+        return;
+    }
+    if (copy && no >= 1) {   /* the destination: the last operand, or a file inside it */
+        const char *dst = argv[ops[no - 1]];
+        int c = tamper_class(dst, t->cwd);
+        if (c == 1) { t->hit = 1; return; }
+        if (c == 2 && !strcmp(b, "rename")) { t->hit = 1; return; }
+        if (c == 2)
+            for (int o = 0; o + 1 < no && !t->hit; o++) {
+                const char *src = argv[ops[o]];
+                const char *bn = strrchr(src, '/') ? strrchr(src, '/') + 1 : src;
+                char cand[PATH_MAX];
+                snprintf(cand, sizeof cand, "%s/%s", dst, bn);
+                if (tamper_class(cand, t->cwd) == 1) t->hit = 1;
+            }
+        return;
+    }
+    if (!strcmp(b, "dd")) {
+        for (int k = i + 1; k < argc && !t->hit; k++)
+            if (!strncmp(argv[k], "of=", 3) && tamper_class(argv[k] + 3, t->cwd) == 1) t->hit = 1;
+        return;
+    }
+    if (!strcmp(b, "find")) {   /* find <Kai's folder> ... -delete / -exec rm|mv|chmod ... */
+        int act = 0;
+        for (int k = i + 1; k < argc; k++) {
+            if (!strcmp(argv[k], "-delete")) act = 1;
+            if ((!strcmp(argv[k], "-exec") || !strcmp(argv[k], "-execdir") || !strcmp(argv[k], "-ok")) && k + 1 < argc) {
+                const char *x = strrchr(argv[k + 1], '/') ? strrchr(argv[k + 1], '/') + 1 : argv[k + 1];
+                if (!strcmp(x, "rm") || !strcmp(x, "mv") || !strcmp(x, "chmod") || !strcmp(x, "chown") ||
+                    !strcmp(x, "unlink") || !strcmp(x, "chflags")) act = 1;
+            }
+        }
+        for (int k = i + 1; act && k < argc && argv[k][0] != '-' && !t->hit; k++)
+            if (tamper_class(argv[k], t->cwd)) t->hit = 1;
+    }
+}
+
+/* `> path` / `>> path` / `>| path` anywhere in the command text */
+static int redirect_tampers(const char *cmd, const char *cwd) {
+    for (const char *s = strchr(cmd, '>'); s; s = strchr(s + 1, '>')) {
+        const char *p = s + 1;
+        while (*p == '>' || *p == '|' || *p == '&') p++;
+        while (*p == ' ' || *p == '\t') p++;
+        char w[PATH_MAX];
+        size_t n = 0;
+        char q = 0;
+        if (*p == '"' || *p == '\'') q = *p++;
+        while (*p && n + 1 < sizeof w && (q ? *p != q : !strchr(" \t\n;&|<>()", *p))) {
+            if (!q && *p == '\\' && p[1]) p++;
+            w[n++] = *p++;
+        }
+        w[n] = '\0';
+        if (n && tamper_class(w, cwd) == 1) return 1;
+    }
+    return 0;
+}
+
+int kai_command_tampers_kai(const char *cmd, const char *cwd) {
+    if (!cmd || !*cmd) return 0;
+    if (redirect_tampers(cmd, cwd)) return 1;
+    tamper_t t = {cwd, 0, ""};
+    kai_shell_walk(cmd, check_tamper, NULL, &t);
+    return t.hit;
+}
+
 static int agent_control_path(const char *np, char *why, size_t whylen) {
     size_t n = strlen(np);
+    if (kai_path_is_kai_program(np)) {
+        if (why) kai_strlcpy(why, "kai_program", whylen);
+        return 1;
+    }
     for (size_t i = 0; i < sizeof AGENT_CONTROL / sizeof AGENT_CONTROL[0]; i++) {
         size_t l = strlen(AGENT_CONTROL[i]);
         if (n >= l && strcasecmp(np + n - l, AGENT_CONTROL[i]) == 0) {
@@ -492,6 +687,7 @@ const char *kai_rule_explanation(const char *rule) {
     if (kai_rule_is_persistence(rule)) return "makes a program start automatically when you log in";
     /* never tier: the "Always protected" card's one-line reason */
     if (kai_rule_is_kai_home(rule)) return "holds Kai's own settings and keys, so no agent may touch it";
+    if (kai_rule_is_kai_program(rule)) return "is Kai's own program, so agents may run it but not remove or change it";
     if (kai_rule_is_builtin(rule)) return "switches Kai's checks for this agent on and off, so agents may not change it";
     return NULL;
 }
@@ -510,7 +706,7 @@ int kai_control_read_allowed(const char *rule) {
 
 int kai_rule_is_builtin(const char *rule) {
     if (!rule || !*rule) return 0;
-    if (!strcmp(rule, "kai_self_protect") || !strcmp(rule, "~/.kai")) return 1;
+    if (!strcmp(rule, "kai_self_protect") || !strcmp(rule, "~/.kai") || !strcmp(rule, "kai_program")) return 1;
     size_t n = strlen(rule);
     for (size_t i = 0; i < sizeof AGENT_CONTROL / sizeof AGENT_CONTROL[0]; i++) {
         const char *c = AGENT_CONTROL[i] + 1; /* the name agent_control_path reports */
@@ -617,6 +813,7 @@ typedef struct {
 /* A protected path was found: it counts unless the user exempted its rule. */
 static int path_hit(path_scan_t *ps, const char *path) {
     if (!kai_path_protected_as(ps->p, ps->agent, path, ps->cwd, ps->why, ps->whylen)) return 0;
+    if (kai_rule_is_kai_program(ps->why)) return 0;   /* judged by kai_command_tampers_kai */
     return !(ps->skip && ps->skip(ps->why, ps->skip_ud));
 }
 

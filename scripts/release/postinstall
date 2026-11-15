@@ -14,7 +14,37 @@
 #
 # KAI_CONSOLE_USER overrides who is at the console (tests only).
 log() { echo "kai postinstall: $*"; }
-KAI_BIN=/usr/local/bin/kai
+# Kai's program is in a root-owned folder; /usr/local/bin/kai is a symlink to it.
+KAI_DIR="/Library/Application Support/Kai"
+KAI_BIN="$KAI_DIR/bin/kai"
+LAUNCHER=/usr/local/libexec/kai-hook
+
+# Nov 15: Kai's program and launcher must sit where only an admin can change
+# them, or any program the user runs could delete them and switch Kai off.
+# The payload is installed root:wheel; make sure (an older copy might not be).
+if [ "$(id -u)" = 0 ]; then
+    chown root:wheel "$KAI_DIR" "$KAI_DIR/bin" "$KAI_BIN" "$LAUNCHER" 2>/dev/null
+    chmod 755 "$KAI_DIR" "$KAI_DIR/bin" "$KAI_BIN" "$LAUNCHER" 2>/dev/null
+fi
+# Every folder above them, and the files: owned by root, not group/world-writable.
+root_only() {   # path -> prints the first offender, returns 1
+    p="$1"
+    while :; do
+        [ -e "$p" ] || { echo "$p is missing"; return 1; }
+        set -- $(stat -f '%u %Lp' "$p")
+        g=$(( ($2 / 10) % 10 )); o=$(( $2 % 10 ))
+        if [ "$1" != 0 ] || [ $((g & 2)) != 0 ] || [ $((o & 2)) != 0 ]; then
+            echo "$p is owned by uid $1 with mode $2"; return 1
+        fi
+        [ "$p" = / ] && return 0
+        p=$(dirname "$p")
+    done
+}
+if bad=$(root_only "$LAUNCHER") && bad=$(root_only "$KAI_BIN"); then
+    log "Kai's program and hook launcher are in folders only an admin can change"
+else
+    log "degraded: Kai can be switched off by any program you run ($bad). kai doctor reports it too."
+fi
 
 if [ "${KAI_CONSOLE_USER+set}" = set ]; then user="$KAI_CONSOLE_USER"
 else user=$(stat -f %Su /dev/console 2>/dev/null); fi

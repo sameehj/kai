@@ -41,7 +41,8 @@ Kai is a guardrail, not a sandbox.
 
 - **Pause:** Kai menu → **Pause 15 min**. It resumes by itself. Kai's own settings stay protected while it's paused.
 - **Repair:** if the menu bar turns red ("Kai's checks are off; its settings aren't protected"), click **Repair**. It may ask for your password once. Your agents keep working while Kai is broken; they just aren't checked.
-- **Uninstall:** Kai → Settings → **Uninstall**. It removes the hooks, the Internet filter and Kai's program, checks each step, and lists anything left (sometimes "Restart needed"). Then move Kai.app to the Trash.
+- **Uninstall only from Kai → Settings → Uninstall.** It removes the hooks, the Internet filter and Kai's program, checks each step, and lists anything left (sometimes "Restart needed"). Then move Kai.app to the Trash.
+  - **Don't delete Kai's files by hand** (for example `sudo rm` of `/usr/local/bin/kai` or the launcher). That leaves your agents' hooks behind. They keep working, but nothing is checked, and each call shows "Kai is missing: its checks are off". If that happens, reinstall Kai or run `kai uninstall`.
 
 ## Sharing your stats
 

@@ -15,7 +15,7 @@ import SwiftUI
 
 enum UninstallSteps {
     /// Files the package installs (scripts/release/build-preview-pkg.sh).
-    static let packageFiles = [Lifecycle.programPath, Lifecycle.launcherPath, "/usr/local/share/kai"]
+    static let packageFiles = [Lifecycle.cliLink, Lifecycle.launcherPath, Lifecycle.programDir, "/usr/local/share/kai"]
     static let packageID = "io.github.sameehj.kai.preview"
 
     /// The hook settings files Kai installs into, and whether each still runs Kai.
@@ -82,18 +82,18 @@ final class UninstallModel: ObservableObject {
             say(!bad, l)
         }
         // 4. program and launcher, one admin prompt
-        let present = UninstallSteps.packageFiles.filter { FileManager.default.fileExists(atPath: $0) }
+        let present = UninstallSteps.packageFiles.filter { Lifecycle.exists($0) }
         if present.isEmpty {
             say(true, "Kai's program and hook launcher: already gone.")
         } else {
             let a = Lifecycle.runAsAdmin(UninstallSteps.removeCommand,
-                                         prompt: "Kai wants to remove its program and hook launcher from /usr/local.")
+                                         prompt: "Kai wants to remove its program and hook launcher from this Mac.")
             say(a.ok, a.ok ? "Removed " + present.joined(separator: ", ") + "."
                           : "Kai's program and launcher weren't removed: \(a.message).")
         }
         // 5. leftovers
         var left: [String] = []
-        for f in UninstallSteps.packageFiles where FileManager.default.fileExists(atPath: f) { left.append("\(f) is still there.") }
+        for f in UninstallSteps.packageFiles where Lifecycle.exists(f) { left.append("\(f) is still there.") }
         for f in UninstallSteps.hookFilesStillCallingKai() { left.append("\(f) still runs Kai's hook.") }
         let ext = UninstallSteps.extensionLines()
         if ext.contains(where: { $0.contains("waiting to uninstall") }) {

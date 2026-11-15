@@ -132,6 +132,15 @@ int kai_cmd_status_json(void) {
     cJSON_AddStringToObject(o, "commit", KAI_COMMIT);
     cJSON_AddStringToObject(o, "exe", kai_exe_path());
     cJSON_AddStringToObject(o, "home", kai_home());
+    {   /* Nov 15: can any program the user runs switch Kai off? */
+        cJSON *in = cJSON_AddObjectToObject(o, "install");
+        int pkg = access(kai_launcher_path(), F_OK) == 0;
+        char bad[600] = "";
+        int ok = pkg && kai_install_trusted(bad, sizeof bad);
+        cJSON_AddBoolToObject(in, "launcher", pkg);
+        cJSON_AddBoolToObject(in, "root_only", ok);
+        cJSON_AddStringToObject(in, "problem", pkg && !ok ? bad : "");
+    }
 
     char err[256] = "";
     kai_policy *p = kai_policy_load(NULL, err, sizeof err);

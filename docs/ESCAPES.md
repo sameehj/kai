@@ -118,6 +118,9 @@ How to read it:
 | sed -i the hook settings from the shell | Kai's hook was removed | ✅ stopped | Hooks |
 | Delete ~/.kai | Kai's policy and log were deleted | ✅ stopped | Hooks |
 | Run a script that rewrites the hook settings | Kai's hook was removed | ❌ gets through | Storage wall: write protection for Kai's files (planned) |
+| rm, mv, overwrite or chmod Kai's program, launcher, Kai.app or package receipt | not replayed | ✅ stopped | Hooks (0.3.0-preview.1, `kai_program`): reads and runs still work |
+| A script the agent runs deletes Kai's program or launcher | not replayed | ❌ gets through | Root-owned install folders (0.3.0-preview.1): needs admin rights when `kai doctor` shows no "degraded"; hooks see only the interpreter |
+| Kai's hook launcher deleted by hand (hooks left behind) | not replayed | ❌ gets through | By design (C1): the hook says "Kai is missing: its checks are off" and the call goes through; uninstall from Settings → Uninstall |
 | Kai's program is missing or crashes (Claude Code, Codex) | not replayed | ❌ gets through | By design (C1): a broken Kai never stops the agent; it says its checks are off and its settings aren't protected. Protection that outlives Kai needs a separate running enforcer (storage wall, planned) |
 | Kai's program is missing or crashes (Cursor) | not replayed | ❌ gets through | By design (C1): a broken Kai never stops Cursor's agent (no failClosed); Cursor's own approval applies. Protection that outlives Kai needs a separate running enforcer (storage wall, planned) |
 

@@ -311,6 +311,16 @@ static void privacy_report(void) {
 int kai_cmd_doctor(void) {
     int problems = 0;
     printf("kai %s at %s\n", KAI_VERSION, kai_exe_path());
+    if (access(kai_launcher_path(), F_OK) == 0) {   /* installed from the package */
+        char bad[600];
+        if (kai_install_trusted(bad, sizeof bad))
+            printf("✓ Kai's program and hook launcher are in folders only an admin can change\n");
+        else {
+            printf("! degraded: Kai can be switched off by any program you run (%s). Reinstall the Kai package; "
+                   "it puts Kai's program in a folder only an admin can change.\n", bad);
+            problems++;
+        }
+    }
 
     char err[256];
     kai_policy *p = kai_policy_load(NULL, err, sizeof err);

@@ -3,7 +3,9 @@
 #
 # Kai's hook launcher. Agents' hooks call this stable path, which the package
 # installs at /usr/local/libexec/kai-hook:  kai-hook hook <agent>
-# It runs Kai.
+# It runs Kai's program from a root-owned folder (Nov 15): /usr/local/bin is
+# often the user's own (Homebrew), so a program the user runs could delete or
+# replace a kai there. /usr/local/bin/kai is only a symlink, for the Terminal.
 #
 # C1 (Nov 8 redesign): if Kai's program is missing, a broken Kai never stops
 # the agent. Prompts and tool calls go through, and the user is told plainly
@@ -12,7 +14,7 @@
 # counted in <kai home>/unchecked.log (agent, event, time; never the input).
 #
 #   kai-hook --status    what the hooks run and whether Kai's program is there
-K=/usr/local/bin/kai
+K="/Library/Application Support/Kai/bin/kai"
 KH="${KAI_HOME:-$HOME/.kai}"
 
 if [ "${1:-}" = --status ]; then

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
 //
 // C5 / §2.6: repair, owned by the app and independent of a broken CLI or hook.
-// The package installs Kai's program at /usr/local/bin/kai and the hook
-// launcher at /usr/local/libexec/kai-hook; the agents' hooks call the
-// launcher. Repair puts a missing program back from the copy inside Kai.app
+// The package installs Kai's program in a root-owned folder,
+// /Library/Application Support/Kai/bin/kai (Nov 15: /usr/local/bin is often the
+// user's own, so any program could delete a kai there), with
+// /usr/local/bin/kai as a symlink for the Terminal, and the hook launcher at
+// /usr/local/libexec/kai-hook; the agents' hooks call the launcher. Repair puts a missing program back from the copy inside Kai.app
 // (one admin prompt) and then rewrites the hooks with `kai doctor --fix`. It
 // never points the hooks into the app bundle: trashing the app must not leave
 // them calling a missing program.
@@ -11,8 +13,13 @@ import AppKit
 import Foundation
 
 enum Lifecycle {
-    static let programPath = "/usr/local/bin/kai"
+    static let programDir = "/Library/Application Support/Kai"
+    static let programPath = "/Library/Application Support/Kai/bin/kai"
+    static let cliLink = "/usr/local/bin/kai"
     static let launcherPath = "/usr/local/libexec/kai-hook"
+
+    /// The path exists, itself (a dangling symlink counts).
+    static func exists(_ path: String) -> Bool { (try? FileManager.default.attributesOfItem(atPath: path)) != nil }
 
     /// The kai inside this Kai.app (Contents/Resources/kai), if any.
     static var bundledProgram: String? { Bundle.main.url(forResource: "kai", withExtension: nil)?.path }
@@ -64,14 +71,18 @@ enum Lifecycle {
         if !fm.isExecutableFile(atPath: launcherPath) {
             if let src = bundledLauncher {
                 cmds.append("/bin/mkdir -p /usr/local/libexec && /bin/cp -f \(shellQuote(src)) \(shellQuote(launcherPath))"
-                            + " && /bin/chmod 755 \(shellQuote(launcherPath))")
+                            + " && /usr/sbin/chown root:wheel \(shellQuote(launcherPath)) && /bin/chmod 755 \(shellQuote(launcherPath))")
                 what.append("hook launcher")
             } else { missing.append("hook launcher") }
         }
         if !fm.isExecutableFile(atPath: programPath) {
             if let src = bundledProgram {
-                cmds.append("/bin/mkdir -p /usr/local/bin && /bin/cp -f \(shellQuote(src)) \(shellQuote(programPath))"
-                            + " && /bin/chmod 755 \(shellQuote(programPath))")
+                // root-owned, not group-writable, all the way down; then the Terminal's symlink
+                let dir = (programPath as NSString).deletingLastPathComponent
+                cmds.append("/bin/mkdir -p \(shellQuote(dir)) && /bin/cp -f \(shellQuote(src)) \(shellQuote(programPath))"
+                            + " && /usr/sbin/chown root:wheel \(shellQuote(programDir)) \(shellQuote(dir)) \(shellQuote(programPath))"
+                            + " && /bin/chmod 755 \(shellQuote(programDir)) \(shellQuote(dir)) \(shellQuote(programPath))"
+                            + " && /bin/mkdir -p /usr/local/bin && /bin/ln -sfh \(shellQuote(programPath)) \(shellQuote(cliLink))")
                 what.append("program")
             } else { missing.append("program") }
         }
