@@ -167,16 +167,64 @@ int kai_plausible_secret_value(const char *match, size_t len) {
 }
 
 /* A value given for an explicit password field is a credential however weak
- * it is (all digits included); only placeholders and plain words such as
- * "required" or "unknown" are let through. Examples: tests/run_tests.c. */
+ * it is (all digits included), but only when the value is a literal: a quoted
+ * string, or a bare value as in a config file ("password: hunter22").
+ * Code is not a secret: a function call, a pointer, a struct member, a type
+ * declaration or another variable ("pw = getpwuid(uid)", "password: String",
+ * "pass = user.password", "pw = *p", "password = $PW") never matches.
+ * Placeholders and plain words such as "required" are let through.
+ * Examples: tests/regress (S12). */
+static int ident_char(unsigned char c) { return isalnum(c) || c == '_'; }
+
 int kai_plausible_password_value(const char *match, size_t len) {
     size_t i = 0;
     while (i < len && isalpha((unsigned char)match[i])) i++;
-    while (i < len && strchr("\"'= :", match[i])) i++;
+    int quoted = 0, colon = 0, equals = 0;
+    while (i < len && strchr("\"'= :", match[i])) {
+        if (match[i] == '"' || match[i] == '\'') quoted = 1;
+        colon |= match[i] == ':'; equals |= match[i] == '=';
+        i++;
+    }
+    /* "password: String = …": a type annotation; the value is after the '=' */
+    if (colon && !equals && !quoted) {
+        size_t j = i;
+        while (j < len && (ident_char((unsigned char)match[j]) || strchr(".<>?!", match[j]))) j++;
+        size_t t = j;
+        while (t < len && match[t] == ' ') t++;
+        if (j > i && t < len && match[t] == '=' && (t + 1 >= len || match[t + 1] != '=')) {
+            i = t;
+            while (i < len && strchr("\"'= :", match[i])) {
+                if (match[i] == '"' || match[i] == '\'') quoted = 1;
+                i++;
+            }
+        }
+    }
     const char *v = match + i;
     size_t n = len - i;
     while (n && strchr(".,;:!?)]}*_`", v[n - 1])) n--;
     if (n < 6) return 0;
+    if (!quoted) {
+        /* "==" / "=>" / ":=": a comparison or an arrow, not a value */
+        if (v[0] == '=' || v[0] == '>') return 0;
+        /* pointer, address, shell/template variable, a call, an index, a cast */
+        if (strchr("*&$@%({[<", v[0])) return 0;
+        int digit = 0, ident = isalpha((unsigned char)v[0]) || v[0] == '_';
+        for (size_t k = 0; k < n; k++) {
+            unsigned char c = (unsigned char)v[k];
+            if (c == '(' || c == '[' || c == '{') return 0;              /* f(x), a[i] */
+            if (c == '-' && k + 1 < n && v[k + 1] == '>') return 0;     /* p->pw_name */
+            if (c == ':' && k + 1 < n && v[k + 1] == ':') return 0;     /* Type::member */
+            if (c == '.' && k > 0 && k + 1 < n && ident_char((unsigned char)v[k - 1]) &&
+                (isalpha((unsigned char)v[k + 1]) || v[k + 1] == '_'))
+                return 0;                                               /* user.password */
+            if (isdigit(c)) digit = 1;
+            if (!ident_char(c)) ident = 0;
+        }
+        /* a bare name with no digit is a variable or a type ("userPassword",
+         * "String", "None"); a literal password in a config file has a digit
+         * or a symbol in it */
+        if (ident && !digit) return 0;
+    }
     char low[128];
     size_t ln = n < sizeof low - 1 ? n : sizeof low - 1;
     for (size_t k = 0; k < ln; k++) low[k] = (char)tolower((unsigned char)v[k]);
@@ -188,6 +236,21 @@ int kai_plausible_password_value(const char *match, size_t len) {
     int word = 1;
     for (size_t k = 0; k < n && word; k++) word = islower((unsigned char)v[k]) || v[k] == '-';
     return !word;
+}
+
+/* Generic key=value detectors: a match is a guess, not a known secret format. */
+static int generic_secret_rule(const char *rule) {
+    return !strcmp(rule, "secret:password_assign") || !strcmp(rule, "secret:generic_secret_assign");
+}
+
+/* Did the scan find a high-confidence secret (a known token format, a private
+ * key, or a rule the user added), not only a generic key=value guess? Prompts
+ * are blocked only for these; a generic match alone warns. */
+int kai_report_high_confidence(const kai_report *rep) {
+    if (!rep) return 0;
+    for (int i = 0; i < rep->nhits; i++)
+        if (rep->hits[i].action >= KAI_ACT_REDACT && !generic_secret_rule(rep->hits[i].rule)) return 1;
+    return 0;
 }
 
 /* ---- path matching ---- */

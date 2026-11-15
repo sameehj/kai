@@ -35,8 +35,8 @@ static int one_root_only(const char *p, char *bad, size_t n) {
     struct stat st;
     if (lstat(p, &st) != 0) { snprintf(bad, n, "%s is missing", p); return 0; }
     if (st.st_uid != 0 || (st.st_mode & (S_IWGRP | S_IWOTH))) {
-        struct passwd *pw = getpwuid(st.st_uid);
-        snprintf(bad, n, "%s is owned by %s%s", p, pw ? pw->pw_name : "another user",
+        struct passwd *owner = getpwuid(st.st_uid);
+        snprintf(bad, n, "%s is owned by %s%s", p, owner ? owner->pw_name : "another user",
                  (st.st_mode & S_IWOTH) ? " and anyone can change it"
                  : (st.st_mode & S_IWGRP) ? " and its group can change it" : "");
         return 0;

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
-"""Release regression suite for 0.3.0-preview.1 (S1, S3, S4, S8, S9, R8c).
+"""Release regression suite for 0.3.0-preview.1 (S1, S3, S4, S8, S9, S10-S12, R8c).
 
 Every case states its expected outcome BEFORE it runs, with one of the
 outcome words:
@@ -613,6 +613,81 @@ case("S11-fresh-doctor-no-app", "S11", "fresh install, no extensions, every agen
      "Observed")(lambda: _fresh_doctor(True))
 case("S11-fresh-doctor-app", "S11", "...also with Kai.app present (its extensions not running, Internet not turned on)",
      "Observed")(lambda: _fresh_doctor(False))
+
+
+# ---- S12: the generic password pattern matches values, not code (Nov 15) -------
+# k-949d442d stopped a read of src/health.c and k-2df7b611 a prompt quoting it:
+# "pw = getpwuid(...)" is code, not a secret. Code forms in C, Python, JS and
+# Swift pass as a file read and in a prompt; a quoted literal in a file and a
+# real-format token in a prompt are still Stopped. Secret-shaped values are built
+# at run time so this file holds none.
+PW = "pass" + "word"
+CODE_FORMS = [
+    ("c-getpwuid", "struct passwd *pw = getpwuid(st.st_uid);"),
+    ("c-member", 'printf("%s", pw ? pw->pw_name : "another user");'),
+    ("c-getenv", "const char *" + PW + ' = getenv("DB_PASS");'),
+    ("c-pointer", "char *passwd = *argv_" + PW + ";"),
+    ("c-compare", "if (" + PW + " == NULL) return -1;"),
+    ("c-next", "pw = pw->pw_next;"),
+    ("py-environ", PW + ' = os.environ["DB_PASSWORD"]'),
+    ("py-getpass", PW + ' = getpass.getpass("Password: ")'),
+    ("py-getcwd", "pwd = os.getcwd()"),
+    ("py-variable", PW + " = user_" + PW),
+    ("py-default", "def login(user, " + PW + "=None):"),
+    ("js-env", "const " + PW + " = process.env.DB_PASSWORD;"),
+    ("js-call", PW + ": hash" + PW.capitalize() + "(input),"),
+    ("js-this", "this." + PW + " = " + PW + ";"),
+    ("js-template", "const " + PW + " = `${prefix}`;"),
+    ("swift-type", "let " + PW + ": String"),
+    ("swift-optional", "var " + PW + ": String? = nil"),
+    ("swift-uuid", "let pw = UUID().uuidString"),
+    ("swift-member", "let passcode = credentials.passcode"),
+]
+
+
+def _s12_file(name, text):
+    f = os.path.join(PROJ, "s12-" + name + ".txt")
+    with open(f, "w") as fh:
+        fh.write(text + "\n")
+    return outcome(hook("claude", cc("Read", {"file_path": f})))
+
+
+def _s12_prompt(text, agent="claude"):
+    if agent == "cursor":
+        ev = {"hook_event_name": "beforeSubmitPrompt", "prompt": text, "conversation_id": "r1", "workspace_roots": [PROJ]}
+    else:
+        ev = {"hook_event_name": "UserPromptSubmit", "session_id": "r1", "cwd": PROJ, "prompt": text}
+    return outcome(hook(agent, ev))
+
+
+for cid, text in CODE_FORMS:
+    case("S12-read-" + cid, "S12", "file read of code: `%s`" % text, "Observed")(lambda t=text, c=cid: _s12_file(c, t))
+    case("S12-prompt-" + cid, "S12", "prompt quoting code: `%s`" % text, "Observed")(
+        lambda t=text: _s12_prompt("why does Kai flag this line? " + t))
+case("S12-prompt-cursor-getpwuid", "S12", "Cursor prompt quoting the getpwuid line", "Observed")(
+    lambda: _s12_prompt("why is this flagged: struct passwd *pw = getpwuid(st.st_uid);", "cursor"))
+case("S12-read-quoted", "S12", "file read of a quoted real-looking password", "Stopped")(
+    lambda: _s12_file("quoted", 'db_' + PW + ' = "' + "Tr0ub4" + "dor&3xQ" + '"'))
+case("S12-read-swift-typed-literal", "S12", "file read of a typed Swift literal (let …: String = \"…\")", "Stopped")(
+    lambda: _s12_file("swift-lit", "let " + PW + ': String = "' + "Tr0ub4" + "dor&3xQ" + '"'))
+case("S12-read-config", "S12", "file read of a bare literal in a config file", "Stopped")(
+    lambda: _s12_file("config", PW + ": " + "hunt" + "er2299"))
+def _s12_warns():
+    r = hook("claude", {"hook_event_name": "UserPromptSubmit", "session_id": "r1", "cwd": PROJ,
+                        "prompt": "log in with " + PW + "=" + "Tr0ub4" + "dor&3xQ"})
+    if outcome(r) != "Observed":
+        return outcome(r)
+    return "Observed" if "Prompt sent with a warning" in r["out"] else "no warning shown: " + r["out"][:80]
+
+
+case("S12-prompt-generic-warns", "S12", "prompt with only a generic password match: sent, and the user sees a warning",
+     "Observed")(_s12_warns)
+case("S12-prompt-github", "S12", "prompt with a real-format GitHub token", "Stopped")(
+    lambda: _s12_prompt("use this token: " + "ghp" + "_" + "R8xTq2LmZ7vNc4Wb9KdJ1sYp6HfAeG3uQo5i"))
+case("S12-prompt-private-key", "S12", "prompt with a private-key header", "Stopped")(
+    lambda: _s12_prompt("-----BEGIN " + "OPENSSH PRIVATE" + " KEY-----\nb3BlbnNzaC1rZXktdjEA\n"))
+case("S12-prompt-cursor-github", "S12", "Cursor prompt with a real-format GitHub token", "Stopped")(
+    lambda: _s12_prompt("token " + "ghp" + "_" + "R8xTq2LmZ7vNc4Wb9KdJ1sYp6HfAeG3uQo5i", "cursor"))
 
 
 def main():

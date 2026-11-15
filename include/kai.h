@@ -921,6 +921,9 @@ const char *kai_action_name(kai_action a);
 void kai_report_summary(const kai_report *rep, char *out, size_t outlen);
 /* The same in plain words, for messages ("a password-like secret"). */
 void kai_report_plain(const kai_report *rep, char *out, size_t outlen);
+/* 1 if the scan found a known token format, a private key or a user rule,
+ * not only a generic key=value guess (password_assign, generic_secret_assign). */
+int kai_report_high_confidence(const kai_report *rep);
 /* One rule id in plain words, or NULL for a rule the user defined. */
 const char *kai_rule_plain(const char *rule);
 

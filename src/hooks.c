@@ -308,7 +308,10 @@ static void add_ask_user(char *msg, size_t n) {
 static void prompt_reason(const char *agent, const char *what, int blocked, char *out, size_t n) {
     const char *name = !strcmp(agent, "claude") ? "Claude Code" : !strcmp(agent, "codex") ? "Codex"
                      : !strcmp(agent, "cursor") ? "Cursor" : "This agent";
-    if (blocked)
+    if (blocked == 2)   /* only a generic key=value guess: warn, never block */
+        snprintf(out, n, "Prompt sent with a warning: it may contain %s. Kai blocks a prompt only for a "
+                 "known token format or a private key; check that you meant to share it.", what);
+    else if (blocked)
         snprintf(out, n, "Prompt blocked: it contained %s. %s can't redact prompts, so Kai blocked it. "
                  "Remove the secret and send the prompt again.", what, name);
     else
@@ -1441,9 +1444,10 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
         free(cleaned);
         if (rep.worst >= KAI_ACT_REDACT) {
             kai_action a = kai_policy_prompt_action(p);
-            decision = a >= KAI_ACT_REDACT ? KAI_ACT_BLOCK : KAI_ACT_WARN;
+            int sure = kai_report_high_confidence(&rep);
+            decision = a >= KAI_ACT_REDACT && sure ? KAI_ACT_BLOCK : KAI_ACT_WARN;
             char what[300]; kai_report_plain(&rep, what, sizeof what);
-            prompt_reason(source, what, decision >= KAI_ACT_BLOCK, reason, sizeof reason);
+            prompt_reason(source, what, decision >= KAI_ACT_BLOCK ? 1 : !sure ? 2 : 0, reason, sizeof reason);
             kai_strlcpy(rule, "prompt_secret", sizeof rule);
         }
     } else if (ev && (strcmp(ev, "PreToolUse") == 0)) {
@@ -1826,6 +1830,16 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             free(s); cJSON_Delete(o);
         }
     }
+    /* A prompt Kai warned about goes through; Claude Code shows the user why
+     * (systemMessage). Codex validates hook output strictly: log only. */
+    if (decision == KAI_ACT_WARN && ev && strcmp(ev, "UserPromptSubmit") == 0 && source &&
+        !strcmp(source, "claude") && reason[0]) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "systemMessage", reason);
+        char *s = cJSON_PrintUnformatted(o);
+        if (s) printf("%s\n", s);
+        free(s); cJSON_Delete(o);
+    }
     /* Item 7: before a git/ssh/scp/gh command that Kai is allowing, if the
      * ssh-agent holds no keys, tell the agent up front how to make it work (ask
      * the user to load a key / use gh) instead of letting it fail on ~/.ssh and
@@ -2021,7 +2035,15 @@ static int hook_cursor(const char *json) {
         subject = prompt;
         kai_report rep;
         char *c = kai_scan_text(p, prompt ? prompt : "", &rep); free(c);
-        if (rep.worst >= KAI_ACT_REDACT &&
+        if (rep.worst >= KAI_ACT_REDACT && !kai_report_high_confidence(&rep)) {
+            /* only a generic key=value guess: the prompt goes through, logged as a warning */
+            char sm[512], what[300], ctx[KAI_AUDIT_TARGET_MAX];
+            kai_report_plain(&rep, what, sizeof what);
+            prompt_reason("cursor", what, 2, sm, sizeof sm);
+            prompt_context(prompt, ctx, sizeof ctx);
+            kai_audit_entry e = {"cursor", ev, "warn", "prompt", sm, NULL, ctx, NULL, session, cwd, NULL};
+            kai_audit_write(&e);
+        } else if (rep.worst >= KAI_ACT_REDACT &&
             kai_policy_prompt_action(p) >= KAI_ACT_REDACT) {
             /* beforeSubmitPrompt uses {continue:false} */
             cJSON *o = cJSON_CreateObject();
