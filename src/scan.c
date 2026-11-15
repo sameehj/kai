@@ -168,7 +168,7 @@ int kai_plausible_secret_value(const char *match, size_t len) {
 
 /* A value given for an explicit password field is a credential however weak
  * it is (all digits included), but only when the value is a literal: a quoted
- * string, or a bare value as in a config file ("password: hunter22").
+ * string, or a bare value as in a config file (a key, a colon, a literal).
  * Code is not a secret: a function call, a pointer, a struct member, a type
  * declaration or another variable ("pw = getpwuid(uid)", "password: String",
  * "pass = user.password", "pw = *p", "password = $PW") never matches.
