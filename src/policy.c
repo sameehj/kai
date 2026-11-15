@@ -32,6 +32,7 @@ static const char DEFAULT_POLICY[] =
     "protect ~/.ssh\n"
     "protect ~/.aws\n"
     "protect ~/.config/gcloud\n"
+    "protect ~/.config/gh/hosts.yml\n"
     "protect ~/.kube\n"
     "protect ~/.docker/config.json\n"
     "protect ~/.netrc\n"

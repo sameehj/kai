@@ -6,6 +6,7 @@
 protect ~/.ssh
 protect ~/.aws
 protect ~/.config/gcloud
+protect ~/.config/gh/hosts.yml   # gh's token; gh itself still reads it
 protect ~/.kube
 protect ~/.docker/config.json
 protect ~/.netrc

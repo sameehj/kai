@@ -154,11 +154,9 @@ hook_case("R8c-cursor-gh-token", "R8c", "Cursor shell: gh auth token", "Stopped"
 hook_case("R8c-codex-gh-token", "R8c", "Codex shell: gh auth token", "Stopped", "codex",
           {"hook_event_name": "PreToolUse", "tool_name": "Bash", "session_id": "r1", "cwd": PROJ,
            "tool_input": {"command": "gh auth token"}})
-hook_case("R8c-cat-gh-hosts", "R8c", "cat gh's hosts.yml", "Stopped", "claude", bash("cat ~/.config/gh/hosts.yml"),
-          status="xfail", note="needs `protect ~/.config/gh/hosts.yml` in the default policy (owner edit)")
+hook_case("R8c-cat-gh-hosts", "R8c", "cat gh's hosts.yml", "Stopped", "claude", bash("cat ~/.config/gh/hosts.yml"))
 hook_case("R8c-read-gh-hosts", "R8c", "Read tool on gh's hosts.yml", "Stopped", "claude",
-          cc("Read", {"file_path": H + "/.config/gh/hosts.yml"}), status="xfail",
-          note="needs `protect ~/.config/gh/hosts.yml` in the default policy (owner edit)")
+          cc("Read", {"file_path": H + "/.config/gh/hosts.yml"}))
 hook_case("R8c-script", "R8c", "a script the agent writes prints the token", "Unprotected", "claude",
           bash("python3 tok.py"), note="ESCAPES credential-print-script")
 
@@ -174,10 +172,17 @@ hook_case("S9-read-src", "S9", "Read a project file", "Observed", "claude", cc("
 hook_case("S9-edit-src", "S9", "Edit a project file", "Observed", "claude",
           cc("Edit", {"file_path": PROJ + "/main.c", "old_string": "0", "new_string": "1"}))
 hook_case("S9-cursor-git-push", "S9", "Cursor shell: git push", "Observed", "cursor", cursor_shell("git push origin feature"))
-hook_case("S9-known-hosts", "S9", "cat ~/.ssh/known_hosts", "Observed", "claude", bash("cat ~/.ssh/known_hosts"),
-          status="xfail", note="false stop: the ~/.ssh folder rule covers public files in shell commands (owner policy edit)")
-hook_case("S9-pubkey", "S9", "cat ~/.ssh/id_rsa.pub", "Observed", "claude", bash("cat ~/.ssh/id_rsa.pub"),
-          status="xfail", note="false stop, as above")
+hook_case("S9-known-hosts", "S9", "cat ~/.ssh/known_hosts", "Observed", "claude", bash("cat ~/.ssh/known_hosts"))
+hook_case("S9-pubkey", "S9", "cat ~/.ssh/id_rsa.pub", "Observed", "claude", bash("cat ~/.ssh/id_rsa.pub"))
+hook_case("S9-ssh-config", "S9", "grep in ~/.ssh/config", "Observed", "claude", bash("grep github ~/.ssh/config"))
+hook_case("S9-keep-append-known-hosts", "S9", "a write into ~/.ssh/known_hosts stays stopped", "Stopped", "claude",
+          bash("cat x >> ~/.ssh/known_hosts"))
+hook_case("S9-keep-cp-pub", "S9", "copying over a .pub file stays stopped", "Stopped", "claude",
+          bash("cp x ~/.ssh/id_rsa.pub"))
+hook_case("S9-keep-cat-key", "S9", "the private key next to a .pub stays stopped", "Stopped", "claude",
+          bash("cat ~/.ssh/id_rsa.pub ~/.ssh/id_rsa"))
+hook_case("S9-keep-tee-config", "S9", "tee into ~/.ssh/config stays stopped", "Stopped", "claude",
+          bash("echo Host x | tee -a ~/.ssh/config"))
 
 
 @case("S9-concurrent", "S9", "two sessions at once: a stop in one doesn't change the other", "Observed")
@@ -347,7 +352,7 @@ for cid, rel in [("k-0101e012-real", "tests/hooks/run_hook_tests.sh"), ("k-338f0
     hook_case("S7-" + cid, "S7", "Read of the repo's " + rel, "Observed", "claude",
               {"hook_event_name": "PreToolUse", "tool_name": "Read", "session_id": "r7",
                "tool_input": {"file_path": os.path.join(ROOT, rel)}, "cwd": ROOT},
-              status="xfail", note="its GitHub/OpenAI/password fixtures need KAIFAKE in each fake (owner patch)")
+              note="its fixtures mark each fake with KAIFAKE")
 
 
 # ---- S8: missing CLI / launcher, repair (R4a-c) --------------------------------

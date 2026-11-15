@@ -808,12 +808,34 @@ typedef struct {
     void *skip_ud;
     const char *agent;          /* the requesting agent: its own state is exempt */
     char cwdbuf[4096];          /* G14: the folder after a `cd` earlier in the command */
+    int reader;                 /* S9: this simple command only prints files */
+    int writes;                 /* S9: the whole command line redirects or tees somewhere */
 } path_scan_t;
+
+/* S9 (0.3.0-preview.1): the public files in ~/.ssh (known_hosts, config and
+ * *.pub) hold no secret; ssh and git print them all the time. Reading one
+ * with a command that only prints (cat, head, grep, ...) in a command line
+ * that writes nowhere (no '>' and no tee) is not stopped. Every write stays
+ * protected, and so does every other file in the folder. */
+static int public_ssh_file(const char *path, const char *cwd) {
+    char *np = kai_normalize_path(path, cwd);
+    if (!np) return 0;
+    char *home = kai_expand_home("~/.ssh/");
+    int in = home && strncasecmp(np, home, strlen(home)) == 0 && !strchr(np + strlen(home), '/');
+    const char *b = in ? np + strlen(home) : "";
+    size_t l = strlen(b);
+    int pub = in && (!strcasecmp(b, "known_hosts") || !strcasecmp(b, "known_hosts.old") || !strcasecmp(b, "config") ||
+                     (l > 4 && !strcasecmp(b + l - 4, ".pub")));
+    free(home);
+    free(np);
+    return pub;
+}
 
 /* A protected path was found: it counts unless the user exempted its rule. */
 static int path_hit(path_scan_t *ps, const char *path) {
     if (!kai_path_protected_as(ps->p, ps->agent, path, ps->cwd, ps->why, ps->whylen)) return 0;
     if (kai_rule_is_kai_program(ps->why)) return 0;   /* judged by kai_command_tampers_kai */
+    if (ps->reader && !ps->writes && public_ssh_file(path, ps->cwd)) return 0;
     return !(ps->skip && ps->skip(ps->why, ps->skip_ud));
 }
 
@@ -950,9 +972,18 @@ static void text_words(char **argv, int argc, int start, char *skip) {
     }
 }
 
+static int print_only(const char *b) {
+    static const char *const R[] = {"cat", "head", "tail", "less", "more", "bat", "nl", "wc", "grep", "egrep",
+                                    "fgrep", "rg", "diff", "file", "stat", "ls", NULL};
+    for (int i = 0; R[i]; i++) if (!strcmp(b, R[i])) return 1;
+    return 0;
+}
+
 static void scan_cmd_words(char **argv, int argc, void *ud) {
     path_scan_t *ps = ud;
     int start = kai_shell_command_start(argv, argc);
+    ps->reader = start < argc &&
+                 print_only(strrchr(argv[start], '/') ? strrchr(argv[start], '/') + 1 : argv[start]);
     if (start < argc) {
         const char *b = strrchr(argv[start], '/') ? strrchr(argv[start], '/') + 1 : argv[start];
         if (!strcmp(b, "cd") || !strcmp(b, "pushd")) {   /* G14: later paths are relative to it */
@@ -989,6 +1020,7 @@ static void scan_cmd_words(char **argv, int argc, void *ud) {
 
 static void scan_text_paths(const char *text, void *ud) {
     /* heredoc bodies (python, cat > file, ...): look for paths line by line */
+    ((path_scan_t *)ud)->reader = 0;   /* S9: a body is never a print-only read */
     const char *s = text;
     while (*s && !((path_scan_t *)ud)->hit) {
         const char *e = strchr(s, '\n');
@@ -1010,7 +1042,8 @@ int kai_command_touches_protected_as(const kai_policy *p, const char *agent, con
     if (!p || !cmd) return 0;
     char scratch[256];
     if (!why || !whylen) { why = scratch; whylen = sizeof scratch; } /* path_hit reads it */
-    path_scan_t ps = {p, cwd, why, whylen, 0, skip, ud, agent, ""};
+    path_scan_t ps = {p, cwd, why, whylen, 0, skip, ud, agent, "", 0, 0};
+    ps.writes = strchr(cmd, '>') != NULL || strstr(cmd, "tee") != NULL;   /* S9: any write: no exemption */
     kai_shell_walk(cmd, scan_cmd_words, scan_text_paths, &ps);
     if (!ps.hit) why[0] = '\0';
     return ps.hit;

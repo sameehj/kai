@@ -37,6 +37,14 @@ AuditEvent.filesEnforcing = true
 check(own.plainSentence == "Claude Code tried to read Kai's settings. Always protected.",
       "...and with the Files wall enforcing: \(own.plainSentence)")
 AuditEvent.filesEnforcing = false
+// The title matches the action: a settings edit through the shell is a change, not a read.
+for (cmd, rule, tool) in [("sed -i '' 's/a/b/' ~/.kai/policy", "~/.kai", "Bash"),
+                          ("mv ~/.claude ~/c2", "kai_self_protect", "Bash"),
+                          ("echo {} > ~/.cursor/hooks.json", "~/.cursor/hooks.json", "Bash"),
+                          ("~/.claude/settings.json", "~/.claude/settings.json", "Edit")] {
+    let e = ev(#"{"ts":"2026-10-29T08:06:30Z","source":"claude","event":"PreToolUse","decision":"block","rule":"\#(rule)","detail":"Kai never allows agents to change its settings through its checks.","h":"b3","tool":"\#(tool)","target":"\#(cmd)"}"#)
+    check(e.plainSentence == "Claude Code tried to change Kai's settings. Stopped.", "\(tool) `\(cmd)`: \(e.plainSentence)")
+}
 let ssh = ev(#"{"ts":"2026-10-29T08:07:00Z","source":"claude","event":"PreToolUse","decision":"block","rule":"~/.ssh","detail":"Kai blocked reading `~/.ssh/id_ed25519`: private keys can unlock your servers.","h":"b2","tool":"Read","target":"~/.ssh/id_ed25519"}"#)
 check(ssh.plainSentence == "Claude Code tried reading ~/.ssh/id_ed25519. Blocked.", "a protected file: \(ssh.plainSentence)")
 check(!events[0].plainSentence.contains("..") && !events[0].plainSentence.contains("not_on"), "no double period, no rule names")
