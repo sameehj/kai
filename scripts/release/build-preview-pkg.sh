@@ -51,11 +51,13 @@ fi
 grep -q "#define KAI_VERSION \"$VERSION\"" include/kai.h || {
     echo "include/kai.h KAI_VERSION isn't \"$VERSION\""; [ "$MODE" = "--test" ] || exit 2; }
 
-# Kai's program goes in a root-owned folder; /usr/local/bin/kai is a symlink to
-# it (Nov 15: /usr/local/bin is often the user's, so a kai there can be
-# removed by any program the user runs). The launcher runs the real path.
+# Kai's program goes in a root-owned folder (Nov 15: /usr/local/bin is often
+# the user's, so a kai there can be removed by any program the user runs). The
+# launcher runs the real path. /usr/local/bin is NOT in the payload: listing it
+# would let the installer apply root:wheel to the user's Homebrew folder.
+# Postinstall makes the /usr/local/bin/kai symlink, for the Terminal.
 PROG_DIR="Library/Application Support/Kai/bin"
-rm -rf "$OUT" && mkdir -p "$STAGE/usr/local/bin" "$STAGE/usr/local/share/kai" "$STAGE/usr/local/libexec" \
+rm -rf "$OUT" && mkdir -p "$STAGE/usr/local/share/kai" "$STAGE/usr/local/libexec" \
                           "$STAGE/$PROG_DIR" "$STAGE/Applications" "$OUT/scripts"
 chmod 755 "$STAGE/Library" "$STAGE/Library/Application Support" "$STAGE/Library/Application Support/Kai" "$STAGE/$PROG_DIR"
 
@@ -110,7 +112,6 @@ lipo -info "$K" | grep -q "x86_64 arm64\|arm64 x86_64" || { echo "kai isn't univ
 "$K" version | grep -q "commit $(git rev-parse --short=12 HEAD)$" || [ "$MODE" = "--test" ] || {
     echo "kai doesn't carry this commit: $("$K" version)"; exit 1; }
 install -m 0755 "$K" "$STAGE/$PROG_DIR/kai"
-ln -s "/$PROG_DIR/kai" "$STAGE/usr/local/bin/kai"
 # STEP 2c: the stable hook launcher agents' hooks call (never a build path)
 install -m 0755 scripts/release/kai-hook "$STAGE/usr/local/libexec/kai-hook"
 grep -q "^K=\"/$PROG_DIR/kai\"$" "$STAGE/usr/local/libexec/kai-hook" || { echo "the launcher doesn't run /$PROG_DIR/kai"; exit 1; }
@@ -173,9 +174,10 @@ cp scripts/release/installer/welcome.html scripts/release/installer/readme.html 
 COMP="$OUT/component.pkg"
 pkgbuild --root "$STAGE" --identifier "$ID" --version "$VERSION" --scripts "$OUT/scripts" \
          --ownership recommended --install-location / "$COMP" >/dev/null
-for f in "./$PROG_DIR/kai" ./usr/local/libexec/kai-hook ./usr/local/bin/kai; do
+for f in "./$PROG_DIR/kai" ./usr/local/libexec/kai-hook; do
     pkgutil --payload-files "$COMP" | grep -qxF "$f" || { echo "the package has no $f"; exit 1; }
 done
+! pkgutil --payload-files "$COMP" | grep -q "^\./usr/local/bin" || { echo "the payload lists /usr/local/bin"; exit 1; }
 DIST="$OUT/distribution.xml"
 productbuild --synthesize --package "$COMP" "$DIST" >/dev/null
 # add the pages and a title right after the opening tag

@@ -25,6 +25,11 @@ LAUNCHER=/usr/local/libexec/kai-hook
 if [ "$(id -u)" = 0 ]; then
     chown root:wheel "$KAI_DIR" "$KAI_DIR/bin" "$KAI_BIN" "$LAUNCHER" 2>/dev/null
     chmod 755 "$KAI_DIR" "$KAI_DIR/bin" "$KAI_BIN" "$LAUNCHER" 2>/dev/null
+    # `kai` in the Terminal: a symlink (replaces an older Kai's file there).
+    # /usr/local/bin's own owner and mode are left as they are.
+    [ -d /usr/local/bin ] || mkdir -p /usr/local/bin
+    if ln -sfh "$KAI_BIN" /usr/local/bin/kai; then log "linked /usr/local/bin/kai to $KAI_BIN"
+    else log "couldn't link /usr/local/bin/kai (run kai from $KAI_BIN)"; fi
 fi
 # Every folder above them, and the files: owned by root, not group/world-writable.
 root_only() {   # path -> prints the first offender, returns 1
