@@ -579,6 +579,42 @@ def _s10_user_prog():
     return "Observed" if "degraded" in out else "mismatch: " + out[:200]
 
 
+# ---- S11: a correct fresh install reads clean (Nov 15) ---------------------------
+# Files isn't in this release and Internet is opt-in: neither is a problem, and
+# an agent without Kai's hooks is "not set up", not a problem.
+def _fresh_doctor(no_app):
+    h2 = tempfile.mkdtemp(prefix="kai-regress-s11.")
+    for d in (".claude", ".cursor", ".codex", "bin"):
+        os.makedirs(os.path.join(h2, d), exist_ok=True)
+    kp = os.path.join(h2, "bin", "kai")
+    shutil.copy2(KAI, kp)
+    env = dict(os.environ, HOME=h2, KAI_HOME=os.path.join(h2, ".kai"), CODEX_HOME=os.path.join(h2, ".codex"))
+    for k in ("KAI_POLICY", "KAI_TEST_ALLOW_DEV_HOOK"):
+        env.pop(k, None)
+    if no_app:
+        env["KAI_NO_APP"] = "1"
+    try:
+        subprocess.run([kp, "init"], capture_output=True, text=True, env=env, timeout=60)
+        for a in ("claude", "cursor", "codex"):
+            subprocess.run([kp, "install", a], capture_output=True, text=True, env=env, timeout=60)
+        r = subprocess.run([kp, "doctor"], capture_output=True, text=True, env=env, timeout=120)
+        out = r.stdout
+        want = ["No problems found.", "· Files: not included in this release", "· Internet: off (opt-in in Settings)"]
+        miss = [w for w in want if w not in out]
+        extra = [w for w in ("no verified heartbeat", "category switches", "Problems found") if w in out]
+        if r.returncode == 0 and not miss and not extra:
+            return "Observed"
+        return "mismatch rc=%d missing=%s unexpected=%s: %s" % (r.returncode, miss, extra, out[-300:])
+    finally:
+        shutil.rmtree(h2, ignore_errors=True)
+
+
+case("S11-fresh-doctor-no-app", "S11", "fresh install, no extensions, every agent set up: kai doctor says No problems found",
+     "Observed")(lambda: _fresh_doctor(True))
+case("S11-fresh-doctor-app", "S11", "...also with Kai.app present (its extensions not running, Internet not turned on)",
+     "Observed")(lambda: _fresh_doctor(False))
+
+
 def main():
     bad = 0
     xpass = 0

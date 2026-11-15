@@ -105,6 +105,15 @@ final class NetworkWall: NSObject, ObservableObject {
         OSSystemExtensionManager.shared.submitRequest(req)
     }
 
+    /// 0.3: <kai home>/internet.on says the user turned Internet on, so `kai
+    /// doctor` reports a missing extension as a problem only then (otherwise
+    /// "Internet: off (opt-in in Settings)"). Agents can't write Kai's home.
+    static func markOn(_ on: Bool) {
+        let path = String(cString: kai_home()) + "/internet.on"
+        if on { FileManager.default.createFile(atPath: path, contents: Data("on\n".utf8)) }
+        else { try? FileManager.default.removeItem(atPath: path) }
+    }
+
     func turnOn() {
         guard Bundle.main.bundlePath.hasPrefix("/Applications/") else {
             state = .failed("Move Kai.app to /Applications first (macOS only loads extensions from there)")
@@ -130,7 +139,7 @@ final class NetworkWall: NSObject, ObservableObject {
             m.saveToPreferences { _ in
                 m.removeFromPreferences { error in
                     Task { @MainActor in
-                        if let error { self?.state = .failed(error.localizedDescription) } else { self?.state = .off }
+                        if let error { self?.state = .failed(error.localizedDescription) } else { self?.state = .off; Self.markOn(false) }
                     }
                 }
             }
@@ -153,6 +162,7 @@ final class NetworkWall: NSObject, ObservableObject {
                         else if let error { lines.append("Internet filter: not removed (\(error.localizedDescription)).") }
                         else { lines.append("Internet filter: turned off and removed.") }
                         self?.state = .off
+                        Self.markOn(false)
                         self?.deactivate { lines.append($0); done(lines) }
                     }
                 }
@@ -190,7 +200,7 @@ final class NetworkWall: NSObject, ObservableObject {
             m.isEnabled = true
             m.saveToPreferences { error in
                 Task { @MainActor in
-                    if let error { self?.state = .failed(error.localizedDescription) } else { self?.state = .on }
+                    if let error { self?.state = .failed(error.localizedDescription) } else { self?.state = .on; Self.markOn(true) }
                 }
             }
         }
