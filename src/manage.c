@@ -1291,8 +1291,34 @@ int kai_cli_change_in_kai(int argc, char **argv) {
     return 4;
 }
 
+/* kai policy accept (Nov 15): the user checked a policy that changed outside
+ * Kai (kai doctor: "policy changed outside Kai") and keeps it. Records the
+ * current file's fingerprint so the warning stops until the next outside
+ * change. Refused from an agent's process tree (and the hooks stop agents
+ * running it); a policy that doesn't load can't be accepted. */
+static int policy_accept(void) {
+    if (policy_caller_is_agent()) {
+        fprintf(stderr, "kai policy accept: refused. Run this in your own terminal, not from an agent.\n");
+        return 3;
+    }
+    char err[256];
+    kai_policy *p = kai_policy_load(NULL, err, sizeof err);
+    if (!p) { fprintf(stderr, "kai policy accept: the policy doesn't load (%s). Fix it first.\n", err); return 1; }
+    kai_policy_free(p);
+    kai_policy_record_fingerprint();
+    char det[160];
+    if (kai_policy_integrity(det, sizeof det) == KAI_POLICY_CHANGED) {
+        fprintf(stderr, "kai policy accept: couldn't record the fingerprint (%s)\n", det);
+        return 1;
+    }
+    kai_audit("kai", "policy-accept", "note", "policy_accept", kai_policy_file());
+    printf("Accepted the current policy (%s). Kai warns again if it changes outside Kai.\n", kai_policy_file());
+    return 0;
+}
+
 int kai_cmd_policy(int argc, char **argv) {
     const char *sub = argc > 0 ? argv[0] : "show";
+    if (!strcmp(sub, "accept")) return policy_accept();
     int is_write = !strcmp(sub, "set") || !strcmp(sub, "add") || !strcmp(sub, "remove");
 #ifndef KAI_TEST_DIRECT_POLICY
     if (is_write) return kai_cli_change_in_kai(argc, argv);

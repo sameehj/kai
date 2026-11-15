@@ -344,7 +344,8 @@ int kai_cmd_doctor(void) {
         kai_policy_free(p);
     }
     if (integ == KAI_POLICY_CHANGED) {
-        printf("! policy changed outside Kai (%s). If you didn't edit it yourself, check it: kai policy show\n", idet);
+        printf("! policy changed outside Kai (%s). If you didn't edit it yourself, check it: kai policy show. "
+               "If every rule is yours: kai policy accept\n", idet);
         problems++;
     } else if (integ == KAI_POLICY_OK) {
         printf("✓ policy matches what Kai last wrote\n");
@@ -370,8 +371,12 @@ int kai_cmd_doctor(void) {
         agent_measure(a);
         char *cfg = kai_expand_home(a->config);
         if (!a->installed) {
-            printf("%s %s: hooks not installed in %s%s\n", a->detected ? "!" : "·", a->name, cfg,
-                   a->detected ? " (the agent is used here: kai install)" : "");
+            /* not set up isn't a problem: Kai just doesn't check that agent */
+            if (a->detected)
+                printf("· %s: not set up, so Kai doesn't check it (it's on this Mac; to check it: kai install %s)\n",
+                       a->name, a->key);
+            else
+                printf("· %s: not set up\n", a->name);
         } else if (!a->ok) {
             printf("✗ %s: %s (config %s)\n", a->name, a->problem, cfg); problems++;
         } else {

@@ -357,7 +357,7 @@ static void check_kai_control(char **argv, int argc, void *ud) {
                   !strncmp(sub, "allow-", 6);
     if (!strcmp(sub, "policy") && k + 1 < argc)
         control = !strcmp(argv[k + 1], "set") || !strcmp(argv[k + 1], "add") ||
-                  !strcmp(argv[k + 1], "remove");
+                  !strcmp(argv[k + 1], "remove") || !strcmp(argv[k + 1], "accept");
     if (control) *(int *)ud = 1;
 }
 
