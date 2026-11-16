@@ -5,7 +5,7 @@
 
   # Kai
 
-  ### Zero Trust. Zero Wrappers. Zero Friction.
+  ### Your Mac's local AI agent security guard.
 
   **Kai checks what your agents do, and shows you where they connect.**
 
@@ -29,6 +29,26 @@
 | Network (if switched on) | | connections from agent processes | encrypted contents |
 
 Details per agent and operation: [docs/COVERAGE.md](docs/COVERAGE.md). What still gets through: [docs/ESCAPES.md](docs/ESCAPES.md).
+
+## The menu-bar app
+
+Kai lives in the menu bar. Click it to see:
+
+<p align="center">
+  <img src="assets/screenshots/popover.png" width="360" alt="Kai's menu-bar popover: the status reads Partly checking, with Claude Code and Cursor checked and Codex not checked; a link to the coverage screen; and a recent stop where Claude Code was stopped reading a demo secrets file, with Dismiss, Open Activity and Why? buttons." />
+</p>
+
+- **Status:** **Checking** (every agent you set up is checked), **Partly checking** (some agents or checks aren't active, or only warn), or **Not checking** (Kai is paused or broken). The line under it says which.
+- **Recent stops:** what Kai stopped, in plain words. **Why?** opens the decision: what was stopped and why, **Retry would now be** (what Kai would decide if the agent tried again now), and the narrow way to allow it. **Not right** marks a stop you think was wrong, so it's counted for the study.
+- **Coverage: what Kai checks, and what it can't see:** per agent, what's checked, what's only observed, and what isn't covered.
+  <p align="center">
+    <img src="assets/screenshots/coverage.png" width="640" alt="Kai Settings, Agent Control: Coverage now lists Claude Code and Cursor as Checking, Codex as Not installed, Internet as Unknown, encrypted request contents as Not inspected and Files as Not included; below, each agent session Kai sees, with its coverage and permissions." />
+  </p>
+
+- **Repair:** if the menu bar turns red ("Kai's checks are off"), one click puts back Kai's program and hook launcher. It may ask for your password once.
+- **Settings → Uninstall:** the only way to remove Kai (see [Uninstall](#uninstall)).
+
+The same from Terminal: `kai why <id>` explains a decision, `kai not-right <id>` marks it as wrong, and `kai stats --export` writes the study summary (counts only, no prompts, paths, commands or code) for you to review and send.
 
 ## What it doesn't do in this release
 
@@ -62,11 +82,11 @@ How this release was verified: see the [release notes](https://github.com/sameeh
 
 ### Verify the download (optional)
 
-Download `SHA256SUMS` from the same release into the same folder, then:
+Download `Kai-Preview-<version>.pkg.sha256` from the same release into the same folder, then:
 
 ```sh
-shasum -a 256 -c SHA256SUMS                                  # "Kai-Preview-<version>.pkg: OK"
-spctl --assess --type install -vv Kai-Preview-*.pkg          # "source=Notarized Developer ID"
+shasum -a 256 -c Kai-Preview-<version>.pkg.sha256            # "Kai-Preview-<version>.pkg: OK"
+spctl --assess --type install -vv Kai-Preview-<version>.pkg  # "source=Notarized Developer ID"
 ```
 
 ### When Kai stops something
@@ -75,14 +95,11 @@ The message says what Kai stopped, why, and the narrow way to allow it if it was
 
 ### Uninstall
 
-1. Remove Kai's checks from your agents: `kai uninstall all` (add `--purge` to also delete `~/.kai`: your settings, log and permissions).
-2. Quit Kai from its menu bar icon, then drag `/Applications/Kai.app` to the Trash **in Finder**; macOS removes Kai's network extension with it.
-3. Remove the `kai` command:
-   ```sh
-   sudo rm -f /usr/local/bin/kai /usr/local/libexec/kai-hook
-   sudo rm -rf /usr/local/share/kai
-   sudo pkgutil --forget io.github.sameehj.kai.preview
-   ```
+**Uninstall only from Kai → Settings → Uninstall.** It removes your agents' hooks, the Internet filter and Kai's program, checks each step, and lists anything left (sometimes "Restart needed"). Then move Kai.app to the Trash.
+
+If the app is already gone, run `kai uninstall all` in Terminal to remove Kai's hooks from your agents, then reinstall Kai and uninstall from Settings, or [contact us](https://github.com/sameehj/kai/issues).
+
+**Don't delete Kai's files by hand** (for example `sudo rm` of `/usr/local/bin/kai` or the hook launcher). That leaves your agents' hooks behind: they keep working, but nothing is checked, and each call shows "Kai is missing: its checks are off".
 
 All releases: [github.com/sameehj/kai/releases](https://github.com/sameehj/kai/releases). From source: `make && sudo make install` (C compiler and `make`).
 
