@@ -34,9 +34,17 @@ Details per agent and operation: [docs/COVERAGE.md](docs/COVERAGE.md). What stil
 
 Kai lives in the menu bar. Click it to see:
 
+<p align="center">
+  <img src="assets/screenshots/popover.png" width="360" alt="Kai's menu-bar popover: the status reads Partly checking, with Claude Code and Cursor checked and Codex not checked; a link to the coverage screen; and a recent stop where Claude Code was stopped reading a demo secrets file, with Dismiss, Open Activity and Why? buttons." />
+</p>
+
 - **Status:** **Checking** (every agent you set up is checked), **Partly checking** (some agents or checks aren't active, or only warn), or **Not checking** (Kai is paused or broken). The line under it says which.
 - **Recent stops:** what Kai stopped, in plain words. **Why?** opens the decision: what was stopped and why, **Retry would now be** (what Kai would decide if the agent tried again now), and the narrow way to allow it. **Not right** marks a stop you think was wrong, so it's counted for the study.
 - **Coverage: what Kai checks, and what it can't see:** per agent, what's checked, what's only observed, and what isn't covered.
+  <p align="center">
+    <img src="assets/screenshots/coverage.png" width="640" alt="Kai Settings, Agent Control: Coverage now lists Claude Code and Cursor as Checking, Codex as Not installed, Internet as Unknown, encrypted request contents as Not inspected and Files as Not included; below, each agent session Kai sees, with its coverage and permissions." />
+  </p>
+
 - **Repair:** if the menu bar turns red ("Kai's checks are off"), one click puts back Kai's program and hook launcher. It may ask for your password once.
 - **Settings → Uninstall:** the only way to remove Kai (see [Uninstall](#uninstall)).
 
