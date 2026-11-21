@@ -17,6 +17,8 @@ struct MenuView: View {
     @AppStorage("advancedSection") private var advancedSection = "agents"
     @ObservedObject private var grantManager = GrantManager.shared
     @ObservedObject private var agents = AgentsModel.shared
+    @ObservedObject private var records = KaiRecords.shared
+    @State private var question = ""
 
     private var alert: AuditEvent? {
         guard let b = model.freshBlock, b.id != dismissedBlock else { return nil }
@@ -35,15 +37,17 @@ struct MenuView: View {
             pausedBanner
             if DevFlags.perSessionPause { pauseBanner }
             agentRows
+            sessionRows
             InternetNeedsYouRow { open(.internet) }
             latestStop
+            openAndAsk
             footer
         }
         .padding(16)
         .frame(width: 320)
         .background(Theme.ink)
         .foregroundStyle(Theme.text)
-        .task { await model.refresh(); wall.refresh(); await agents.refresh() }
+        .task { await model.refresh(); wall.refresh(); await agents.refresh(); await records.refresh() }
         .task {
             while Date().timeIntervalSince(AppModel.launchedAt) < 6 {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -105,25 +109,23 @@ struct MenuView: View {
                 case .noneFound:
                     HStack(spacing: 4) {
                         Text("No agents found ·").font(.system(size: 12)).foregroundStyle(Theme.muted)
-                        Button("Settings → Agents") { advancedSection = "agents"; open(.advanced) }
+                        Button("Settings → Agents") { open(.agents) }
                             .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
                     }
                 case .list: EmptyView()
                 }
                 if let note = model.connectedNote { ConnectedNote(text: note) }
                 CodexTrustRow()
-                ForEach(state == .list ? found : []) { a in
+                // 0.5: agents that need words (not connected, broken); the rest show as sessions below.
+                ForEach(state == .list ? found.filter { $0.hooks != "installed" && !AppModel.userTurnedOff($0.name) } : []) { a in
                     let (word, tone) = Self.agentState(a)
-                    let working = agents.workingNow.filter { $0.displayAgent == LiveCoverage.title(a.name) }.count
-                    Button { MainNav.shared.showActivity(agent: a.name); openMain() } label: {
+                    Button { MainNav.shared.go(.settings(.agents)); openMain() } label: {
                         HStack(spacing: 8) {
-                            Circle().fill(Theme.coverage(tone)).frame(width: 7, height: 7)
+                            AgentLogo(agent: a.name, size: 16)
                             Text(LiveCoverage.title(a.name)).font(.system(size: 13, weight: .medium))
                             Text(word).font(.system(size: 12)).foregroundStyle(tone == .problem ? Theme.coral : Theme.muted)
+                                .lineLimit(1)
                             Spacer()
-                            if working > 0 {
-                                Text("\(working) working").font(.system(size: 11)).foregroundStyle(Theme.soft)
-                            }
                             Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(Theme.muted)
                         }
                         .padding(.horizontal, 10).padding(.vertical, 6)
@@ -134,6 +136,77 @@ struct MenuView: View {
                 }
             }
         }
+    }
+
+    /// 0.5: the popover mirrors Now: up to 3 sessions (logo, project, Working/Idle).
+    @ViewBuilder private var sessionRows: some View {
+        let cards = NowData.sections(model).flatMap(\.cards)
+        if agents.loaded && agents.sourceError == nil {
+            VStack(alignment: .leading, spacing: 4) {
+                if cards.isEmpty {
+                    let connected = (model.displayAgents(agents) ?? []).filter { $0.detected && $0.hooks == "installed" }
+                    if !connected.isEmpty {
+                        Text(NowBuilder.emptyText(connected: connected.map(\.name)))
+                            .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                ForEach(cards.prefix(3)) { c in
+                    Button { MainNav.shared.page = .now; openMain() } label: {
+                        HStack(spacing: 8) {
+                            AgentLogo(agent: c.agentKey, size: 16)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("\(c.session.displayAgent) · \(c.project)").font(.system(size: 12.5, weight: .medium)).lineLimit(1)
+                                if model.recordingActivity, let l = c.lastLine(now: Date()) {
+                                    Text(l).font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(1)
+                                }
+                            }
+                            Spacer()
+                            Text(c.statePill(now: Date())).font(.system(size: 11))
+                                .foregroundStyle(c.working ? Theme.teal : Theme.muted)
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(Theme.sidebar, in: RoundedRectangle(cornerRadius: 8))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                if cards.count > 3 {
+                    Text("+ \(cards.count - 3) more in Now").font(.system(size: 11)).foregroundStyle(Theme.muted)
+                }
+            }
+        }
+    }
+
+    /// "Open Kai" and an Ask field.
+    private var openAndAsk: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button { MainNav.shared.page = .now; openMain() } label: {
+                Text("Open Kai").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(LimeButtonStyle())
+            HStack(spacing: 6) {
+                TextField("Ask Kai…", text: $question).textFieldStyle(.plain).font(.system(size: 12.5))
+                    .onSubmit(sendQuestion)
+                Button(action: sendQuestion) { Image(systemName: "arrow.up.circle.fill").font(.system(size: 16)) }
+                    .buttonStyle(.plain).foregroundStyle(Theme.teal)
+                    .disabled(question.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(.horizontal, 10).frame(height: 32)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Theme.border))
+        }
+    }
+
+    private func sendQuestion() {
+        let q = question.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return }
+        question = ""
+        let nav = MainNav.shared
+        nav.page = .ask
+        nav.chatHidden = false
+        let ctx = MainWindowView.context(model: model, wall: wall, agents: agents, records: records, nav: nav)
+        openMain()
+        Task { await AskController.shared.ask(q, context: ctx) }
     }
 
     static func agentState(_ a: AgentRow) -> (String, LiveCoverage.Tone) {
@@ -172,7 +245,7 @@ struct MenuView: View {
             let days = max(1, Int((Double(first.expires) - Date().timeIntervalSince1970) / 86400.0 + 0.5))
             Button {
                 agentControlOpen = "agent:" + first.agent
-                MainNav.shared.page = .agents; openMain()
+                open(.advanced)
             } label: {
                 Text("Kai tidied up an old setting: \(name) \(ms.count == 1 ? "is" : "are") allowed for \(first.agentTitle) "
                      + "for \(days) day\(days == 1 ? "" : "s"). Review ›")
@@ -263,7 +336,7 @@ struct MenuView: View {
         }
     }
 
-    private func openAgentControl() { MainNav.shared.page = .agents; openMain() }
+    private func openAgentControl() { MainNav.shared.go(.settings(.agents)); openMain() }
 
     /// 0.3: the header's words and colour, from measured state (LiveCoverage.headline).
     /// Red only when Kai itself is broken; a routine stop is never red.
@@ -286,15 +359,16 @@ struct MenuView: View {
     // Checking · Partly checking · Not checking, or, when Kai is broken,
     // "Kai's checks are off; its settings aren't protected" with Repair.
     private var header: some View {
-        let h = HeaderState.make(model, agents)
-        let n = agents.workingNow.count
+        let summary = NowData.summary(model)
+        let h = HeaderState.make(model, agents, summary: summary)
         return HStack(alignment: .top, spacing: 10) {
             Image("KaiLogo").resizable().frame(width: 26, height: 26).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Kai · \(n) working session\(n == 1 ? "" : "s")").font(.system(size: 13, weight: .semibold))
+                Text("Kai · \(summary.text)").font(.system(size: 13, weight: .semibold))
                 HStack(spacing: 5) {
                     Circle().fill(h.color).frame(width: 7, height: 7)
-                    Text(h.text).font(.system(size: 11)).foregroundStyle(h.tone == .ok ? Theme.muted : h.color)
+                    Text(h.tone == .ok ? "Connected · checking" : h.text).font(.system(size: 11))
+                        .foregroundStyle(h.tone == .ok ? Theme.muted : h.color)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if status.status == .broken && LiveCoverage.blocked(agents: agents.loaded ? agents.agents : []).isEmpty {
@@ -312,13 +386,13 @@ struct MenuView: View {
     @ViewBuilder private var latestStop: some View {
         if let e = ActivityFeed.stops(model.events, workspace: nil).first {
             Button {
-                MainNav.shared.page = .decisions
+                MainNav.shared.showStops()
                 MainNav.shared.openDecision = e
                 openMain()
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "hand.raised").font(.system(size: 11)).foregroundStyle(Theme.amber)
-                    Text("Latest stop: \(e.agentName) · \(ActivityFeed.stopItem(e, workspace: nil).detail)")
+                    Text("Latest stop: \(e.agentName) " + NowCard.stopLine(e))
                         .font(.system(size: 12)).foregroundStyle(Theme.soft).lineLimit(1)
                     Spacer()
                     if let d = e.date { Text(ago(d)).font(.system(size: 11)).foregroundStyle(Theme.muted) }
@@ -338,13 +412,13 @@ struct MenuView: View {
             HStack {
                 CapsLabel("Recent stops")
                 Spacer()
-                Button("See all") { MainNav.shared.page = .decisions; openMain() }
+                Button("See all") { MainNav.shared.showStops(); openMain() }
                     .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
             }
             if let b = alert {
                 BlockNotice(event: b,
                             dismiss: { withAnimation { dismissedBlock = b.id } },
-                            details: { MainNav.shared.page = .decisions; openMain() })
+                            details: { MainNav.shared.showStops(); openMain() })
             }
             // Step 6: "N actions stopped today" opens the list (reason, command, choices).
             if model.stoppedTodayCount > 0 {
@@ -356,7 +430,7 @@ struct MenuView: View {
                     .buttonStyle(.plain)
                     .popover(isPresented: Binding(get: { openDecision == "stopped" },
                                                   set: { if !$0 { openDecision = nil } }), arrowEdge: .leading) {
-                        StoppedTodayList(grants: grantManager, open: { MainNav.shared.page = .decisions; openMain() }).environmentObject(model)
+                        StoppedTodayList(grants: grantManager, open: { MainNav.shared.showStops(); openMain() }).environmentObject(model)
                     }
                     InfoButton(text: InfoText.actionsStopped)
                 }
@@ -395,13 +469,6 @@ struct MenuView: View {
 
     private var footer: some View {
         HStack(spacing: 14) {
-            Button("Ask Kai…") {
-                MainNav.shared.page = .ask
-                MainNav.shared.chatHidden = false
-                MainNav.shared.focusChat += 1
-                openMain()
-            }
-            .foregroundStyle(Theme.teal)
             if grantManager.pauseState(nil) == Int32(KAI_PAUSE_NONE) {
                 Menu("Pause…") {
                     Button("Pause checks for 15 minutes") { grantManager.pauseAll(minutes: 15) }
@@ -520,21 +587,10 @@ struct BlockNotice: View {
 
 // MARK: - Pieces
 
+/// 0.5: the agent's real logo (AgentIcon), never initials.
 struct AgentBadge: View {
     let agent: Agent
-    private var style: (String, Color, Color) {
-        switch agent.rawValue {
-        case "claude": return ("C", Color(hex: 0x2B2420), Color(hex: 0xF0A27A))
-        case "cursor": return ("Cu", Theme.raised, .white)
-        case "codex": return ("Cx", Color(hex: 0x1E2A26), Color(hex: 0x7FE0B8))
-        default: return (String(agent.title.prefix(1)), Theme.raised, .white)
-        }
-    }
-    var body: some View {
-        Text(style.0).font(Theme.display(14)).foregroundStyle(style.2)
-            .frame(width: 32, height: 32)
-            .background(style.1, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-    }
+    var body: some View { AgentLogo(agent: agent.rawValue, size: 28) }
 }
 
 struct AgentCard: View {

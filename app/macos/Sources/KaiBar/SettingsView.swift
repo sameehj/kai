@@ -6,38 +6,6 @@ import KaiCore
 /// 0.4: the Settings page of the Kai window: General (activity recording, Ask
 /// Kai's model), the pages named for what they protect - Files, Internet - and
 /// Advanced for everything technical.
-enum SettingsPage: String, CaseIterable, Identifiable {
-    case general, files, internet, advanced, uninstall
-    var id: String { rawValue }
-    /// A page saved by an older Kai ("storage", "network", "agentControl", ...).
-    init(stored raw: String) {
-        switch raw {
-        case "storage": self = .files
-        case "network": self = .internet
-        case "protection", "permissions", "company": self = .advanced
-        default: self = SettingsPage(rawValue: raw) ?? .general
-        }
-    }
-    var title: String {
-        switch self {
-        case .general: return "General"
-        case .files: return "Files"
-        case .internet: return "Internet"
-        case .advanced: return "Advanced"
-        case .uninstall: return "Uninstall"
-        }
-    }
-    var icon: String {
-        switch self {
-        case .general: return "gearshape"
-        case .files: return "folder"
-        case .internet: return "globe"
-        case .advanced: return "slider.horizontal.3"
-        case .uninstall: return "trash"
-        }
-    }
-}
-
 /// 0.4: Settings is a page of the Kai window (pinned at the bottom of its
 /// sidebar), with its own sub-pages along the top.
 struct SettingsView: View {
@@ -54,7 +22,7 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(maxWidth: 520)
+            .frame(maxWidth: 780)
             .padding(.horizontal, 28).padding(.top, 20)
             if let msg = model.errorMessage {
                 ErrorBanner(message: msg) { model.errorMessage = nil }.padding([.horizontal, .top], 24)
@@ -70,6 +38,9 @@ struct SettingsView: View {
     @ViewBuilder private var content: some View {
         switch page {
         case .general: KaiGeneralSettings()
+        case .agents: AgentsSettingsPage()
+        case .ask: AskSettingsPage()
+        case .rules: RulesSettingsPage()
         case .files: VStack(alignment: .leading, spacing: 18) { StoragePage(); FilesPage() }
         case .internet: NetworkPage()
         case .advanced: AdvancedPage()
@@ -80,7 +51,7 @@ struct SettingsView: View {
 
 // MARK: - Shared page pieces
 
-private struct PageHeader: View {
+struct PageHeader: View {
     let icon: String
     let title: String
     let subtitle: String
@@ -302,6 +273,8 @@ private struct GeneralPage: View {
                 info("Command-line tool", model.cliPath ?? "not found")
                 info("Policy file", model.status?.policy.source ?? "—")
                 Button("Edit Policy File…") { model.openPolicyFile() }.buttonStyle(GhostButtonStyle())
+                Text(AgentTrademarks.line).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -327,7 +300,7 @@ private struct GeneralPage: View {
     }
 }
 
-private struct ProtectionPage: View {
+struct ProtectionPage: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -366,7 +339,7 @@ private struct ProtectionPage: View {
 }
 
 /// Exceptions made with "Not a threat" on the Activity page.
-private struct ExceptionsCard: View {
+struct ExceptionsCard: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
         Card(padding: 14) {
@@ -763,24 +736,22 @@ private struct CompanyPage: View {
 
 /// Phase B item 10: everything technical, one page with sections.
 private struct AdvancedPage: View {
-    @AppStorage("advancedSection") private var section = "agents"
+    // 0.5: Agents and Checks moved to their own pages (Settings → Agents, Rules).
+    @AppStorage("advancedSection") private var section = "app"
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             PageHeader(icon: "slider.horizontal.3", title: "Advanced",
-                       subtitle: "How Kai is built into your agents, their checks, company terms, permissions and the app.")
-            Picker("", selection: $section) {
-                Text("Agents").tag("agents")
-                Text("Checks").tag("checks")
+                       subtitle: "Company terms, permissions and the app.")
+            Picker("", selection: Binding(get: { ["company", "permissions", "app"].contains(section) ? section : "app" },
+                                          set: { section = $0 })) {
                 Text("Company data").tag("company")
                 Text("Permissions").tag("permissions")
                 Text("App").tag("app")
-            }.pickerStyle(.segmented).labelsHidden().frame(width: 520)
+            }.pickerStyle(.segmented).labelsHidden().frame(width: 360)
             switch section {
-            case "checks": ProtectionPage()
             case "company": CompanyPage()
             case "permissions": PermissionsPage()
-            case "app": GeneralPage(showAgents: false)
-            default: GeneralPage(showAgents: true)
+            default: GeneralPage(showAgents: false)
             }
         }
     }

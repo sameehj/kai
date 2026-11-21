@@ -173,7 +173,8 @@ let tdAll = AskEngine.answer("what happened today", st)
 check(tdAll.display.contains("Cursor: no session running") && tdAll.display.contains("Activity recording is on")
       && tdAll.display.contains("Internet watching is off"), "today: sessions, recording and Internet (\(tdAll.display))")
 let fc = AskEngine.answer("which files did cursor read", st)
-check(fc.display.contains("by Cursor") && fc.display.contains("editor's writes"), "files for one agent (\(fc.display))")
+check(fc.display.contains("by Cursor") && fc.footer.joined().contains("editor's writes"),
+      "files for one agent; Cursor's limit in Kai's footer (\(fc.display) | \(fc.footer))")
 
 print("ask kai 0.4.1: model routing is validated")
 check(PhrasePrompts.intent(fromModel: "recording", question: "x") == .recording, "a valid label is used")

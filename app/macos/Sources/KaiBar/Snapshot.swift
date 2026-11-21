@@ -60,7 +60,8 @@ enum Snapshot {
         render(AgentReachView(agent: "claude", grants: GrantManager()).background(Theme.ink),
                width: 640, height: 900, name: "agent-claude-page")
         let saved = UserDefaults.standard.string(forKey: "settingsPage")
-        for p in [MainPage.activity, .agents, .decisions, .ask] {
+        await KaiRecords.shared.refresh()
+        for p in [MainPage.now, .activity, .ask] {
             MainNav.shared.page = p
             render(MainWindowView(), width: 1080, height: 720, name: "window-\(p.rawValue)")
         }

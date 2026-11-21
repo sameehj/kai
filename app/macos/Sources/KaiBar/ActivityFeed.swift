@@ -29,6 +29,10 @@ struct ActivityGroups: Decodable, Equatable {
     var recording: Bool = false
     var groups: [Group] = []
     var total: Int = 0
+    /// 0.5: per Kai session (Now cards, the timeline); nil from older CLIs.
+    var sessions: [SessionActivity]? = nil
+    /// 0.5: the oldest record read (when recording began, within the window).
+    var first_record: Double? = nil
 
     static func parse(_ json: String) -> ActivityGroups? {
         guard let d = json.data(using: .utf8) else { return nil }
@@ -197,8 +201,20 @@ enum ActivityFeed {
         .sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
     }
 
+    /// 0.5: a command as its program name only ("npm"), never the command line.
+    static func program(_ cmd: String) -> String {
+        for w in cmd.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" }) {
+            if w.contains("=") { continue }                       // VAR=value (values can be secrets)
+            let base = (String(w) as NSString).lastPathComponent
+            let clean = base.filter { !"\"'`$();|&".contains($0) }
+            if !clean.isEmpty { return String(clean.prefix(40)) }
+        }
+        return "a command"
+    }
+
     static func stopItem(_ e: AuditEvent, workspace: String?) -> ActivityItem {
-        let what = e.excerpt.map { shown($0, workspace: workspace) } ?? (e.actionLabel ?? "an action")
+        let what = e.excerpt.map { e.actionLabel == "Command" ? program($0) : shown($0, workspace: workspace) }
+            ?? (e.actionLabel ?? "an action")
         let title: String
         if e.isPrompt { title = "Prompt stopped" }
         else if e.isNetwork { title = "Connection stopped" }

@@ -1,0 +1,7 @@
+{
+  "images" : [
+    { "idiom" : "universal", "filename" : "claude-spark.png", "scale" : "1x" },
+    { "idiom" : "universal", "filename" : "claude-spark@2x.png", "scale" : "2x" }
+  ],
+  "info" : { "version" : 1, "author" : "xcode" }
+}

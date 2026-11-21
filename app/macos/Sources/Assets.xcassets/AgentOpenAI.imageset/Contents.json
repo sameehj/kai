@@ -1,0 +1,11 @@
+{
+  "images" : [
+    { "idiom" : "universal", "filename" : "openai-blossom-black.png", "scale" : "1x" },
+    { "idiom" : "universal", "filename" : "openai-blossom-black@2x.png", "scale" : "2x" },
+    { "idiom" : "universal", "filename" : "openai-blossom-white.png", "scale" : "1x",
+      "appearances" : [ { "appearance" : "luminosity", "value" : "dark" } ] },
+    { "idiom" : "universal", "filename" : "openai-blossom-white@2x.png", "scale" : "2x",
+      "appearances" : [ { "appearance" : "luminosity", "value" : "dark" } ] }
+  ],
+  "info" : { "version" : 1, "author" : "xcode" }
+}
