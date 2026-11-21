@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial -->
 
 <div align="center">
-  <img src="assets/kai-logo.png" alt="Kai shield logo" width="132" />
+  <img src="assets/brand/kai-logo-purple-teal.png" alt="Kai shield logo" width="132" />
 
   # Kai
 
@@ -9,10 +9,18 @@
 
   **Kai checks what your agents do, and shows you where they connect.**
 
-  **0.3.0-preview.1 · macOS 13+** · **Claude Code · Codex · Cursor** · **Open source**
+  **0.4.0-preview.1 · macOS 13+** · **Claude Code · Codex · Cursor** · **Open source**
 </div>
 
 **Kai is a guardrail, not a sandbox.** It checks the tool calls your agents report to it, through each agent's own hooks, and leaves everything else to the agent's own approvals. A program the agent writes and runs, or anything that doesn't go through the agent's tools, isn't checked.
+
+## New in 0.4
+
+- **One Kai window:** Activity (what Kai recorded in a workspace today, grouped, with the evidence behind each row), Agents, Decisions, and Ask Kai.
+- **Ask Kai** answers from Kai's records only, such as "What did Kai stop?" or "Is Cursor connected?". Each answer says what it's based on, and "No matching record" never means it didn't happen. A model, if you pick one, only rewords the answer.
+- **Opt-in activity recording** (off by default): which files agents read or changed and which commands they asked to run. Kai records metadata only, kept for 7 days.
+
+<!-- Screenshots for 0.4 (to add): assets/screenshots/window-activity.png, window-ask.png, popover-0.4.png -->
 
 ## What Kai does in this release
 

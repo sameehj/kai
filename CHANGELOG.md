@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.0-preview.1 (2026-11-21)
+
+The Kai window and Ask Kai. Notes: [docs/release/0.4.0-preview.1.md](docs/release/0.4.0-preview.1.md).
+
+- **Kai window**
+  - Activity, Agents, Decisions and Ask Kai, with Settings at the bottom; the workspace sits in the toolbar.
+  - One header that names the most important problem.
+  - Agent Control and the "What each agent can reach" list are removed.
+- **Ask Kai**
+  - Deterministic answers from Kai's records, each with "Based on: …"; "No matching record" when nothing matches.
+  - A model (Apple Intelligence or a local llama.cpp model, downloaded only after you agree) can only reword an answer.
+  - Chats stay on this Mac for 30 days.
+- **Opt-in activity recording:** `record_activity on` (off by default) adds one metadata line per agent tool request, kept 7 days. Read it with `kai activity --json`.
+- **Decisions:** "Allow for this session…" lets one agent read one file with its file tool for 5 minutes, after you confirm. It's never offered for private keys or Kai's settings.
+- **MCP arguments:** environment references and file paths aren't taken for secrets.
+- **Stop messages:** one sentence, then "Ask the user if this is needed."
+- **Popover:** smaller; one entry per stop; the "Kai.." double period is fixed.
+- **Brand:** purple-and-teal shield, teal actions, light and dark mode.
+
 ## 0.2.0-preview.2 (2026-11-01)
 
 First public pre-release: agent hooks plus the Kai app's Internet wall in Watch: Kai records the connections
