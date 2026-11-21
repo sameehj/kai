@@ -8,7 +8,7 @@ struct MenuView: View {
     @EnvironmentObject var wall: NetworkWall
     @EnvironmentObject var storage: StorageWall
     @Environment(\.openWindow) private var openWindow
-    @AppStorage("settingsPage") private var settingsPage = SettingsPage.agentControl.rawValue
+    @AppStorage("settingsPage") private var settingsPage = SettingsPage.general.rawValue
     @State private var dismissedBlock: String?
     @State private var showPermissions = false
     @State private var openDecision: String?
@@ -32,19 +32,13 @@ struct MenuView: View {
             pausedBanner
             if DevFlags.perSessionPause { pauseBanner }
             agentRows
-            permissions
-            coverageLine
-            recent
+            latestStop
             footer
         }
         .padding(16)
-        .frame(width: 360)
-        .background(background)
-        // The menu-bar panel follows the system appearance and ignores
-        // preferredColorScheme: force dark and a white default text color.
-        .environment(\.colorScheme, .dark)
-        .foregroundStyle(Color.white)
-        .preferredColorScheme(.dark)
+        .frame(width: 320)
+        .background(Theme.ink)
+        .foregroundStyle(Theme.text)
         .task { await model.refresh(); wall.refresh(); await agents.refresh() }
     }
 
@@ -96,7 +90,7 @@ struct MenuView: View {
                 ForEach(found) { a in
                     let (word, tone) = Self.agentState(a)
                     let working = agents.workingNow.filter { $0.displayAgent == LiveCoverage.title(a.name) }.count
-                    Button { openAgentControl() } label: {
+                    Button { MainNav.shared.showActivity(agent: a.name); openMain() } label: {
                         HStack(spacing: 8) {
                             Circle().fill(Theme.coverage(tone)).frame(width: 7, height: 7)
                             Text(LiveCoverage.title(a.name)).font(.system(size: 13, weight: .medium))
@@ -152,7 +146,7 @@ struct MenuView: View {
             let days = max(1, Int((Double(first.expires) - Date().timeIntervalSince1970) / 86400.0 + 0.5))
             Button {
                 agentControlOpen = "agent:" + first.agent
-                open(.agentControl)
+                MainNav.shared.page = .agents; openMain()
             } label: {
                 Text("Kai tidied up an old setting: \(name) \(ms.count == 1 ? "is" : "are") allowed for \(first.agentTitle) "
                      + "for \(days) day\(days == 1 ? "" : "s"). Review ›")
@@ -243,7 +237,7 @@ struct MenuView: View {
         }
     }
 
-    private func openAgentControl() { open(.agentControl) }
+    private func openAgentControl() { MainNav.shared.page = .agents; openMain() }
 
     /// 0.3: the header's words and colour, from measured state (LiveCoverage.headline).
     /// Red only when Kai itself is broken; a routine stop is never red.
@@ -266,42 +260,46 @@ struct MenuView: View {
     // Checking · Partly checking · Not checking, or, when Kai is broken,
     // "Kai's checks are off; its settings aren't protected" with Repair.
     private var header: some View {
-        HStack(spacing: 10) {
+        let h = HeaderState.make(model, agents)
+        let n = agents.workingNow.count
+        return HStack(alignment: .top, spacing: 10) {
             Image("KaiLogo").resizable().frame(width: 26, height: 26).accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 1) {
-                let h = status
-                let otherProblem = model.health == .problem && h.status != .broken
-                Text(otherProblem ? model.headline : h.words)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(otherProblem ? Theme.coral : Theme.coverage(h.tone))
-                    .fixedSize(horizontal: false, vertical: true)
-                if let d = otherProblem ? model.detailLine : h.detail {
-                    Text(d).font(.system(size: 11)).foregroundStyle(Theme.muted)
-                        .lineLimit(3).fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Kai · \(n) working session\(n == 1 ? "" : "s")").font(.system(size: 13, weight: .semibold))
+                HStack(spacing: 5) {
+                    Circle().fill(h.color).frame(width: 7, height: 7)
+                    Text(h.text).font(.system(size: 11)).foregroundStyle(h.tone == .ok ? Theme.muted : h.color)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                // Per-agent banners carry their own Repair; otherwise it's here.
-                if h.status == .broken && LiveCoverage.blocked(agents: agents.loaded ? agents.agents : []).isEmpty {
+                if status.status == .broken && LiveCoverage.blocked(agents: agents.loaded ? agents.agents : []).isEmpty {
                     RepairButton { Task { await model.refresh(); await agents.refresh() } }
                 }
-                if let note = model.internetUnverifiedNote(networkOn: wall.isOn) {
-                    Text(note).font(.system(size: 11)).foregroundStyle(Theme.amber)
-                }
             }
-            .layoutPriority(1)   // the status lines wrap rather than truncate
-            PreviewBadge().fixedSize()
-            if !KaiInstance.isRelease { DevBadge().fixedSize() }
+            .layoutPriority(1)
             Spacer()
             if model.busy { ProgressView().controlSize(.small) }
-            Button { open(.files) } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 15))
-                    .foregroundStyle(Theme.muted)
-                    .frame(width: 34, height: 34)
-                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border))
+            if !KaiInstance.isRelease { DevBadge().fixedSize() }
+        }
+    }
+
+    /// The latest stop, one line; it opens its decision in the Kai window.
+    @ViewBuilder private var latestStop: some View {
+        if let e = ActivityFeed.stops(model.events, workspace: nil).first {
+            Button {
+                MainNav.shared.page = .decisions
+                MainNav.shared.openDecision = e
+                openMain()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "hand.raised").font(.system(size: 11)).foregroundStyle(Theme.amber)
+                    Text("Latest stop: \(e.agentName) · \(ActivityFeed.stopItem(e, workspace: nil).detail)")
+                        .font(.system(size: 12)).foregroundStyle(Theme.soft).lineLimit(1)
+                    Spacer()
+                    if let d = e.date { Text(ago(d)).font(.system(size: 11)).foregroundStyle(Theme.muted) }
+                }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Settings")
         }
     }
 
@@ -314,13 +312,13 @@ struct MenuView: View {
             HStack {
                 CapsLabel("Recent stops")
                 Spacer()
-                Button("See all") { open(.activity) }
+                Button("See all") { MainNav.shared.page = .decisions; openMain() }
                     .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
             }
             if let b = alert {
                 BlockNotice(event: b,
                             dismiss: { withAnimation { dismissedBlock = b.id } },
-                            details: { open(.activity) })
+                            details: { MainNav.shared.page = .decisions; openMain() })
             }
             // Step 6: "N actions stopped today" opens the list (reason, command, choices).
             if model.stoppedTodayCount > 0 {
@@ -332,7 +330,7 @@ struct MenuView: View {
                     .buttonStyle(.plain)
                     .popover(isPresented: Binding(get: { openDecision == "stopped" },
                                                   set: { if !$0 { openDecision = nil } }), arrowEdge: .leading) {
-                        StoppedTodayList(grants: grantManager, open: { open(.activity) }).environmentObject(model)
+                        StoppedTodayList(grants: grantManager, open: { MainNav.shared.page = .decisions; openMain() }).environmentObject(model)
                     }
                     InfoButton(text: InfoText.actionsStopped)
                 }
@@ -371,13 +369,22 @@ struct MenuView: View {
 
     private var footer: some View {
         HStack(spacing: 14) {
-            if grantManager.pauseState(nil) == Int32(KAI_PAUSE_NONE) {
-                Button { grantManager.pauseAll(minutes: 15) } label: {
-                    Label("Pause 15 min", systemImage: "pause.circle")
-                }
-                .help("Pauses Kai's checks for 15 minutes, then they resume by themselves.")
+            Button("Ask Kai…") {
+                MainNav.shared.page = .ask
+                MainNav.shared.chatHidden = false
+                MainNav.shared.focusChat += 1
+                openMain()
             }
-            Button("Settings") { open(.files) }
+            .foregroundStyle(Theme.teal)
+            if grantManager.pauseState(nil) == Int32(KAI_PAUSE_NONE) {
+                Menu("Pause…") {
+                    Button("Pause checks for 15 minutes") { grantManager.pauseAll(minutes: 15) }
+                    Button("Pause checks for 1 hour") { grantManager.pauseAll(minutes: 60) }
+                }
+                .menuStyle(.borderlessButton).fixedSize()
+                .help("Kai's checks resume by themselves.")
+            }
+            Button("Settings") { open(.general) }
             Spacer()
             Button("Quit") { NSApp.terminate(nil) }
         }
@@ -387,8 +394,14 @@ struct MenuView: View {
         .padding(.top, 2)
     }
 
+    private func openMain() {
+        openWindow(id: "settings")
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     private func open(_ page: SettingsPage) {
         settingsPage = page.rawValue
+        MainNav.shared.page = .settings
         openWindow(id: "settings")
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -451,7 +464,7 @@ struct BlockNotice: View {
                         .first { $0.id == event.session }?.name))
                 }
                 Text((event.isPrompt ? "The prompt wasn't sent" : "The action didn't run")
-                     + (event.detail.isEmpty ? "." : ": \(event.detail)."))
+                     + (event.detail.isEmpty ? "." : ": " + event.detail.sentenceEnded))
                     .font(.system(size: 12)).foregroundStyle(Theme.soft)
                     .fixedSize(horizontal: false, vertical: true)
                 if showWhy {
@@ -603,8 +616,8 @@ struct WhiteButtonStyle: ButtonStyle {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
             .frame(maxWidth: .infinity, minHeight: 36)
-            .foregroundStyle(Theme.ink)
-            .background(.white, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .foregroundStyle(Theme.onTeal)
+            .background(Theme.teal, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .opacity(configuration.isPressed ? 0.8 : 1)
     }
 }
@@ -688,7 +701,7 @@ struct PauseControl: View {
 /// never hosts the control service, and says so.
 struct DevBadge: View {
     var body: some View {
-        Text("DEV").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.ink)
+        Text("DEV").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.onTeal)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(Theme.amber, in: Capsule())
             .help("A development copy: it doesn't run Kai's control service. The installed Kai in /Applications does.")

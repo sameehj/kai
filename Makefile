@@ -86,6 +86,7 @@ test: kai tests/cli/kai-test
 	sh tests/hooks/run_activity_tests.sh ./kai
 	sh tests/release/run_postinstall_tests.sh
 	sh tests/app/run_app_tests.sh
+	sh tests/app/run_llama_smoke.sh
 	sh tests/release/run_release_env_tests.sh
 	sh tests/release/run_sign_tests.sh
 	sh tests/release/run_release_guard_tests.sh

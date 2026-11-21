@@ -60,10 +60,12 @@ enum Snapshot {
         render(AgentReachView(agent: "claude", grants: GrantManager()).background(Theme.ink),
                width: 640, height: 900, name: "agent-claude-page")
         let saved = UserDefaults.standard.string(forKey: "settingsPage")
-        UserDefaults.standard.set(SettingsPage.agentControl.rawValue, forKey: "settingsPage")
-        render(SettingsView(), width: 1100, height: 760, name: "agent-control")
-        UserDefaults.standard.set(SettingsPage.activity.rawValue, forKey: "settingsPage")
-        render(SettingsView(), width: 1100, height: 760, name: "activity")
+        for p in [MainPage.activity, .agents, .decisions, .ask] {
+            MainNav.shared.page = p
+            render(MainWindowView(), width: 1080, height: 720, name: "window-\(p.rawValue)")
+        }
+        UserDefaults.standard.set(SettingsPage.general.rawValue, forKey: "settingsPage")
+        render(SettingsView(), width: 1100, height: 760, name: "settings-general")
         UserDefaults.standard.set(SettingsPage.internet.rawValue, forKey: "settingsPage")
         render(SettingsView(), width: 1100, height: 1100, name: "internet")
         UserDefaults.standard.set(saved, forKey: "settingsPage")

@@ -48,9 +48,17 @@ struct KaiStatus: Decodable, Equatable {
         var configured: Configured? = nil
         var observed: Observed? = nil
     }
+    /// How Kai's program is installed (0.4 header: "Kai's settings can be
+    /// changed by other programs" when the launcher's folders aren't admin-only).
+    struct Install: Decodable, Equatable {
+        var launcher: Bool? = nil
+        var rootOnly: Bool? = nil
+        var problem: String? = nil
+    }
     let version: String
     let exe: String
     let home: String
+    var install: Install? = nil
     let policy: Policy
     let claude: Agent
     let cursor: Agent

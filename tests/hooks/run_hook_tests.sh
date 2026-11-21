@@ -354,7 +354,7 @@ for v in 'api_key=os.environ[OPENAI_KEY]' 'api_key=process.env.OPENAI_API_KEY' '
   refute "mcp reference not denied: $v" claude "$(mcp_ref "$v")" '"permissionDecision":"deny"'
 done
 expect "mcp real-shaped token still denied" claude "$(mcp_ref 'token ghp_KAIFAKEhijklmnopqrstuvwxyz0123')" '"permissionDecision":"deny"'
-expect "mcp literal generic value still denied" claude "$(mcp_ref 'secret=aB3/dE5fG7hI9jK1lM3nO5pQ')" '"permissionDecision":"deny"'
+expect "mcp literal generic value still denied" claude "$(mcp_ref 'secret=KAIFAKEaB3/dE5fG7hI9jK1lM3nO5pQ')" '"permissionDecision":"deny"'
 
 echo "== audit log =="
 if [ -f "$KAI_HOME/audit.log" ]; then

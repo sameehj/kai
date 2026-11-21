@@ -35,3 +35,9 @@ diff -u /tmp/cjson/cJSON.c third_party/cjson/cJSON.c    # = kai-patches.diff
 
 CoreFoundation, Security, libcurl (the macOS SDK's), and in the app: SwiftUI, AppKit, NetworkExtension,
 EndpointSecurity, LocalAuthentication. Versions are those of the toolchain in the release notes.
+
+## llama.cpp (Kai.app, optional local phraser)
+
+- Source: https://github.com/ggml-org/llama.cpp, release `b12182` (prebuilt `llama.xcframework`, pinned by URL and checksum in `app/macos/Packages/LlamaBinary/Package.swift`).
+- License: MIT.
+- Models are not bundled; the default (Qwen3.5-0.8B GGUF, Apache-2.0) is downloaded only after the user agrees.

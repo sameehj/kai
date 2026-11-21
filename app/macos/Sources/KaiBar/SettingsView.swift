@@ -3,25 +3,24 @@ import AppKit
 import SwiftUI
 import KaiCore
 
-/// Phase B item 10: Agent Control (the main page) and Activity, then four
-/// settings pages named for what they protect - Files, Internet - and
+/// 0.4: the Settings page of the Kai window: General (activity recording, Ask
+/// Kai's model), the pages named for what they protect - Files, Internet - and
 /// Advanced for everything technical.
 enum SettingsPage: String, CaseIterable, Identifiable {
-    case agentControl, activity, files, internet, advanced, uninstall
+    case general, files, internet, advanced, uninstall
     var id: String { rawValue }
-    /// A page saved by an older Kai ("storage", "network", "general", ...).
+    /// A page saved by an older Kai ("storage", "network", "agentControl", ...).
     init(stored raw: String) {
         switch raw {
         case "storage": self = .files
         case "network": self = .internet
-        case "general", "protection", "permissions", "company": self = .advanced
-        default: self = SettingsPage(rawValue: raw) ?? .agentControl
+        case "protection", "permissions", "company": self = .advanced
+        default: self = SettingsPage(rawValue: raw) ?? .general
         }
     }
     var title: String {
         switch self {
-        case .agentControl: return "Agent Control"
-        case .activity: return "Activity"
+        case .general: return "General"
         case .files: return "Files"
         case .internet: return "Internet"
         case .advanced: return "Advanced"
@@ -30,8 +29,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     }
     var icon: String {
         switch self {
-        case .agentControl: return "person.2.gobackward"
-        case .activity: return "waveform.path.ecg"
+        case .general: return "gearshape"
         case .files: return "folder"
         case .internet: return "globe"
         case .advanced: return "slider.horizontal.3"
@@ -40,90 +38,38 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     }
 }
 
+/// 0.4: Settings is a page of the Kai window (pinned at the bottom of its
+/// sidebar), with its own sub-pages along the top.
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var wall: NetworkWall
     @EnvironmentObject var storage: StorageWall
-    @AppStorage("settingsPage") private var pageRaw = SettingsPage.agentControl.rawValue
+    @AppStorage("settingsPage") private var pageRaw = SettingsPage.general.rawValue
     private var page: SettingsPage { SettingsPage(stored: pageRaw) }
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-            VStack(alignment: .leading, spacing: 0) {
-                if let msg = model.errorMessage {
-                    ErrorBanner(message: msg) { model.errorMessage = nil }.padding([.horizontal, .top], 24)
-                }
-                ScrollView {
-                    content.padding(28).frame(maxWidth: .infinity, alignment: .leading)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            Picker("", selection: Binding(get: { page }, set: { pageRaw = $0.rawValue })) {
+                ForEach(SettingsPage.allCases) { p in Text(p.title).tag(p) }
             }
-            .background(
-                ZStack {
-                    Theme.ink
-                    RadialGradient(colors: [Theme.lime.opacity(0.08), .clear], center: .topTrailing,
-                                   startRadius: 0, endRadius: 420)
-                }
-            )
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 520)
+            .padding(.horizontal, 28).padding(.top, 20)
+            if let msg = model.errorMessage {
+                ErrorBanner(message: msg) { model.errorMessage = nil }.padding([.horizontal, .top], 24)
+            }
+            ScrollView {
+                content.padding(28).frame(maxWidth: 860, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
         }
-        .frame(width: 980, height: 640)
-        .environment(\.colorScheme, .dark)
-        .foregroundStyle(Color.white)
-        .preferredColorScheme(.dark)
         .task { await model.refresh() }
-    }
-
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 10) {
-                Image("KaiLogo").resizable().frame(width: 30, height: 30).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack(spacing: 6) {
-                        Text("Kai").font(Theme.display(16))
-                        PreviewBadge()
-                        if !KaiInstance.isRelease { DevBadge() }
-                    }
-                    // Item 4: observed enforcement only, never a blanket "All
-                    // protected" from agent-hook state.
-                    Text(model.health == .problem ? model.headline
-                         : model.headline(AgentsModel.shared).words)
-                        .font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(1)
-                    if !StorageWall.included {
-                        Text(ProtectionText.filesNotIncluded).font(.system(size: 11)).foregroundStyle(Theme.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-            .padding(.horizontal, 8).padding(.bottom, 18).padding(.top, 8)
-            ForEach(SettingsPage.allCases) { p in
-                if p == .files { CapsLabel("Settings").padding(.horizontal, 10).padding(.top, 14).padding(.bottom, 2) }
-                Button { pageRaw = p.rawValue } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: p.icon).frame(width: 18)
-                        Text(p.title)
-                        Spacer()
-                    }
-                    .font(.system(size: 13, weight: p == page ? .semibold : .regular))
-                    .foregroundStyle(p == page ? Theme.ink : Theme.soft)
-                    .padding(.horizontal, 10).frame(height: 34)
-                    .background(p == page ? Theme.lime : .clear, in: RoundedRectangle(cornerRadius: 9))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(p == page ? .isSelected : [])
-            }
-            Spacer()
-        }
-        .padding(12)
-        .frame(width: 220)
-        .background(Theme.sidebar)
-        .overlay(alignment: .trailing) { Rectangle().fill(Color(hex: 0x23252B)).frame(width: 1) }
     }
 
     @ViewBuilder private var content: some View {
         switch page {
-        case .agentControl: AgentControlPage()
-        case .activity: ActivityPage()
+        case .general: KaiGeneralSettings()
         case .files: VStack(alignment: .leading, spacing: 18) { StoragePage(); FilesPage() }
         case .internet: NetworkPage()
         case .advanced: AdvancedPage()
@@ -168,7 +114,7 @@ private struct ChoiceCards: View {
                 let on = o.value == selected
                 Button { pick(o.value) } label: {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(o.title).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                        Text(o.title).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
                         Text(o.help).font(.system(size: 11)).foregroundStyle(Theme.muted)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -836,114 +782,6 @@ private struct AdvancedPage: View {
 // Item 3: Agent Control — the sessions list + per-session detail (grant, revoke,
 // pause), as the first Settings page. Reuses the session views from the Agents
 // window; data from `kai sessions`/`kai agents` (works with the storage wall off).
-private struct AgentControlPage: View {
-    @ObservedObject private var model = AgentsModel.shared   // cached: renders at once
-    @StateObject private var grants = GrantManager()
-    @State private var selected: String?
-    @State private var showEnded = false
-    @AppStorage("agentControlOpen") private var openRequest = ""
-
-    /// Working now, then idle; ended sessions live in their own collapsed group.
-    private var sorted: [SessionRow] { model.workingNow + model.idle }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            PageHeader(icon: "person.2.gobackward", title: "Agent Control",
-                       subtitle: "Every agent session Kai sees, with its permissions. Revoke one without touching the others.")
-            Card(padding: 14) { LiveCoverageList() }
-            // A plain HStack (not a nested split view, which collapsed inside the
-            // Settings window's own split): a fixed-width list + a detail, both
-            // filling the height.
-            HStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 0) {
-                    if !model.loaded {
-                        // cold start: placeholders until the first refresh lands
-                        VStack(alignment: .leading, spacing: 10) {
-                            ForEach(0..<3, id: \.self) { _ in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Claude Code · project").font(.system(size: 13))
-                                    Text("ttys000 · active 1m ago").font(.caption)
-                                }.redacted(reason: .placeholder)
-                            }
-                        }.padding(10)
-                    } else if sorted.isEmpty && model.endedToday.isEmpty {
-                        Text("No agent sessions right now.").font(.system(size: 13))
-                            .foregroundStyle(Theme.muted).padding(10)
-                    }
-                    List(selection: $selected) {
-                        Section(header: CapsLabel("What each agent can reach")) {
-                            ForEach([("claude", "Claude Code"), ("codex", "Codex"), ("cursor", "Cursor")], id: \.0) { a in
-                                Text(a.1).font(.system(size: 13)).tag("agent:" + a.0)
-                            }
-                        }
-                        if !model.workingNow.isEmpty {
-                            Section {
-                                ForEach(model.workingNow) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
-                            } header: { InfoHeading(title: "Working now", info: InfoText.workingNow) }
-                        }
-                        if !model.idle.isEmpty {
-                            Section {
-                                ForEach(model.idle) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
-                            } header: { InfoHeading(title: "Idle", info: InfoText.idle) }
-                        }
-                        if !model.endedToday.isEmpty {
-                            Section {
-                                DisclosureGroup("\(model.endedToday.count) ended today", isExpanded: $showEnded) {
-                                    ForEach(model.endedToday) { s in SessionRowView(session: s, needsYou: false).tag(s.id) }
-                                }
-                            } header: { InfoHeading(title: "Ended", info: InfoText.ended) }
-                        }
-                        if !model.backgroundServices.isEmpty {
-                            Section("Background services") {
-                                ForEach(model.backgroundServices) { b in
-                                    Text("\(b.displayAgent) — \(b.projectName)")
-                                        .font(.caption).foregroundStyle(Theme.muted)
-                                }
-                            }
-                        }
-                    }
-                    .frame(maxHeight: .infinity)
-                }
-                .frame(width: 300)
-                Divider()
-                Group {
-                    if let id = selected, id.hasPrefix("agent:") {
-                        AgentReachView(agent: String(id.dropFirst(6)), grants: grants)
-                    } else if let id = selected, let s = model.sessions.first(where: { $0.id == id }) {
-                        SessionDetail(session: s, grants: grants)
-                    } else {
-                        VStack { Spacer(); Text("Select a session or an agent").foregroundStyle(Theme.muted); Spacer() }
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            // The Settings window wraps pages in a ScrollView, where "fill the
-            // height" collapses to the minimum: give the list + detail a real
-            // height (the window is 640 tall).
-            .frame(maxWidth: .infinity, minHeight: 470, maxHeight: .infinity)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear { if !openRequest.isEmpty { selected = openRequest; openRequest = "" } }
-        .onChange(of: openRequest) { r in if !r.isEmpty { selected = r; openRequest = "" } }
-        // The data is cached (shared store), so it may not CHANGE when the page
-        // opens: pick a session on appear too, not only on a change.
-        .onAppear { selectDefault() }
-        .task { await model.refresh(); selectDefault() }
-        .onChange(of: model.sessions) { _ in selectDefault() }
-        .onChange(of: model.loaded) { _ in selectDefault() }
-    }
-
-    /// Select the first session once data arrives, so the detail isn't empty.
-    private func selectDefault() {
-        if selected == nil || !model.sessions.contains(where: { $0.id == selected }) {
-            selected = sorted.first?.id
-        }
-    }
-}
-
-// S7: every active grant across sessions/projects, plus the recent lifecycle
-// history (granted / used / expired / revoked) from the audit log. Grants are
-// created only from Kai; this page can revoke them.
 private struct PermissionsPage: View {
     @EnvironmentObject var model: AppModel
     @StateObject private var grants = GrantManager()
@@ -1060,79 +898,6 @@ private struct PermissionsPage: View {
     }
 }
 
-private struct ActivityPage: View {
-    @EnvironmentObject var model: AppModel
-    @StateObject private var grants = GrantManager()
-    @State private var verifyResult: String?
-    @AppStorage("activityFilter") private var filter = "all"
-    @State private var expanded: Set<String> = []
-
-    private var shown: [AuditEvent] {
-        model.events.filter { e in
-            guard !e.isNote else { return false } // shown under their block
-            if e.isGrant && e.event == "requested" { return false } // one row per block, not two
-            switch filter {
-            case "agents": return !e.isNetwork
-            case "network": return e.isNetwork
-            default: return true
-            }
-        }
-    }
-
-    /// Identical decisions (same who, what, rule and target) collapse into ONE
-    /// row with a count - a component retrying the same blocked open becomes
-    /// "×956", not 956 rows. The newest one represents the group.
-    private var grouped: [(event: AuditEvent, count: Int)] {
-        var order: [String] = []
-        var groups: [String: (event: AuditEvent, count: Int)] = [:]
-        for e in shown {
-            let k = e.mergeKey   // step 5: one grant record per agent and target
-            if let g = groups[k] { groups[k] = (g.event, g.count + 1) }
-            else { groups[k] = (e, 1); order.append(k) }
-        }
-        return order.compactMap { groups[$0] }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            PageHeader(icon: "waveform.path.ecg", title: "Activity",
-                       subtitle: "What Kai blocked, cleaned or noticed, what it was, and what the agent did next. Secrets are never stored.")
-            Text(model.weeklyLine).font(.system(size: 12)).foregroundStyle(Theme.muted)
-                .fixedSize(horizontal: false, vertical: true)
-            if let n = model.notice {
-                Card(padding: 12, stroke: Color(hex: 0x3A4420)) {
-                    HStack {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.lime)
-                        Text(n).font(.system(size: 13))
-                        Spacer()
-                        Button { model.notice = nil } label: { Image(systemName: "xmark") }
-                            .buttonStyle(.plain).foregroundStyle(Theme.muted).accessibilityLabel("Dismiss")
-                    }
-                }
-            }
-            Picker("Show", selection: $filter) {
-                Text("Everything").tag("all")
-                Text("Agent actions").tag("agents")
-                Text("Network").tag("network")
-            }
-            .pickerStyle(.segmented).labelsHidden().frame(width: 360)
-            if shown.isEmpty {
-                Text(filter == "network" ? "No connections noticed yet." : "No blocks, warnings or noticed hosts yet.")
-                    .font(.system(size: 13)).foregroundStyle(Theme.muted)
-            }
-            ForEach(grouped.prefix(150), id: \.event.id) { g in
-                let e = g.event
-                ActivityRow(event: e, followUp: model.followUp(for: e), expanded: expanded.contains(e.id),
-                            count: g.count, grants: grants) {
-                    if expanded.contains(e.id) { expanded.remove(e.id) } else { expanded.insert(e.id) }
-                }
-            }
-        }
-    }
-}
-
-/// One decision: what it was about, why, and what the agent did next.
-/// Click to open the details and "Not a threat".
 private struct ActivityRow: View {
     @EnvironmentObject var model: AppModel
     let event: AuditEvent
