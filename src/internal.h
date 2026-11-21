@@ -177,6 +177,7 @@ struct kai_policy {
     } exempt[KAI_MAX_LIST];
     int nexempt;
     int audit_context;
+    int record_activity;   /* 0.4: opt-in activity recorder (record_activity on|off), off by default */
 };
 
 /* ---- process inspection (proc.c) ---- */
@@ -202,6 +203,14 @@ int kai_hook_recheck_command(const kai_policy *p, const char *agent, const char 
 /* Phase 5: kai not-right / kai stats (stats.c). */
 int kai_cmd_not_right(int argc, char **argv);
 int kai_cmd_why_decision(int argc, char **argv);
+/* 0.4 activity recorder (activity.c): one metadata line per hook call when
+ * `record_activity on`. Never arguments, contents or full commands. */
+int kai_policy_record_activity(const kai_policy *p);
+void kai_activity_record(const kai_policy *p, const char *agent, const char *session, const char *cwd,
+                         const char *tool, const char *op, const char *path, const char *cmd,
+                         const char *mcp_server, const char *decision);
+void kai_activity_cmd0(const char *cmd, char *out, size_t n);
+int kai_cmd_activity(int argc, char **argv);
 int kai_cmd_stats(int argc, char **argv);
 
 /* S7: blank Kai's canonical fake test tokens in a file's text (scan.c). */

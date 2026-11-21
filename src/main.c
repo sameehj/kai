@@ -215,6 +215,7 @@ static void usage(void) {
         "  kai not-right <decision-id>       mark a stop as wrong (counted by kai stats)\n"
         "  kai stats --export [--days N]     local counts for the tester study; nothing is sent\n"
         "  kai policy [show|set|add|remove]  view or change the policy safely\n"
+        "  kai activity --json [--since 24h] [--workspace PATH]  what the opt-in recorder saw, grouped\n"
         "  kai allow-file <path> --read|--write --agent A [--for 1h]\n"
         "  kai allow-fetch <domain> --agent claude [--for 1h]\n"
         "  kai allow-mcp <server> [<tool>] --agent A [--for 1h]   (default: until kai undo)\n"
@@ -247,6 +248,7 @@ int main(int argc, char **argv) {
     if (strcmp(cmd, "status") == 0)
         return (rest > 0 && strcmp(restv[0], "--json") == 0) ? kai_cmd_status_json() : kai_cmd_status_text();
     if (strcmp(cmd, "policy") == 0) return kai_cmd_policy(rest, restv);
+    if (strcmp(cmd, "activity") == 0) return kai_cmd_activity(rest, restv);
     if (strcmp(cmd, "gateway") == 0) return cmd_gateway(rest, restv);
     if (strcmp(cmd, "agent-of") == 0) return cmd_agent_of(rest, restv);
     if (strcmp(cmd, "sni") == 0) return cmd_sni();

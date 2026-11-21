@@ -123,6 +123,50 @@ char *kai_redact_for_log(const kai_policy *p, const char *text) {
  * separator: it must be long enough, varied enough (Shannon entropy), mix
  * character kinds, and not be a known placeholder. (Examples live in
  * tests/run_tests.c, which the self-scan skips.) */
+/* A value that names where a secret lives is not the secret: an environment
+ * lookup (os.environ[...], process.env.X, ENV[...], getenv(...)), a template
+ * or shell variable (${X}, {{x}}, $X) or a file path ("/etc/app/key.pem",
+ * "./certs/server.crt", "config/creds.json"). MCP arguments and code carry
+ * these all the time; flagging them stopped work for nothing. */
+static int kai_value_is_reference(const char *v, size_t n) {
+    while (n && (*v == '"' || *v == '\'' || *v == '`')) { v++; n--; }
+    while (n && strchr("\"'`,;", v[n - 1])) n--;
+    if (!n) return 0;
+    char low[256];
+    size_t ln = n < sizeof low - 1 ? n : sizeof low - 1;
+    for (size_t k = 0; k < ln; k++) low[k] = (char)tolower((unsigned char)v[k]);
+    low[ln] = '\0';
+    static const char *const REFS[] = {"os.environ", "process.env", "env[", "getenv(", "${", "{{",
+                                       "os.getenv", "system.getenv", "environment.getenvironmentvariable"};
+    for (size_t k = 0; k < sizeof REFS / sizeof REFS[0]; k++)
+        if (strstr(low, REFS[k])) return 1;
+    if (v[0] == '$' && n > 1 && (isalpha((unsigned char)v[1]) || v[1] == '_' || v[1] == '{')) return 1;
+    /* a path: rooted, home- or dot-relative, or slash-separated words ending in a file extension */
+    if (v[0] == '/' || !strncmp(v, "~/", 2) || !strncmp(v, "./", 2) || !strncmp(v, "../", 3)) {
+        for (size_t k = 0; k < n; k++)
+            if (!(isalnum((unsigned char)v[k]) || strchr("/._-~@+", v[k]))) return 0;
+        return 1;
+    }
+    static const char *const EXTS[] = {".pem", ".key", ".crt", ".json", ".p12", ".pfx", ".cer", ".der",
+                                       ".yaml", ".yml", ".toml", ".env", ".txt", ".cfg", ".conf", ".ini"};
+    int has_slash = 0, pathchars = 1;
+    for (size_t k = 0; k < n; k++) {
+        if (v[k] == '/') has_slash = 1;
+        if (!(isalnum((unsigned char)v[k]) || strchr("/._-", v[k]))) pathchars = 0;
+    }
+    for (size_t k = 0; k < sizeof EXTS / sizeof EXTS[0]; k++) {
+        size_t el = strlen(EXTS[k]);
+        if (ln > el && !strcmp(low + ln - el, EXTS[k]) && pathchars) {
+            /* key.pem with a slash, or a bare file name made of plain words */
+            if (has_slash) return 1;
+            int words = 1;
+            for (size_t m = 0; m + el < ln && words; m++) words = islower((unsigned char)low[m]) || strchr("._-", low[m]);
+            if (words) return 1;
+        }
+    }
+    return 0;
+}
+
 int kai_plausible_secret_value(const char *match, size_t len) {
     /* skip the key name, then the separator run ("= : ' \"") */
     size_t i = 0;
@@ -132,6 +176,7 @@ int kai_plausible_secret_value(const char *match, size_t len) {
     size_t n = len - i;
     while (n && strchr(".,;:!?)]}*_`", v[n - 1])) n--; /* sentence / markdown punctuation */
     if (n < 8) return 0;
+    if (kai_value_is_reference(v, n)) return 0;
     /* a plain lowercase word ("detectors", "itself") is prose, not a key */
     int word = 1;
     for (size_t k = 0; k < n && word; k++) word = islower((unsigned char)v[k]) || v[k] == '-';
@@ -203,6 +248,7 @@ int kai_plausible_password_value(const char *match, size_t len) {
     size_t n = len - i;
     while (n && strchr(".,;:!?)]}*_`", v[n - 1])) n--;
     if (n < 6) return 0;
+    if (kai_value_is_reference(v, n)) return 0;
     if (!quoted) {
         /* "==" / "=>" / ":=": a comparison or an arrow, not a value */
         if (v[0] == '=' || v[0] == '>') return 0;

@@ -60,7 +60,8 @@ mcp='{"hook_event_name":"PreToolUse","tool_name":"mcp__notion__create_page","ses
 fetch='{"hook_event_name":"PreToolUse","tool_name":"WebFetch","session_id":"g","tool_input":{"url":"https://docs.example.org/a","prompt":"x"},"cwd":"'"$G"'"}'
 
 o=$(hk claude "$rd")
-has "a stopped .env read: what, why, and the exact command" "$o" "kai allow-file ~/proj/.env --read --agent claude --for 1h"
+has "a stopped .env read: what and why, in one sentence" "$o" "Kai stopped reading \`~/proj/.env\`: it usually holds passwords and keys."
+hasnt "...with no terminal allow-file instruction for the agent (0.4)" "$o" "kai allow-file"
 has "...in Kai's own words" "$o" "Kai stopped reading"
 hasnt "Preview 1 never says blocked" "$o" "Blocked by Kai"
 o=$(k allow-file .env --read --agent claude --for 1h)
@@ -272,11 +273,11 @@ echo "== tell the agent why (NEVER-RERUN fix 5) =="
 WH="$TMP/why"; mkdir -p "$WH/.claude" "$WH/.codex" "$WH/.kai" "$WH/proj"; printf 'A=1\n' > "$WH/proj/.env"
 wy() { printf '%s' "$2" | HOME="$WH" KAI_HOME="$WH/.kai" KAI_NO_APP=1 "$KAI" hook "$1"; }
 o=$(wy claude '{"hook_event_name":"PreToolUse","tool_name":"Read","session_id":"w","tool_input":{"file_path":"'"$WH"'/proj/.env"},"cwd":"'"$WH"'/proj"}')
-has "Claude Code deny tells the agent not to work around it" "$o" "Don't retry another way; ask the user."
+has "Claude Code deny tells the agent not to work around it" "$o" "Ask the user if this is needed."
 o=$(wy codex '{"hook_event_name":"PreToolUse","tool_name":"shell","session_id":"w","tool_input":{"command":["bash","-lc","cat .env"]},"cwd":"'"$WH"'/proj"}')
-has "Codex deny too" "$o" "Don't retry another way; ask the user."
+has "Codex deny too" "$o" "Ask the user if this is needed."
 o=$(wy cursor '{"hook_event_name":"beforeShellExecution","command":"cat '"$WH"'/proj/.env","workspace_roots":["'"$WH"'/proj"]}')
-has "Cursor's agent_message too" "$o" "Don't retry another way; ask the user."
+has "Cursor's agent_message too" "$o" "Ask the user if this is needed."
 printf '# my own notes\nkeep this line\n' > "$WH/.claude/CLAUDE.md"
 HOME="$WH" KAI_HOME="$WH/.kai" "$KAI" install claude >/dev/null 2>&1
 HOME="$WH" KAI_HOME="$WH/.kai" "$KAI" install claude >/dev/null 2>&1
@@ -343,7 +344,7 @@ o=$(dk claude '{"hook_event_name":"PreToolUse","tool_name":"Bash","session_id":"
 id=$(printf '%s' "$o" | grep -o 'Kai decision k-[0-9a-f]\{8\}' | head -1 | sed 's/Kai decision //')
 [ -n "$id" ] && pass "a Claude Code denial names its decision ID ($id)" || fail "no decision ID in the denial: $o"
 has "...with the reason" "$o" "Kai stopped a command that uses"
-has "...and the recovery" "$o" "ask the user"
+has "...and the recovery" "$o" "Ask the user"
 has "...and where the user sees it" "$o" "Kai → Activity"
 grep -q "\"decision_id\":\"$id\"" "$DH/.kai/audit.log" 2>/dev/null && pass "...the same ID is on the audit record (Activity)" || fail "decision ID $id not in the audit log"
 o=$(dk codex '{"hook_event_name":"PreToolUse","tool_name":"shell","session_id":"d","tool_input":{"command":["bash","-lc","cat .env"]},"cwd":"'"$DH"'/proj"}')

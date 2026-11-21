@@ -345,6 +345,17 @@ if grep -q 'ghp_KAIFAKEhijklmnop' "$rpath"; then fail "report contains the secre
 case "$rep" in *'"issue_url":"https://github.com/sameehj/kai/issues/new?'*) pass "report gives an issue link" ;; *) fail "report: $rep" ;; esac
 if "$KAI" report 0000000000 >/dev/null 2>&1; then fail "report of unknown id should fail"; else pass "unknown id is an error"; fi
 
+echo "== MCP arguments: references and paths are not secrets (0.4) =="
+mcp_ref() { printf '{"hook_event_name":"PreToolUse","cwd":"/tmp/proj","tool_name":"mcp__srv__send","tool_input":{"text":"%s"}}' "$1"; }
+for v in 'api_key=os.environ[OPENAI_KEY]' 'api_key=process.env.OPENAI_API_KEY' 'secret=ENV[SECRET_X1]' \
+         'api_key=getenv(KEY_A1)' 'api_key=${OPENAI_API_KEY}' 'secret={{vault.Key1}}' 'api_key=$OPENAI_API_KEY' \
+         'private_key=/etc/ssl/private/server.pem' 'private_key=certs/Server01.key' 'secret=config/gcp-Creds2.json' \
+         'password=./secrets/db_pass.txt' 'password=process.env.DB_PASS1'; do
+  refute "mcp reference not denied: $v" claude "$(mcp_ref "$v")" '"permissionDecision":"deny"'
+done
+expect "mcp real-shaped token still denied" claude "$(mcp_ref 'token ghp_KAIFAKEhijklmnopqrstuvwxyz0123')" '"permissionDecision":"deny"'
+expect "mcp literal generic value still denied" claude "$(mcp_ref 'secret=aB3/dE5fG7hI9jK1lM3nO5pQ')" '"permissionDecision":"deny"'
+
 echo "== audit log =="
 if [ -f "$KAI_HOME/audit.log" ]; then
   if "$KAI" log verify >/dev/null 2>&1; then pass "audit chain verifies"; else fail "audit chain broken"; fi
