@@ -42,12 +42,16 @@ final class LlamaPhraser: AskPhraser, @unchecked Sendable {
         self.store = store
     }
 
-    /// A specific GGUF file (tests, $KAI_LLAMA_MODEL). Not hash-checked here.
+    #if DEBUG
+    /// A specific GGUF file (tests, $KAI_LLAMA_MODEL). Not hash-checked here,
+    /// so debug builds only: a release build loads only hash-verified catalog
+    /// models.
     init(modelFile: URL) {
         self.model = nil
         self.explicitFile = modelFile
         self.store = .shared
     }
+    #endif
 
     deinit {
         let m = llmModel, c = ctx
@@ -60,9 +64,11 @@ final class LlamaPhraser: AskPhraser, @unchecked Sendable {
     }
 
     private var resolvedFile: URL? {
+        #if DEBUG
         if let explicitFile {
             return FileManager.default.isReadableFile(atPath: explicitFile.path) ? explicitFile : nil
         }
+        #endif
         guard let model else { return nil }
         return store.installedURL(for: model)
     }
@@ -256,7 +262,9 @@ final class LlamaPhraser: AskPhraser {
     var kind: PhraserKind { .local }
     var isAvailable: Bool { false }
     init(model: LocalModel = ModelStore.defaultModel, store: ModelStore = .shared) {}
+    #if DEBUG
     init(modelFile: URL) {}
+    #endif
     func phrase(_ prompt: PhrasePrompt) async throws -> String { throw PhraserError.unavailable }
     func smokeTest(tokens: Int = 8) throws -> String { throw PhraserError.unavailable }
 }

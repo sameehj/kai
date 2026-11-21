@@ -95,6 +95,8 @@ struct SessionRow: Decodable, Identifiable, Equatable {
         }
     }
     var workspaces: [Workspace]? = nil
+    /// 0.5: the keys this session's activity lines carry (kai activity "sessions").
+    var activityKeys: [String] = []
     /// Step 6: the name every list shows, set by `assignNames` (unique).
     var name: String = ""
 
@@ -102,7 +104,7 @@ struct SessionRow: Decodable, Identifiable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id, agent, topic, topicReportedByAgent, project, hostApp, startedUtc, endedUtc, childCount,
-             source, kind, tty, enforcement, state, activity, lastActiveUtc, workspaces
+             source, kind, tty, enforcement, state, activity, lastActiveUtc, workspaces, activityKeys
     }
     init(id: String, agent: String) { self.id = id; self.agent = agent }
     init(from decoder: Decoder) throws {
@@ -125,6 +127,7 @@ struct SessionRow: Decodable, Identifiable, Equatable {
         lastActiveUtc = c.value(.lastActiveUtc, 0)
         // a workspace list that doesn't decode keeps the row (as an app with unknown workspaces)
         workspaces = (try? c.decodeIfPresent(LossyList<Workspace>.self, forKey: .workspaces))??.items
+        activityKeys = c.value(.activityKeys, [String]())
     }
 
     /// Only an explicit "ended" is ended: an unknown state stays listed (as unknown).

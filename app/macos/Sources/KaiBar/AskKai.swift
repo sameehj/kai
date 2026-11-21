@@ -24,6 +24,13 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     var date = Date()
     /// 0.4.1: suggested questions (chips). Optional: older chats lack it.
     var suggestions: [String]? = nil
+    /// 0.5: coverage limits, rendered by Kai under the answer (never by a model).
+    var limits: [String]? = nil
+
+    /// The deterministic footer: limits, then "Based on" (and who worded it).
+    var footer: [String] {
+        (limits ?? []) + (basedOn.map { ["Based on: \($0)" + (phrasedBy.map { " · worded by \($0)" } ?? "")] } ?? [])
+    }
 }
 
 struct ChatThread: Codable, Identifiable, Equatable {
@@ -169,9 +176,10 @@ final class AskController: ObservableObject {
     }
     var usingModel: Bool { sourceTitle != "Templates" }
 
-    /// A short message from Kai in the current chat (an action's result).
+    /// A short message from Kai in the current chat (an action's result);
+    /// starts a chat when there is none.
     func note(_ text: String) {
-        guard var t = current else { return }
+        var t = current ?? ChatThread(workspace: nil, title: String(text.prefix(48)))
         t.messages.append(ChatMessage(role: .kai, text: text))
         t.updated = Date()
         upsert(t)
@@ -202,6 +210,7 @@ final class AskController: ObservableObject {
             if let id = s.decision_id, ctx.why[id] == nil, let w = await KaiRecords.shared.why(id) { ctx.why[id] = w }
         }
         if let id = ctx.focus?.decisionID, ctx.why[id] == nil, let w = await KaiRecords.shared.why(id) { ctx.why[id] = w }
+        if ctx.session != nil && !t.title.hasPrefix("About ") { t.title = "About \(ctx.session!.agentTitle) · \(ctx.session!.project)" }
         let phraser = Phrasers.make(kind)
         let modelOn = phraser.kind != .templates && phraser.isAvailable
         let warmKey = phraser.kind.rawValue + Phrasers.localName()
@@ -209,17 +218,21 @@ final class AskController: ObservableObject {
         // Model routing: only for a question the table didn't match, only the
         // question text, only a label from the fixed list. The answer is still
         // built from records. Skipped while the model is still loading.
-        if intent == .unknown, ctx.focus == nil, modelOn, warm.contains(warmKey),
+        if intent == .unknown, ctx.focus == nil, ctx.session == nil, modelOn, warm.contains(warmKey),
            let reply = try? await phraser.phrase(PhrasePrompts.classify(question: q)) {
             intent = PhrasePrompts.intent(fromModel: reply, question: q)
         }
         let a = AskEngine.answer(q, ctx, intent: intent)
+        // The limits and "Based on" are Kai's own footer: the model never sees
+        // them (PhrasePrompts.make gets a.text only), so it can't drop them.
         let msg = ChatMessage(role: .kai, text: a.display, basedOn: a.basedOn, actions: a.actions,
-                              suggestions: a.suggestions.isEmpty ? nil : a.suggestions)
+                              suggestions: a.suggestions.isEmpty ? nil : a.suggestions,
+                              limits: a.limits.isEmpty ? nil : a.limits.map(AskAnswer.untag))
         t.messages.append(msg)
         t.updated = Date()
         upsert(t)
         MainNav.shared.askContext = nil
+        MainNav.shared.askSession = nil
         // The template answer shows at once; a model's rewording replaces it
         // when it arrives and keeps every number (Phrasers.accept).
         guard modelOn, a.intent != .outOfScope, a.intent != .unknown else { return }
@@ -255,28 +268,31 @@ struct ChatDock: View {
     @State private var text = ""
     @FocusState private var focused: Bool
 
+    private var placeholder: String {
+        if let s = nav.askSession { return "Ask about this \(s.agentTitle) session…" }
+        if nav.askContext != nil { return "Ask about this record…" }
+        return "Ask about activity, agents or decisions…"
+    }
+
     var body: some View {
         VStack(spacing: 6) {
-            if let c = nav.askContext {
-                HStack(spacing: 6) {
-                    Image(systemName: "paperclip").foregroundStyle(Theme.purple)
-                    Text("About: \(c.title) · \(c.agent)").font(.system(size: 11.5)).lineLimit(1)
-                    Button { nav.askContext = nil } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.borderless).foregroundStyle(Theme.muted)
-                    Spacer()
+            if let s = nav.askSession {
+                contextChip(agent: s.agent, text: "About: \(s.agentTitle) · \(s.project)" + (s.tab.isEmpty ? "" : " · \(s.tab)")) {
+                    nav.askSession = nil
                 }
-                .frame(maxWidth: 815)
+            } else if let c = nav.askContext {
+                contextChip(agent: c.agentKey, text: "About: \(c.title) · \(c.agent)") { nav.askContext = nil }
             }
             HStack(spacing: 9) {
                 Text("Ask Kai").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.purple)
-                TextField(nav.askContext == nil ? "Ask about activity, agents or decisions…" : "Ask about this record…",
-                          text: $text)
+                TextField(placeholder, text: $text)
                     .textFieldStyle(.plain)
                     .focused($focused)
                     .onSubmit(send)
                 if ask.thinking { ProgressView().controlSize(.small) }
+                ModelChooser(style: .chip)
                 Button("Ask", action: send).buttonStyle(LimeButtonStyle())
-                    .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty && nav.askContext == nil)
+                    .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty && nav.askContext == nil && nav.askSession == nil)
             }
             .padding(.leading, 15).padding(.trailing, 6).padding(.vertical, 5)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -292,9 +308,21 @@ struct ChatDock: View {
         .onAppear { if nav.focusChat > 0 { focused = true } }
     }
 
+    private func contextChip(agent: String, text: String, clear: @escaping () -> Void) -> some View {
+        HStack(spacing: 6) {
+            if agent.isEmpty { Image(systemName: "paperclip").foregroundStyle(Theme.muted) }
+            else { AgentLogo(agent: agent, size: 16) }
+            Text(text).font(.system(size: 11.5)).lineLimit(1)
+            Button(action: clear) { Image(systemName: "xmark.circle.fill") }
+                .buttonStyle(.borderless).foregroundStyle(Theme.muted)
+            Spacer()
+        }
+        .frame(maxWidth: 815)
+    }
+
     private func send() {
         var q = text.trimmingCharacters(in: .whitespaces)
-        if q.isEmpty, nav.askContext != nil { q = "Explain this" }
+        if q.isEmpty, nav.askContext != nil || nav.askSession != nil { q = "Explain this" }
         guard !q.isEmpty else { return }
         text = ""
         nav.page = .ask
@@ -311,17 +339,13 @@ struct AskKaiPage: View {
     @EnvironmentObject var wall: NetworkWall
     @ObservedObject private var ask = AskController.shared
     @ObservedObject private var nav = MainNav.shared
-    @ObservedObject private var downloads = ModelDownloads.shared
-    @AppStorage("askModelCardDismissed") private var cardDismissed = false
-    @State private var consent: LocalModel?
-
     var body: some View {
         HStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        sourceBar
-                        if !ask.usingModel && !cardDismissed && downloads.progress == nil { modelCard }
+                        header
+                        ModelFirstRunCard()
                         if let t = ask.current, !t.messages.isEmpty {
                             ForEach(t.messages) { m in bubble(m).id(m.id) }
                         } else {
@@ -339,52 +363,18 @@ struct AskKaiPage: View {
             Divider()
             chats.frame(width: 210)
         }
-        .sheet(item: $consent) { m in
-            ModelConsentSheet(model: m, onCancel: { consent = nil }, onDownload: {
-                consent = nil
-                downloads.start(m) { ok in if ok { ask.modelRaw = PhraserKind.local.rawValue } }
-            })
-        }
     }
 
-    /// Where answers come from, and the way to a better one (with consent).
-    private var sourceBar: some View {
-        HStack(spacing: 8) {
-            Text("Answers: \(ask.sourceTitle)").font(.system(size: 11.5)).foregroundStyle(Theme.muted)
-            ask.modelStatus.map { Text("· \($0)").font(.system(size: 11.5)).foregroundStyle(Theme.muted) }
-            if let p = downloads.progress {
-                ProgressView(value: p).frame(width: 120)
-                Text("Downloading \(Int(p * 100))%").font(.system(size: 11)).foregroundStyle(Theme.muted)
-            } else if !ask.usingModel && !AppleIntelligencePhraser().isAvailable {
-                Button("· Get the local model (≈\(ModelStore.defaultModel.sizeText))") { consent = LocalModelChoice.current }
-                    .buttonStyle(.plain).font(.system(size: 11.5)).foregroundStyle(Theme.purple)
-            }
+    /// "Ask Kai", the model chip (where answers come from) and New chat.
+    private var header: some View {
+        HStack(spacing: 10) {
+            Text("Ask Kai").font(.system(size: 18, weight: .semibold))
+            ModelChooser(style: .chip)
+            ask.modelStatus.map { Text($0).font(.system(size: 11.5)).foregroundStyle(Theme.muted) }
             Spacer()
+            Button { ask.newChat() } label: { Label("New chat", systemImage: "square.and.pencil") }
+                .buttonStyle(GhostButtonStyle())
         }
-    }
-
-    private var modelCard: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "sparkles").foregroundStyle(Theme.purple)
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Better answers, still private: download a small model that runs on this Mac.")
-                    .font(.system(size: 12.5, weight: .medium)).fixedSize(horizontal: false, vertical: true)
-                Text("It only picks what kind of question you asked and rewords Kai's answer. It never sees your "
-                     + "records or changes a setting.")
-                    .font(.system(size: 11.5)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 8) {
-                    Button("Download (\(LocalModelChoice.current.sizeText))…") { consent = LocalModelChoice.current }
-                        .buttonStyle(LimeButtonStyle(subtle: true))
-                    Button("Not now") { cardDismissed = true }.buttonStyle(GhostButtonStyle())
-                }
-                if let e = downloads.error { Text(e).font(.system(size: 11.5)).foregroundStyle(Theme.amber) }
-            }
-            Spacer(minLength: 0)
-            Button { cardDismissed = true } label: { Image(systemName: "xmark").font(.system(size: 10)) }
-                .buttonStyle(.plain).foregroundStyle(Theme.muted).help("Dismiss")
-        }
-        .padding(12)
-        .background(Theme.purple.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     /// An action is shown only while the state it offers isn't already true.
@@ -399,18 +389,22 @@ struct AskKaiPage: View {
 
     private var hero: some View {
         VStack(spacing: 10) {
+            Image("KaiLogo").resizable().frame(width: 46, height: 46).accessibilityHidden(true)
             Text("What would you like to know?").font(.system(size: 26, weight: .semibold))
-            Text("Ask about agents, recorded actions, or a decision Kai made.").foregroundStyle(Theme.muted)
-            HStack(spacing: 8) {
+            Text("Ask about a session, a connection or a stopped action.").foregroundStyle(Theme.muted)
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                 ForEach(AskEngine.suggestions, id: \.self) { s in
-                    Button(s) { let c = context(); Task { await ask.ask(s, context: c) } }
-                        .buttonStyle(GhostButtonStyle())
+                    Button { let c = context(); Task { await ask.ask(s, context: c) } } label: {
+                        Text(s).frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(GhostButtonStyle())
                 }
             }
+            .frame(maxWidth: 520)
             .padding(.top, 14)
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 60)
+        .padding(.top, 50)
     }
 
     @ViewBuilder private func bubble(_ m: ChatMessage) -> some View {
@@ -424,9 +418,10 @@ struct AskKaiPage: View {
         } else {
             VStack(alignment: .leading, spacing: 8) {
                 Text(m.text).font(.system(size: 13)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                if let b = m.basedOn {
-                    Text("Based on: \(b)" + (m.phrasedBy.map { " · worded by \($0)" } ?? ""))
-                        .font(.system(size: 11)).foregroundStyle(Theme.muted)
+                // Kai's own footer: limits and "Based on", never model text.
+                ForEach(Array(m.footer.enumerated()), id: \.offset) { _, line in
+                    Text(line).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 let live = m.actions.filter(stillUseful)
                 if !live.isEmpty {
@@ -457,14 +452,19 @@ struct AskKaiPage: View {
         switch a.kind {
         case .openDecision:
             if let e = model.events.first(where: { $0.decision_id == a.ref || $0.id == a.ref }) { nav.openDecision = e }
-            else { nav.page = .decisions }
+            else { nav.showStops() }
         case .allowForSession:
             if let e = model.events.first(where: { $0.decision_id == a.ref || $0.id == a.ref }) { nav.openDecision = e }
         case .reconnect:
             if let ag = Agent(rawValue: a.ref) { model.setAgent(ag, enabled: true) }
         case .openActivity:
-            if a.ref == "stops" { nav.page = .decisions; return }
+            if a.ref == "stops" { nav.showStops(); return }
+            if a.ref.hasPrefix("session:"),
+               let s = AgentsModel.shared.sessions.first(where: { $0.id == String(a.ref.dropFirst(8)) }) {
+                nav.showActivity(session: s.id, agent: s.agent); return
+            }
             nav.filter = a.ref == "files" ? .files : a.ref == "connections" ? .connections : .all
+            nav.sessionFilter = nil
             nav.page = .activity
         case .turnOnRecording:
             Task {
@@ -487,18 +487,16 @@ struct AskKaiPage: View {
     }
 
     private var chats: some View {
-        let workspace = context().workspace
-        return VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Chats").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.muted)
                 Spacer()
-                Button { ask.newChat() } label: { Label("New chat", systemImage: "square.and.pencil") }
-                    .buttonStyle(.borderless).font(.system(size: 12))
             }
             .padding(.bottom, 4)
-            let list = ask.threads(in: workspace)
+            // 0.5: every project is in scope, so every chat is listed.
+            let list = ask.threads
             if list.isEmpty {
-                Text("No chats in \(Workspaces.name(workspace)) yet.").font(.system(size: 11)).foregroundStyle(Theme.muted)
+                Text("No chats yet.").font(.system(size: 11)).foregroundStyle(Theme.muted)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
@@ -553,34 +551,18 @@ struct KaiGeneralSettings: View {
                         .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Card(padding: 16) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Ask Kai").font(.system(size: 14, weight: .semibold))
-                    Text("Kai answers from its records first. A model only picks what kind of question you asked "
-                         + "(when Kai's own matching can't tell) and rewords the answer; it never decides anything and "
-                         + "can't add actions. It receives only your question and Kai's answer.")
-                        .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
-                    Picker("Model", selection: Binding(get: { ask.kind }, set: { ask.modelRaw = $0.rawValue })) {
-                        ForEach(PhraserKind.allCases) { k in
-                            Text(k.title + (available(k) ? "" : " (not available)")).tag(k)
-                        }
+            Card(padding: 14) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Ask Kai").font(.system(size: 14, weight: .semibold))
+                        Text("Which model words answers: Settings → Ask Kai, or the model menu next to Ask.")
+                            .font(.system(size: 12)).foregroundStyle(Theme.muted)
                     }
-                    .frame(maxWidth: 380)
-                    if ask.kind == .appleIntelligence && !AppleIntelligencePhraser().isAvailable {
-                        Text("Apple Intelligence needs macOS 26 with Apple Intelligence turned on. Kai uses templates until then.")
-                            .font(.system(size: 12)).foregroundStyle(Theme.amber)
-                    }
-                    if ask.kind == .local { LocalModelSettings() }
+                    Spacer()
+                    ModelChooser(style: .chip)
                 }
             }
         }
     }
 
-    private func available(_ k: PhraserKind) -> Bool {
-        switch k {
-        case .appleIntelligence: return AppleIntelligencePhraser().isAvailable
-        case .local: return true   // downloadable on first use
-        case .templates: return true
-        }
-    }
 }

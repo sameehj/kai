@@ -206,8 +206,11 @@ int kai_cmd_why_decision(int argc, char **argv);
 /* 0.4 activity recorder (activity.c): one metadata line per hook call when
  * `record_activity on`. Never arguments, contents or full commands. */
 int kai_policy_record_activity(const kai_policy *p);
-void kai_activity_record(const kai_policy *p, const char *agent, const char *session, const char *cwd,
-                         const char *tool, const char *op, const char *path, const char *cmd,
+int kai_audit_suppressed(void);   /* audit.c: a health probe is running */
+/* ksession: Kai's own session key for the calling agent (its ES session id or
+ * "pid-<root>"), the key `kai snapshot` lists as activity_keys; NULL if none. */
+void kai_activity_record(const kai_policy *p, const char *agent, const char *session, const char *ksession,
+                         const char *cwd, const char *tool, const char *op, const char *path, const char *cmd,
                          const char *mcp_server, const char *decision);
 void kai_activity_cmd0(const char *cmd, char *out, size_t n);
 int kai_cmd_activity(int argc, char **argv);

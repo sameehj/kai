@@ -26,7 +26,7 @@ Evidence: each agent's hook event, in that agent's format, sent to the real `kai
 | Screen and app control (screencapture, ffmpeg/sox, osascript) | PreToolUse (Bash) | command text (parsed) | before it runs | Yes | Recognized commands only: screencapture, ffmpeg/sox/rec from a live device, imagesnap, cliclick, osascript that tells an app; allowed per app (kai allow-capture --app, or the agent's page in the app). A program the agent writes can call the capture APIs directly. | synthetic 2026-11-21: stopped |
 | The agent's own screenshot or computer-use tool | PreToolUse (mcp__computer-use__…) | tool name | before the call | Yes | Recognized by tool name (screenshot, computer). A web page screenshot in a browser tool isn't counted as the screen. | synthetic 2026-11-21: stopped |
 
-## Codex (codex-cli 0.162.1)
+## Codex (codex-cli 0.171.0)
 
 | Action | Event or hook | Input available | Stage | Can block? | Known bypasses and limits | Evidence |
 |---|---|---|---|---|---|---|

@@ -1,6 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
-# Activity recorder: on by default since 0.4.1, metadata only, daily rotation, 7 days kept.
+# Activity recorder: on by default since 0.4.1, metadata only, daily rotation, 7 days kept;
+# 0.5: per-session summaries, health probes not recorded.
 set -u
 KAI="${1:-./kai}"
 TMP="$(mktemp -d)"
@@ -47,6 +48,20 @@ o=$("$KAI" activity --json --since 1h --workspace /tmp/proj)
 case "$o" in *'"op":"read","count":2,"distinct":1'*) pass "repeated reads collapsed" ;; *) fail "grouping: $o" ;; esac
 o=$("$KAI" activity --json --workspace /tmp/elsewhere)
 case "$o" in *'"groups":[]'*) pass "--workspace filters" ;; *) fail "workspace filter: $o" ;; esac
+
+# 0.5: per session (Now cards, the Activity timeline): counts, stops, newest events first
+o=$("$KAI" activity --json --since 1h)
+case "$o" in *'"sessions":[{'*) pass "kai activity lists sessions" ;; *) fail "sessions: $o" ;; esac
+# the key is Kai's session key (pid-<root> under an agent) or, without one, the agent's own session id
+case "$o" in *'"key":"conv:s1"'*|*'"key":"pid-'*) pass "sessions keyed by Kai's session key or the agent's session id" ;; *) fail "session key: $o" ;; esac
+case "$o" in *'"counts":{"read":2,"edit":0,"write":1,"command":'[12]',"mcp":1,"tool":0}'*) pass "per-session counts by kind" ;; *) fail "counts: $o" ;; esac
+case "$o" in *'"events":[{"ts":'*'"op":"mcp","name":"gh"'*) pass "events newest first, MCP by server name" ;; *) fail "events: $o" ;; esac
+case "$o" in *MARKER*) fail "session events leak arguments: $o" ;; *) pass "session events hold no arguments or full commands" ;; esac
+case "$o" in *'"first_record":'*) pass "first_record says when recording began" ;; *) fail "first_record: $o" ;; esac
+# 0.5: a health probe (kai status' self-test) is not agent activity
+before=$(wc -l < "$F" | tr -d ' ')
+hk claude '{"kai_health_probe":true,"hook_event_name":"PreToolUse","cwd":"/","tool_name":"Read","tool_input":{"file_path":"/x/audit.log"}}'
+[ "$(wc -l < "$F" | tr -d ' ')" = "$before" ] && pass "health probe not recorded" || fail "health probe recorded: $(tail -1 "$F")"
 
 # rotation: yesterday's file moves aside; rotated files older than 7 days are deleted
 touch -t "$(date -v-1d +%Y%m%d%H%M 2>/dev/null || date -d yesterday +%Y%m%d%H%M)" "$F"

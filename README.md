@@ -9,14 +9,20 @@
 
   **Kai checks what your agents do, and shows you where they connect.**
 
-  **0.4.1-preview.1 · macOS 13+** · **Claude Code · Codex · Cursor** · **Open source**
+  **0.5.0-preview.1 · macOS 13+** · **Claude Code · Codex · Cursor** · **Open source**
 </div>
 
 **Kai is a guardrail, not a sandbox.** It checks the tool calls your agents report to it, through each agent's own hooks, and leaves everything else to the agent's own approvals. A program the agent writes and runs, or anything that doesn't go through the agent's tools, isn't checked.
 
+## New in 0.5
+
+- **Now:** every agent session, live, with its project, what it's doing right now and what Kai stopped.
+- **One Activity timeline:** grouped by session, filtered by kind, project, agent or session.
+- **Real agent icons**, and **the model chip in Ask Kai**: pick Templates, Qwen 0.8B (downloaded only after you agree) or Apple Intelligence right in the chat.
+
 ## New in 0.4
 
-- **One Kai window:** Activity (what Kai recorded in a workspace today, grouped, with the evidence behind each row), Agents, Decisions, and Ask Kai.
+- **One Kai window:** what Kai recorded today, with the evidence behind each row, and Ask Kai.
 - **Ask Kai** answers from Kai's records only, such as "What did Kai stop?" or "Is Cursor connected?". Each answer says what it's based on, and "No matching record" never means it didn't happen. A model, if you pick one, only rewords the answer.
 - **Activity recording** (on by default since 0.4.1; turn it off in Settings → General): which files agents read or changed and which commands they asked to run. Kai records metadata only, kept for 7 days.
 
@@ -57,6 +63,12 @@ Kai lives in the menu bar. Click it to see:
 - **Settings → Uninstall:** the only way to remove Kai (see [Uninstall](#uninstall)).
 
 The same from Terminal: `kai why <id>` explains a decision, `kai not-right <id>` marks it as wrong, and `kai stats --export` writes the study summary (counts only, no prompts, paths, commands or code) for you to review and send.
+
+## Privacy and safety
+
+**Ask Kai and the local model.** Ask Kai's answers are built from Kai's own records by fixed code. A model is optional and only rewords that answer, or picks which kind of question you asked from a fixed list. It can't make decisions, approve anything, change settings or add buttons. The local model (Qwen3.5 0.8B, about 500 MB) downloads only after you agree, from a pinned version, and Kai checks its SHA-256 before use. It runs on your Mac with no network access. It sees your question and Kai's short answer, never file contents or full commands. Nothing it reads or writes is logged. If the model fails or changes a number, Kai shows its own answer instead. Coverage limits are always shown by Kai, not by the model. Delete the model any time from the model menu in Ask Kai.
+
+*Current limit:* the model runs inside the Kai app process. A future version may move it into a separate sandboxed helper.
 
 ## What it doesn't do in this release
 

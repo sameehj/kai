@@ -1,30 +1,30 @@
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
 //
-// 0.4: the Kai window (docs/design/kai_v11.html). Sidebar: Activity, Agents,
-// Decisions, Ask Kai, with Settings pinned at the bottom. Toolbar: health on
-// the left, the workspace in the middle, appearance and a menu on the right.
-// A chat dock at the bottom (⌘K focuses it, ⌘J hides it).
+// 0.5: the Kai window. Sidebar: Now (home), Activity, Ask Kai, with Settings
+// pinned at the bottom. Toolbar: the health pill (its count comes from the
+// same NowSummary as the Now header), appearance and a menu. The Ask dock is
+// at the bottom of every page (⌘K focuses it, ⌘J hides it). Every project is
+// in scope; a project is a filter on Activity, and each Now card names its
+// own.
 import AppKit
 import SwiftUI
 import KaiCore
 
 enum MainPage: String, CaseIterable, Identifiable {
-    case activity, agents, decisions, ask, settings
+    case now, activity, ask, settings
     var id: String { rawValue }
     var title: String {
         switch self {
+        case .now: return "Now"
         case .activity: return "Activity"
-        case .agents: return "Agents"
-        case .decisions: return "Decisions"
         case .ask: return "Ask Kai"
         case .settings: return "Settings"
         }
     }
     var icon: String {
         switch self {
+        case .now: return "dot.radiowaves.left.and.right"
         case .activity: return "list.bullet.rectangle"
-        case .agents: return "person.2"
-        case .decisions: return "hand.raised"
         case .ask: return "bubble.left.and.text.bubble.right"
         case .settings: return "gearshape"
         }
@@ -35,43 +35,73 @@ enum MainPage: String, CaseIterable, Identifiable {
 @MainActor
 final class MainNav: ObservableObject {
     static let shared = MainNav()
-    @Published var page: MainPage = .activity
+    @Published var page: MainPage = .now
+    // Activity filters (0.5): kind, agent, session, project. nil = all.
+    @Published var filter: TimelineFilter = .all
     @Published var agentFilter: String? = nil
-    @Published var filter: ActivityFilter = .all
+    @Published var sessionFilter: String? = nil
+    /// The project filter (a path). 0.4's toolbar workspace picker became this.
+    @Published var projectFilter: String? = nil
     @Published var search = ""
+    @Published var openEvent: TimelineEvent? = nil
     @Published var openItem: ActivityItem? = nil
     @Published var openDecision: AuditEvent? = nil
-    /// The chosen workspace (a project path); nil = the most recently active.
-    @Published var pickedWorkspace: String? = nil
     @Published var chatHidden = false
     @Published var focusChat = 0
     @Published var askContext: ActivityItem? = nil
+    /// Now → Ask about this: the session the dock asks about.
+    @Published var askSession: SessionFocus? = nil
 
     func show(_ p: MainPage) { page = p }
-    func showActivity(agent: String?) { agentFilter = agent; filter = .all; search = ""; page = .activity }
+    func showActivity(agent: String?) {
+        agentFilter = agent; sessionFilter = nil; filter = .all; search = ""; page = .activity
+    }
+    func showActivity(session: String, agent: String) {
+        sessionFilter = session; agentFilter = agent; projectFilter = nil; filter = .all; page = .activity
+    }
+    func showStops() { filter = .stops; sessionFilter = nil; page = .activity }
     func ask(about item: ActivityItem) {
         openItem = nil
+        openEvent = nil
+        askSession = nil
         askContext = item
         chatHidden = false
         focusChat += 1
     }
+    func ask(aboutSession s: SessionFocus) {
+        askContext = nil
+        askSession = s
+        chatHidden = false
+        focusChat += 1
+    }
+    func go(_ r: KaiRoute) {
+        switch r {
+        case .now: page = .now
+        case .activity(let stops): if stops { showStops() } else { page = .activity }
+        case .ask: page = .ask
+        case .settings(let p):
+            UserDefaults.standard.set(p.rawValue, forKey: "settingsPage")
+            page = .settings
+        }
+    }
 }
 
 /// What the Kai window reads beyond AppModel and AgentsModel: the recorder's
-/// groups and `kai why` per decision.
+/// groups and sessions (all projects) and `kai why` per decision.
 @MainActor
 final class KaiRecords: ObservableObject {
     static let shared = KaiRecords()
     @Published private(set) var groups: ActivityGroups? = nil
     @Published private(set) var why: [String: WhyRecord] = [:]
-    @Published private(set) var loadedWorkspace: String? = nil
+    private var loading = false
 
-    func refresh(workspace: String?) async {
-        var args = ["activity", "--json", "--since", "24h"]
-        if let w = workspace { args += ["--workspace", w] }
-        let r = await KaiCLI.run(args)
-        groups = r.ok ? ActivityGroups.parse(r.out) : nil
-        loadedWorkspace = workspace
+    func refresh() async {
+        guard !loading else { return }
+        loading = true
+        defer { loading = false }
+        let r = await KaiCLI.run(["activity", "--json", "--since", "24h"])
+        let g = r.ok ? ActivityGroups.parse(r.out) : nil
+        if g != groups { groups = g }
     }
 
     func why(_ id: String) async -> WhyRecord? {
@@ -83,30 +113,51 @@ final class KaiRecords: ObservableObject {
     }
 }
 
-/// The workspaces Kai knows from sessions, most recently active first.
+/// The projects Kai knows from sessions and records, most recently active first.
 enum Workspaces {
-    static func list(_ sessions: [SessionRow]) -> [(path: String, last: Int)] {
+    static func list(_ sessions: [SessionRow], records: [SessionActivity] = []) -> [(path: String, last: Int)] {
         var best: [String: Int] = [:]
         for s in sessions {
             if !s.project.isEmpty, s.project != "/" { best[s.project] = max(best[s.project] ?? 0, s.lastActiveUtc, s.startedUtc) }
             for w in s.workspaces ?? [] { best[w.path] = max(best[w.path] ?? 0, w.lastActiveUtc) }
         }
+        for r in records where !r.workspace.isEmpty && r.workspace != "/" {
+            best[r.workspace] = max(best[r.workspace] ?? 0, Int(r.last))
+        }
         let home = NSHomeDirectory()
         return best.filter { $0.key != home }.map { ($0.key, $0.value) }.sorted { $0.last > $1.last }
     }
-    static func name(_ path: String?) -> String { path.map { ($0 as NSString).lastPathComponent } ?? "All workspaces" }
+    static func name(_ path: String?) -> String { path.map { ($0 as NSString).lastPathComponent } ?? "All projects" }
+}
+
+/// Now's data, built once per render from the shared stores: the Now page,
+/// the toolbar pill and the popover all read this, so their counts agree.
+@MainActor
+enum NowData {
+    static func sections(_ model: AppModel) -> [NowSection] {
+        NowBuilder.sections(sessions: AgentsModel.shared.sessions,
+                            records: KaiRecords.shared.groups?.sessions ?? [], events: model.events)
+    }
+    static func summary(_ model: AppModel) -> NowSummary { NowSummary.of(sections(model)) }
 }
 
 /// The header: the most important problem wins. One agent that isn't
-/// connected never reads as "all checks are off".
+/// connected never reads as "all checks are off". Dot: teal when connected
+/// and fine, amber when something needs the user, red when Kai is off, grey
+/// only when no agent is connected.
 struct HeaderState: Equatable {
-    enum Tone { case ok, attention, off }
+    enum Tone { case ok, attention, off, none }
     var text: String
     var tone: Tone
     var detail: String? = nil
 
     @MainActor
     static func make(_ model: AppModel, _ agents: AgentsModel) -> HeaderState {
+        make(model, agents, summary: NowData.summary(model))
+    }
+
+    @MainActor
+    static func make(_ model: AppModel, _ agents: AgentsModel, summary: NowSummary) -> HeaderState {
         if model.cliPath == nil || Lifecycle.programMissing {
             return HeaderState(text: "Kai is off", tone: .off, detail: "Kai's program is missing. Reinstall the Kai package.")
         }
@@ -114,12 +165,12 @@ struct HeaderState: Equatable {
             if agents.sourceError != nil && Date().timeIntervalSince(AppModel.launchedAt) >= 5 {
                 return HeaderState(text: "Kai can't list agents right now", tone: .attention, detail: agents.sourceError)
             }
-            return HeaderState(text: "Checking…", tone: .ok)
+            return HeaderState(text: "Checking…", tone: .none)
         }
         let found = rows.filter(\.detected)
-        if found.isEmpty { return HeaderState(text: "No supported agent found", tone: .attention) }
+        if found.isEmpty { return HeaderState(text: "No supported agent found", tone: .none) }
         if !found.contains(where: { $0.hooks == "installed" || $0.hooks == "untrusted" }) {
-            return HeaderState(text: "Kai is off", tone: .off, detail: "No agent is connected to Kai.")
+            return HeaderState(text: "No agent connected", tone: .none, detail: "Turn an agent on in Settings → Agents.")
         }
         if GrantManager.shared.pauseState(nil) != Int32(KAI_PAUSE_NONE) {
             return HeaderState(text: "Kai is paused", tone: .attention, detail: "Checks resume by themselves.")
@@ -138,19 +189,19 @@ struct HeaderState: Equatable {
         if found.contains(where: { $0.hooks == "untrusted" }) {
             return HeaderState(text: "Codex needs one step", tone: .attention, detail: AutoConnect.codexTrustLine)
         }
-        if let missing = found.first(where: { $0.hooks != "installed" }) {
+        if let missing = found.first(where: { $0.hooks != "installed" && !AppModel.userTurnedOff($0.name) }) {
             return HeaderState(text: "\(ActivityFeed.agentTitle(missing.name)) isn't connected", tone: .attention,
                                detail: "Kai doesn't check it until it's connected.")
         }
-        let working = agents.workingNow.count
-        return HeaderState(text: working > 0 ? "Connected · \(working) working" : "Connected", tone: .ok)
+        return HeaderState(text: summary.working + summary.idle > 0 ? summary.text : "Connected", tone: .ok)
     }
 
     var color: Color {
         switch tone {
-        case .ok: return Theme.muted
+        case .ok: return Theme.teal
         case .attention: return Theme.amber
         case .off: return Theme.coral
+        case .none: return Theme.muted
         }
     }
 }
@@ -165,7 +216,6 @@ struct MainWindowView: View {
     @ObservedObject private var ask = AskController.shared
     @AppStorage("appearance") private var appearance = "system"
 
-    private var workspace: String? { nav.pickedWorkspace ?? Workspaces.list(agents.sessions).first?.path }
     private var header: HeaderState { HeaderState.make(model, agents) }
 
     var body: some View {
@@ -173,9 +223,9 @@ struct MainWindowView: View {
             sidebar
         } detail: {
             VStack(spacing: 0) {
-                if header.tone != .ok { banner }
+                if header.tone == .attention || header.tone == .off { banner }
                 page.frame(maxWidth: .infinity, maxHeight: .infinity)
-                if !nav.chatHidden && nav.page != .settings {
+                if !nav.chatHidden {
                     Divider()
                     ChatDock(context: { makeContext() })
                 }
@@ -190,14 +240,21 @@ struct MainWindowView: View {
         .sheet(item: $nav.openItem) { item in
             EvidenceSheet(item: item).environmentObject(model)
         }
+        .sheet(item: $nav.openEvent) { e in
+            TimelineEventSheet(event: e).environmentObject(model)
+        }
         .sheet(item: $nav.openDecision) { e in
-            DecisionDetailSheet(event: e, workspace: workspace).environmentObject(model)
+            DecisionDetailSheet(event: e, workspace: nil).environmentObject(model)
         }
         .background(shortcuts)
-        .task(id: workspace) { await reload() }
         .task {
+            // Every 3 s while the window is visible, every 15 s otherwise.
+            await reload()
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                let visible = NSApp.isActive && NSApp.windows.contains {
+                    $0.isVisible && $0.occlusionState.contains(.visible) && $0.title == "Kai"
+                }
+                try? await Task.sleep(nanoseconds: (visible ? 3 : 15) * 1_000_000_000)
                 await reload()
             }
         }
@@ -206,7 +263,7 @@ struct MainWindowView: View {
     private func reload() async {
         await model.refresh()
         await agents.refresh()
-        await records.refresh(workspace: workspace)
+        await records.refresh()
     }
 
     /// ⌘K focuses the chat, ⌘J hides or shows it.
@@ -222,7 +279,7 @@ struct MainWindowView: View {
 
     private var sidebar: some View {
         List(selection: Binding(get: { nav.page }, set: { if let p = $0 { nav.page = p } })) {
-            ForEach([MainPage.activity, .agents, .decisions, .ask]) { p in
+            ForEach([MainPage.now, .activity, .ask]) { p in
                 Label(p.title, systemImage: p.icon).tag(p)
             }
         }
@@ -262,29 +319,10 @@ struct MainWindowView: View {
                 Circle().fill(header.color).frame(width: 8, height: 8)
                 Text(header.text).font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
             }
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            .background(Theme.raised.opacity(0.6), in: Capsule())
             .help(header.detail ?? header.text)
             .accessibilityElement(children: .combine)
-        }
-        ToolbarItem(placement: .principal) {
-            Menu {
-                let list = Workspaces.list(agents.sessions)
-                ForEach(list, id: \.path) { w in
-                    Button {
-                        nav.pickedWorkspace = w.path
-                    } label: {
-                        if w.path == workspace { Label(Workspaces.name(w.path), systemImage: "checkmark") }
-                        else { Text(Workspaces.name(w.path)) }
-                    }
-                }
-                if list.isEmpty { Text("No workspace from a session yet") }
-                Divider()
-                Button("Most recently active") { nav.pickedWorkspace = nil }
-            } label: {
-                Text(Workspaces.name(workspace)).font(.system(size: 15, weight: .semibold))
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help(workspace ?? "Workspaces come from agent sessions Kai saw")
         }
         ToolbarItemGroup(placement: .primaryAction) {
             Menu {
@@ -322,7 +360,9 @@ struct MainWindowView: View {
                 if let d = header.detail { Text(d).font(.system(size: 12)).foregroundStyle(Theme.muted) }
             }
             Spacer()
-            if header.text.hasSuffix("isn't connected") || header.text == "Kai is off" { Button("Agents") { nav.page = .agents } }
+            if header.text.hasSuffix("isn't connected") || header.text.hasPrefix("Codex") {
+                Button("Settings → Agents") { nav.go(.settings(.agents)) }
+            }
         }
         .padding(.horizontal, 20).padding(.vertical, 10)
         .background(header.color.opacity(0.10))
@@ -330,9 +370,8 @@ struct MainWindowView: View {
 
     @ViewBuilder private var page: some View {
         switch nav.page {
-        case .activity: ActivityPageView(workspace: workspace)
-        case .agents: AgentsPageView()
-        case .decisions: DecisionsPageView(workspace: workspace)
+        case .now: NowPageView()
+        case .activity: ActivityTimelineView()
         case .ask: AskKaiPage(context: { makeContext() })
         case .settings: SettingsView()
         }
@@ -341,9 +380,14 @@ struct MainWindowView: View {
     // MARK: Ask Kai context: structured records only
 
     func makeContext() -> AskContext {
-        let items = ActivityFeed.build(groups: records.groups, events: model.events, workspace: workspace,
+        MainWindowView.context(model: model, wall: wall, agents: agents, records: records, nav: nav)
+    }
+
+    static func context(model: AppModel, wall: NetworkWall, agents: AgentsModel, records: KaiRecords,
+                        nav: MainNav) -> AskContext {
+        let items = ActivityFeed.build(groups: records.groups, events: model.events, workspace: nil,
                                        internetWatching: wall.isOn)
-        let stops = ActivityFeed.stops(model.events, workspace: workspace)
+        let stops = ActivityFeed.stops(model.events, workspace: nil)
         let askAgents = agents.agents.filter(\.detected).map { a -> AskAgent in
             let title = LiveCoverage.title(a.name)
             let running = agents.interactiveSessions.contains { $0.isActive && $0.displayAgent == title }
@@ -362,19 +406,24 @@ struct MainWindowView: View {
         }
         let firsts = (records.groups?.groups ?? []).map(\.first).filter { $0 > 0 }
         let first = firsts.min().map { Date(timeIntervalSince1970: $0) }
-        return AskContext(workspace: workspace, recording: model.recordingActivity || (records.groups?.recording ?? false),
+        return AskContext(workspace: nil, recording: model.recordingActivity || (records.groups?.recording ?? false),
                           internetWatching: wall.isOn, items: items, stops: stops, agents: askAgents,
                           why: records.why, focus: nav.askContext,
                           version: model.status?.version ?? "", commit: model.status?.commit ?? "",
                           internet: internet,
                           recordingFirst: first.flatMap { Calendar.current.isDateInToday($0) ? $0 : nil },
                           policyProblem: model.status.flatMap { $0.policy.ok ? nil : $0.policy.error },
-                          paused: GrantManager.shared.pauseState(nil) != Int32(KAI_PAUSE_NONE))
+                          paused: GrantManager.shared.pauseState(nil) != Int32(KAI_PAUSE_NONE),
+                          session: nav.askSession)
     }
 }
 
 extension AppModel {
     var recordingActivity: Bool { policy?.switches["record_activity"] == "on" }
+    /// The user turned this agent off in Kai (it won't be connected again on its own).
+    static func userTurnedOff(_ agent: String) -> Bool {
+        UserDefaults.standard.stringArray(forKey: AutoConnect.disabledKey)?.contains(agent) == true
+    }
 }
 
 // MARK: - Shared row
@@ -444,93 +493,6 @@ struct PageColumn<Content: View>: View {
     }
 }
 
-// MARK: - Activity
-
-struct ActivityPageView: View {
-    @EnvironmentObject var model: AppModel
-    @EnvironmentObject var wall: NetworkWall
-    @ObservedObject private var nav = MainNav.shared
-    @ObservedObject private var records = KaiRecords.shared
-    let workspace: String?
-
-    private var all: [ActivityItem] {
-        ActivityFeed.build(groups: records.groups, events: model.events, workspace: workspace,
-                           internetWatching: wall.isOn)
-    }
-    private var shown: [ActivityItem] {
-        all.filter { $0.matches(nav.filter) && $0.matches(search: nav.search) }
-            .filter { nav.agentFilter == nil || $0.agentKey == nav.agentFilter }
-    }
-
-    var body: some View {
-        PageColumn(title: "Activity",
-                   subtitle: Text("What Kai recorded in ") + Text(Workspaces.name(workspace)).bold() + Text(" · Today")) {
-            HStack(spacing: 12) {
-                Picker("", selection: $nav.filter) {
-                    ForEach(ActivityFilter.allCases) { f in Text(f.rawValue).tag(f) }
-                }
-                .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 360)
-                if let a = nav.agentFilter {
-                    Button { nav.agentFilter = nil } label: {
-                        Label(ActivityFeed.agentTitle(a), systemImage: "xmark.circle.fill").font(.system(size: 12))
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Show all agents")
-                }
-                Spacer()
-                TextField("Search activity", text: $nav.search).textFieldStyle(.roundedBorder).frame(width: 190)
-            }
-            .padding(.bottom, 13)
-            if !model.recordingActivity && !(records.groups?.recording ?? false) { recordingOff }
-            if shown.isEmpty {
-                RecordList {
-                    VStack(spacing: 6) {
-                        Text("No matching recorded activity.").foregroundStyle(Theme.muted)
-                        Text("No record doesn't mean nothing happened.").font(.system(size: 11)).foregroundStyle(Theme.muted)
-                    }
-                    .frame(maxWidth: .infinity).padding(28)
-                }
-            } else {
-                RecordList {
-                    ForEach(Array(shown.enumerated()), id: \.element.id) { i, item in
-                        if i > 0 { Divider() }
-                        RecordRow(letter: item.letter, title: item.title, subtitle: "\(item.agent) · \(item.detail)",
-                                  meta: item.countText, tone: item.kind == .stop ? Theme.amber : Theme.muted,
-                                  askAbout: { nav.ask(about: item) }) { open(item) }
-                    }
-                }
-            }
-            if !wall.isOn && nav.filter == .connections {
-                Text("Connections appear when Internet watching is on (Settings → Internet).")
-                    .font(.system(size: 12)).foregroundStyle(Theme.muted).padding(.top, 10)
-            }
-        }
-    }
-
-    private func open(_ item: ActivityItem) {
-        nav.openItem = item
-    }
-
-    private var recordingOff: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Activity recording is off").font(.system(size: 13, weight: .semibold))
-                Text("Kai lists what it stopped. To also list the files agents read or changed and the commands "
-                     + "they asked to run, turn on recording. It stays on this Mac for 7 days and never keeps "
-                     + "file contents, arguments or full commands.")
-                    .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
-            Button("Turn on activity recording") { model.setSwitch("record_activity", "on") }
-                .buttonStyle(LimeButtonStyle())
-        }
-        .padding(16)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(Theme.border))
-        .padding(.bottom, 14)
-    }
-}
-
 /// One record's evidence: Outcome, Agent, Evidence source, Session, Scope,
 /// up to four examples.
 struct EvidenceSheet: View {
@@ -562,7 +524,7 @@ struct EvidenceSheet: View {
             }
             HStack {
                 Spacer()
-                Button("Ask about this") { nav.ask(about: item); nav.page = .ask }
+                Button("Ask about this →") { nav.ask(about: item); nav.page = .ask }
                 if item.kind == .stop, let e = model.events.first(where: { $0.id == item.eventID }) {
                     Button("Open decision") { nav.openItem = nil; DispatchQueue.main.async { nav.openDecision = e } }
                 }
@@ -580,123 +542,6 @@ struct EvidenceSheet: View {
             Text(v).font(mono ? .system(size: 12, design: .monospaced) : .system(size: 13))
                 .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .trailing)
                 .multilineTextAlignment(.trailing)
-        }
-    }
-}
-
-// MARK: - Agents
-
-struct AgentsPageView: View {
-    @EnvironmentObject var model: AppModel
-    @ObservedObject private var agents = AgentsModel.shared
-    @ObservedObject private var nav = MainNav.shared
-
-    var body: some View {
-        PageColumn(title: "Agents", subtitle: Text("Kai's connection to each agent on this Mac, and what it reports.")) {
-            let rows = model.displayAgents(agents)
-            let found = (rows ?? []).filter(\.detected)
-            if let note = model.connectedNote { ConnectedNote(text: note) }
-            CodexTrustRow()
-            if rows == nil, let err = agents.sourceError {
-                Text("Kai can't list agents right now: \(err)").font(.system(size: 12)).foregroundStyle(Theme.amber)
-            } else if rows == nil {
-                ProgressView().controlSize(.small)
-            } else if found.isEmpty {
-                RecordList { Text("No supported agent found on this Mac.").foregroundStyle(Theme.muted).padding(28) }
-            } else {
-                RecordList {
-                    ForEach(Array(found.enumerated()), id: \.element.id) { i, a in
-                        if i > 0 { Divider() }
-                        let (state, tone) = Self.state(a, agents)
-                        VStack(alignment: .leading, spacing: 0) {
-                            RecordRow(letter: String(LiveCoverage.title(a.name).prefix(2)),
-                                      title: LiveCoverage.title(a.name), subtitle: state + " · " + ActivityFeed.coverage(a.name),
-                                      tone: tone) { nav.showActivity(agent: a.name) }
-                            if let ag = Agent(rawValue: a.name) {
-                                HStack {
-                                    Spacer()
-                                    if a.hooks == "failing" {
-                                        Button("Reconnect") { model.setAgent(ag, enabled: true) }
-                                            .buttonStyle(LimeButtonStyle(subtle: true))
-                                    }
-                                    // 0.4.1: on by default; the switch is the only control.
-                                    Toggle("On", isOn: Binding(get: { a.hooks != "missing" && a.hooks != "not found" },
-                                                               set: { model.setAgent(ag, enabled: $0) }))
-                                        .toggleStyle(KaiToggleStyle()).labelsHidden()
-                                        .disabled(model.busy || model.status == nil)
-                                        .help("On: Kai's hooks are in \(ag.title)'s settings. Off: Kai leaves it alone "
-                                              + "and won't connect it again on its own.")
-                                }
-                                .padding(.horizontal, 16).padding(.bottom, 10)
-                            }
-                        }
-                    }
-                }
-                Text("Connected and Not connected are about Kai's integration only. Working: a connected agent "
-                     + "ran a command in the last 15 minutes.")
-                    .font(.system(size: 11)).foregroundStyle(Theme.muted).padding(.top, 10)
-            }
-        }
-    }
-
-    @MainActor
-    static func state(_ a: AgentRow, _ agents: AgentsModel) -> (String, Color) {
-        let title = LiveCoverage.title(a.name)
-        let working = agents.workingNow.filter { $0.displayAgent == title }.count
-        let running = agents.interactiveSessions.contains { $0.isActive && $0.displayAgent == title }
-        if a.hooks == "installed" {
-            return (working > 0 ? "Connected · \(working) working" : "Connected · no recent activity", Theme.muted)
-        }
-        if a.hooks == "untrusted" {
-            return ("Connected · Codex hasn't run Kai's hook yet: not checked until you run /hooks in Codex", Theme.amber)
-        }
-        if a.hooks == "missing" && UserDefaults.standard.stringArray(forKey: AutoConnect.disabledKey)?.contains(a.name) == true {
-            return ("Off · you turned it off", Theme.muted)
-        }
-        if running { return ("Not connected · running · activity unknown", Theme.amber) }
-        return ("Not connected · activity unavailable", Theme.amber)
-    }
-}
-
-// MARK: - Decisions
-
-struct DecisionsPageView: View {
-    @EnvironmentObject var model: AppModel
-    @ObservedObject private var nav = MainNav.shared
-    let workspace: String?
-
-    /// Recorded stops in this workspace, one entry per stop, newest first.
-    private var stops: [AuditEvent] {
-        var seen = Set<String>()
-        return model.events.filter { e in
-            e.isBlock && !e.isNote && !e.isSilent && !e.isGrant
-                && (e.isNetwork || ActivityFeed.inWorkspace(e.cwd, workspace))
-                && seen.insert(e.decision_id ?? e.id).inserted
-        }
-        .sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
-    }
-
-    var body: some View {
-        PageColumn(title: "Decisions", subtitle: Text("Stops Kai recorded in ") + Text(Workspaces.name(workspace)).bold()) {
-            if stops.isEmpty {
-                RecordList {
-                    VStack(spacing: 6) {
-                        Text("No recorded stops.").foregroundStyle(Theme.muted)
-                        Text("No record doesn't mean nothing risky happened.").font(.system(size: 11)).foregroundStyle(Theme.muted)
-                    }
-                    .frame(maxWidth: .infinity).padding(28)
-                }
-            } else {
-                RecordList {
-                    ForEach(Array(stops.enumerated()), id: \.element.id) { i, e in
-                        if i > 0 { Divider() }
-                        let item = ActivityFeed.stopItem(e, workspace: workspace)
-                        RecordRow(letter: "!", title: item.title, subtitle: "\(item.agent) · \(item.detail)",
-                                  meta: e.date.map { $0.formatted(date: .omitted, time: .shortened) } ?? "",
-                                  tone: Theme.amber, askAbout: { nav.ask(about: item) }) { nav.openDecision = e }
-                    }
-                }
-            }
         }
     }
 }
@@ -735,7 +580,8 @@ struct DecisionDetailSheet: View {
                     detail("Checked by", why?.component ?? (event.isNetwork ? "network wall" : "agent hook"))
                     detail("Rule", event.rule)
                     detail("Tool", event.tool ?? "—")
-                    detail("Target", event.excerpt ?? "—")
+                    // A command shows only its program name, never the command line.
+                    detail("Target", event.excerpt.map { event.actionLabel == "Command" ? ActivityFeed.program($0) : $0 } ?? "—")
                     detail("Session", why?.attribution ?? event.session ?? "—")
                     detail("Decision", event.decision_id ?? "—")
                     detail("Time", event.date?.formatted(date: .abbreviated, time: .standard) ?? event.ts)
@@ -754,7 +600,7 @@ struct DecisionDetailSheet: View {
                     EmptyView()
                 }
                 Spacer()
-                Button("Ask about this") { dismiss(); nav.ask(about: item); nav.page = .ask }
+                Button("Ask about this →") { dismiss(); nav.ask(about: item); nav.page = .ask }
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }
             .padding(.top, 8)

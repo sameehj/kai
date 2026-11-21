@@ -23,8 +23,8 @@ struct KaiBarApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        // 0.4: one window, "Kai" (Activity, Agents, Decisions, Ask Kai,
-        // Settings). The old id stays so kai://settings links keep working.
+        // 0.5: one window, "Kai" (Now, Activity, Ask Kai, Settings). The old
+        // id stays so kai://settings links keep working.
         Window("Kai", id: "settings") {
             MainWindowView()
                 .environmentObject(model)
@@ -32,6 +32,15 @@ struct KaiBarApp: App {
                 .environmentObject(storage)
         }
         .defaultSize(width: 1080, height: 720)
+
+        // 0.5: first launch only (Onboarding.done).
+        Window("Welcome to Kai", id: "onboarding") {
+            OnboardingView()
+                .environmentObject(model)
+                .environmentObject(wall)
+                .environmentObject(storage)
+        }
+        .windowResizability(.contentSize)
     }
 }
 
@@ -110,12 +119,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // in-process; the CLI only reads them.
     }
 
-    /// kai://settings/<page> - the CLI's "Change this in Kai" opens the page.
+    /// kai://settings/<page> (the CLI's "Change this in Kai"), kai://now,
+    /// kai://activity[/stops], kai://ask; 0.4's kai://decisions and
+    /// kai://agents redirect (KaiRoute).
     func application(_ application: NSApplication, open urls: [URL]) {
-        for u in urls where u.scheme == "kai" && u.host == "settings" {
-            let page = u.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            UserDefaults.standard.set(SettingsPage(stored: page).rawValue, forKey: "settingsPage")
-            Task { @MainActor in MainNav.shared.page = .settings }
+        for u in urls {
+            guard let r = KaiRoute.from(u) else { continue }
+            if case .settings(let p) = r { UserDefaults.standard.set(p.rawValue, forKey: "settingsPage") }
+            Task { @MainActor in MainNav.shared.go(r) }
             NotificationCenter.default.post(name: .kaiOpenSettings, object: nil)
         }
     }
@@ -136,6 +147,13 @@ struct MenuBarLabel: View {
             .accessibilityLabel("Kai: \(model.health == .problem ? model.headline : model.headline(AgentsModel.shared).words)")
             .onReceive(NotificationCenter.default.publisher(for: .kaiOpenSettings)) { _ in
                 openWindow(id: "settings")
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            .task {
+                // 0.5: the short onboarding, once.
+                guard Snapshot.requestedDir == nil, !Onboarding.done, Bundle.main.bundleIdentifier != nil else { return }
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                openWindow(id: "onboarding")
                 NSApp.activate(ignoringOtherApps: true)
             }
     }

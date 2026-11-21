@@ -90,7 +90,12 @@ struct AskAnswer: Equatable {
     var actions: [AskAction] = []
     /// Questions offered as tappable chips (help, unknown).
     var suggestions: [String] = []
+    /// 0.5: coverage limits ("Cursor doesn't report edits."). Rendered by Kai
+    /// under the answer, never passed to a model, so rewording can't drop them.
+    var limits: [String] = []
     var display: String { AskAnswer.untag(text) }
+    /// The deterministic footer under every answer: limits, then "Based on".
+    var footer: [String] { limits.map { AskAnswer.untag($0) } + ["Based on: \(basedOn)"] }
     static func untag(_ s: String) -> String {
         s.replacingOccurrences(of: "<data>", with: "").replacingOccurrences(of: "</data>", with: "")
     }
@@ -129,6 +134,8 @@ struct AskContext {
     var recordingFirst: Date? = nil
     var policyProblem: String? = nil
     var paused: Bool = false
+    /// 0.5: a session the user asked about (Now → Ask about this).
+    var session: SessionFocus? = nil
 
     var internetState: InternetState { internet ?? (internetWatching ? .on : .off) }
 }
@@ -144,8 +151,8 @@ enum SettingCheck {
 }
 
 enum AskEngine {
-    static let suggestions = ["What happened today?", "Is Kai recording?",
-                              "What did Kai stop?", "Which files were changed?"]
+    static let suggestions = ["Which agents are working right now?", "What did agents change today?",
+                              "Why did Kai stop something?", "Is Cursor connected?"]
 
     static let canAnswer = "Kai can answer: whether Kai is on and recording, what happened today, which files "
         + "agents read or changed, what Kai stopped and why, whether an agent is connected, whether Internet "
@@ -285,6 +292,8 @@ enum AskEngine {
         }
         if let a = agent, has(t, Synonyms.connected) && !has(t, ["what did", "today"]) { return .agent(a) }
         if agent == nil, has(t, ["connected", "installed", "hooked"]) { return .agent("") }
+        if agent == nil, has(t, ["which agents", "what agents", "agents working", "working right now", "who is working",
+                                 "any agent", "agents running", "is anyone working", "sessions"]) { return .agent("") }
         if has(t, Synonyms.stops) { return .stops }
         if has(t, Synonyms.files) { return .files }
         if has(t, Synonyms.destinations) { return .destinations }
@@ -298,7 +307,7 @@ enum AskEngine {
         if has(t, ["recording", "record", "activity", "keep a list"]) { return "recording" }
         if has(t, ["internet", "network", "watching"]) { return "internet" }
         if has(t, ["notification*", "sound*"]) { return "app" }
-        if has(t, ["model", "apple intelligence", "llama", "ask kai", "answers"]) { return "model" }
+        if has(t, ["model", "apple intelligence", "llama", "qwen", "ask kai", "answers"]) { return "model" }
         if has(t, ["uninstall", "remove kai"]) { return "uninstall" }
         if has(t, ["pause"]) { return "pause" }
         if has(t, ["check*", "protect*", "secrets", "files"]) { return "checks" }
@@ -312,6 +321,10 @@ enum AskEngine {
         if let f = c.focus, intent != .outOfScope,
            intent == .unknown || has(t, ["this", "it", "that"]) {
             return about(f, c)
+        }
+        if let s = c.session, intent != .outOfScope,
+           intent == .unknown || has(t, ["this", "it", "that", "session"]) {
+            return aboutSession(s)
         }
         let agent = agentIn(t)
         switch intent {
@@ -459,11 +472,11 @@ enum AskEngine {
         case "recording": (place, ref) = ("Settings → General → “Keep a list of what agents read, edit and run”", "general")
         case "internet": (place, ref) = ("Settings → Internet", "internet")
         case "app": (place, ref) = ("Settings → Advanced → App", "advanced:app")
-        case "model": (place, ref) = ("Settings → General → Ask Kai", "general")
+        case "model": (place, ref) = ("the model menu next to the Ask button, or Settings → Ask Kai", "ask")
         case "uninstall": (place, ref) = ("Settings → Uninstall", "uninstall")
         case "pause": (place, ref) = ("the menu-bar popover → Pause 15 min", "")
-        case "checks": (place, ref) = ("Settings → Advanced → Checks", "advanced:checks")
-        case "agents": (place, ref) = ("Settings → Advanced → Agents (one switch per agent)", "advanced:agents")
+        case "checks": (place, ref) = ("Settings → Rules", "rules")
+        case "agents": (place, ref) = ("Settings → Agents (one switch per agent)", "agents")
         default: (place, ref) = ("Settings", "general")
         }
         return AskAnswer(intent: .settings(topic),
@@ -488,9 +501,9 @@ enum AskEngine {
         let who = agent.map { " for \(ActivityFeed.agentTitle($0))" } ?? ""
         guard !s.isEmpty else {
             return AskAnswer(intent: .stops,
-                             text: "No matching record: Kai recorded no stops\(who)\(whereText(c)) today. That doesn't "
-                                + "mean every action was checked.",
-                             basedOn: "Kai's decisions (audit log), today")
+                             text: "No matching record: Kai recorded no stops\(who)\(whereText(c)) today.",
+                             basedOn: "Kai's decisions (audit log), today",
+                             limits: ["No stop doesn't mean every action was checked."])
         }
         let lines = s.prefix(3).map { e -> String in
             var l = "\(e.agentName): \(ActivityFeed.stopItem(e, workspace: c.workspace).title.lowercased()) "
@@ -499,11 +512,11 @@ enum AskEngine {
             if let id = e.decision_id, let r = c.why[id]?.retryLine { l += "; \(r.lowercased())" }
             return l + "."
         }
-        let more = s.count > 3 ? " And \(s.count - 3) more in Decisions." : ""
+        let more = s.count > 3 ? " And \(s.count - 3) more in Activity → Stops." : ""
         var actions: [AskAction] = s.prefix(3).map {
             AskAction(kind: .openDecision, title: "Open decision", ref: $0.decision_id ?? $0.id)
         }
-        if actions.count > 1 { actions = [AskAction(kind: .openActivity, title: "Open Decisions", ref: "stops")] }
+        if actions.count > 1 { actions = [AskAction(kind: .openActivity, title: "Open Stops", ref: "stops")] }
         return AskAnswer(intent: .stops,
                          text: "Kai recorded \(ActivityFeed.n(s.count, "stop"))\(who)\(whereText(c)) today. "
                             + lines.joined(separator: " ") + more,
@@ -522,23 +535,29 @@ enum AskEngine {
         let f = c.items.filter { [.read, .edit, .write].contains($0.kind) && (agent == nil || $0.agentKey == agent) }
         guard !f.isEmpty else {
             let who = agent.map { " by \(ActivityFeed.agentTitle($0))" } ?? ""
-            let note = agent == "codex" ? "Codex reports no file events."
-                : agent == "cursor" ? "Cursor doesn't report its editor's writes."
-                : "Cursor doesn't report its editor's writes and Codex reports no file events."
             return AskAnswer(intent: .files,
-                             text: "No matching record: Kai recorded no file reads or changes\(who)\(whereText(c)) "
-                                + "today. " + note,
-                             basedOn: "kai activity, today")
+                             text: "No matching record: Kai recorded no file reads or changes\(who)\(whereText(c)) today.",
+                             basedOn: "kai activity, today", limits: fileLimits(c, agent: agent))
         }
         let lines = f.prefix(4).map { i in
             "\(i.agent) \(i.title.lowercased()): \(i.detail)"
                 + (i.examples.isEmpty ? "" : " (for example \(PhrasePrompts.data(i.examples[0])))")
         }
         return AskAnswer(intent: .files,
-                         text: lines.joined(separator: ". ") + ". These are requests Kai saw through the agents' "
-                            + "hooks, not every file access: commands and scripts can touch other files.",
+                         text: lines.joined(separator: ". ") + ".",
                          basedOn: "kai activity (activity recording), today",
-                         actions: [AskAction(kind: .openActivity, title: "Open Activity", ref: "files")])
+                         actions: [AskAction(kind: .openActivity, title: "Open Activity", ref: "files")],
+                         limits: ["These are requests Kai saw through the agents' hooks, not every file access: "
+                                  + "commands and scripts can touch other files."] + fileLimits(c, agent: agent))
+    }
+
+    /// What the agents asked about don't report about files (the coverage table).
+    static func fileLimits(_ c: AskContext, agent: String?) -> [String] {
+        let keys = agent.map { [$0] } ?? (c.agents.isEmpty ? ["cursor", "codex"] : c.agents.map(\.key))
+        var out: [String] = []
+        if keys.contains("cursor") { out.append("Cursor doesn't report its editor's writes.") }
+        if keys.contains("codex") { out.append("Codex reports no file events.") }
+        return out
     }
 
     static func destinations(_ c: AskContext) -> AskAnswer {
@@ -557,10 +576,10 @@ enum AskEngine {
         }
         return AskAnswer(intent: .destinations,
                          text: "Kai observed \(g.countText) to \(g.detail.replacingOccurrences(of: " · watching only", with: "")): "
-                            + g.examples.map(PhrasePrompts.data).joined(separator: ", ")
-                            + ". Internet is Watch-only: nothing was blocked, and a connection doesn't show what was sent.",
+                            + g.examples.map(PhrasePrompts.data).joined(separator: ", ") + ".",
                          basedOn: "Network wall (Watch only), today",
-                         actions: [AskAction(kind: .openActivity, title: "Open Activity", ref: "connections")])
+                         actions: [AskAction(kind: .openActivity, title: "Open Activity", ref: "connections")],
+                         limits: ["Internet is Watch-only: nothing was blocked, and a connection doesn't show what was sent."])
     }
 
     static func agentWords(_ a: AskAgent) -> String {
@@ -586,10 +605,11 @@ enum AskEngine {
             AskAction(kind: .reconnect, title: "Reconnect \(ActivityFeed.agentTitle($0.key))", ref: $0.key)
         }
         return AskAnswer(intent: .agent(key),
-                         text: rows.map(agentWords).joined(separator: " ")
-                            + " Connected is about Kai's integration only; working means a connected agent ran a "
-                            + "command in the last 15 minutes.",
-                         basedOn: "kai snapshot and kai status", actions: actions)
+                         text: rows.map(agentWords).joined(separator: " "),
+                         basedOn: "kai snapshot and kai status", actions: actions,
+                         limits: ["Connected is about Kai's integration only; working means a connected agent ran a "
+                                  + "command in the last 15 minutes."]
+                            + rows.compactMap { AgentReports.footnote($0.key).map { $0.prefix(1).uppercased() + $0.dropFirst() + "." } })
     }
 
     static func blindSpots(_ c: AskContext, agent: String? = nil) -> AskAnswer {
@@ -606,8 +626,10 @@ enum AskEngine {
         s.append("Internet is Watch-only: Kai can list destinations when watching is on, never what was sent.")
         if !c.recording { s.append("Activity recording is off, so Kai keeps only its stops.") }
         if !c.internetWatching { s.append("Internet watching is off.") }
-        return AskAnswer(intent: .blindSpots, text: s.joined(separator: " "),
-                         basedOn: "Kai's coverage notes (docs/COVERAGE.md) and your settings")
+        // The first sentence is the answer; the rest are limits Kai renders itself.
+        return AskAnswer(intent: .blindSpots, text: s[0],
+                         basedOn: "Kai's coverage notes (docs/COVERAGE.md) and your settings",
+                         limits: Array(s.dropFirst()))
     }
 
     /// At most 4 lines: sessions per agent, what was recorded, stops, and
@@ -640,7 +662,30 @@ enum AskEngine {
         if !c.recording { actions.append(AskAction(kind: .turnOnRecording, title: "Turn on activity recording")) }
         return AskAnswer(intent: .today, text: text,
                          basedOn: (c.recording ? "kai activity, " : "") + "Kai's decisions, kai snapshot and your settings, today",
-                         actions: actions)
+                         actions: actions,
+                         limits: agents.filter(\.connected).compactMap { a in
+                             AgentReports.footnote(a.key).map { $0.prefix(1).uppercased() + $0.dropFirst() + "." }
+                         })
+    }
+
+    /// Now → "Ask about this": the session, from its card's own numbers.
+    static func aboutSession(_ s: SessionFocus) -> AskAnswer {
+        var text = "\(s.agentTitle) in \(s.project)" + (s.tab.isEmpty ? "" : " (\(s.tab))") + ": \(s.state.lowercased())"
+            + (s.started.isEmpty ? "" : ", \(s.started)") + "."
+        if !s.recording {
+            text += " Activity recording is off, so Kai kept only its stops for this session."
+        } else {
+            let counted = s.counts.filter { $0.notReportedBy == nil && $0.kind != .stops }.map(\.text)
+            text += counted.isEmpty ? "" : " Kai recorded " + AutoConnectWords.joined(counted) + "."
+            if let l = s.last { text += " Last: " + PhrasePrompts.data(l) + "." }
+        }
+        text += s.stops == 0 ? " Kai stopped nothing in it." : " Kai stopped \(ActivityFeed.n(s.stops, "request")) in it"
+            + (s.stopLine.map { ", most recently: " + PhrasePrompts.data($0) } ?? "") + (s.stops == 0 ? "" : ".")
+        if !s.topic.isEmpty { text += " Topic, as the agent reported it: " + PhrasePrompts.data(s.topic) + "." }
+        return AskAnswer(intent: .unknown, text: text, basedOn: "kai snapshot and kai activity, this session",
+                         actions: [AskAction(kind: .openActivity, title: "Open in Activity", ref: "session:" + s.id)],
+                         limits: s.counts.compactMap { $0.notReportedBy == nil ? nil : $0.text.prefix(1).uppercased() + $0.text.dropFirst() + "." }
+                            + ["Counts are requests Kai saw through \(s.agentTitle)'s hook, not everything it did."])
     }
 
     /// "Ask about this": the record dropped in, explained from itself.
