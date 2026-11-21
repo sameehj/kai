@@ -34,7 +34,7 @@ swiftc -O -o "$OUT/cardtext/run" "$S/AuditLog.swift" "$S/CardText.swift" "$OUT/c
 # 0.4 Ask Kai and Activity: intents, answers from records, one entry per stop.
 mkdir -p "$OUT/ask"
 cp "$ROOT/tests/app/ask_main.swift" "$OUT/ask/main.swift"
-swiftc -O -o "$OUT/ask/run" "$S/AuditLog.swift" "$S/ActivityFeed.swift" "$S/AskPhraser.swift" "$S/AskEngine.swift" \
+swiftc -O -o "$OUT/ask/run" "$S/AuditLog.swift" "$S/ActivityFeed.swift" "$S/AskPhraser.swift" "$S/AskEngine.swift" "$S/AutoConnect.swift" \
     "$OUT/ask/main.swift" || exit 1
 "$OUT/ask/run" || rc=1
 rm -rf "$OUT"

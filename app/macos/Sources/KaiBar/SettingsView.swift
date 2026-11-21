@@ -259,9 +259,13 @@ private struct GeneralPage: View {
     }
 
     @ViewBuilder private var agents: some View {
-        CapsLabel("Built into your agents")
+        CapsLabel("Agents")
+        if let note = model.connectedNote { ConnectedNote(text: note) }
+        CodexTrustRow()
         ForEach(Agent.allCases) { AgentCard(agent: $0) }
-        Text("Turning an agent on adds Kai's checks to its settings file (its hooks) and keeps a backup. Restart open agent sessions to pick up the change.")
+        Text("Kai connects every agent it finds on this Mac. On adds Kai's checks to the agent's settings file (its "
+             + "hooks) and keeps a backup; Off removes them, and Kai won't connect that agent again on its own. "
+             + "Restart open agent sessions to pick up a change.")
             .font(.system(size: 12)).foregroundStyle(Theme.muted)
     }
 
@@ -533,11 +537,14 @@ private struct NetworkPage: View {
                             .toggleStyle(KaiToggleStyle()).labelsHidden()
                             .disabled(wall.state == .activating || wall.state == .checking)
                     }
-                    Text(wall.isOn ? "On: Kai records the connections agents make. Turning it off removes the filter from this Mac."
-                                   : wall.summary + ". Turning it on asks macOS to approve Kai's network extension.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(wall.state == .off || wall.isOn ? Theme.muted : Theme.amber)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if wall.isOn {
+                        Text("On: Kai records the connections agents make. Turning it off removes the filter from this Mac.")
+                            .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        // 0.4.1: where macOS asks, step by step; turns On by itself once approved.
+                        InternetSetupStep()
+                    }
                 }
             }
             VStack(alignment: .leading, spacing: 8) {

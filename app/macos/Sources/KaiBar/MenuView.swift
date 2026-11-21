@@ -12,6 +12,9 @@ struct MenuView: View {
     @State private var dismissedBlock: String?
     @State private var showPermissions = false
     @State private var openDecision: String?
+    /// Re-render once the 5-second "Looking for agents…" grace has passed.
+    @State private var lookTick = Date()
+    @AppStorage("advancedSection") private var advancedSection = "agents"
     @ObservedObject private var grantManager = GrantManager.shared
     @ObservedObject private var agents = AgentsModel.shared
 
@@ -32,6 +35,7 @@ struct MenuView: View {
             pausedBanner
             if DevFlags.perSessionPause { pauseBanner }
             agentRows
+            InternetNeedsYouRow { open(.internet) }
             latestStop
             footer
         }
@@ -40,6 +44,12 @@ struct MenuView: View {
         .background(Theme.ink)
         .foregroundStyle(Theme.text)
         .task { await model.refresh(); wall.refresh(); await agents.refresh() }
+        .task {
+            while Date().timeIntervalSince(AppModel.launchedAt) < 6 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                lookTick = Date()
+            }
+        }
     }
 
     /// Things that change what the header means: notifications off, an
@@ -79,15 +89,30 @@ struct MenuView: View {
                             .fixedSize(horizontal: false, vertical: true).padding(14).frame(width: 340)
                     }
             }
-        } else if !agents.loaded {
-            Text("Looking for agents…").font(.system(size: 12)).foregroundStyle(Theme.soft)
         } else {
-            let found = agents.agents.filter(\.detected)
+            let rows = model.displayAgents(agents)
+            let snap = agents.loaded && agents.sourceError == nil ? agents.agents.filter(\.detected).count : nil
+            let st = model.status.map { _ in model.statusAgentRows.filter(\.detected).count }
+            let state = AutoConnect.listState(snapshotCount: snap, statusCount: st,
+                                              sinceLaunch: lookTick.timeIntervalSince(AppModel.launchedAt))
+            let found = (rows ?? []).filter(\.detected)
             VStack(alignment: .leading, spacing: 4) {
-                if found.isEmpty {
-                    Text("No supported agent found on this Mac.").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                switch state {
+                case .looking:
+                    Text("Looking for agents…").font(.system(size: 12)).foregroundStyle(Theme.soft)
+                case .unreadable:
+                    Text("Kai can't list agents right now.").font(.system(size: 12)).foregroundStyle(Theme.amber)
+                case .noneFound:
+                    HStack(spacing: 4) {
+                        Text("No agents found ·").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        Button("Settings → Agents") { advancedSection = "agents"; open(.advanced) }
+                            .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.lime)
+                    }
+                case .list: EmptyView()
                 }
-                ForEach(found) { a in
+                if let note = model.connectedNote { ConnectedNote(text: note) }
+                CodexTrustRow()
+                ForEach(state == .list ? found : []) { a in
                     let (word, tone) = Self.agentState(a)
                     let working = agents.workingNow.filter { $0.displayAgent == LiveCoverage.title(a.name) }.count
                     Button { MainNav.shared.showActivity(agent: a.name); openMain() } label: {
@@ -114,6 +139,7 @@ struct MenuView: View {
     static func agentState(_ a: AgentRow) -> (String, LiveCoverage.Tone) {
         switch a.hooks {
         case "installed": return ("Checking", .checking)
+        case "untrusted": return ("Not checked yet: run /hooks in Codex", .off)
         case "failing": return ("Checks off: broken", .problem)
         default: return ("Not checking", .off)
         }
@@ -517,8 +543,12 @@ struct AgentCard: View {
 
     private func subtitle(_ info: KaiStatus.Agent) -> String {
         if info.broken { return "Not working: " + (info.problem ?? "check failed") }
-        if info.installed { return "Agent checks on" }
-        return info.detected ? "Agent checks off" : "Not found on this Mac"
+        if info.installed && agent == .codex && model.codexNeedsTrust {
+            return "On · not checked until you run /hooks in Codex once"
+        }
+        if info.installed { return "On" }
+        if !info.detected { return "Not found on this Mac" }
+        return model.userDisabledAgents.contains(agent.rawValue) ? "Off · you turned it off" : "Off"
     }
 
     var body: some View {
@@ -540,6 +570,58 @@ struct AgentCard: View {
                     .toggleStyle(KaiToggleStyle()).labelsHidden()
                     .disabled(model.busy || model.status == nil)
             }
+        }
+    }
+}
+
+/// 0.4.1: "Kai connected Claude Code, Cursor and Codex." once, dismissible.
+struct ConnectedNote: View {
+    @EnvironmentObject var model: AppModel
+    let text: String
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "checkmark.circle").foregroundStyle(Theme.teal)
+            Text(text).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button { model.connectedNote = nil } label: { Image(systemName: "xmark").font(.system(size: 10)) }
+                .buttonStyle(.plain).foregroundStyle(Theme.muted).help("Dismiss")
+        }
+        .padding(10)
+        .background(Theme.teal.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+/// 0.4.1: Codex runs hooks only after the user trusts them once. Until Kai
+/// sees Codex call its hook, one amber row says what to do; never "protected".
+struct CodexTrustRow: View {
+    @EnvironmentObject var model: AppModel
+    @State private var copied = false
+    @State private var checking = false
+    var body: some View {
+        if model.codexNeedsTrust {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "exclamationmark.circle").foregroundStyle(Theme.amber)
+                    Text(AutoConnect.codexTrustLine).font(.system(size: 12))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 8) {
+                    Button(copied ? "Copied" : "Copy \"/hooks\"") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString("/hooks", forType: .string)
+                        copied = true
+                    }
+                    Button(checking ? "Checking…" : "Done") {
+                        checking = true
+                        Task { await model.recheckCodex(); checking = false }
+                    }
+                    .disabled(checking)
+                }
+                .font(.system(size: 12))
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
         }
     }
 }

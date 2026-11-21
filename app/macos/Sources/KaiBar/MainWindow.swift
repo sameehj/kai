@@ -110,10 +110,15 @@ struct HeaderState: Equatable {
         if model.cliPath == nil || Lifecycle.programMissing {
             return HeaderState(text: "Kai is off", tone: .off, detail: "Kai's program is missing. Reinstall the Kai package.")
         }
-        let found = agents.agents.filter(\.detected)
-        if !agents.loaded { return HeaderState(text: "Checking…", tone: .ok) }
+        guard let rows = model.displayAgents(agents) else {
+            if agents.sourceError != nil && Date().timeIntervalSince(AppModel.launchedAt) >= 5 {
+                return HeaderState(text: "Kai can't list agents right now", tone: .attention, detail: agents.sourceError)
+            }
+            return HeaderState(text: "Checking…", tone: .ok)
+        }
+        let found = rows.filter(\.detected)
         if found.isEmpty { return HeaderState(text: "No supported agent found", tone: .attention) }
-        if !found.contains(where: { $0.hooks == "installed" }) {
+        if !found.contains(where: { $0.hooks == "installed" || $0.hooks == "untrusted" }) {
             return HeaderState(text: "Kai is off", tone: .off, detail: "No agent is connected to Kai.")
         }
         if GrantManager.shared.pauseState(nil) != Int32(KAI_PAUSE_NONE) {
@@ -129,6 +134,9 @@ struct HeaderState: Equatable {
         if let broken = found.first(where: { $0.hooks == "failing" }) {
             return HeaderState(text: "\(ActivityFeed.agentTitle(broken.name)) isn't connected", tone: .attention,
                                detail: "Kai's hook didn't answer a test request.")
+        }
+        if found.contains(where: { $0.hooks == "untrusted" }) {
+            return HeaderState(text: "Codex needs one step", tone: .attention, detail: AutoConnect.codexTrustLine)
         }
         if let missing = found.first(where: { $0.hooks != "installed" }) {
             return HeaderState(text: "\(ActivityFeed.agentTitle(missing.name)) isn't connected", tone: .attention,
@@ -340,13 +348,28 @@ struct MainWindowView: View {
             let title = LiveCoverage.title(a.name)
             let running = agents.interactiveSessions.contains { $0.isActive && $0.displayAgent == title }
             let working = agents.workingNow.filter { $0.displayAgent == title }.count
+            let untrusted = a.name == "codex" && a.hooks == "installed" && model.codexNeedsTrust
             return AskAgent(key: a.name, connected: a.hooks == "installed", running: running,
                             working: a.hooks == "installed" ? working : 0,
-                            problem: a.hooks == "failing" ? a.detail : nil)
+                            problem: a.hooks == "failing" ? a.detail : nil, untrusted: untrusted)
         }
+        let internet: InternetState
+        switch wall.state {
+        case .on: internet = .on
+        case .needsApproval, .allowFilter: internet = .needsApproval
+        case .failed(let why): internet = .failed(why)
+        default: internet = .off
+        }
+        let firsts = (records.groups?.groups ?? []).map(\.first).filter { $0 > 0 }
+        let first = firsts.min().map { Date(timeIntervalSince1970: $0) }
         return AskContext(workspace: workspace, recording: model.recordingActivity || (records.groups?.recording ?? false),
                           internetWatching: wall.isOn, items: items, stops: stops, agents: askAgents,
-                          why: records.why, focus: nav.askContext)
+                          why: records.why, focus: nav.askContext,
+                          version: model.status?.version ?? "", commit: model.status?.commit ?? "",
+                          internet: internet,
+                          recordingFirst: first.flatMap { Calendar.current.isDateInToday($0) ? $0 : nil },
+                          policyProblem: model.status.flatMap { $0.policy.ok ? nil : $0.policy.error },
+                          paused: GrantManager.shared.pauseState(nil) != Int32(KAI_PAUSE_NONE))
     }
 }
 
@@ -570,10 +593,13 @@ struct AgentsPageView: View {
 
     var body: some View {
         PageColumn(title: "Agents", subtitle: Text("Kai's connection to each agent on this Mac, and what it reports.")) {
-            let found = agents.agents.filter(\.detected)
-            if let err = agents.sourceError {
+            let rows = model.displayAgents(agents)
+            let found = (rows ?? []).filter(\.detected)
+            if let note = model.connectedNote { ConnectedNote(text: note) }
+            CodexTrustRow()
+            if rows == nil, let err = agents.sourceError {
                 Text("Kai can't list agents right now: \(err)").font(.system(size: 12)).foregroundStyle(Theme.amber)
-            } else if !agents.loaded {
+            } else if rows == nil {
                 ProgressView().controlSize(.small)
             } else if found.isEmpty {
                 RecordList { Text("No supported agent found on this Mac.").foregroundStyle(Theme.muted).padding(28) }
@@ -586,11 +612,20 @@ struct AgentsPageView: View {
                             RecordRow(letter: String(LiveCoverage.title(a.name).prefix(2)),
                                       title: LiveCoverage.title(a.name), subtitle: state + " · " + ActivityFeed.coverage(a.name),
                                       tone: tone) { nav.showActivity(agent: a.name) }
-                            if a.hooks != "installed", let ag = Agent(rawValue: a.name) {
+                            if let ag = Agent(rawValue: a.name) {
                                 HStack {
                                     Spacer()
-                                    Button(a.hooks == "failing" ? "Reconnect" : "Connect") { model.setAgent(ag, enabled: true) }
-                                        .buttonStyle(LimeButtonStyle(subtle: true))
+                                    if a.hooks == "failing" {
+                                        Button("Reconnect") { model.setAgent(ag, enabled: true) }
+                                            .buttonStyle(LimeButtonStyle(subtle: true))
+                                    }
+                                    // 0.4.1: on by default; the switch is the only control.
+                                    Toggle("On", isOn: Binding(get: { a.hooks != "missing" && a.hooks != "not found" },
+                                                               set: { model.setAgent(ag, enabled: $0) }))
+                                        .toggleStyle(KaiToggleStyle()).labelsHidden()
+                                        .disabled(model.busy || model.status == nil)
+                                        .help("On: Kai's hooks are in \(ag.title)'s settings. Off: Kai leaves it alone "
+                                              + "and won't connect it again on its own.")
                                 }
                                 .padding(.horizontal, 16).padding(.bottom, 10)
                             }
@@ -611,6 +646,12 @@ struct AgentsPageView: View {
         let running = agents.interactiveSessions.contains { $0.isActive && $0.displayAgent == title }
         if a.hooks == "installed" {
             return (working > 0 ? "Connected · \(working) working" : "Connected · no recent activity", Theme.muted)
+        }
+        if a.hooks == "untrusted" {
+            return ("Connected · Codex hasn't run Kai's hook yet: not checked until you run /hooks in Codex", Theme.amber)
+        }
+        if a.hooks == "missing" && UserDefaults.standard.stringArray(forKey: AutoConnect.disabledKey)?.contains(a.name) == true {
+            return ("Off · you turned it off", Theme.muted)
         }
         if running { return ("Not connected · running · activity unknown", Theme.amber) }
         return ("Not connected · activity unavailable", Theme.amber)

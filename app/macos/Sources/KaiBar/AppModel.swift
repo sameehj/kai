@@ -30,6 +30,11 @@ final class AppModel: ObservableObject {
     @Published var errorMessage: String?
     /// A short confirmation ("Exception added …"), shown on the Activity page.
     @Published var notice: String?
+    /// 0.4.1: "Kai connected Claude Code, Cursor and Codex." Shown once, after
+    /// Kai connected agents on its own; dismissible.
+    @Published var connectedNote: String?
+    static let launchedAt = Date()
+    private var autoDetected: Set<String>?
     /// Dogfood: shown in the popover header with a link to System Settings.
     @Published var notificationsOff = false
     @Published var notifyOnBlock: Bool {
@@ -107,9 +112,8 @@ final class AppModel: ObservableObject {
     /// menu-bar label), from measured state: the agents' hooks as `kai
     /// snapshot` measured them, Kai's program on disk, and pauses.
     func headline(_ agents: AgentsModel) -> LiveCoverage.Headline {
-        let known = agents.loaded && agents.sourceError == nil
         let warn = (policy?.switches ?? [:]).contains { $0.key.hasPrefix("on_") && $0.value == "warn" }
-        return LiveCoverage.headline(agents: known ? agents.agents : nil,
+        return LiveCoverage.headline(agents: displayAgents(agents),
                                      programMissing: cliPath == nil || Lifecycle.programMissing,
                                      pausedAll: GrantManager.shared.pauseState(nil) != Int32(KAI_PAUSE_NONE),
                                      pausedSessions: agents.pausedSessions.count, warnOnly: warn)
@@ -214,11 +218,101 @@ final class AppModel: ObservableObject {
             }
             migratingChannels = false
         }
+        if let p = newPolicy, !recordingDefaultChecked, Snapshot.requestedDir == nil {
+            recordingDefaultChecked = true
+            noteRecordingDefault(p)
+        }
         if let path = newStatus?.audit.path, tail == nil {
             tail = AuditTail(path: path)
             pollAudit()
         }
         if let s = newStatus { await reapplyIntegrationsIfUpdated(s) }
+        if let s = status { await autoConnect(s) }
+    }
+
+    /// 0.4.1: activity recording is on by default (a policy without the line
+    /// records; an explicit `record_activity off` is kept). Say so once; a
+    /// marker under ~/.kai makes sure this never repeats.
+    private var recordingDefaultChecked = false
+    private func noteRecordingDefault(_ p: PolicyInfo) {
+        let marker = String(cString: kai_home()) + "/record-activity-default-0.4.1"
+        guard !FileManager.default.fileExists(atPath: marker) else { return }
+        FileManager.default.createFile(atPath: marker, contents: Data("shown\n".utf8),
+                                       attributes: [.posixPermissions: 0o600])
+        if p.switches["record_activity"] == "on" {
+            notice = "Kai now keeps a list of what agents read, edit and run, on this Mac only (no file contents). "
+                + "Turn it off in Settings → General."
+        }
+    }
+
+    // MARK: 0.4.1 auto-connect
+
+    var agentStates: [AutoConnect.AgentState] {
+        Agent.allCases.map { a in
+            let i = agentInfo(a)
+            return AutoConnect.AgentState(key: a.rawValue, detected: i.detected, installed: i.installed, lastHook: i.lastHook)
+        }
+    }
+
+    var userDisabledAgents: [String] {
+        get { UserDefaults.standard.stringArray(forKey: AutoConnect.disabledKey) ?? [] }
+        set { UserDefaults.standard.set(newValue, forKey: AutoConnect.disabledKey) }
+    }
+
+    /// Connect every detected agent the user hasn't turned off: on the first
+    /// refresh of each launch, then whenever an agent is newly detected.
+    private func autoConnect(_ s: KaiStatus) async {
+        guard !busy, Snapshot.requestedDir == nil else { return }   // snapshots are read-only
+        let states = agentStates
+        let todo = AutoConnect.plan(states, disabled: Set(userDisabledAgents), previouslyDetected: autoDetected)
+        autoDetected = Set(states.filter { $0.detected }.map { $0.key })
+        guard !todo.isEmpty else { return }
+        busy = true
+        var connected: [String] = []
+        for agentKey in todo {
+            let title = Agent(rawValue: agentKey)?.title ?? agentKey
+            let r = await KaiCLI.run(["install", agentKey])
+            if r.ok { connected.append(title) }
+            else { errorMessage = "Kai couldn't connect \(title): \(r.message)" }
+        }
+        busy = false
+        if let updated = await KaiCLI.decode(KaiStatus.self, ["status", "--json"]) { status = updated }
+        await AgentsModel.shared.refresh()
+        if let line = AutoConnect.connectedLine(connected) { connectedNote = line }
+    }
+
+    /// Agents as the UI shows them: `kai snapshot`'s rows once they land, or
+    /// `kai status`'s after 5 seconds (so "Looking for agents…" never stays).
+    /// Codex with Kai's hooks but no record of calling them is "untrusted":
+    /// never shown as checked. nil: neither source is known yet.
+    func displayAgents(_ agents: AgentsModel) -> [AgentRow]? {
+        var rows: [AgentRow]?
+        if agents.loaded && agents.sourceError == nil { rows = agents.agents }
+        else if Date().timeIntervalSince(Self.launchedAt) >= 5, status != nil { rows = statusAgentRows }
+        guard var r = rows else { return nil }
+        if codexNeedsTrust {
+            for i in r.indices where r[i].name == "codex" && r[i].hooks == "installed" { r[i].hooks = "untrusted" }
+        }
+        return r
+    }
+
+    var statusAgentRows: [AgentRow] {
+        Agent.allCases.map { a in
+            let i = agentInfo(a)
+            var row = AgentRow(name: a.rawValue)
+            row.detected = i.detected
+            row.hooks = i.broken ? "failing" : i.installed ? "installed" : i.detected ? "missing" : "not found"
+            row.detail = i.problem
+            return row
+        }
+    }
+
+    var codexNeedsTrust: Bool { AutoConnect.codexNeedsTrust(agentStates.first { $0.key == "codex" }) }
+
+    /// Codex "Done": check again whether Codex has called Kai's hook.
+    func recheckCodex() async {
+        if let updated = await KaiCLI.decode(KaiStatus.self, ["status", "--json"]) { status = updated }
+        if codexNeedsTrust { notice = "Kai hasn't seen Codex use its hook yet. Run /hooks in Codex, then any command." }
     }
 
     /// After Kai is updated, re-run setup for every agent that's turned on, so
@@ -228,7 +322,7 @@ final class AppModel: ObservableObject {
     private func reapplyIntegrationsIfUpdated(_ s: KaiStatus) async {
         // A toggle also changes hook settings. Never let an update refresh
         // reinstall hooks while the user is turning that agent off.
-        guard !reappliedThisLaunch && !busy else { return }
+        guard !reappliedThisLaunch && !busy, Snapshot.requestedDir == nil else { return }   // snapshots are read-only
         reappliedThisLaunch = true
         let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "") + "/" + s.version
         let key = "integrationsAppliedFor"
@@ -267,6 +361,14 @@ final class AppModel: ObservableObject {
         Notifier.checkOff { off in DispatchQueue.main.async { if self.notificationsOff != off { self.notificationsOff = off } } }
         let fresh = tail.poll()
         if tail.recent != events { events = tail.recent }
+        // `kai uninstall <agent>` from the Terminal while Kai runs: the user
+        // turned it off; don't connect it again on our own.
+        for e in fresh where e.rule == "uninstall" {
+            let which = e.detail == "all" ? Agent.allCases.map { $0.rawValue } : [e.detail]
+            for k in which where Agent(rawValue: k) != nil && !userDisabledAgents.contains(k) {
+                userDisabledAgents = AutoConnect.disabled(userDisabledAgents, agent: k, enabled: false)
+            }
+        }
         let blocks = fresh.filter { $0.isBlock && !$0.isSilent }
         if !blocks.isEmpty {
             lastBlockAt = Date()
@@ -406,6 +508,7 @@ final class AppModel: ObservableObject {
     }
 
     func setAgent(_ a: Agent, enabled: Bool) {
+        userDisabledAgents = AutoConnect.disabled(userDisabledAgents, agent: a.rawValue, enabled: enabled)
         Task {
             errorMessage = nil
             await perform([enabled ? "install" : "uninstall", a.rawValue])
@@ -418,6 +521,18 @@ final class AppModel: ObservableObject {
     func setSwitch(_ key: String, _ value: String) {
         guard policy?.switches[key] != value else { return }
         Task { await performPolicyChange(["policy", "set", key, value]) }
+    }
+
+    /// Set a switch and read it back (`kai policy show --json`). nil: the
+    /// value changed; else why not, shown where the user asked.
+    func setSwitchVerified(_ key: String, _ value: String) async -> String? {
+        if policy?.switches[key] == value { return nil }
+        errorMessage = nil
+        await performPolicyChange(["policy", "set", key, value])
+        await refresh()
+        let why = SettingCheck.failure(expected: value, after: policy?.switches[key], error: errorMessage)
+        if why == nil { errorMessage = nil }
+        return why
     }
 
     func add(_ kind: String, _ value: String) {

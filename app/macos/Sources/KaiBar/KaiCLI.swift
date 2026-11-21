@@ -17,6 +17,8 @@ struct KaiStatus: Decodable, Equatable {
         /// Live check (kai status runs the installed hook): nil from older kai CLIs.
         var working: Bool? = nil
         var problem: String? = nil
+        /// 0.4.1: when the agent last called Kai's hook (0 = never); nil from older CLIs.
+        var lastHook: Double? = nil
         /// Installed, checked, and not working right now.
         var broken: Bool { installed && working == false }
     }
@@ -56,6 +58,8 @@ struct KaiStatus: Decodable, Equatable {
         var problem: String? = nil
     }
     let version: String
+    /// Build commit (0.4+); nil from older CLIs.
+    var commit: String? = nil
     let exe: String
     let home: String
     var install: Install? = nil
