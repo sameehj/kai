@@ -13,6 +13,12 @@
  *
  * `kai activity --json [--since 24h] [--workspace PATH]` reads them back
  * grouped per agent and operation, repeated reads of a path collapsed.
+ *
+ * 0.5: also per session ("sessions"), keyed by Kai's session key ("ks", the
+ * key `kai snapshot` lists as activity_keys; older lines fall back to the
+ * agent's own conversation id): counts per operation, stops, and the newest
+ * KAI_ACTIVITY_SESSION_EVENTS events (time, operation, path / first word of a
+ * command / MCP server, decision). "first_record" is the oldest line read.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -29,6 +35,8 @@
 #include "kai.h"
 
 #define KAI_ACTIVITY_KEEP_DAYS 7
+#define KAI_ACTIVITY_SESSION_EVENTS 40
+#define KAI_ACTIVITY_MAX_SESSIONS 64
 
 static void activity_path(char *out, size_t n) { snprintf(out, n, "%s/activity.jsonl", kai_home()); }
 
@@ -104,10 +112,11 @@ static void rotate(const char *path, time_t now) {
     closedir(d);
 }
 
-void kai_activity_record(const kai_policy *p, const char *agent, const char *session, const char *cwd,
-                         const char *tool, const char *op, const char *path, const char *cmd,
+void kai_activity_record(const kai_policy *p, const char *agent, const char *session, const char *ksession,
+                         const char *cwd, const char *tool, const char *op, const char *path, const char *cmd,
                          const char *mcp_server, const char *decision) {
-    if (!kai_policy_record_activity(p) || !op) return;
+    /* 0.5: a health probe (kai status' self-test) is not agent activity. */
+    if (!kai_policy_record_activity(p) || !op || kai_audit_suppressed()) return;
     char file[1100];
     activity_path(file, sizeof file);
     time_t now = time(NULL);
@@ -117,6 +126,7 @@ void kai_activity_record(const kai_policy *p, const char *agent, const char *ses
     cJSON_AddNumberToObject(o, "ts", (double)now);
     cJSON_AddStringToObject(o, "agent", agent ? agent : "unknown");
     if (session && *session) cJSON_AddStringToObject(o, "session", session);
+    if (ksession && *ksession) cJSON_AddStringToObject(o, "ks", ksession);
     if (cwd && *cwd) cJSON_AddStringToObject(o, "workspace", cwd);
     if (tool && *tool) cJSON_AddStringToObject(o, "tool", tool);
     cJSON_AddStringToObject(o, "op", op);
@@ -156,6 +166,72 @@ typedef struct {
     cJSON *sessions;  /* id -> 1 */
 } group_t;
 
+typedef struct { double ts; char op[16]; char name[512]; char decision[16]; } sev_t;
+typedef struct {
+    char key[96], agent[32], workspace[512];
+    double first, last, ws_last;
+    long counts[6], stops;
+    sev_t *ev; int nev, capev;
+} sess_t;
+static const char *const OPS[6] = {"read", "edit", "write", "command", "mcp", "tool"};
+typedef struct { sess_t s[KAI_ACTIVITY_MAX_SESSIONS]; int n; double first_record; } sessions_t;
+
+static int op_index(const char *op) {
+    for (int i = 0; i < 6; i++) if (!strcmp(OPS[i], op)) return i;
+    return 5;
+}
+
+static void session_add(sessions_t *ss, const char *key, const char *agent, const char *ws, double ts,
+                        const char *op, const char *name, const char *dec) {
+    if (ss->first_record == 0 || ts < ss->first_record) ss->first_record = ts;
+    sess_t *s = NULL;
+    for (int i = 0; i < ss->n; i++) if (!strcmp(ss->s[i].key, key)) { s = &ss->s[i]; break; }
+    if (!s) {
+        if (ss->n == KAI_ACTIVITY_MAX_SESSIONS) {   /* bounded: replace the least recent session */
+            int old = 0;
+            for (int i = 1; i < ss->n; i++) if (ss->s[i].last < ss->s[old].last) old = i;
+            if (ss->s[old].last > ts) return;
+            free(ss->s[old].ev);
+            s = &ss->s[old];
+        } else s = &ss->s[ss->n++];
+        memset(s, 0, sizeof *s);
+        kai_strlcpy(s->key, key, sizeof s->key);
+        kai_strlcpy(s->agent, agent, sizeof s->agent);
+        s->first = ts;
+    }
+    if (ts < s->first) s->first = ts;
+    if (ts > s->last) s->last = ts;
+    if (ws && *ws && ts >= s->ws_last) { kai_strlcpy(s->workspace, ws, sizeof s->workspace); s->ws_last = ts; }
+    s->counts[op_index(op)]++;
+    int stop = dec && (!strcmp(dec, "block") || !strcmp(dec, "deny"));
+    if (stop) s->stops++;
+    /* keep the newest events: an array kept to at most 2x the cap, trimmed when output */
+    if (s->nev == s->capev) {
+        if (s->capev >= 4 * KAI_ACTIVITY_SESSION_EVENTS) {
+            int oldest = 0;   /* drop the oldest to make room */
+            for (int i = 1; i < s->nev; i++) if (s->ev[i].ts < s->ev[oldest].ts) oldest = i;
+            if (s->ev[oldest].ts > ts) return;
+            s->ev[oldest] = s->ev[--s->nev];
+        } else {
+            int nc = s->capev ? s->capev * 2 : 16;
+            sev_t *ne = realloc(s->ev, (size_t)nc * sizeof *ne);
+            if (!ne) return;
+            s->ev = ne; s->capev = nc;
+        }
+    }
+    sev_t *e = &s->ev[s->nev++];
+    memset(e, 0, sizeof *e);
+    e->ts = ts;
+    kai_strlcpy(e->op, op, sizeof e->op);
+    if (name) kai_strlcpy(e->name, name, sizeof e->name);
+    kai_strlcpy(e->decision, dec && *dec ? dec : "allow", sizeof e->decision);
+}
+
+static int sev_newest_first(const void *a, const void *b) {
+    double x = ((const sev_t *)a)->ts, y = ((const sev_t *)b)->ts;
+    return x < y ? 1 : x > y ? -1 : 0;
+}
+
 static long parse_since(const char *s) {
     if (!s || !*s) return 86400;
     char *e;
@@ -178,7 +254,8 @@ static int in_workspace(const char *ws, const char *want) {
     return !strncmp(ws, want, l) && (ws[l] == '\0' || ws[l] == '/');
 }
 
-static void read_file(const char *f, double since, const char *want, group_t **gs, int *ng, int *cap) {
+static void read_file(const char *f, double since, const char *want, group_t **gs, int *ng, int *cap,
+                      sessions_t *ss) {
     FILE *fp = fopen(f, "rb");
     if (!fp) return;
     char line[8192];
@@ -192,6 +269,13 @@ static void read_file(const char *f, double since, const char *want, group_t **g
         if (!cJSON_IsNumber(ts) || ts->valuedouble < since || !agent || !op || !in_workspace(ws, want)) {
             cJSON_Delete(o);
             continue;
+        }
+        /* 0.4.1 recorded kai status' health probe (a read of a Kai home's
+         * audit.log with no session): not agent activity, skip those lines. */
+        if (!cJSON_GetObjectItem(o, "session") && !cJSON_GetObjectItem(o, "ks")) {
+            const char *pth = cJSON_GetStringValue(cJSON_GetObjectItem(o, "path"));
+            size_t pl = pth ? strlen(pth) : 0;
+            if (pl >= 10 && !strcmp(pth + pl - 10, "/audit.log")) { cJSON_Delete(o); continue; }
         }
         group_t *g = NULL;
         for (int i = 0; i < *ng; i++)
@@ -224,6 +308,17 @@ static void read_file(const char *f, double since, const char *want, group_t **g
         }
         const char *sess = cJSON_GetStringValue(cJSON_GetObjectItem(o, "session"));
         if (sess && !cJSON_GetObjectItem(g->sessions, sess)) cJSON_AddNumberToObject(g->sessions, sess, 1);
+        if (ss) {
+            const char *ks = cJSON_GetStringValue(cJSON_GetObjectItem(o, "ks"));
+            char key[96];
+            if (ks && *ks) snprintf(key, sizeof key, "%s", ks);
+            else if (sess && *sess) snprintf(key, sizeof key, "conv:%.80s", sess);
+            else snprintf(key, sizeof key, "agent:%.80s", agent);
+            const char *nm = cJSON_GetStringValue(cJSON_GetObjectItem(o, "path"));
+            if (!nm) nm = cJSON_GetStringValue(cJSON_GetObjectItem(o, "cmd0"));
+            if (!nm) nm = cJSON_GetStringValue(cJSON_GetObjectItem(o, "mcp_server"));
+            session_add(ss, key, agent, ws, ts->valuedouble, op, nm, dec);
+        }
         cJSON_Delete(o);
     }
     fclose(fp);
@@ -249,6 +344,7 @@ int kai_cmd_activity(int argc, char **argv) {
 
     group_t *gs = NULL;
     int ng = 0, cap = 0;
+    sessions_t *ss = calloc(1, sizeof *ss);
     DIR *d = opendir(kai_home());
     if (d) {
         struct dirent *de;
@@ -258,7 +354,7 @@ int kai_cmd_activity(int argc, char **argv) {
                 continue;
             char f[1200];
             snprintf(f, sizeof f, "%s/%s", kai_home(), de->d_name);
-            read_file(f, since, want, &gs, &ng, &cap);
+            read_file(f, since, want, &gs, &ng, &cap, ss);
         }
         closedir(d);
     }
@@ -306,6 +402,35 @@ int kai_cmd_activity(int argc, char **argv) {
     }
     free(gs);
     cJSON_AddNumberToObject(o, "total", (double)total);
+    if (ss) {
+        cJSON_AddNumberToObject(o, "first_record", ss->first_record);
+        cJSON *sa = cJSON_AddArrayToObject(o, "sessions");
+        for (int i = 0; i < ss->n; i++) {
+            sess_t *s = &ss->s[i];
+            cJSON *r = cJSON_CreateObject();
+            cJSON_AddStringToObject(r, "key", s->key);
+            cJSON_AddStringToObject(r, "agent", s->agent);
+            cJSON_AddStringToObject(r, "workspace", s->workspace);
+            cJSON_AddNumberToObject(r, "first", s->first);
+            cJSON_AddNumberToObject(r, "last", s->last);
+            cJSON *c = cJSON_AddObjectToObject(r, "counts");
+            for (int k = 0; k < 6; k++) cJSON_AddNumberToObject(c, OPS[k], (double)s->counts[k]);
+            cJSON_AddNumberToObject(r, "stops", (double)s->stops);
+            qsort(s->ev, (size_t)s->nev, sizeof *s->ev, sev_newest_first);
+            cJSON *ea = cJSON_AddArrayToObject(r, "events");
+            for (int k = 0; k < s->nev && k < KAI_ACTIVITY_SESSION_EVENTS; k++) {
+                cJSON *e = cJSON_CreateObject();
+                cJSON_AddNumberToObject(e, "ts", s->ev[k].ts);
+                cJSON_AddStringToObject(e, "op", s->ev[k].op);
+                if (s->ev[k].name[0]) cJSON_AddStringToObject(e, "name", s->ev[k].name);
+                cJSON_AddStringToObject(e, "decision", s->ev[k].decision);
+                cJSON_AddItemToArray(ea, e);
+            }
+            cJSON_AddItemToArray(sa, r);
+            free(s->ev);
+        }
+        free(ss);
+    }
     char *s = json ? cJSON_PrintUnformatted(o) : cJSON_Print(o);
     if (s) { printf("%s\n", s); free(s); }
     cJSON_Delete(o);

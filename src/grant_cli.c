@@ -483,6 +483,13 @@ static int sessions_list(int json) {
             cJSON_AddStringToObject(o, "kind", kai_session_kind_name(s->kind));
             cJSON_AddStringToObject(o, "enforcement", SESSION_COVERAGE(s->agent));
             cJSON_AddStringToObject(o, "state", sess_state(s));
+            /* 0.5: the keys its activity lines carry (kai activity "sessions") */
+            cJSON *keys = cJSON_AddArrayToObject(o, "activity_keys");
+            if (s->source != KAI_SESS_SCAN) cJSON_AddItemToArray(keys, cJSON_CreateString(s->id));
+            if (s->root_pid > 0) {
+                char k[32]; snprintf(k, sizeof k, "pid-%d", s->root_pid);
+                cJSON_AddItemToArray(keys, cJSON_CreateString(k));
+            }
             if (kai_agent_product_kind(s->agent) == KAI_AGENT_IDE && !s->ended_utc) {
                 cJSON *ws = cJSON_AddArrayToObject(o, "workspaces");
                 for (int w = 0; w < r[i].nws; w++) {

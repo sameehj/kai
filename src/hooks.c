@@ -994,17 +994,32 @@ static void maybe_wait_note(char *reason, size_t n, const char *session, const c
  * session (its Kai session, and its root pid key); an allowed PreToolUse marks
  * a call in progress (inflight 1) until its PostToolUse (inflight 0). A stopped
  * call never runs, so it doesn't set it. Health probes don't count. */
-static void note_activity(const kai_policy *p, int inflight) {
-    if (kai_audit_suppressed()) return;
-    long long now = (long long)time(NULL);
-    char keys[2][64];
-    int nk = 0;
-    if (find_es_session(keys[nk], sizeof keys[nk])) nk++;
+/* The calling agent's Kai session keys, worked out once per hook process:
+ * its ES session (when the storage wall named one) and its root pid key. */
+static char g_keys[2][64];
+static int g_nkeys = -1;
+static int session_keys(const kai_policy *p) {
+    if (g_nkeys >= 0) return g_nkeys;
+    g_nkeys = 0;
+    if (find_es_session(g_keys[g_nkeys], sizeof g_keys[0])) g_nkeys++;
     char name[64]; int apid = 0;
     if (p && kai_process_agent(p, (int)getpid(), name, sizeof name, &apid) == 1 && apid > 0) {
         int root = kai_agent_root_pid(p, apid, name);
-        snprintf(keys[nk++], sizeof keys[0], "pid-%d", root > 0 ? root : apid);
+        snprintf(g_keys[g_nkeys++], sizeof g_keys[0], "pid-%d", root > 0 ? root : apid);
     }
+    return g_nkeys;
+}
+/* 0.5: the key an activity line carries (`kai snapshot` lists it per session). */
+static const char *activity_key(const kai_policy *p) {
+    if (!kai_policy_record_activity(p)) return NULL;
+    return session_keys(p) > 0 ? g_keys[0] : NULL;
+}
+
+static void note_activity(const kai_policy *p, int inflight) {
+    if (kai_audit_suppressed()) return;
+    long long now = (long long)time(NULL);
+    int nk = session_keys(p);
+    char (*keys)[64] = g_keys;
     for (int i = 0; i < nk; i++) {
         kai_session_activity_touch(keys[i], NULL, now);
         if (inflight == 1) kai_session_inflight_set(keys[i], now);
@@ -1812,7 +1827,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
     const char *dec_str = would_block ? "would-block"
                           : ask ? "ask" : (decision >= KAI_ACT_BLOCK) ? "block" : "warn";
     if (act_op)
-        kai_activity_record(p, source, session, cwd, tool, act_op, act_path, act_cmd0, act_mcp,
+        kai_activity_record(p, source, session, activity_key(p), cwd, tool, act_op, act_path, act_cmd0, act_mcp,
                             decision == KAI_ACT_NONE && !would_block && !ask ? "allow" : dec_str);
     char did[16] = "";
     if (decision >= KAI_ACT_BLOCK) kai_decision_id_new(did, sizeof did);
@@ -2088,7 +2103,7 @@ static int hook_cursor(const char *json) {
         if (is_read || is_shell || is_mcp) {
             char c0[48] = "";
             if (is_shell) kai_activity_cmd0(subject, c0, sizeof c0);
-            kai_activity_record(p, "cursor", session, cwd, is_mcp ? cjstr(root, "tool_name") : tool,
+            kai_activity_record(p, "cursor", session, activity_key(p), cwd, is_mcp ? cjstr(root, "tool_name") : tool,
                                 is_read ? "read" : is_shell ? "command" : "mcp", is_read ? subject : NULL, c0,
                                 NULL, deny ? (cursor_ask ? "ask" : "block") : "allow");
         }
