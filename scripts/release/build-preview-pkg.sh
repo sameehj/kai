@@ -76,7 +76,12 @@ make src/kai_commit.h >/dev/null
 ( cd app/macos && KAI_APP_ID=io.github.sameehj.kai KAI_TEAM="${KAI_TEAM:-}" xcodegen generate --quiet )
 # With signing off, Xcode leaves $(TeamIdentifierPrefix) empty, so the
 # extension's NEMachServiceName would lose its team prefix: set it here.
+# 0.4: the app's one Swift package (llama.cpp's pinned xcframework, checked by
+# its checksum) is fetched into a cache outside $OUT, which this script wipes.
+# KAI_SPM_CACHE overrides; prefill it with `make app` where a fresh fetch hangs.
+SPM_CACHE="${KAI_SPM_CACHE:-$ROOT/build/dd/SourcePackages}"
 xcodebuild -project app/macos/Kai.xcodeproj -scheme Kai -configuration Release -derivedDataPath "$OUT/dd" \
+    -clonedSourcePackagesDirPath "$SPM_CACHE" \
     DEVELOPMENT_TEAM="${KAI_TEAM:-}" TeamIdentifierPrefix="${KAI_TEAM:+$KAI_TEAM.}" CODE_SIGNING_ALLOWED=NO -quiet build
 APP="$STAGE/Applications/Kai.app"
 cp -R "$OUT/dd/Build/Products/Release/Kai.app" "$APP"

@@ -85,6 +85,8 @@ sign)
     sign() { codesign --force --options runtime --timestamp --sign "$KAI_DEVID_APP" "$@"; }
     # inside out: the bundled CLI, the extension, then the app
     sign "$app/Contents/Resources/kai"
+    # 0.4: embedded frameworks (llama.framework for Ask Kai's local model)
+    for fw in "$app"/Contents/Frameworks/*.framework; do [ -d "$fw" ] && sign "$fw"; done
     sign --entitlements "$work/ext.entitlements" "$ext"
     sign --entitlements "$work/app.entitlements" "$app"
     rm -rf "$work"
