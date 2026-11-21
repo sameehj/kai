@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.0-preview.1 (2026-11-21)
+
+Notes: [docs/release/0.5.0-preview.1.md](docs/release/0.5.0-preview.1.md).
+
+- **Now: see every agent session live.** Each session gets its own card, with its project, its terminal tab, what it's doing right now ("Editing Pricing.tsx · now"), and counts of reads, edits, commands and stops. Kai shows only what each agent reports, so Cursor cards say "edits: not reported by Cursor".
+- **One Activity timeline.** Everything Kai recorded today is in one list, grouped by session. You can filter it by Files, Commands, Connections or Stops, and by project, agent or session. An empty list says why, for example "Claude Code is working in acme-web, not in api-server." The Decisions page is now Activity → Stops.
+- **Real agent icons.** Kai uses the icon of the app you have installed, or the official Claude, Cursor and OpenAI marks. The initials tiles are gone.
+- **Pick or download the model right in Ask Kai.** The model chip next to Ask is a menu with three choices: Templates, Qwen 0.8B or Apple Intelligence.
+  - It downloads the local model in place, showing progress on the chip.
+  - Once the download is verified, Kai switches to the model by itself.
+  - Coverage limits always appear under each answer, written by Kai, never by the model.
+- **Simpler window.** The sidebar has Now, Activity and Ask Kai, with Settings at the bottom.
+  - Settings now has Agents, Ask Kai and Rules pages.
+  - The project picker is gone from the toolbar: Kai covers all projects.
+  - The toolbar dot is teal when all is fine, amber when something needs you and red when Kai is off.
+- **First launch:** a short three-step welcome: which agents Kai connected, Internet watching, and Ask Kai.
+- **The popover mirrors Now:** your sessions, the latest stop, Open Kai and an Ask field.
+- **Fixes:**
+  - Kai's own health check no longer shows up as agent activity (0.4.1 recorded it every few seconds).
+  - Stopped commands show only the program's name, never the full command line.
+
 ## 0.4.1-preview.1 (2026-11-21)
 
 Fixes from using 0.4. Notes: [docs/release/0.4.1-preview.1.md](docs/release/0.4.1-preview.1.md).

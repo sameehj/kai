@@ -41,3 +41,7 @@ EndpointSecurity, LocalAuthentication. Versions are those of the toolchain in th
 - Source: https://github.com/ggml-org/llama.cpp, release `b12182` (prebuilt `llama.xcframework`, pinned by URL and checksum in `app/macos/Packages/LlamaBinary/Package.swift`).
 - License: MIT.
 - Models are not bundled; the default (Qwen3.5-0.8B GGUF, Apache-2.0) is downloaded only after the user agrees.
+
+## Agent logos
+
+The official Claude, Cursor and OpenAI marks bundled with the app, their sources and the trademark notice: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
