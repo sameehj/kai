@@ -367,8 +367,8 @@ def main():
               "",
               "The replay records for each configuration are in `tests/replay/records/`; NOT COVERED rows there are "
               "listed here, never claimed.", ""]
-    lines += ["## Activity recording (0.4, opt-in)", "",
-              "With `record_activity on` (off by default) every hook call above adds one metadata line to "
+    lines += ["## Activity recording (on by default since 0.4.1)", "",
+              "With `record_activity on` (the default since 0.4.1; `record_activity off` turns it off) every hook call above adds one metadata line to "
               "`~/.kai/activity.jsonl`: agent, session, workspace, tool, operation, the file path for file tools, "
               "the first word of a shell command, the MCP server and Kai's decision; never arguments, contents or "
               "full commands; rotated daily, kept 7 days (`kai activity --json`). What each agent reports: Claude Code "

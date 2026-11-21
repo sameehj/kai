@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
-# 0.4 activity recorder: off by default, metadata only, daily rotation, 7 days kept.
+# Activity recorder: on by default since 0.4.1, metadata only, daily rotation, 7 days kept.
 set -u
 KAI="${1:-./kai}"
 TMP="$(mktemp -d)"
@@ -17,10 +17,18 @@ J_MCP='{"hook_event_name":"PreToolUse","cwd":"/tmp/proj","session_id":"s1","tool
 J_CUR='{"hook_event_name":"beforeShellExecution","command":"npm test KAI_CURSOR_MARKER","workspace_roots":["/tmp/proj"]}'
 
 echo "== activity recorder =="
-hk claude "$J_READ"
-[ -f "$KAI_HOME/activity.jsonl" ] && fail "off by default: a file was written" || pass "off by default: nothing recorded"
-o=$("$KAI" activity --json)
+# 0.4.1: on by default (a policy without the line records); an explicit off is kept
+printf 'record_activity off\n' > "$TMP/off.policy"
+KAI_POLICY="$TMP/off.policy" hk claude "$J_READ"
+[ -f "$KAI_HOME/activity.jsonl" ] && fail "explicit off: a file was written" || pass "explicit off: nothing recorded"
+o=$(KAI_POLICY="$TMP/off.policy" "$KAI" activity --json)
 case "$o" in *'"recording":false'*) pass "kai activity says recording is off" ;; *) fail "kai activity: $o" ;; esac
+printf 'egress log\n' > "$TMP/noline.policy"
+KAI_POLICY="$TMP/noline.policy" hk claude "$J_READ"
+[ -f "$KAI_HOME/activity.jsonl" ] && pass "on by default: a policy without the line records" || fail "default: nothing recorded"
+o=$(KAI_POLICY="$TMP/noline.policy" "$KAI" activity --json)
+case "$o" in *'"recording":true'*) pass "kai activity says recording is on" ;; *) fail "kai activity default: $o" ;; esac
+rm -f "$KAI_HOME"/activity*.jsonl
 
 printf 'record_activity on\n' > "$TMP/on.policy"
 export KAI_POLICY="$TMP/on.policy"

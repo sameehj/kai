@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define KAI_VERSION "0.4.0-preview.1"
+#define KAI_VERSION "0.4.1-preview.1"
 
 /* Where the package installs Kai (Nov 15). The program lives in a root-owned
  * folder: /usr/local/bin is often owned by the user (Homebrew), so any program

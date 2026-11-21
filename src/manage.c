@@ -169,6 +169,9 @@ int kai_cmd_status_json(void) {
             kai_health_agent(agents[i].name, agents[i].rel, &h);
             cJSON_AddBoolToObject(a, "working", h.ok);
             cJSON_AddStringToObject(a, "problem", h.problem);
+            /* 0.4.1: when the agent last called Kai's hook (0 = never). For
+             * Codex, never = its one-time hook trust (/hooks) isn't done yet. */
+            cJSON_AddNumberToObject(a, "last_hook", (double)kai_hook_last_seen(agents[i].name));
         }
         char *cfg = kai_expand_home(agents[i].rel);
         cJSON_AddStringToObject(a, "config", cfg);
@@ -521,7 +524,7 @@ static const struct {
     {"storage", "off", {"off", "log", "block", NULL}},
     {"gateway_port", "8787", {NULL}},
     {"audit_context", "on", {"on", "off", NULL}},
-    {"record_activity", "off", {"off", "on", NULL}},
+    {"record_activity", "on", {"on", "off", NULL}},
 };
 #define NSWITCHES (int)(sizeof SWITCHES / sizeof SWITCHES[0])
 

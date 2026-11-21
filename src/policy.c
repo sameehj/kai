@@ -57,6 +57,7 @@ static const char DEFAULT_POLICY[] =
     "egress log\n"
     "storage off\n"
     "audit_context on\n"
+    "record_activity on\n"
     "rule_upload curl_upload (^|\\| )(curl|wget) .*(-d|--data|-T|--upload-file|-F).*@\n"
     "rule_upload pipe_to_shell (^|\\| )(curl|wget) .*\\| (sh|bash|zsh|python[0-9.]*)( |$)\n"
     "rule_upload netcat (^|\\| )(nc|ncat|netcat)( |$)\n"
@@ -591,6 +592,7 @@ static kai_policy *policy_new(void) {
     p->storage_mode = KAI_STORAGE_OFF; /* needs Apple's entitlement; off until then */
     p->gateway_port = 8787;
     p->audit_context = 1;
+    p->record_activity = 1; /* 0.4.1: on by default (metadata only, this Mac only) */
     kai_strlcpy(p->source, "built-in", sizeof p->source);
     return p;
 }

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.1-preview.1 (2026-11-21)
+
+Fixes from using 0.4. Notes: [docs/release/0.4.1-preview.1.md](docs/release/0.4.1-preview.1.md).
+
+- **Agents connect on their own:** Kai connects every agent it finds (Claude Code, Cursor, Codex), on first launch, after an update and when a new agent appears. Turn one off in Settings → Advanced → Agents and Kai leaves it alone.
+- **Codex trust:** until Codex runs Kai's hook, Kai shows one step ("open Codex and run /hooks once") and never says Codex is checked.
+- **The popover** no longer stays on "Looking for agents…": after 5 seconds it shows your agents or "No agents found".
+- **Activity recording is on by default** (renamed "Keep a list of what agents read, edit and run"; on this Mac only, no file contents). An explicit `record_activity off` is kept.
+- **Turning on recording from Ask Kai** now confirms it in the chat, or says why it didn't work; buttons for things already done disappear.
+- **Internet watching:** a guided step says where macOS asks for your OK (System Settings, then the filtering alert) and turns to On by itself once approved. Still Watch only.
+- **Ask Kai answers more:** whether Kai is on or recording, Internet watching, coverage per agent, where a setting is, the version and what it can answer; typos and stray punctuation are tolerated; unmatched questions get three suggested questions. A downloaded local model is used automatically and can pick the question type when Kai's own matching can't.
+- **Fewer false stops on reads:** a generic `password = …` guess in a file no longer stops a read; known token formats, private keys and your own rules still do.
+
 ## 0.4.0-preview.1 (2026-11-21)
 
 The Kai window and Ask Kai. Notes: [docs/release/0.4.0-preview.1.md](docs/release/0.4.0-preview.1.md).

@@ -177,7 +177,7 @@ struct kai_policy {
     } exempt[KAI_MAX_LIST];
     int nexempt;
     int audit_context;
-    int record_activity;   /* 0.4: opt-in activity recorder (record_activity on|off), off by default */
+    int record_activity;   /* 0.4: activity recorder (record_activity on|off), on by default since 0.4.1 */
 };
 
 /* ---- process inspection (proc.c) ---- */

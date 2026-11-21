@@ -3,6 +3,7 @@
 // Turns Kai's network system extension on and off: asks macOS to activate the
 // extension (the user approves once in System Settings), then registers it as
 // the content filter. The extension itself lives in app/macos/Network.
+import AppKit
 import Foundation
 import NetworkExtension
 import SystemExtensions
@@ -17,7 +18,7 @@ final class NetworkWall: NSObject, ObservableObject {
         switch state {
         case .needsApproval: os = Int32(KAI_WALL_OS_NOT_INSTALLED)
         case .off: os = Int32(KAI_WALL_OS_OFF)
-        case .checking, .activating: os = Int32(KAI_WALL_OS_STARTING)
+        case .checking, .activating, .allowFilter: os = Int32(KAI_WALL_OS_STARTING)
         case .failed: os = Int32(KAI_WALL_OS_FAILED)
         case .on: os = Int32(KAI_WALL_OS_ON)
         }
@@ -29,6 +30,9 @@ final class NetworkWall: NSObject, ObservableObject {
         case off
         case activating
         case needsApproval
+        /// 0.4.1: the extension is approved; macOS is asking "Kai would like
+        /// to filter network content" (Allow / Don't Allow).
+        case allowFilter
         case on
         case failed(String)
     }
@@ -43,7 +47,8 @@ final class NetworkWall: NSObject, ObservableObject {
         case .checking: return "Checking…"
         case .off: return "Off"
         case .activating: return "Turning on…"
-        case .needsApproval: return "Approve Kai in System Settings → Privacy & Security"
+        case .needsApproval: return "macOS needs your OK in System Settings"
+        case .allowFilter: return "macOS is asking to allow filtering: click Allow"
         case .on: return "On: Kai checks where agents connect"
         case .failed(let msg): return msg
         }
@@ -58,9 +63,15 @@ final class NetworkWall: NSObject, ObservableObject {
         NEFilterManager.shared().loadFromPreferences { [weak self] error in
             Task { @MainActor in
                 guard let self else { return }
-                if case .needsApproval = self.state { return }
-                if let error { self.state = .failed(error.localizedDescription); return }
                 let m = NEFilterManager.shared()
+                let enabled = error == nil && m.providerConfiguration != nil && m.isEnabled
+                // Waiting for the user (System Settings, or the filter alert):
+                // only a filter that is now on ends the wait.
+                if self.state == .needsApproval || self.state == .allowFilter || self.state == .activating {
+                    if enabled { self.state = .on; Self.markOn(true) }
+                    return
+                }
+                if let error { self.state = .failed(Self.plain(error)); return }
                 self.state = (m.providerConfiguration != nil && m.isEnabled) ? .on : .off
                 if self.state == .on { self.updateExtensionOnce() }
             }
@@ -112,6 +123,36 @@ final class NetworkWall: NSObject, ObservableObject {
         let path = String(cString: kai_home()) + "/internet.on"
         if on { FileManager.default.createFile(atPath: path, contents: Data("on\n".utf8)) }
         else { try? FileManager.default.removeItem(atPath: path) }
+    }
+
+    /// macOS errors in plain words (the step shows them with Try again).
+    static func plain(_ error: Error) -> String {
+        let ns = error as NSError
+        if ns.domain == OSSystemExtensionErrorDomain {
+            switch ns.code {
+            case 4: return "This Kai build doesn't include the Internet extension"
+            case 8: return "macOS didn't allow Kai's extension (it was declined or is waiting in System Settings)"
+            case 9: return "macOS needs Kai.app to be in /Applications to load its extension"
+            case 1, 3: return "macOS couldn't load Kai's extension; restart the Mac and try again"
+            default: break
+            }
+        }
+        if ns.domain == NEFilterErrorDomain {
+            return "macOS didn't allow Kai to filter network content (Don't Allow was chosen, or a profile blocks it)"
+        }
+        return ns.localizedDescription
+    }
+
+    /// System Settings where macOS lists blocked system software. macOS 15+:
+    /// General → Login Items & Extensions; macOS 13–14: Privacy & Security.
+    static func openApprovalSettings() {
+        let v = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+        let urls = v >= 15
+            ? ["x-apple.systempreferences:com.apple.LoginItems-Settings.extension",
+               "x-apple.systempreferences:com.apple.ExtensionsPreferences"]
+            : ["x-apple.systempreferences:com.apple.preference.security?General",
+               "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension"]
+        for s in urls { if let u = URL(string: s), NSWorkspace.shared.open(u) { return } }
     }
 
     func turnOn() {
@@ -198,9 +239,11 @@ final class NetworkWall: NSObject, ObservableObject {
             m.providerConfiguration = config
             m.localizedDescription = "Kai"
             m.isEnabled = true
+            // macOS shows "Kai would like to filter network content" now.
+            Task { @MainActor in self?.state = .allowFilter }
             m.saveToPreferences { error in
                 Task { @MainActor in
-                    if let error { self?.state = .failed(error.localizedDescription) } else { self?.state = .on; Self.markOn(true) }
+                    if let error { self?.state = .failed(Self.plain(error)) } else { self?.state = .on; Self.markOn(true) }
                 }
             }
         }
@@ -245,7 +288,7 @@ extension NetworkWall: OSSystemExtensionRequestDelegate {
                   : "Internet extension: still listed (\(ns.localizedDescription)).")
                 return
             }
-            self.state = .failed(error.localizedDescription)
+            self.state = .failed(Self.plain(error))
         }
     }
 }
