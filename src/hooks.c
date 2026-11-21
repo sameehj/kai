@@ -564,7 +564,10 @@ static int file_holds_sensitive(const kai_policy *p, const char *file, const cha
             kai_report rep;
             char *clean = kai_scan_text(p, txt, &rep);
             free(clean);
-            if (rep.worst >= KAI_ACT_REDACT) {
+            /* 0.4.1: a generic key=value guess (secrets.GITHUB_TOKEN in a
+             * workflow, password: ${{ ... }}) doesn't stop a read. Known token
+             * formats, private keys and the user's own rules still do. */
+            if (rep.worst >= KAI_ACT_REDACT && kai_report_high_confidence(&rep)) {
                 hit = 1;
                 for (int i = 0; i < rep.nhits; i++)
                     if (rep.hits[i].action >= KAI_ACT_BLOCK && strncmp(rep.hits[i].rule, "secret:", 7) != 0)

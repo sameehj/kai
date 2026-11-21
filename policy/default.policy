@@ -99,6 +99,11 @@ rule_upload remote_scp     (^|\| )scp .*:
 # the prompt) so you can see why. Secrets in it are hidden. on | off
 audit_context      on
 
+# Keep a list of what agents read, edit and run: one metadata line per tool
+# request (agent, operation, path or the command's first word; never file
+# contents or full commands), on this Mac only, kept 7 days. on | off
+record_activity    on
+
 # ── Prompt-injection patterns (checked on tool results) ───────────────
 rule_injection ignore_prev   ignore (all |your |previous |prior )*instructions
 rule_injection new_instr     (new|updated|system) (instructions|directive|prompt)[: ]

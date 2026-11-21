@@ -666,12 +666,18 @@ for cid, text in CODE_FORMS:
         lambda t=text: _s12_prompt("why does Kai flag this line? " + t))
 case("S12-prompt-cursor-getpwuid", "S12", "Cursor prompt quoting the getpwuid line", "Observed")(
     lambda: _s12_prompt("why is this flagged: struct passwd *pw = getpwuid(st.st_uid);", "cursor"))
-case("S12-read-quoted", "S12", "file read of a quoted real-looking password", "Stopped")(
+# 0.4.1: a generic key=value guess no longer stops a file read (only a prompt
+# warning path remains for prompts); known formats and private keys still do.
+case("S12-read-quoted", "S12", "file read of a quoted real-looking password (generic guess: not stopped since 0.4.1)", "Observed")(
     lambda: _s12_file("quoted", 'db_' + PW + ' = "' + "Tr0ub4" + "dor&3xQ" + '"'))
-case("S12-read-swift-typed-literal", "S12", "file read of a typed Swift literal (let …: String = \"…\")", "Stopped")(
+case("S12-read-swift-typed-literal", "S12", "file read of a typed Swift literal (let …: String = \"…\")", "Observed")(
     lambda: _s12_file("swift-lit", "let " + PW + ': String = "' + "Tr0ub4" + "dor&3xQ" + '"'))
-case("S12-read-config", "S12", "file read of a bare literal in a config file", "Stopped")(
+case("S12-read-config", "S12", "file read of a bare literal in a config file", "Observed")(
     lambda: _s12_file("config", PW + ": " + "hunt" + "er2299"))
+case("S12-read-github-token", "S12", "file read of a real-format GitHub token", "Stopped")(
+    lambda: _s12_file("ghtoken", "token = " + "ghp" + "_" + "R8xTq2LmZ7vNc4Wb9KdJ1sYp6HfAeG3uQo5i"))
+case("S12-read-private-key", "S12", "file read of a private key", "Stopped")(
+    lambda: _s12_file("pem", "-----BEGIN " + "OPENSSH PRIVATE" + " KEY-----\nb3BlbnNzaC1rZXktdjEA\n-----END " + "OPENSSH PRIVATE" + " KEY-----"))
 def _s12_warns():
     r = hook("claude", {"hook_event_name": "UserPromptSubmit", "session_id": "r1", "cwd": PROJ,
                         "prompt": "log in with " + PW + "=" + "Tr0ub4" + "dor&3xQ"})

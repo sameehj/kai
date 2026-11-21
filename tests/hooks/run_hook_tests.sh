@@ -98,6 +98,21 @@ refute "grep pattern isn't read as a file" claude "$(fcmd 'grep Globex main.c')"
 refute "wc only counts" claude "$(fcmd 'wc -l customers.csv')" 'permissionDecision'
 expect "codex can't ask: blocked" codex "$(fread "$fdir/config.txt")" '"deny"'
 expect "cursor file read can't ask: blocked" cursor "$(cread "$fdir/config.txt")" '"deny"'
+
+# 0.4.1: a generic key=value guess doesn't stop a read; known formats still do
+mkdir -p "$fdir/.github/workflows"
+printf 'jobs:\n  build:\n    steps:\n      - run: make\n        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          password: ${{ secrets.DEPLOY_PASSWORD }}\n' > "$fdir/.github/workflows/ci.yml"
+printf 'aws_access_key_id = AKIA''Q3EGRV7XK2BWN5PL\n' > "$fdir/aws.ini"     # split: only the written file holds the key shape
+printf -- '-----BEGIN RSA PRIV''ATE KEY-----\nMIIEowIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy0AHB7MaYb\n-----END RSA PRIV''ATE KEY-----\n' > "$fdir/deploy_rsa.txt"
+refute "workflow with secrets.GITHUB_TOKEN: Read allowed" claude "$(fread "$fdir/.github/workflows/ci.yml")" 'permissionDecision'
+refute "workflow with secrets.GITHUB_TOKEN: cat allowed" claude "$(fcmd 'cat .github/workflows/ci.yml')" 'permissionDecision'
+printf 'services:\n  db:\n    environment:\n      db_password = "Xk9''mQ2pLv7wR"\n' > "$fdir/compose.yml"
+refute "a generic password= guess in a file: Read allowed (0.4.1)" claude "$(fread "$fdir/compose.yml")" 'permissionDecision'
+refute "a generic password= guess: codex read allowed" codex "$(fread "$fdir/compose.yml")" '"deny"'
+refute "workflow: cursor read allowed" cursor "$(cread "$fdir/.github/workflows/ci.yml")" '"deny"'
+expect "an AWS access key in a file: still asked" claude "$(fread "$fdir/aws.ini")" '"permissionDecision":"ask"'
+expect "a PEM private key in a file: still stopped" claude "$(fread "$fdir/deploy_rsa.txt")" 'permissionDecision'
+expect "a PEM private key: codex blocked" codex "$(fread "$fdir/deploy_rsa.txt")" '"deny"'
 expect "cursor read of a ticket file: blocked" cursor "$(cread "$fdir/notes.md")" '"deny"'
 expect "cursor shell command: asked" cursor "$(cshell 'cat config.txt')" '"permission":"ask"'
 expect "cursor shell with a blocked term: blocked" cursor "$(cshell 'head customers.csv')" '"deny"'
