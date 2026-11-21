@@ -134,7 +134,7 @@ final class AppModel: ObservableObject {
         if kai_any_pause_active(Int64(Date().timeIntervalSince1970)) != 0 { return "pause.circle" }
         if let t = lastBlockAt, Date().timeIntervalSince(t) < 30 { return "xmark.shield.fill" }
         switch health {
-        case .protecting: return "checkmark.shield"
+        case .protecting: return "shield"   // 0.4: never a checkmark: Kai doesn't claim "protected"
         case .partial: return "shield.lefthalf.filled"
         case .off: return "shield.slash"
         case .problem: return "exclamationmark.shield"

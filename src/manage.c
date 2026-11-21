@@ -521,6 +521,7 @@ static const struct {
     {"storage", "off", {"off", "log", "block", NULL}},
     {"gateway_port", "8787", {NULL}},
     {"audit_context", "on", {"on", "off", NULL}},
+    {"record_activity", "off", {"off", "on", NULL}},
 };
 #define NSWITCHES (int)(sizeof SWITCHES / sizeof SWITCHES[0])
 

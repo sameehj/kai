@@ -367,6 +367,17 @@ def main():
               "",
               "The replay records for each configuration are in `tests/replay/records/`; NOT COVERED rows there are "
               "listed here, never claimed.", ""]
+    lines += ["## Activity recording (0.4, opt-in)", "",
+              "With `record_activity on` (off by default) every hook call above adds one metadata line to "
+              "`~/.kai/activity.jsonl`: agent, session, workspace, tool, operation, the file path for file tools, "
+              "the first word of a shell command, the MCP server and Kai's decision; never arguments, contents or "
+              "full commands; rotated daily, kept 7 days (`kai activity --json`). What each agent reports: Claude Code "
+              "file reads, edits and writes, commands and MCP calls; Cursor file reads, commands and MCP calls (not "
+              "its editor's writes); Codex commands and MCP calls (no file events). These are requests seen before "
+              "the tool runs, not confirmations.", "",
+              "MCP arguments (0.4): a value that names where a secret lives (`os.environ[...]`, `process.env.X`, "
+              "`ENV[...]`, `getenv(...)`, `${X}`, `{{x}}`, `$X`, a file path such as `certs/server.pem`) isn't "
+              "taken for the secret; a real-shaped token still stops the call.", ""]
     lines += ["## Not checked by any agent's hooks", "", "| What | Why | Status |", "|---|---|---|"]
     for what, why, st in NOT_CHECKED:
         lines.append("| %s | %s | %s |" % (what, why, st))

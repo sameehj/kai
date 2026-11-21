@@ -23,13 +23,15 @@ struct KaiBarApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("Kai Settings", id: "settings") {
-            SettingsView()
+        // 0.4: one window, "Kai" (Activity, Agents, Decisions, Ask Kai,
+        // Settings). The old id stays so kai://settings links keep working.
+        Window("Kai", id: "settings") {
+            MainWindowView()
                 .environmentObject(model)
                 .environmentObject(wall)
                 .environmentObject(storage)
         }
-        .windowResizability(.contentSize)
+        .defaultSize(width: 1080, height: 720)
     }
 }
 
@@ -96,6 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu-bar only: no Dock icon even when run outside a bundle.
         NSApp.setActivationPolicy(.accessory)
+        LocalModelChoice.register()
         if Snapshot.requestedDir == nil && Bundle.main.bundleIdentifier != nil {
             UNUserNotificationCenter.current().delegate = self
             Notifier.registerCategories()
@@ -112,6 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         for u in urls where u.scheme == "kai" && u.host == "settings" {
             let page = u.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             UserDefaults.standard.set(SettingsPage(stored: page).rawValue, forKey: "settingsPage")
+            Task { @MainActor in MainNav.shared.page = .settings }
             NotificationCenter.default.post(name: .kaiOpenSettings, object: nil)
         }
     }

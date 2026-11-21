@@ -15,7 +15,7 @@ struct DecisionSheet: View {
     var showHeader = true
     @ObservedObject var grants: GrantManager
     @ObservedObject private var agents = AgentsModel.shared
-    @AppStorage("settingsPage") private var settingsPage = SettingsPage.agentControl.rawValue
+    @AppStorage("settingsPage") private var settingsPage = SettingsPage.general.rawValue
     @State private var done: Choice?
     @State private var confirmRule = false
     @State private var showWhy = false

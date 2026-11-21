@@ -14,6 +14,10 @@ options:
   createIntermediateGroups: true
   # Readable by Xcode 15 (CI runners) as well as newer Xcode versions.
   projectFormat: xcode15_0
+# llama.cpp's pinned xcframework, for the optional local phraser (LlamaPhraser.swift).
+packages:
+  LlamaBinary:
+    path: Packages/LlamaBinary
 settings:
   base:
     DEVELOPMENT_TEAM: ${KAI_TEAM}
@@ -24,11 +28,11 @@ settings:
     # it in the developer portal: that needs a live login and makes Xcode
     # report "profile doesn't support the App Groups capability" when it can't.
     REGISTER_APP_GROUPS: NO
-    MARKETING_VERSION: "0.3.0"   # the release without its pre-release suffix (checked by make release)
+    MARKETING_VERSION: "0.4.0"   # the release without its pre-release suffix (checked by make release)
     # The app's build number. Bump freely for app changes (menu bar, signing);
     # this does NOT touch the network extension, so app updates never replace
     # it and never drop agents' live connections.
-    CURRENT_PROJECT_VERSION: "9"
+    CURRENT_PROJECT_VERSION: "10"
     # The network extension's own build number. Bump ONLY when the extension's
     # code (app/macos/Network) changes: macOS replaces an activated extension
     # when this differs, which tears down the content filter.
@@ -123,6 +127,7 @@ targets:
     dependencies:
       - target: KaiNetwork
       - target: libkai            # Scoped Approvals: sign grants in-process (no agent-callable signing)
+      - package: LlamaBinary      # llama.cpp xcframework (optional local phraser)
       - sdk: NetworkExtension.framework
       - sdk: SystemExtensions.framework
       - sdk: ServiceManagement.framework   # register the control-service launch agent
@@ -155,6 +160,10 @@ targets:
         PRODUCT_NAME: Kai
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_INCLUDE_PATHS: $(SRCROOT)/KaiCore   # expose libkai's C API as `import KaiCore`
+        # Weak-link llama.framework: macOS won't load it into an ad-hoc signed
+        # hardened app (make app), and the app must still launch (LlamaPhraser
+        # is then unavailable). Team-signed builds load it.
+        OTHER_LDFLAGS: ["$(inherited)", "-weak_framework", "llama"]
         GCC_C_LANGUAGE_STANDARD: c11
         HEADER_SEARCH_PATHS: ["$(SRCROOT)/../../include", "$(SRCROOT)/../../third_party/cjson"]
         # KAI_PRODUCT_BUILD trips the build guard in manage.c if the policy

@@ -1,21 +1,22 @@
 # Kai brand starter
 
 **Concept:** a geometric K inside a shield, representing developer control over
-AI agent capabilities. Logo: [`kai-logo.png`](kai-logo.png). The app icon in
-`app/macos/Sources/Assets.xcassets` is generated from the same artwork.
+AI agent capabilities. Logo (0.4): [`brand/kai-logo-purple-teal.png`](brand/kai-logo-purple-teal.png).
+The app icon and the KaiLogo image in `app/macos/Sources/Assets.xcassets` are
+generated from it with `sips` (the 1024 px icon is upscaled from the 512 px art).
 
-## Palette (proposed)
+## Palette (0.4)
 
 | Role | Hex |
 |---|---|
-| Ink / background | `#101114` |
-| Surface | `#1C1D21` |
-| Electric lime accent | `#D9FF3F` |
-| White | `#FFFFFF` |
-| Muted text | `#A7ABB4` |
+| Teal: primary actions, selection | `#25C7B8` |
+| Purple: brand accent only | `#7659E8` |
+| Neutral greys | follow light / dark mode (Theme.swift) |
+| Amber | needs attention |
+| Red | Kai is off, nothing else |
 
-A new palette inspired by high-contrast direct-response branding, not any
-other company's brand tokens.
+Brand colours never mean "protected". The menu-bar icon is a monochrome
+template shield, never a checkmark shield.
 
 ## Voice
 

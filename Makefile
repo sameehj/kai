@@ -23,7 +23,7 @@ endif
 
 CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
        src/net.c src/storage.c src/storage_prof.c src/grant.c src/approval_store.c src/proc.c src/shell.c src/gateway.c src/session.c src/agent_rules.c third_party/cjson/cJSON.c
-APP  = src/main.c src/hooks.c src/install.c src/manage.c src/report.c src/health.c src/storaged.c src/grant_cli.c src/status.c src/demo.c src/stats.c
+APP  = src/main.c src/hooks.c src/install.c src/manage.c src/report.c src/health.c src/storaged.c src/grant_cli.c src/status.c src/demo.c src/stats.c src/activity.c
 
 OBJ      = $(CORE:.c=.o) $(APP:.c=.o)
 COREOBJ  = $(CORE:.c=.o)
@@ -83,8 +83,10 @@ test: kai tests/cli/kai-test
 	$(CC) $(CFLAGS) -o tests/storage/run_storage_tests tests/storage/run_storage_tests.c $(STORAGE_TEST_SRC) $(LDLIBS)
 	./tests/storage/run_storage_tests
 	sh tests/hooks/run_hook_tests.sh ./kai
+	sh tests/hooks/run_activity_tests.sh ./kai
 	sh tests/release/run_postinstall_tests.sh
 	sh tests/app/run_app_tests.sh
+	sh tests/app/run_llama_smoke.sh
 	sh tests/release/run_release_env_tests.sh
 	sh tests/release/run_sign_tests.sh
 	sh tests/release/run_release_guard_tests.sh

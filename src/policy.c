@@ -781,6 +781,9 @@ static kai_policy *parse(const char *text, const char *source, char *err,
         } else if (strcmp(d, "audit_context") == 0) {
             char *v; if (!next_tok(&cur, &v)) continue;
             p->audit_context = strcmp(v, "off") != 0;
+        } else if (strcmp(d, "record_activity") == 0) {
+            char *v; if (!next_tok(&cur, &v)) continue;
+            p->record_activity = strcmp(v, "on") == 0;
         } else {
             /* unknown directive: not applied (forward-compatible), but counted
              * so kai doctor can say "unrecognized rule" instead of hiding it */
@@ -1025,6 +1028,7 @@ int kai_policy_file_secret_ask(const kai_policy *p) { return p ? p->file_secret_
 int kai_policy_upload_ask(const kai_policy *p) { return p ? p->upload_ask : 0; }
 int kai_policy_fetch_block(const kai_policy *p) { return p ? p->fetch_block : 0; }
 int kai_policy_audit_context(const kai_policy *p) { return p && p->audit_context; }
+int kai_policy_record_activity(const kai_policy *p) { return p && p->record_activity; }
 
 /* '*' and '?' span anything, '/' and newlines included: the pattern is over
  * the whole command, usually the exact command with a few wildcards. */
