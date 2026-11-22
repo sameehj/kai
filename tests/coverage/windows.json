@@ -1,0 +1,48 @@
+{
+  "generated": "2026-11-22",
+  "kai": "kai 0.5.0-preview.1 (dev build: honours KAI_HOME and KAI_POLICY) \u00c2\u00b7 commit 2b770f938993",
+  "results": {
+    "claude": {
+      "file_tool": "stopped",
+      "file_write": "stopped",
+      "shell_read": "stopped",
+      "script_read": "allowed",
+      "prompt_secret": "stopped",
+      "upload": "stopped",
+      "mcp": "allowed",
+      "web_fetch": "stopped",
+      "case_variant": "stopped",
+      "folder_rename": "stopped",
+      "capture": "stopped",
+      "capture_tool": "stopped"
+    },
+    "codex": {
+      "file_tool": "n/a",
+      "file_write": "n/a",
+      "shell_read": "stopped",
+      "script_read": "allowed",
+      "prompt_secret": "stopped",
+      "upload": "stopped",
+      "mcp": "allowed",
+      "web_fetch": "n/a",
+      "case_variant": "stopped",
+      "folder_rename": "stopped",
+      "capture": "stopped",
+      "capture_tool": "stopped"
+    },
+    "cursor": {
+      "file_tool": "stopped",
+      "file_write": "n/a",
+      "shell_read": "stopped",
+      "script_read": "allowed",
+      "prompt_secret": "stopped",
+      "upload": "stopped",
+      "mcp": "allowed",
+      "web_fetch": "n/a",
+      "case_variant": "stopped",
+      "folder_rename": "stopped",
+      "capture": "stopped",
+      "capture_tool": "stopped"
+    }
+  }
+}

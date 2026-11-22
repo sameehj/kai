@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
-# Kai is macOS only (macOS 13 or later; Linux and Windows aren't supported),
-# so every job runs on macOS and every job is required.
+# Kai ships for macOS (macOS 13 or later). The macOS jobs are required. The
+# Windows job builds and tests the C core, CLI and hooks (dev preview, no app;
+# docs/windows/README.md); the Linux job checks the Makefile build still
+# compiles there.
 name: ci
 on:
   push:
@@ -25,6 +27,30 @@ jobs:
       - uses: actions/checkout@v4
       - run: brew install xcodegen
       - run: make app
+
+  windows:
+    name: build + test (windows-latest, dev preview)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: configure (MSVC, static runtime)
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+      - name: build
+        run: cmake --build build --config Release
+      - name: unit, Windows, escape and hook tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+  linux-build:
+    name: build (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+      - name: build
+        run: make
 
   self-scan:
     name: kai scans its own tree for secrets
