@@ -6,6 +6,9 @@
  */
 #include "cJSON.h"
 #include "internal.h"
+#include "platform.h"
+
+#include <ctype.h>
 
 #include <errno.h>
 #include <limits.h>
@@ -169,6 +172,10 @@ static const char *hook_target(void) {
                         "again.\n", exe);
         return NULL;
     }
+    if (kai_plat_is_windows()) {   /* quoted per agent and shell by win_hook_command */
+        kai_strlcpy(out, t, sizeof out);
+        return out;
+    }
     size_t o = 0;
     out[o++] = '\'';
     for (const char *c = t; *c && o + 5 < sizeof out; c++) {
@@ -178,6 +185,39 @@ static const char *hook_target(void) {
     out[o++] = '\'';
     out[o] = '\0';
     return out;
+}
+
+/* Windows: which shell runs a hook command depends on the agent (measured,
+ * docs/windows/README.md): Claude Code runs Git Bash, or PowerShell without
+ * it, and takes an exec-form entry ("command" + "args") that skips the shell,
+ * which Kai uses; Codex runs PowerShell; Cursor runs PowerShell, or bash when
+ * it finds Git Bash. So the program path goes in bare when every one of those
+ * shells reads it as one word (letters, digits, / . _ - : ~), else its 8.3
+ * short name if that is bare-safe, else PowerShell's & '<path>' (the shell
+ * Codex and Cursor use by default). */
+static int bare_safe(const char *p) {
+    if (!*p) return 0;
+    for (const char *c = p; *c; c++)
+        if (!(isalnum((unsigned char)*c) || strchr("/._-:~", *c))) return 0;
+    return 1;
+}
+
+static void win_hook_command(char *cmd, size_t n, const char *exe, const char *agent) {
+    char shortp[PATH_MAX];
+    if (bare_safe(exe)) { snprintf(cmd, n, "%s hook %s", exe, agent); return; }
+    if (kai_plat_short_path(exe, shortp, sizeof shortp) == 0 && bare_safe(shortp)) {
+        snprintf(cmd, n, "%s hook %s", shortp, agent);
+        return;
+    }
+    size_t o = 0;
+    cmd[o++] = '&'; cmd[o++] = ' '; cmd[o++] = '\'';
+    for (const char *c = exe; *c && o + 4 < n; c++) {
+        if (*c == '\'') cmd[o++] = '\'';   /* PowerShell: '' is a quote inside '...' */
+        cmd[o++] = *c;
+    }
+    cmd[o++] = '\'';
+    cmd[o] = '\0';
+    snprintf(cmd + o, n - o, " hook %s", agent);
 }
 
 /* The hook command: the program and the agent, nothing else. C1: no
@@ -192,6 +232,10 @@ static const char *hook_target(void) {
  * quoted path already relies on that). The command still starts with
  * "<program> hook <agent>", which kai doctor and the app parse. */
 static void hook_command(char *cmd, size_t n, const char *exe, const char *agent) {
+    if (kai_plat_is_windows()) {   /* no sh wrapper: see win_hook_command */
+        win_hook_command(cmd, n, exe, agent);
+        return;
+    }
     const char *say =
         !strcmp(agent, "cursor")
             ? "printf '%s\\n' '{\"continue\":true,\"permission\":\"ask\",\"user_message\":\"" KAI_MISSING_MSG
@@ -208,9 +252,17 @@ static cJSON *claude_hook_entry(const char *matcher, const char *exe) {
     cJSON *arr = cJSON_CreateArray();
     cJSON *h = cJSON_CreateObject();
     cJSON_AddStringToObject(h, "type", "command");
-    char cmd[PATH_MAX + 1024];
-    hook_command(cmd, sizeof cmd, exe, "claude");
-    cJSON_AddStringToObject(h, "command", cmd);
+    if (kai_plat_is_windows()) {
+        /* exec form: Claude Code starts kai.exe itself, no shell, any path */
+        cJSON_AddStringToObject(h, "command", exe);
+        cJSON *args = cJSON_AddArrayToObject(h, "args");
+        cJSON_AddItemToArray(args, cJSON_CreateString("hook"));
+        cJSON_AddItemToArray(args, cJSON_CreateString("claude"));
+    } else {
+        char cmd[PATH_MAX + 1024];
+        hook_command(cmd, sizeof cmd, exe, "claude");
+        cJSON_AddStringToObject(h, "command", cmd);
+    }
     cJSON_AddBoolToObject(h, "_kai", 1);
     cJSON_AddItemToArray(arr, h);
     cJSON_AddItemToObject(group, "hooks", arr);
@@ -523,10 +575,9 @@ static void strip_legacy_handlers(cJSON *root) {
                 cJSON *handler = handlers->child;
                 while (handler) {
                     cJSON *next_handler = handler->next;
-                    cJSON *command = cJSON_GetObjectItemCaseSensitive(handler, "command");
-                    if (cJSON_IsString(command) && command->valuestring &&
-                        (strstr(command->valuestring, " hook claude") ||
-                         strstr(command->valuestring, " hook cursor"))) {
+                    char text[2400];
+                    kai_hook_entry_text(handler, text, sizeof text);
+                    if (strstr(text, " hook claude") || strstr(text, " hook cursor")) {
                         cJSON_Delete(cJSON_DetachItemViaPointer(handlers, handler));
                     }
                     handler = next_handler;

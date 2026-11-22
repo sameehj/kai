@@ -58,8 +58,9 @@ void kai_plat_fix_component(char *comp) { (void)comp; }
 char *kai_plat_expand_env(const char *s) { (void)s; return NULL; }
 
 /* Run cmd with /bin/sh, input on stdin; collect stdout. */
-int kai_plat_run(const char *cmd, const char *input, size_t inlen, char *out, size_t outlen,
+int kai_plat_run(const char *cmd, int shell, const char *input, size_t inlen, char *out, size_t outlen,
                  size_t *outgot, int timeout_ms) {
+    (void)shell;   /* kai_plat_quote_argv output is sh-quoted: /bin/sh runs both */
     if (outlen) out[0] = '\0';
     if (outgot) *outgot = 0;
     int in[2], o[2];
@@ -236,4 +237,10 @@ char *kai_plat_quote_argv(char *const argv[]) {
         sb_adds(&b, "'");
     }
     return sb_take(&b);
+}
+
+int kai_plat_short_path(const char *path, char *out, size_t n) {
+    if (strlen(path) >= n) return -1;
+    kai_strlcpy(out, path, n);
+    return 0;
 }

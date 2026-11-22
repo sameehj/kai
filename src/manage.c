@@ -44,9 +44,9 @@
 static int hook_command_present(const cJSON *node, const char *needle) {
     if (!node) return 0;
     if (cJSON_IsObject(node)) {
-        const cJSON *command = cJSON_GetObjectItemCaseSensitive(node, "command");
-        if (cJSON_IsString(command) && command->valuestring &&
-            strstr(command->valuestring, needle)) return 1;
+        char text[2400];
+        kai_hook_entry_text(node, text, sizeof text);
+        if (text[0] && strstr(text, needle)) return 1;
     }
     if (cJSON_IsObject(node) || cJSON_IsArray(node)) {
         for (const cJSON *child = node->child; child; child = child->next) {

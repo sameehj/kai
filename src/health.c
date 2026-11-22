@@ -106,9 +106,9 @@ int kai_install_trusted(char *bad, size_t n) {
 
 /* Run cmd (POSIX: /bin/sh -c; Windows: as a command line), input on stdin;
  * collect stdout. Returns the exit status (or -1 on timeout / failure to run). */
-static int run_probe(const char *cmd, const char *input, size_t inlen, char *out, size_t outlen,
+static int run_probe(const char *cmd, int shell, const char *input, size_t inlen, char *out, size_t outlen,
                      size_t *outgot) {
-    return kai_plat_run(cmd, input, inlen, out, outlen, outgot, PROBE_TIMEOUT_MS);
+    return kai_plat_run(cmd, shell, input, inlen, out, outlen, outgot, PROBE_TIMEOUT_MS);
 }
 
 /* The program a hook command runs: the text before " hook ". */
@@ -118,14 +118,37 @@ static void command_exe(const char *cmd, char *exe, size_t n) {
     const char *h = strstr(cmd, " hook ");
     size_t len = h ? (size_t)(h - cmd) : strlen(cmd);
     size_t o = 0;
-    int q = 0;
-    for (size_t i = 0; i < len && o + 1 < n; i++) {
-        if (cmd[i] == '\'') { q = !q; continue; }
-        if (!q && cmd[i] == '\\' && i + 1 < len) { exe[o++] = cmd[++i]; continue; }
+    int q = 0, win = kai_plat_is_windows();
+    size_t i = 0;
+    if (win && cmd[0] == '&' && cmd[1] == ' ') i = 2;   /* PowerShell: & '<program>' hook <agent> */
+    for (; i < len && o + 1 < n; i++) {
+        if (cmd[i] == '\'') {
+            if (win && q && i + 1 < len && cmd[i + 1] == '\'') { exe[o++] = cmd[++i]; continue; }   /* PS '' */
+            q = !q;
+            continue;
+        }
+        if (!win && !q && cmd[i] == '\\' && i + 1 < len) { exe[o++] = cmd[++i]; continue; }
         exe[o++] = cmd[i];
     }
     exe[o] = '\0';
 }
+
+void kai_hook_entry_text(const cJSON *e, char *out, size_t n) {
+    if (n) out[0] = '\0';
+    const cJSON *c = cJSON_GetObjectItemCaseSensitive(e, "command");
+    if (!cJSON_IsString(c) || !c->valuestring) return;
+    kai_strlcpy(out, c->valuestring, n);
+    const cJSON *args = cJSON_GetObjectItemCaseSensitive(e, "args"), *a;
+    cJSON_ArrayForEach(a, args) {
+        if (!cJSON_IsString(a)) continue;
+        size_t l = strlen(out);
+        snprintf(out + l, n - l, " %s", a->valuestring);
+    }
+}
+
+/* Run a hook entry the way its agent does: an exec-form entry ("args") as a
+ * program, anything else through the agent's shell. */
+static int run_entry(const cJSON *e, const char *input, size_t inlen, char *out, size_t outlen, size_t *outgot);
 
 static int executable(const char *path) {
     struct stat st;
@@ -173,7 +196,7 @@ void kai_health_agent(const char *agent, const char *config, kai_health *h) {
     char needle[32];
     snprintf(needle, sizeof needle, " hook %s", agent);
     const cJSON *hooks = cJSON_GetObjectItemCaseSensitive(root, "hooks");
-    const char *probe_cmd = NULL;
+    const cJSON *probe_e = NULL;
     int found = 0, guarded = 0;   /* guarded: some tool hook fails closed (an earlier Kai) */
     char exe[1100] = "";
     const cJSON *ev;
@@ -192,9 +215,14 @@ void kai_health_agent(const char *agent, const char *config, kai_health *h) {
             const cJSON *e = items ? items->child : g;
             for (; e; e = items ? e->next : NULL) {
                 const cJSON *c = cJSON_GetObjectItemCaseSensitive(e, "command");
-                if (!cJSON_IsString(c) || !strstr(c->valuestring, needle)) { if (!items) break; continue; }
+                char text[2400];
+                kai_hook_entry_text(e, text, sizeof text);
+                if (!cJSON_IsString(c) || !strstr(text, needle)) { if (!items) break; continue; }
                 found = 1;
-                if (!exe[0]) command_exe(c->valuestring, exe, sizeof exe);
+                if (!exe[0]) {
+                    if (cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(e, "args"))) kai_strlcpy(exe, c->valuestring, sizeof exe);
+                    else command_exe(c->valuestring, exe, sizeof exe);
+                }
                 if (blocking) {
                     const cJSON *of = cJSON_GetObjectItemCaseSensitive(e, "onFailure");
                     int fc = !strcmp(agent, "cursor")
@@ -204,8 +232,8 @@ void kai_health_agent(const char *agent, const char *config, kai_health *h) {
                                    strstr(c->valuestring, "exit 2") != NULL
                                  : strstr(c->valuestring, "exit 2") != NULL;
                     if (fc) guarded = 1;
-                    if (!probe_cmd && (!strcmp(ev->string, "PreToolUse") || !strcmp(ev->string, "beforeReadFile")))
-                        probe_cmd = c->valuestring;
+                    if (!probe_e && (!strcmp(ev->string, "PreToolUse") || !strcmp(ev->string, "beforeReadFile")))
+                        probe_e = e;
                 }
                 if (!items) break;
             }
@@ -235,14 +263,14 @@ void kai_health_agent(const char *agent, const char *config, kai_health *h) {
         cJSON_Delete(root);
         return;
     }
-    if (!probe_cmd) {
+    if (!probe_e) {
         set_problem(h, "no hook checks the agent's actions; run kai install %s", agent);
         cJSON_Delete(root);
         return;
     }
     char *in = probe_input(agent);
     char out[4096];
-    int rc = run_probe(probe_cmd, in, strlen(in), out, sizeof out, NULL);
+    int rc = run_entry(probe_e, in, strlen(in), out, sizeof out, NULL);
     free(in);
     if (rc != 0 || !strstr(out, "deny")) {
         char why[64];
@@ -270,7 +298,7 @@ int kai_health_run_hook(const char *agent, const char *config, const char *input
     char needle[32];
     snprintf(needle, sizeof needle, " hook %s", agent);
     const cJSON *hooks = cJSON_GetObjectItemCaseSensitive(root, "hooks");
-    char cmd[2048] = "";
+    const cJSON *found = NULL;
     const cJSON *ev;
     cJSON_ArrayForEach(ev, hooks) {
         if (strcmp(ev->string, "PreToolUse") && strcmp(ev->string, "beforeReadFile")) continue;
@@ -278,15 +306,33 @@ int kai_health_run_hook(const char *agent, const char *config, const char *input
         cJSON_ArrayForEach(g, ev) {
             const cJSON *list = cJSON_GetObjectItemCaseSensitive(g, "hooks");
             const cJSON *items = cJSON_IsArray(list) ? list : NULL;
-            for (const cJSON *e = items ? items->child : g; e && !cmd[0]; e = items ? e->next : NULL) {
-                const cJSON *c = cJSON_GetObjectItemCaseSensitive(e, "command");
-                if (cJSON_IsString(c) && strstr(c->valuestring, needle)) kai_strlcpy(cmd, c->valuestring, sizeof cmd);
+            for (const cJSON *e = items ? items->child : g; e && !found; e = items ? e->next : NULL) {
+                char text[2400];
+                kai_hook_entry_text(e, text, sizeof text);
+                if (strstr(text, needle)) found = e;
                 if (!items) break;
             }
         }
     }
+    int rc = found ? run_entry(found, input, strlen(input), out, outlen, NULL) : -1;
     cJSON_Delete(root);
-    if (!cmd[0]) return -1;
-    return run_probe(cmd, input, strlen(input), out, outlen, NULL);
+    return rc;
+}
+
+static int run_entry(const cJSON *e, const char *input, size_t inlen, char *out, size_t outlen, size_t *outgot) {
+    const cJSON *c = cJSON_GetObjectItemCaseSensitive(e, "command");
+    const cJSON *args = cJSON_GetObjectItemCaseSensitive(e, "args");
+    if (!cJSON_IsString(c)) return -1;
+    if (!cJSON_IsArray(args)) return run_probe(c->valuestring, 1, input, inlen, out, outlen, outgot);
+    char *av[34];
+    int k = 0;
+    av[k++] = c->valuestring;
+    const cJSON *a;
+    cJSON_ArrayForEach(a, args) if (cJSON_IsString(a) && k < 33) av[k++] = a->valuestring;
+    av[k] = NULL;
+    char *line = kai_plat_quote_argv(av);
+    int rc = line ? run_probe(line, 0, input, inlen, out, outlen, outgot) : -1;
+    free(line);
+    return rc;
 }
 

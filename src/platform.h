@@ -43,12 +43,18 @@ void kai_plat_fix_component(char *comp);
  * %NAME% and $env:NAME. Caller frees; NULL = nothing to expand. */
 char *kai_plat_expand_env(const char *s);
 
-/* Run a command line with `input` on stdin, collecting stdout (stderr is
- * dropped), for at most timeout_ms. POSIX: /bin/sh -c. Windows: the command
- * line goes to CreateProcessW as is (no shell). Returns the exit status, -1
- * on timeout or failure to start. */
-int kai_plat_run(const char *cmdline, const char *input, size_t inlen, char *out, size_t outlen,
+/* Run a hook command with `input` on stdin, collecting stdout (stderr is
+ * dropped), for at most timeout_ms, the way the agent runs it. shell=1: a
+ * shell command (POSIX: /bin/sh -c; Windows: PowerShell, as Codex and Cursor
+ * run hooks). shell=0: a program and its arguments, already quoted with
+ * kai_plat_quote_argv (Windows: CreateProcessW, no shell, as Claude Code runs
+ * an exec-form hook). Returns the exit status, -1 on timeout or failure. */
+int kai_plat_run(const char *cmdline, int shell, const char *input, size_t inlen, char *out, size_t outlen,
                  size_t *outgot, int timeout_ms);
+
+/* Windows: the 8.3 short form of an existing path ('/'-separated), when the
+ * volume has short names. POSIX: a copy. 0 on success. */
+int kai_plat_short_path(const char *path, char *out, size_t n);
 
 /* Run argv[0] (searched on PATH) in cwd with stdin from the null device,
  * capturing stdout+stderr, killed after timeout_s. Returns the exit status,

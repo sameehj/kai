@@ -50,10 +50,15 @@ suite = json.load(open(cases_path, encoding="utf-8"))
 cases = suite["cases"]
 real_home = os.path.realpath(os.path.expanduser("~"))
 
+WINDOWS = sys.platform == "win32"
 home = tempfile.mkdtemp()
-proj = os.path.join(home, "proj")
+if WINDOWS:  # kai.exe resolves ~ from USERPROFILE; '/' keeps {HOME} valid inside JSON
+    home = os.path.realpath(home).replace(os.sep, "/")
+proj = os.path.join(home, "proj").replace(os.sep, "/")
 os.makedirs(proj)
 env = dict(os.environ, KAI_HOME=tempfile.mkdtemp(), HOME=home)
+if WINDOWS:
+    env["USERPROFILE"] = home
 env.pop("KAI_POLICY", None)
 
 
@@ -92,6 +97,8 @@ def missing_binary():
     os.makedirs(os.path.dirname(exe))
     shutil.copy(kai, exe)
     e = dict(env, HOME=h, KAI_HOME=os.path.join(h, ".kai"))
+    if WINDOWS:
+        e["USERPROFILE"] = h
     subprocess.run([exe, "install", "claude"], capture_output=True, env=e, timeout=30)
     settings = json.load(open(os.path.join(h, ".claude", "settings.json")))
     entry = next(x for g in settings["hooks"].get("PreToolUse", [])
@@ -114,6 +121,8 @@ def cursor_fail_closed():
     os.makedirs(os.path.join(h, ".cursor"))
     # a dev build in the checkout on purpose (STEP 2c's guard refuses that otherwise)
     e = dict(env, HOME=h, KAI_HOME=os.path.join(h, ".kai"), KAI_TEST_ALLOW_DEV_HOOK="1")
+    if WINDOWS:
+        e["USERPROFILE"] = h
     subprocess.run([kai, "install", "cursor"], capture_output=True, env=e, timeout=30)
     try:
         cfg = json.load(open(os.path.join(h, ".cursor", "hooks.json")))
@@ -169,6 +178,8 @@ def replay(case, control=False):
     the check must say nothing happened: that proves the check can tell."""
     spec = case["replay"]
     if spec.get("os") and spec["os"] != sys.platform:
+        return "skipped"
+    if WINDOWS:  # replays are bash scripts against a POSIX home
         return "skipped"
     for tool in spec.get("needs", []):
         if not shutil.which(tool):

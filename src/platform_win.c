@@ -365,7 +365,7 @@ long long kai_plat_mtime_ns(const struct _stat64 *st) { return (long long)st->st
 
 /* ------------------------------------------------------------- run/pids */
 
-int kai_plat_run(const char *cmdline, const char *input, size_t inlen, char *out, size_t outlen,
+int kai_plat_run(const char *cmdline, int shell, const char *input, size_t inlen, char *out, size_t outlen,
                  size_t *outgot, int timeout_ms) {
     if (outlen) out[0] = '\0';
     if (outgot) *outgot = 0;
@@ -384,7 +384,13 @@ int kai_plat_run(const char *cmdline, const char *input, size_t inlen, char *out
     si.hStdOutput = out_w;
     si.hStdError = nul;
     PROCESS_INFORMATION pi;
-    wchar_t *wc = wide(cmdline);
+    char *line = NULL;
+    if (shell) {   /* as Codex and Cursor run a hook command: PowerShell */
+        char *av[] = {"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", (char *)cmdline, NULL};
+        line = kai_plat_quote_argv(av);
+    }
+    wchar_t *wc = wide(line ? line : cmdline);
+    free(line);
     BOOL ok = wc && CreateProcessW(NULL, wc, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
     free(wc);
     CloseHandle(in_r);
@@ -506,6 +512,22 @@ int kai_plat_run_argv(char *const argv[], const char *cwd, int timeout_s, char *
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     return rc;
+}
+
+int kai_plat_short_path(const char *path, char *out, size_t n) {
+    wchar_t *w = wide(path);
+    if (!w) return -1;
+    wchar_t buf[32768];
+    DWORD l = GetShortPathNameW(w, buf, (DWORD)(sizeof buf / sizeof buf[0]));
+    free(w);
+    if (!l || l >= sizeof buf / sizeof buf[0]) return -1;
+    char *s = narrow(buf);
+    if (!s) return -1;
+    slashes(s);
+    int ok = strlen(s) < n;
+    if (ok) kai_strlcpy(out, s, n);
+    free(s);
+    return ok ? 0 : -1;
 }
 
 int kai_plat_pid_alive(int pid) {

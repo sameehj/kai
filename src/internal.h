@@ -110,6 +110,10 @@ typedef struct {
     char problem[300];
 } kai_health;
 void kai_health_agent(const char *agent, const char *config, kai_health *h);
+/* A hook entry's command as one line: "command" plus any exec-form "args"
+ * (Claude Code on Windows), so " hook <agent>" finds both forms. */
+struct cJSON;
+void kai_hook_entry_text(const struct cJSON *e, char *out, size_t n);
 char *kai_redact_for_log(const kai_policy *p, const char *text);
 /* Kai's own protection (its settings, the agents' hook files): never exempt. */
 int kai_rule_is_builtin(const char *rule);
