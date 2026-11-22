@@ -9,6 +9,7 @@
  * its hooks) is never reported as Active.
  */
 #include "internal.h"
+#include "platform.h"
 #include "cJSON.h"
 
 #include <stdio.h>
@@ -196,7 +197,10 @@ int kai_cmd_status_text(void) {
     const char *head = installed && checking == installed ? "Checking"
                      : any_on ? "Partly checking" : "Not checking";
     printf("Kai%s %s · %s\n", app ? "" : " Preview", KAI_VERSION, head);
-    if (!app) printf("%s\nKai Preview checks inside your agents. The Kai app adds the Internet wall, which "
+    if (kai_plat_is_windows())
+        printf("%s\nWindows dev preview: Kai checks inside your agents only. There is no Kai app, Internet wall or "
+               "Files wall on Windows yet.\n", CONTRACT);
+    else if (!app) printf("%s\nKai Preview checks inside your agents. The Kai app adds the Internet wall, which "
                      "records the connections it observes and blocks nothing in this release.\n", CONTRACT);
     printf("Agents\n%s", buf ? buf : "");
     free(buf);
@@ -217,7 +221,9 @@ int kai_cmd_status_text(void) {
             snprintf(asked, sizeof asked, " (your policy asks for Protect; this release only watches)");
         kai_policy_free(sp);
     }
-    if (!app)
+    if (kai_plat_is_windows())   /* no app and no walls on Windows (dev preview) */
+        printf("%-16s none on Windows: hooks only, no Internet or Files wall\n", "OS enforcement");
+    else if (!app)
         printf("%-16s Internet: not installed (comes with the Kai app)%s%s · Files: not included in this release\n",
                "OS enforcement", watch_only, asked);
     else
@@ -430,8 +436,10 @@ int kai_cmd_doctor(void) {
     int files_in = files_included();
     int inet_lvl = kai_wall_observed_level("network");
     int inet_on = internet_opted_in() || inet_lvl >= 0;
-    if (!files_in) printf("· Files: not included in this release\n");
-    if (!inet_on) printf("· Internet: off (opt-in in Settings)\n");
+    if (kai_plat_is_windows()) printf("· Files and Internet walls: not on Windows (dev preview: hooks only)\n");
+    else if (!files_in) printf("· Files: not included in this release\n");
+    if (kai_plat_is_windows()) inet_on = 1;   /* nothing to opt into */
+    else if (!inet_on) printf("· Internet: off (opt-in in Settings)\n");
     else if (inet_lvl < 0) {
         printf("✗ Internet: turned on in Settings but not running (no verified heartbeat). Open Kai and check "
                "Settings > Internet, or turn it off there.\n");
@@ -495,8 +503,10 @@ int kai_cmd_doctor(void) {
         printf("  · Known gaps: while an extension restarts or after it crashes, its checks stop until it is "
                "back (fail-open). See docs/RUNTIME.md.\n");
     }
-    privacy_report();
-    printf("  · With Accessibility, an agent's host app could also click Kai's buttons.\n");
+    if (!kai_plat_is_windows()) {   /* macOS privacy permissions (TCC) */
+        privacy_report();
+        printf("  · With Accessibility, an agent's host app could also click Kai's buttons.\n");
+    }
 
     printf("%s\n", problems ? "Problems found." : "No problems found.");
     return problems ? 1 : 0;

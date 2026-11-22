@@ -131,3 +131,7 @@ if(Python3_FOUND)
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
   endif()
 endif()
+
+# cmake --install build --config Release --prefix "%LOCALAPPDATA%\Programs\Kai"
+# puts kai.exe where Kai's checks treat it as Kai's own program (kai_program).
+install(TARGETS kai RUNTIME DESTINATION .)
