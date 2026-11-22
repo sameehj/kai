@@ -232,12 +232,44 @@ static char *cwd_now(void) {
 
 /* "\\?\C:\x" -> "C:/x", "\\?\UNC\s\sh" -> "//s/sh", "/c/x" (Git Bash) ->
  * "C:/x", "/cygdrive/c/x" -> "C:/x". In place on a '/'-converted copy. */
+/* "//localhost/C$/x" is "C:/x": an administrative share of this machine
+ * (localhost, 127.0.0.1, ::1, ".", or the computer's own name). */
+static void local_admin_share(char *p) {
+    if (p[0] != '/' || p[1] != '/') return;
+    const char *host = p + 2, *slash = strchr(host, '/');
+    if (!slash) return;
+    size_t hl = (size_t)(slash - host);
+    const char *share = slash + 1;
+    if (!isalpha((unsigned char)share[0]) || share[1] != '$' || (share[2] && share[2] != '/')) return;
+    char me[256] = "";
+    wchar_t wn[256];
+    DWORD n = 256;
+    if (GetComputerNameExW(ComputerNamePhysicalNetBIOS, wn, &n)) {
+        char *s = narrow(wn);
+        if (s) { kai_strlcpy(me, s, sizeof me); free(s); }
+    }
+    static const char *const local[] = {"localhost", "127.0.0.1", "::1", "[::1]", "0--1.ipv6-literal.net", "."};
+    int hit = me[0] && strlen(me) == hl && !_strnicmp(host, me, hl);
+    for (size_t i = 0; !hit && i < sizeof local / sizeof local[0]; i++)
+        hit = strlen(local[i]) == hl && !_strnicmp(host, local[i], hl);
+    if (!hit) return;
+    char d = (char)toupper((unsigned char)share[0]);
+    const char *rest = share + 2;   /* "" or "/..." */
+    size_t rl = strlen(rest);
+    p[0] = d; p[1] = ':';
+    if (rl) memmove(p + 2, rest, rl + 1);
+    else { p[2] = '/'; p[3] = '\0'; }
+}
+
 static void drop_prefixes(char *p) {
     size_t l = strlen(p);
     if (!strncmp(p, "//?/UNC/", 8) || !strncmp(p, "//./UNC/", 8) || !_strnicmp(p, "//?/unc/", 8)) {
         memmove(p + 2, p + 8, l - 8 + 1);
+        local_admin_share(p);
         return;
     }
+    local_admin_share(p);
+    if (is_drive(p)) return;
     if ((!strncmp(p, "//?/", 4) || !strncmp(p, "//./", 4) || !strncmp(p, "/??/", 4)) && is_drive(p + 4)) {
         memmove(p, p + 4, l - 4 + 1);
         return;

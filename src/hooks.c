@@ -2209,6 +2209,10 @@ int kai_cmd_hook(int argc, char **argv) {
     size_t len = 0;
     char *json = kai_read_stream(stdin, 8 * 1024 * 1024, &len);
     if (!json) { fprintf(stderr, "kai hook: input too large or unreadable\n"); return 1; }
+    /* Cursor on Windows starts the event with a UTF-8 byte-order mark (its
+     * PowerShell wrapper adds it); a JSON parser rejects that. */
+    if ((unsigned char)json[0] == 0xEF && (unsigned char)json[1] == 0xBB && (unsigned char)json[2] == 0xBF)
+        memmove(json, json + 3, strlen(json + 3) + 1);
     int rc;
     if (strcmp(agent, "claude") == 0) rc = hook_claude(json, NULL, "claude");
     else if (strcmp(agent, "codex") == 0) rc = hook_claude(json, NULL, "codex");
