@@ -726,8 +726,10 @@ int kai_plat_others_can_write(const char *path, char *who, size_t n) {
     wchar_t *w = wide(path);
     if (!w) return -1;
     PACL dacl = NULL;
+    PSID owner = NULL;
     PSECURITY_DESCRIPTOR sd = NULL;
-    DWORD r = GetNamedSecurityInfoW(w, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, NULL, NULL, &dacl, NULL, &sd);
+    DWORD r = GetNamedSecurityInfoW(w, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION,
+                                    &owner, NULL, &dacl, NULL, &sd);
     free(w);
     if (r != ERROR_SUCCESS) return -1;
     int res = 0;
@@ -745,6 +747,8 @@ int kai_plat_others_can_write(const char *path, char *who, size_t n) {
             ACCESS_ALLOWED_ACE *a = (ACCESS_ALLOWED_ACE *)ace;
             if (!(a->Mask & KAI_WRITE_RIGHTS)) continue;
             PSID sid = (PSID)&a->SidStart;
+            /* OWNER RIGHTS (S-1-3-4) is whoever owns the file */
+            if (IsWellKnownSid(sid, WinCreatorOwnerRightsSid) && owner) sid = owner;
             if (sid_is_trusted(sid, me)) continue;
             res = 1;
             if (who) {
