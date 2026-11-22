@@ -973,6 +973,15 @@ static void WINAPI service_main(DWORD argc, LPWSTR *argv) {
     g_ssh = RegisterServiceCtrlHandlerExW(SVC_NAME, handler, NULL);
     if (!g_ssh) return;
     report(SERVICE_START_PENDING, NO_ERROR, 10000);
+    {   /* the SCM's restart actions also for an error exit (a user switch),
+         * not only a crash; the MSI can't set this reliably */
+        SC_HANDLE m = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+        SC_HANDLE s = m ? OpenServiceW(m, SVC_NAME, SERVICE_CHANGE_CONFIG) : NULL;
+        SERVICE_FAILURE_ACTIONS_FLAG ff = {TRUE};
+        if (s) ChangeServiceConfig2W(s, SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, &ff);
+        if (s) CloseServiceHandle(s);
+        if (m) CloseServiceHandle(m);
+    }
     g_stop_event = CreateEventW(NULL, TRUE, FALSE, NULL);
     report(SERVICE_RUNNING, NO_ERROR, 0);
     int rc = run_watch();

@@ -152,6 +152,25 @@ void kai_plat_slashes(char *s) { slashes(s); }
 const char *kai_plat_program_dir(void) {
     static char buf[PATH_MAX];
     if (buf[0]) return buf;
+    /* The MSI installs to %ProgramFiles%\Kai (bin\kai.exe); a developer's
+     * cmake --install, to %LOCALAPPDATA%\Programs\Kai. */
+    char *pf = env_utf8(L"ProgramW6432");
+    if (!pf || !*pf) { free(pf); pf = env_utf8(L"ProgramFiles"); }
+    if (pf && *pf) {
+        slashes(pf);
+        char exe[PATH_MAX];
+        snprintf(exe, sizeof exe, "%s/Kai/bin/kai.exe", pf);
+        struct _stat64 st;
+        wchar_t *w = wide(exe);
+        int there = w && _wstat64(w, &st) == 0;
+        free(w);
+        if (there) {
+            snprintf(buf, sizeof buf, "%s/Kai", pf);
+            free(pf);
+            return buf;
+        }
+    }
+    free(pf);
     char *l = env_utf8(L"LOCALAPPDATA");
     if (!l || !*l) { free(l); return NULL; }
     slashes(l);
@@ -198,7 +217,7 @@ static int sid_is_admin_side(PSID sid) {
     return 0;
 }
 
-int kai_plat_heartbeat_trusted(const char *path, const struct stat *st, unsigned owner) {
+int kai_plat_heartbeat_trusted(const char *path, const struct _stat64 *st, unsigned owner) {
     (void)st; (void)owner;
     wchar_t *w = wide(path);
     if (!w) return 0;

@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial
+
+  Kai for Windows: one per-machine MSI (one UAC prompt).
+
+    C:\Program Files\Kai\Kai.exe        the app (self-contained .NET: nothing else to install)
+    C:\Program Files\Kai\bin\kai.exe    the CLI and the agent hooks (on the system PATH)
+    C:\Program Files\Kai\bin\kaisvc.exe Kai Watch, a LocalSystem service started with Windows
+
+  Uninstall stops and removes the service, and removes the hooks of the user
+  who uninstalls (kai uninstall all) and their "Start with Windows" entry.
+  Upgrades replace the previous version (MajorUpgrade).
+
+  Built by scripts/release/build-windows-msi.ps1:
+    wix build -arch x64 -ext WixToolset.Util.wixext -d ProductVersion=0.5.1
+      -d BinDir=... -d AppDir=... -d IconFile=... Kai.wxs
+  AppDir is optional (a CLI-and-service-only MSI for CI when the app isn't built).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="Kai"
+           Manufacturer="Kai"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="49589964-2760-4EAC-BD90-3BA63DD798E8"
+           Scope="perMachine"
+           Compressed="yes"
+           InstallerVersion="500">
+
+    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer version of Kai is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="KaiIcon" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="KaiIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/sameehj/kai" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Kai">
+        <Directory Id="BINFOLDER" Name="bin" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <!-- kai.exe: the CLI and the hooks, on the system PATH -->
+    <ComponentGroup Id="Cli" Directory="BINFOLDER">
+      <Component Id="KaiCli" Guid="7B0A3F7E-5D0B-4F4B-9C55-3C9D1E6A2B01">
+        <File Id="KaiExe" Source="$(var.BinDir)\kai.exe" KeyPath="yes" />
+        <Environment Id="KaiPath" Name="PATH" Value="[BINFOLDER]" Action="set" Part="last" System="yes"
+                     Permanent="no" />
+      </Component>
+
+      <!-- Kai Watch: LocalSystem, starts with Windows, restarted on failure -->
+      <Component Id="KaiWatch" Guid="2E6C7A54-0C4B-4E1A-8F43-9D2B7C5E1A02">
+        <File Id="KaiSvcExe" Source="$(var.BinDir)\kaisvc.exe" KeyPath="yes" />
+        <ServiceInstall Id="KaiWatchService" Name="KaiWatch" DisplayName="Kai Watch"
+                        Description="Watches which hosts AI coding agents connect to and records it for Kai. Observation only: it doesn't block anything."
+                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Vital="yes">
+          <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart" RestartServiceDelayInSeconds="5"
+                              ResetPeriodInDays="1" />
+          <!-- "restart on an error exit too" is set by kaisvc itself at start -->
+        </ServiceInstall>
+        <ServiceControl Id="KaiWatchControl" Name="KaiWatch" Start="install" Stop="both" Remove="uninstall"
+                        Wait="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <?ifdef AppDir?>
+    <!-- the app and its .NET runtime -->
+    <ComponentGroup Id="App" Directory="INSTALLFOLDER">
+      <Files Include="$(var.AppDir)\**" />
+    </ComponentGroup>
+
+    <ComponentGroup Id="Shortcuts" Directory="ProgramMenuFolder">
+      <Component Id="KaiShortcut" Guid="C3D1F9A0-6A9E-4B27-8E5C-1F7A2B3C4D03">
+        <Shortcut Id="KaiStartMenu" Name="Kai" Description="Kai: a guardrail for AI coding agents"
+                  Target="[INSTALLFOLDER]Kai.exe" WorkingDirectory="INSTALLFOLDER">
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="Kai.App" />
+        </Shortcut>
+        <RegistryValue Root="HKLM" Key="Software\Kai" Name="StartMenuShortcut" Type="integer" Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- close the app before files are replaced or removed -->
+    <util:CloseApplication Id="CloseKai" Target="Kai.exe" CloseMessage="yes" RebootPrompt="no"
+                           TerminateProcess="0" />
+    <?endif?>
+
+    <!-- Uninstall (not an upgrade): remove the uninstalling user's agent hooks
+         and their "Start with Windows" entry, as them (impersonated), before
+         the files go. Failures don't stop the uninstall. -->
+    <CustomAction Id="SetUnhookCmd" Property="UnhookAgents"
+                  Value="&quot;[BINFOLDER]kai.exe&quot; uninstall all" />
+    <CustomAction Id="UnhookAgents" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred"
+                  Impersonate="yes" Return="ignore" />
+    <CustomAction Id="SetRemoveRunCmd" Property="RemoveRunEntry"
+                  Value="&quot;[System64Folder]reg.exe&quot; delete HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v Kai /f" />
+    <CustomAction Id="RemoveRunEntry" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec" Execute="deferred"
+                  Impersonate="yes" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="SetUnhookCmd" Before="UnhookAgents" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="UnhookAgents" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="SetRemoveRunCmd" Before="RemoveRunEntry" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="RemoveRunEntry" After="UnhookAgents" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+
+    <Feature Id="Main" Title="Kai" Level="1">
+      <ComponentGroupRef Id="Cli" />
+      <?ifdef AppDir?>
+      <ComponentGroupRef Id="App" />
+      <ComponentGroupRef Id="Shortcuts" />
+      <?endif?>
+    </Feature>
+  </Package>
+</Wix>
