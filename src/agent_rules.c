@@ -1071,8 +1071,7 @@ int kai_cmd_block(int argc, char **argv) {
     snprintf(d, sizeof d, "kai block %s for %s", a.target, agent);
     kai_audit("kai", "block", "note", "terminal_rule", d);
     printf("Kai now stops %s's checked actions that reach %s (and its subdomains): shell commands that name it "
-           "and web fetches. With Internet set to Watch + block my list, Kai also refuses the agent's direct "
-           "connections to it. Until you remove it.\nUndo: kai undo · See all: kai rules\n%s\n",
+           "and web fetches. Until you remove it.\nUndo: kai undo · See all: kai rules\n%s\n",
            agent_title(agent), a.target, LIMIT_LINE);
     return 0;
 }

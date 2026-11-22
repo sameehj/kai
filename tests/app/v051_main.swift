@@ -125,10 +125,12 @@ check(netBlock.blockedSite == "paste.example.org" && netSeen.blockedSite == nil,
 
 print("Internet: one control, honest words")
 check(InternetMode.from(egress: "log", extensionOn: true) == .watch, "log = Watch")
-check(InternetMode.from(egress: "blocklist", extensionOn: true) == .blocklist, "blocklist = Watch + block my list")
+check(InternetMode.from(egress: "blocklist", extensionOn: true) == (InternetMode.blocklistOffered ? .blocklist : .watch),
+      "blocklist = Watch + block my list (Watch while it isn't offered)")
 check(InternetMode.from(egress: "block", extensionOn: true) == .watch, "strict block reads as Watch (clamped in release)")
 check(InternetMode.from(egress: "log", extensionOn: false) == .off, "no extension: Off")
-check(InternetMode.offered.map(\.label) == ["Off", "Watch", "Watch + block my list"], "the segments")
+check(InternetMode.offered.map(\.label) == (InternetMode.blocklistOffered ? ["Off", "Watch", "Watch + block my list"] : ["Off", "Watch"]),
+      "the segments (\(InternetMode.offered.map(\.label)))")
 check(!InternetMode.allCases.map(\.subtitle).joined().contains("Protect")
       && !InternetMode.allCases.map(\.subtitle).joined().contains("Off unless you turn it on"), "no Protect, no stale subtitle")
 check(InternetMode.watch.subtitle.contains("Nothing is blocked") && !InternetMode.blocklist.subtitle.contains("Nothing is blocked"),
@@ -157,7 +159,8 @@ InternetMode.current = .watch
 let items = ActivityFeed.connections([netSeen, netSeen])
 let ctx = AskContext(workspace: nil, recording: true, internetWatching: true, items: items, stops: [], agents: [])
 let a = AskEngine.destinations(ctx)
-check(a.actions.contains { $0.kind == .blockSite && $0.ref == "registry.npmjs.org" }, "Block site action (\(a.actions.map(\.title)))")
+check(a.actions.contains { $0.kind == .blockSite && $0.ref == "registry.npmjs.org" } == InternetMode.blocklistOffered,
+      "Block site action only while the block list is offered (\(a.actions.map(\.title)))")
 check(a.limits == [InternetMode.watch.connectionLimit], "Watch: nothing was blocked")
 InternetMode.current = .blocklist
 check(AskEngine.destinations(ctx).limits == [InternetMode.blocklist.connectionLimit], "block list: only listed sites refused")

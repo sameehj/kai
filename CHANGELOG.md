@@ -4,7 +4,6 @@
 
 Notes: [docs/release/0.5.1-preview.1.md](docs/release/0.5.1-preview.1.md).
 
-- **Block the sites you choose (Watch + block my list).** Settings → Internet has one control: Off · Watch · Watch + block my list. Add sites to Blocked sites (the same list as `kai block`), and Kai refuses agents' direct connections to them. It is not a firewall: an agent could still reach a site another way, for example through a proxy.
 - **Numbers in the menu bar.** The popover shows today's actions, stops and connections, and each session's last action and counts.
 - **Clearer stops: Kai always says it stopped the action** ("Kai stopped Claude Code's command"), in the popover, Now, Activity, Ask and notifications.
 - **Card counts match Activity.** When a session started before recording, its card says what Activity holds ("Recorded in Activity since 09:14: …"), and Open → always shows All.

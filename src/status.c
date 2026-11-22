@@ -199,7 +199,7 @@ int kai_cmd_status_text(void) {
                      : any_on ? "Partly checking" : "Not checking";
     printf("Kai%s %s · %s\n", app ? "" : " Preview", KAI_VERSION, head);
     if (!app) printf("%s\nKai Preview checks inside your agents. The Kai app adds the Internet wall, which "
-                     "records the connections it observes and can refuse agents' connections to sites you block.\n", CONTRACT);
+                     "records the connections it observes and blocks nothing in this release.\n", CONTRACT);
     printf("Agents\n%s", buf ? buf : "");
     free(buf);
 

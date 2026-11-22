@@ -35,7 +35,7 @@ Kai is a **local guardrail for AI coding agents**. It connects through supported
   </picture>
 </p>
 
-> **Security boundary:** Kai is **not a sandbox**. It can stop supported tool calls *when they pass through an agent's hooks*. It does not control every action a process can take, including a script the agent writes and runs. Internet mode in **0.5.1-preview.1** is off by default: **Watch** records where agents connect, and **Watch + block my list** refuses agents' direct connections to sites you choose. It is not a firewall: an agent could reach a site another way, for example through a proxy. See [coverage](docs/COVERAGE.md) and [known escapes](docs/ESCAPES.md).
+> **Security boundary:** Kai is **not a sandbox**. It can stop supported tool calls *when they pass through an agent's hooks*. It does not control every action a process can take, including a script the agent writes and runs. Internet mode in **0.5.1-preview.1 observes connections; it does not block them**. See [coverage](docs/COVERAGE.md) and [known escapes](docs/ESCAPES.md).
 
 ## Why Kai
 
@@ -64,7 +64,7 @@ Kai is a **local guardrail for AI coding agents**. It connects through supported
 
 3. For **Codex**, open Codex, run `/hooks`, and trust Kai's hooks. You can then verify with `kai demo` or use `kai demo --live` for an actual agent-run test (uses model quota).
 
-**Internet (preview) is optional and off by default.** Turning it on requires macOS Network Extension approval. **Watch** records where agents connect; **Watch + block my list** also refuses agents' direct connections to the sites on your list. It is not a firewall: an agent could reach a site another way, for example through a proxy. Full [installation and verification instructions](#install) are below.
+**Internet watching is optional and off by default.** Turning it on requires macOS Network Extension approval, and **does not block connections in this release**. Full [installation and verification instructions](#install) are below.
 
 ## New in 0.5
 
@@ -83,14 +83,14 @@ Kai is a **local guardrail for AI coding agents**. It connects through supported
 - **Supported agent tool calls are checked before execution.** Kai applies fixed rules to the file, shell, prompt, fetch and MCP operations that supported hooks actually report. Some attempts to read sensitive files, expose known secrets, alter hook settings or send sensitive data are stopped with a reason and decision ID (`kai why <id>`). **This is not a guarantee against all ways of accessing or leaking data.**
 - **Kai aims not to interrupt ordinary work.** Routine MCP tools, Git, `gh`, builds and tests generally remain under the agent's own approvals; Kai applies its supported checks to high-risk operations, including some destructive MCP actions and cross-host sends. False positives remain possible.
 - **Missing Kai fails open.** If its program is missing, the agent continues working without Kai's checks. Kai reports that checks are off when it can detect the problem and offers repair in the app. **Fail-open behavior prioritizes continuity over guaranteed enforcement.**
-- **Internet (preview), off by default.** Watch records where agents connect. **Watch + block my list** refuses agents' direct connections to sites you choose. It is not a firewall: an agent could reach a site another way, for example through a proxy.
+- **Internet (preview), off by default.** If enabled and approved by macOS, Kai observes attributed agent connections. **It blocks nothing in this version.**
 
 | | Checked by Kai | Observed only | Not covered |
 |---|---|---|---|
 | Claude Code | file tools, shell commands, prompts, MCP and web-fetch calls | | scripts it writes and runs, subprocesses' own file access |
 | Codex | shell commands, prompts, MCP calls | | the same |
 | Cursor | shell commands, file reads, prompts, MCP arguments (secrets only) | | file writes, editor extensions |
-| Network (if switched on) | connections from agent processes to sites on your block list | all other agent connections | encrypted contents, other routes to a blocked site |
+| Network (if switched on) | | connections from agent processes | encrypted contents |
 
 Details per agent and operation: [docs/COVERAGE.md](docs/COVERAGE.md). What still gets through: [docs/ESCAPES.md](docs/ESCAPES.md).
 
@@ -146,7 +146,7 @@ How this release was verified: see the [release notes](https://github.com/sameeh
 **macOS 13 or later; Linux and Windows aren't supported.** Works with Claude Code, Codex and Cursor.
 
 1. **Download** `Kai-Preview-<version>.pkg` from the newest release on the [Releases page](https://github.com/sameehj/kai/releases), and double-click it. It installs the Kai app and the `kai` command.
-2. **Open Kai** (Applications → Kai). It lives in the menu bar. Open Kai: it connects the agents it finds. Turn any off in Settings → Agents. Optional: in Settings → Internet, choose **Watch** (records where agents connect) or **Watch + block my list** (also refuses agents' direct connections to the sites on your list; not a firewall).
+2. **Open Kai** (Applications → Kai). It lives in the menu bar. Open Kai: it connects the agents it finds. Turn any off in Settings → Agents. Optional: in Settings → Internet, choose **Watch**: Kai records where agents connect; nothing is blocked.
 3. **If you switched Internet on, approve Kai's network extension** when macOS asks. This is what lets Kai see where your agents connect.
    - macOS 13–14: System Settings → Privacy & Security, then click Allow next to Kai.
    - macOS 15: System Settings → General → Login Items & Extensions → Network Extensions, then turn Kai on.
@@ -202,8 +202,7 @@ kai allow-fetch docs.example.org --agent claude --for 1h  # the agent's fetch to
 kai allow-mcp notion search --agent claude --for 1h       # one MCP tool (or every tool of a server)
 kai allow-upload ./report.pdf --to files.example.com --agent claude --for 1h
 kai allow-capture --app Safari --agent claude --for 15m   # screen and app control, one app
-kai block paste.example.org                               # stop commands and fetches that reach it,
-                                                          # and (in Watch + block my list) connections to it
+kai block paste.example.org                               # stop commands and fetches that reach it
 kai rules                                                 # what each agent may do, and why
 kai undo                                                  # take back the last change
 ```
@@ -219,7 +218,7 @@ Exactly what each agent reports to Kai, at which stage, whether Kai can stop it,
 - Hooks run with your permissions. A program an agent writes and runs, or a detached process, can get around them.
 - Kai checks only what an agent reports to its hooks: not tool results, not the agent's other model traffic.
 - Kai's rules and policy are files a program with your permissions can edit. Kai notices some policy changes made outside Kai (`kai doctor`), never all, and prevents none.
-- Files protection: not included in this release. The Internet wall records connections; in **Watch + block my list** it refuses agents' direct connections to the sites on your list. It is not a firewall: an agent could reach a site another way, for example through a proxy or a site that isn't on your list.
+- Files protection: not included in this release. The Internet wall observes connections and blocks nothing in this release.
 - No browser coverage: Kai doesn't check AI chat sites in a browser (the Chrome extension was removed). `kai uninstall chrome` removes one an earlier Kai installed.
 - Screen and app control: Kai stops the commands and tools it recognizes (`screencapture`, `ffmpeg`/`sox` recording, `osascript` telling any app, computer-use tools) and names the app; you allow them per app. With the Kai app, those allows are made in the app (each agent's page), not with `kai allow-capture`. A program the agent writes can call the capture APIs directly. Kai can't change macOS privacy prompts: macOS grants these permissions per app, so every agent run in Terminal, iTerm or Cursor inherits what that app holds (`kai doctor` lists them where it can read them).
 

@@ -95,7 +95,7 @@ enum InternetMode: String, CaseIterable, Identifiable, Equatable {
     /// S5 gate: "Watch + block my list" is offered only when it was verified
     /// on a real Mac for this release (see the release notes). The engine
     /// code stays in either way.
-    static let blocklistOffered = true
+    static let blocklistOffered = false   // 0.5.1: S5 not run, so hidden; the engine code stays in
 
     /// From the policy's `egress` switch and whether the extension runs.
     static func from(egress: String?, extensionOn: Bool) -> InternetMode {
