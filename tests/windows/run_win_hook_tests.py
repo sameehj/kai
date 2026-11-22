@@ -137,6 +137,8 @@ cs = json.load(open(os.path.join(home, ".claude", "settings.json")))
 entries = [h for g in cs["hooks"]["PreToolUse"] for h in g["hooks"]]
 check(any(h.get("command") == exe.replace(B, "/") and h.get("args") == ["hook", "claude"] for h in entries),
       "Claude Code: exec form (command + args)")
+check(any("PowerShell" in g.get("matcher", "").split("|") for g in cs["hooks"]["PreToolUse"]),
+      "Claude Code: the PowerShell tool is matched")
 for agent, rel in (("codex", ".codex\\hooks.json"), ("cursor", ".cursor\\hooks.json")):
     txt = open(os.path.join(home, rel)).read()
     check(("hook " + agent) in txt, agent + " hook command written")
