@@ -142,6 +142,16 @@ static int is_loopback(const unsigned char *addr, int family) {
     return family == AF_INET ? addr[0] == 127 : memcmp(addr, v6lo, 16) == 0;
 }
 
+/* Does one list entry (egress_allow or egress_block) cover this connection? */
+static int entry_hits(const char *entry, const char *host, int have_ip, const unsigned char *addr, int family,
+                      int port) {
+    egress_entry e;
+    if (!parse_entry(entry, &e)) return 0;
+    if (e.port && e.port != port) return 0;
+    return e.host[0] ? (host && *host && host_covered(host, e.host))
+                     : (have_ip && e.family == family && prefix_match(addr, e.addr, e.bits));
+}
+
 /* B2: hosts that only collect telemetry or crash reports. Matching is on the
  * domain or a subdomain of it. */
 int kai_host_is_telemetry(const char *host) {
@@ -187,18 +197,52 @@ int kai_egress_endpoint_allowed(const kai_policy *p, const char *host, const cha
         if (why) kai_strlcpy(why, "running without a policy: only web ports", whylen);
         return 0;
     }
-    for (int i = 0; i < p->negress; i++) {
-        egress_entry e;
-        if (!parse_entry(p->egress_allow[i], &e)) continue;
-        if (e.port && e.port != port) continue;
-        int hit = e.host[0] ? (host && *host && host_covered(host, e.host))
-                            : (have_ip && e.family == family && prefix_match(addr, e.addr, e.bits));
-        if (hit) {
+    for (int i = 0; i < p->negress; i++)
+        if (entry_hits(p->egress_allow[i], host, have_ip, addr, family, port)) {
             if (why) kai_strlcpy(why, p->egress_allow[i], whylen);
             return 1;
         }
+    return 0;
+}
+
+/* ---- 0.5.1 block list ---- */
+
+int kai_egress_blocked(const kai_policy *p, const char *agent, const char *host, const char *ip, int port,
+                       char *why, size_t whylen) {
+    if (why && whylen) why[0] = '\0';
+    if (!p) return 0;
+    unsigned char addr[16];
+    int family = 0, have_ip = read_ip(ip, addr, &family);
+    if (have_ip && is_loopback(addr, family)) return 0;   /* this Mac is never on the list */
+    for (int i = 0; i < p->negress_block; i++)
+        if (entry_hits(p->egress_block[i], host, have_ip, addr, family, port)) {
+            if (why) kai_strlcpy(why, p->egress_block[i], whylen);
+            return 1;
+        }
+    /* kai block / Settings -> Internet -> Blocked sites (reach rules): host names only */
+    if (host && *host && agent && *agent) {
+        char h[256];
+        kai_strlcpy(h, host, sizeof h);
+        size_t hl = strlen(h);
+        while (hl && h[hl - 1] == '.') h[--hl] = '\0';
+        if (hl && kai_agent_reach_blocked(agent, h, why, whylen)) return 1;
     }
     return 0;
+}
+
+int kai_egress_blocklist_drop(const kai_policy *p, const char *agent, const char *host, const char *ip, int port,
+                              char *why, size_t whylen) {
+    if (why && whylen) why[0] = '\0';
+    if (!p || !agent || !*agent) return 0;                       /* not an agent: never refused */
+    if (kai_policy_egress_mode(p) != KAI_EGRESS_BLOCKLIST) return 0;
+    return kai_egress_blocked(p, agent, host, ip, port, why, whylen);
+}
+
+int kai_blocked_sites_count(const kai_policy *p) {
+    int n = p ? p->negress_block : 0;
+    const char *a, *h;
+    for (int i = 0; kai_agent_block_at(i, &a, &h); i++) n++;
+    return n;
 }
 
 int kai_egress_allowed(const kai_policy *p, const char *host, char *why, size_t whylen) {

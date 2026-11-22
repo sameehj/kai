@@ -30,6 +30,12 @@ enum AgentIconSource: Equatable {
         }
     }
 
+    /// 0.5.1: marks with a light and a dark variant (black / white). They must
+    /// be drawn through the asset catalog for the current appearance: drawn
+    /// as a plain NSImage, the black OpenAI mark landed on the dark tile and
+    /// Codex showed a blank grey square on Now.
+    static func needsAppearance(_ name: String) -> Bool { name == "AgentOpenAI" || name == "AgentCursor" }
+
     /// `installed(bundleID)` is the app's URL when it's installed (NSWorkspace).
     static func resolve(_ agent: String, installed: (String) -> URL?) -> AgentIconSource {
         for id in bundleIDs(agent) { if let u = installed(id) { return .app(u) } }

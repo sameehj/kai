@@ -29,6 +29,20 @@ enum AgentIcon {
         return img
     }
     static func image(for agent: Agent) -> NSImage { image(for: agent.rawValue) }
+
+    /// The bundled mark's asset name when the agent's own app isn't installed.
+    private static var names: [String: String?] = [:]
+    static func bundledName(for agent: String) -> String? {
+        if cache[agent] == nil { names[agent] = nil }   // the image cache was refreshed: look again
+        _ = image(for: agent)                           // installs the refresh observer
+        if let n = names[agent] { return n }
+        var n: String? = nil
+        if case .bundled(let b) = AgentIconSource.resolve(agent, installed: { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }) {
+            n = b
+        }
+        names[agent] = n
+        return n
+    }
 }
 
 /// The logo in a rounded square: 28 pt on Now cards, 16 pt in rows.
@@ -36,7 +50,7 @@ struct AgentLogo: View {
     let agent: String
     var size: CGFloat = 16
     var body: some View {
-        Image(nsImage: AgentIcon.image(for: agent))
+        logo
             .resizable()
             .interpolation(.high)
             .scaledToFit()
@@ -45,5 +59,12 @@ struct AgentLogo: View {
             .background(Theme.raised.opacity(size >= 24 ? 1 : 0), in: RoundedRectangle(cornerRadius: size * 0.26, style: .continuous))
             .clipShape(RoundedRectangle(cornerRadius: size * 0.26, style: .continuous))
             .accessibilityLabel(ActivityFeed.agentTitle(agent))
+    }
+
+    /// The app's own icon, else the bundled mark from the asset catalog,
+    /// which picks the light or dark variant for the current appearance.
+    @MainActor private var logo: Image {
+        if let n = AgentIcon.bundledName(for: agent) { return Image(n) }
+        return Image(nsImage: AgentIcon.image(for: agent))
     }
 }

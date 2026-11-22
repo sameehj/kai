@@ -334,8 +334,93 @@ static void test_agents(void) {
     kai_policy_free(p);
 }
 
+/* 0.5.1 "Watch + block my list": one block list (kai block hosts in
+ * agent-rules.json + egress_block entries), refused only for agent flows. */
+static void test_blocklist(void) {
+    printf("egress block list (Watch + block my list)\n");
+    char why[256];
+    /* main() points KAI_HOME at a throwaway folder before any test runs
+     * (kai_home() is cached on first use). Never write rules anywhere else. */
+    const char *home = getenv("KAI_HOME");
+    if (!home || strncmp(home, "/tmp/kai-unit-", 14) || strcmp(kai_home(), home)) {
+        CHECK(0, "block list tests need the throwaway KAI_HOME (skipped, nothing written)");
+        return;
+    }
+    kai_policy *p = P("egress blocklist\n"
+                      "egress_block paste.example.org 203.0.113.0/24 198.51.100.9:22 2001:db8:bad::/48\n"
+                      "egress_allow paste.example.org files.example.net\n");
+    /* parsing */
+    CHECK(kai_policy_egress_requested(p) == KAI_EGRESS_BLOCKLIST, "egress blocklist parsed");
+    CHECK(kai_policy_egress_mode(p) == KAI_EGRESS_BLOCKLIST, "blocklist is effective (dev build)");
+    CHECK(kai_policy_egress_block_entry(p, 0) && !strcmp(kai_policy_egress_block_entry(p, 0), "paste.example.org"),
+          "egress_block entries kept in order");
+    CHECK(kai_policy_egress_block_entry(p, 4) == NULL, "four egress_block entries");
+    /* subdomains */
+    CHECK(kai_egress_blocked(p, "claude", "paste.example.org", "192.0.2.1", 443, why, sizeof why), "listed host");
+    CHECK(kai_egress_blocked(p, "claude", "eu.paste.example.org", "192.0.2.1", 443, why, sizeof why) &&
+          !strcmp(why, "paste.example.org"), "subdomain, why = the entry");
+    CHECK(kai_egress_blocked(p, "claude", "PASTE.Example.ORG.", "192.0.2.1", 443, why, sizeof why), "case and trailing dot");
+    CHECK(!kai_egress_blocked(p, "claude", "notpaste.example.org", "192.0.2.1", 443, why, sizeof why), "suffix without dot");
+    CHECK(!kai_egress_blocked(p, "claude", "example.org", "192.0.2.1", 443, why, sizeof why), "parent domain not listed");
+    /* IP and CIDR, for name-less flows */
+    CHECK(kai_egress_blocked(p, "claude", NULL, "203.0.113.77", 443, why, sizeof why), "CIDR, no name");
+    CHECK(kai_egress_blocked(p, "claude", NULL, "::ffff:203.0.113.5", 80, why, sizeof why), "v4-mapped in CIDR");
+    CHECK(!kai_egress_blocked(p, "claude", NULL, "203.0.114.1", 443, why, sizeof why), "outside CIDR");
+    CHECK(kai_egress_blocked(p, "claude", NULL, "198.51.100.9", 22, why, sizeof why), "ip:port");
+    CHECK(!kai_egress_blocked(p, "claude", NULL, "198.51.100.9", 443, why, sizeof why), "ip:port, other port");
+    CHECK(kai_egress_blocked(p, "claude", NULL, "[2001:db8:bad::1]", 443, why, sizeof why), "v6 range");
+    CHECK(!kai_egress_blocked(p, "claude", NULL, "127.0.0.1", 443, why, sizeof why), "loopback never listed");
+    /* block wins over allow */
+    CHECK(kai_egress_endpoint_allowed(p, "paste.example.org", "192.0.2.1", 443, why, sizeof why),
+          "the host is also on egress_allow");
+    CHECK(kai_egress_blocklist_drop(p, "claude", "paste.example.org", "192.0.2.1", 443, why, sizeof why),
+          "block list wins over egress_allow");
+    CHECK(!kai_egress_blocklist_drop(p, "claude", "files.example.net", "192.0.2.1", 443, why, sizeof why),
+          "allowed, unlisted host: not refused");
+    CHECK(!kai_egress_blocklist_drop(p, "claude", "pastebin.example", "192.0.2.1", 443, why, sizeof why),
+          "unlisted host: Watch (logged, not refused)");
+    /* non-agent flows are never refused */
+    CHECK(!kai_egress_blocklist_drop(p, NULL, "paste.example.org", "192.0.2.1", 443, why, sizeof why),
+          "non-agent flow to a listed host allowed");
+    CHECK(!kai_egress_blocklist_drop(p, "", NULL, "203.0.113.9", 443, why, sizeof why),
+          "non-agent flow to a listed range allowed");
+    /* kai block hosts (reach rules) feed the same list */
+    CHECK(kai_blocked_sites_count(p) == 4, "count: four policy entries, no rules yet");
+    CHECK(kai_agent_rule_add(KAI_AGENT_RULE_BLOCK, "*", "Drop.Example.com", 0) == 0, "kai block for every agent");
+    CHECK(kai_agent_rule_add(KAI_AGENT_RULE_BLOCK, "cursor", "cursor-only.example", 0) == 0, "kai block for one agent");
+    CHECK(kai_egress_blocklist_drop(p, "claude", "cdn.drop.example.com", "192.0.2.1", 443, why, sizeof why) &&
+          !strcmp(why, "drop.example.com"), "kai block host and subdomains refused");
+    CHECK(kai_agent_rule_for("claude", "drop.example.com", 0) == KAI_AGENT_RULE_BLOCK, "the hooks see the same rule");
+    CHECK(kai_egress_blocklist_drop(p, "cursor", "cursor-only.example", "192.0.2.1", 443, why, sizeof why),
+          "one-agent block applies to that agent");
+    CHECK(!kai_egress_blocklist_drop(p, "claude", "cursor-only.example", "192.0.2.1", 443, why, sizeof why),
+          "one-agent block doesn't apply to another");
+    CHECK(kai_blocked_sites_count(p) == 6, "count: policy entries + kai block hosts");
+    const char *ba = NULL, *bh = NULL;
+    CHECK(kai_agent_block_at(0, &ba, &bh) && !strcmp(ba, "*") && !strcmp(bh, "drop.example.com"), "list the blocks");
+    CHECK(kai_agent_block_remove("*", "drop.example.com") == 0, "unblock");
+    CHECK(!kai_egress_blocklist_drop(p, "claude", "drop.example.com", "192.0.2.1", 443, why, sizeof why),
+          "unblocked host: Watch again");
+    CHECK(kai_agent_block_remove("*", "drop.example.com") == -1, "unblock twice: nothing to remove");
+    kai_policy_free(p);
+    /* other modes never refuse by the list */
+    kai_policy *w = P("egress log\negress_block paste.example.org\n");
+    CHECK(!kai_egress_blocklist_drop(w, "claude", "paste.example.org", "192.0.2.1", 443, why, sizeof why),
+          "Watch: the list isn't enforced by the network extension");
+    CHECK(kai_egress_blocked(w, "claude", "paste.example.org", "192.0.2.1", 443, why, sizeof why),
+          "Watch: the site is still on the list");
+    kai_policy_free(w);
+    kai_policy *o = P("egress off\negress_block paste.example.org\n");
+    CHECK(!kai_egress_blocklist_drop(o, "claude", "paste.example.org", "192.0.2.1", 443, why, sizeof why), "Off: nothing refused");
+    kai_policy_free(o);
+}
+
 int main(void) {
     printf("== libkai unit tests ==\n");
+    /* A throwaway Kai home for every test, set before anything caches kai_home(). */
+    static char home[] = "/tmp/kai-unit-XXXXXX";
+    if (!mkdtemp(home)) { printf("  can't make a temp home\n"); return 1; }
+    setenv("KAI_HOME", home, 1);
     test_default_parses();
     test_redact();
     test_replace_term();
@@ -347,7 +432,11 @@ int main(void) {
     test_generic_secret_precision();
     test_sni();
     test_egress();
+    test_blocklist();
     test_agents();
+    char cmd[300];
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", home);
+    if (system(cmd)) {}
     printf("\n%d checks, %d failures\n", checks, fails);
     return fails ? 1 : 0;
 }

@@ -417,7 +417,7 @@ int kai_heartbeat_level(const char *path, const char *wall, uid_t owner) {
     const char *m = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "mode")) : NULL;
     int lvl = -1;
     if (w && !strcmp(w, wall) && m)
-        lvl = !strcmp(m, "block") ? 2 : (!strcmp(m, "log") || !strcmp(m, "warn")) ? 1 : 0;
+        lvl = !strcmp(m, "block") ? 2 : (!strcmp(m, "log") || !strcmp(m, "warn") || !strcmp(m, "blocklist")) ? 1 : 0;  /* blocklist: Watch + listed sites */
     cJSON_Delete(o);
     return lvl;
 }

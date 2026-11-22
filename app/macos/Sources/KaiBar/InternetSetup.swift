@@ -6,7 +6,8 @@
 // network content". This view says where to go before each step and flips
 // to On by itself (it polls every 2 seconds while visible).
 //
-// Watch only: nothing here changes what the Network Wall enforces.
+// Nothing here changes what the Network Wall enforces: the mode (Watch, or
+// Watch + block my list) is the policy's, chosen on the Internet page.
 import SwiftUI
 
 struct InternetSetupStep: View {
@@ -24,7 +25,7 @@ struct InternetSetupStep: View {
                     .font(.system(size: 12)).foregroundStyle(Theme.muted)
             case .off:
                 Text("Kai can list the destinations agents connect to. It watches connections; it doesn't read "
-                     + "traffic, and nothing is blocked.")
+                     + "traffic.")
                     .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
                 Button("Turn on Internet watching") { wall.turnOn() }.buttonStyle(LimeButtonStyle())
                 ahead
@@ -47,7 +48,8 @@ struct InternetSetupStep: View {
                 Text("Click Allow in the macOS alert. Kai watches connections; it doesn't read traffic.")
                     .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
             case .on:
-                Label("Internet watching is on (Watch only).", systemImage: "checkmark.circle.fill")
+                Label(InternetMode.current == .blocklist ? "Internet is on: Watch + block my list."
+                                                         : "Internet watching is on.", systemImage: "checkmark.circle.fill")
                     .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.teal)
             case .failed(let why):
                 Label("Internet watching isn't on", systemImage: "exclamationmark.triangle")

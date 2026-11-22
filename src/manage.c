@@ -106,9 +106,10 @@ static const char *status_storage_mode_name(const kai_policy *p) {
 static const char *status_egress_mode_name(const kai_policy *p) {
     if (!p) return "unknown";
     switch (kai_policy_egress_mode(p)) {
-        case KAI_EGRESS_BLOCK: return "block";
-        case KAI_EGRESS_LOG:   return "log";
-        default:               return "off";
+        case KAI_EGRESS_BLOCK:     return "block";
+        case KAI_EGRESS_BLOCKLIST: return "blocklist";
+        case KAI_EGRESS_LOG:       return "log";
+        default:                   return "off";
     }
 }
 
@@ -197,6 +198,16 @@ int kai_cmd_status_json(void) {
     cJSON *cfg = cJSON_AddObjectToObject(w, "configured");
     cJSON_AddStringToObject(cfg, "storage", status_storage_mode_name(p));
     cJSON_AddStringToObject(cfg, "network", status_egress_mode_name(p));
+    /* 0.5.1: what the Internet setting enforces. enforcing is true only in
+     * "Watch + block my list", and only for the listed sites. */
+    {
+        cJSON *in = cJSON_AddObjectToObject(o, "internet");
+        int bl = p && kai_policy_egress_mode(p) == KAI_EGRESS_BLOCKLIST;
+        cJSON_AddStringToObject(in, "mode", status_egress_mode_name(p));
+        cJSON_AddBoolToObject(in, "enforcing", bl);
+        cJSON_AddNumberToObject(in, "blocked_sites", kai_blocked_sites_count(p));
+        cJSON_AddStringToObject(in, "enforces", bl ? "listed sites only" : "nothing");
+    }
     cJSON *obs = cJSON_AddObjectToObject(w, "observed");
     cJSON *sh = status_read_health("/tmp/kai-storage-health.json", 30);
     cJSON *so = cJSON_AddObjectToObject(obs, "storage");
@@ -520,7 +531,7 @@ static const struct {
     {"on_fetch", "allow", {"allow", "block", NULL}},
     {"injection", "warn", {"warn", "off", NULL}},
     {"max_scan_bytes", "2000000", {NULL}},
-    {"egress", "log", {"log", "block", "off", NULL}},
+    {"egress", "log", {"log", "blocklist", "block", "off", NULL}},
     {"storage", "off", {"off", "log", "block", NULL}},
     {"gateway_port", "8787", {NULL}},
     {"audit_context", "on", {"on", "off", NULL}},
@@ -590,6 +601,7 @@ static int policy_show(int json) {
     cJSON *protect = cJSON_CreateArray(), *allow = cJSON_CreateArray();
     cJSON *terms = cJSON_CreateArray(), *rules = cJSON_CreateArray();
     cJSON *egress = cJSON_CreateArray();
+    cJSON *egress_block = cJSON_CreateArray();
     cJSON *channels = cJSON_CreateArray();
     cJSON *agents = cJSON_CreateArray();
     cJSON *exempt = cJSON_CreateArray();
@@ -611,12 +623,13 @@ static int policy_show(int json) {
             cJSON_AddItemToArray(channels, cJSON_CreateString(v));
             free(v);
         } else if (strcmp(dir, "protect") == 0 || strcmp(dir, "allow") == 0 ||
-                   strcmp(dir, "egress_allow") == 0) {
+                   strcmp(dir, "egress_allow") == 0 || strcmp(dir, "egress_block") == 0) {
             char *v = malloc(al + 1);
             if (!v) continue;
             memcpy(v, arg, al);
             v[al] = '\0';
-            cJSON *list = dir[0] == 'p' ? protect : (dir[0] == 'a' ? allow : egress);
+            cJSON *list = dir[0] == 'p' ? protect : (dir[0] == 'a' ? allow
+                          : !strcmp(dir, "egress_block") ? egress_block : egress);
             cJSON_AddItemToArray(list, cJSON_CreateString(v));
             free(v);
         } else if (strcmp(dir, "term") == 0) {
@@ -686,6 +699,7 @@ static int policy_show(int json) {
     cJSON_AddItemToObject(o, "protect", protect);
     cJSON_AddItemToObject(o, "allow", allow);
     cJSON_AddItemToObject(o, "egress_allow", egress);
+    cJSON_AddItemToObject(o, "egress_block", egress_block);
     cJSON_AddItemToObject(o, "channels", channels);
     cJSON_AddItemToObject(o, "terms", terms);
     cJSON_AddItemToObject(o, "rules", rules);
@@ -714,7 +728,7 @@ static int switch_rank(const char *key, const char *val) {
         {"on_upload",        {"warn", "ask", "block", NULL}},
         {"on_fetch",         {"allow", "block", NULL}},
         {"injection",        {"off", "warn", NULL}},
-        {"egress",           {"off", "log", "block", NULL}},
+        {"egress",           {"off", "log", "blocklist", "block", NULL}},
         {"storage",          {"off", "log", "block", NULL}},
         {"audit_context",    {"off", "on", NULL}},
     };
@@ -972,16 +986,17 @@ static int policy_add(int argc, char **argv) {
     sb_t b;
     sb_init(&b);
     if (strcmp(kind, "protect") == 0 || strcmp(kind, "allow") == 0 ||
-        strcmp(kind, "egress_allow") == 0) {
+        strcmp(kind, "egress_allow") == 0 || strcmp(kind, "egress_block") == 0) {
         const char *path = argv[1];
         if (argc != 2 || strpbrk(path, " \t#") || has_newline(path)) {
             fprintf(stderr, "kai policy add %s: one path, no spaces or '#'\n", kind);
             lines_free(&L);
             return 1;
         }
-        if (strcmp(kind, "egress_allow") == 0 &&
+        if ((strcmp(kind, "egress_allow") == 0 || strcmp(kind, "egress_block") == 0) &&
             !kai_egress_entry_valid(strncmp(path, "*.", 2) == 0 ? path + 2 : path)) {
-            fprintf(stderr, "kai policy add egress_allow: expected a host, IP address or range, "
+            fprintf(stderr, "kai policy add %s: expected a host, IP address or range, ", kind);
+            fprintf(stderr, 
                             "optionally with :port (example.com, db.example.com:5432, "
                             "10.0.0.0/8, 203.0.113.5:22, [2001:db8::1]:22)\n");
             lines_free(&L);
@@ -1120,7 +1135,7 @@ static int policy_remove(int argc, char **argv) {
     if (argc < 2) goto usage;
     const char *kind = argv[0];
     if (strcmp(kind, "protect") && strcmp(kind, "allow") && strcmp(kind, "term") &&
-        strcmp(kind, "rule") && strcmp(kind, "egress_allow") && strcmp(kind, "agent") &&
+        strcmp(kind, "rule") && strcmp(kind, "egress_allow") && strcmp(kind, "egress_block") && strcmp(kind, "agent") &&
         strcmp(kind, "exempt") && strcmp(kind, "channel"))
         goto usage;
     lines_t L;
@@ -1141,7 +1156,7 @@ static int policy_remove(int argc, char **argv) {
     /* Removing a protect/rule/term/agent drops protection => loosening.
      * Removing an allow/egress_allow/exempt restores a block => tightening. */
     int loosens = !strcmp(kind, "protect") || !strcmp(kind, "rule") ||
-                  !strcmp(kind, "term") || !strcmp(kind, "agent");
+                  !strcmp(kind, "term") || !strcmp(kind, "agent") || !strcmp(kind, "egress_block");
     char summary[160];
     snprintf(summary, sizeof summary, "remove %s %s", kind, val);
     int rc = policy_commit_or_queue(&L, loosens, summary);
@@ -1235,7 +1250,8 @@ int kai_policy_dispatch(int argc, char **argv, int caller_is_agent) {
         char perr[256];
         kai_policy *ep = kai_policy_load(NULL, perr, sizeof perr);
         kai_egress_mode m = kai_policy_egress_mode(ep);
-        printf("%s\n", m == KAI_EGRESS_BLOCK ? "block" : m == KAI_EGRESS_LOG ? "log" : "off");
+        printf("%s\n", m == KAI_EGRESS_BLOCK ? "block" : m == KAI_EGRESS_BLOCKLIST ? "blocklist"
+                       : m == KAI_EGRESS_LOG ? "log" : "off");
         kai_policy_free(ep);
         return 0;
     }
@@ -1274,7 +1290,8 @@ const char *kai_settings_page_for(int argc, char **argv) {
         return !strcmp(what, "storage") ? "files" : !strcmp(what, "egress") ? "internet" : "advanced";
     if (!strcmp(sub, "add") || !strcmp(sub, "remove"))
         return (!strcmp(what, "protect") || !strcmp(what, "allow")) ? "files"
-             : (!strcmp(what, "egress_allow") || !strcmp(what, "channel")) ? "internet" : "advanced";
+             : (!strcmp(what, "egress_allow") || !strcmp(what, "egress_block") || !strcmp(what, "channel")) ? "internet"
+             : "advanced";
     return "advanced";
 }
 

@@ -97,6 +97,8 @@ struct PolicyInfo: Decodable, Equatable {
     let protect: [String]
     let allow: [String]
     let egressAllow: [String]?
+    /// 0.5.1: the policy's egress_block entries (addresses, ranges, host:port).
+    var egressBlock: [String]? = nil
     var channels: [String]? = nil   // spec §4: "<agent>/<channel>" lines
     let terms: [Term]
     let rules: [Rule]

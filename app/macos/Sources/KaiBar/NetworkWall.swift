@@ -56,10 +56,16 @@ final class NetworkWall: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        #if DEBUG
+        if ScreenshotFixture.active { return }
+        #endif
         refresh()
     }
 
     func refresh() {
+        #if DEBUG
+        if ScreenshotFixture.active { return }
+        #endif
         NEFilterManager.shared().loadFromPreferences { [weak self] error in
             Task { @MainActor in
                 guard let self else { return }
@@ -292,3 +298,9 @@ extension NetworkWall: OSSystemExtensionRequestDelegate {
         }
     }
 }
+
+#if DEBUG
+extension NetworkWall {
+    func loadFixture(_ s: State) { state = s }
+}
+#endif

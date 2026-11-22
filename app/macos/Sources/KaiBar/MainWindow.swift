@@ -57,7 +57,8 @@ final class MainNav: ObservableObject {
         agentFilter = agent; sessionFilter = nil; filter = .all; search = ""; page = .activity
     }
     func showActivity(session: String, agent: String) {
-        sessionFilter = session; agentFilter = agent; projectFilter = nil; filter = .all; page = .activity
+        // 0.5.1: Open → always lands on the All filter, never the last-used one.
+        sessionFilter = session; agentFilter = agent; projectFilter = nil; filter = .all; search = ""; page = .activity
     }
     func showStops() { filter = .stops; sessionFilter = nil; page = .activity }
     func ask(about item: ActivityItem) {
@@ -65,12 +66,17 @@ final class MainNav: ObservableObject {
         openEvent = nil
         askSession = nil
         askContext = item
+        AskController.shared.startThread(title: item.title, quote: ([item.title, item.agent] + (item.detail.isEmpty ? [] : [item.detail]))
+                                            .filter { !$0.isEmpty }.joined(separator: " · "), agent: item.agentKey)
         chatHidden = false
         focusChat += 1
     }
     func ask(aboutSession s: SessionFocus) {
         askContext = nil
         askSession = s
+        AskController.shared.startThread(title: "About \(s.agentTitle) · \(s.project)",
+                                         quote: ([s.agentTitle, s.project, s.tab, s.state].filter { !$0.isEmpty && $0 != "—" })
+                                            .joined(separator: " · ") + (s.last.map { "\n" + $0 } ?? ""), agent: s.agent)
         chatHidden = false
         focusChat += 1
     }
@@ -96,6 +102,9 @@ final class KaiRecords: ObservableObject {
     private var loading = false
 
     func refresh() async {
+        #if DEBUG
+        if ScreenshotFixture.active { return }
+        #endif
         guard !loading else { return }
         loading = true
         defer { loading = false }
@@ -150,6 +159,8 @@ struct HeaderState: Equatable {
     var text: String
     var tone: Tone
     var detail: String? = nil
+    /// 0.5.1: an agent's hooks failed their test: "Claude Code's hooks need repair", with Repair.
+    var needsRepair = false
 
     @MainActor
     static func make(_ model: AppModel, _ agents: AgentsModel) -> HeaderState {
@@ -165,7 +176,7 @@ struct HeaderState: Equatable {
             if agents.sourceError != nil && Date().timeIntervalSince(AppModel.launchedAt) >= 5 {
                 return HeaderState(text: "Kai can't list agents right now", tone: .attention, detail: agents.sourceError)
             }
-            return HeaderState(text: "Checking…", tone: .none)
+            return HeaderState(text: "Checking hooks…", tone: .none)   // only while the first check runs
         }
         let found = rows.filter(\.detected)
         if found.isEmpty { return HeaderState(text: "No supported agent found", tone: .none) }
@@ -183,8 +194,8 @@ struct HeaderState: Equatable {
             }
         }
         if let broken = found.first(where: { $0.hooks == "failing" }) {
-            return HeaderState(text: "\(ActivityFeed.agentTitle(broken.name)) isn't connected", tone: .attention,
-                               detail: "Kai's hook didn't answer a test request.")
+            return HeaderState(text: "\(StopWords.possessive(ActivityFeed.agentTitle(broken.name))) hooks need repair", tone: .attention,
+                               detail: "Kai's hook didn't answer a test request.", needsRepair: true)
         }
         if found.contains(where: { $0.hooks == "untrusted" }) {
             return HeaderState(text: "Codex needs one step", tone: .attention, detail: AutoConnect.codexTrustLine)
@@ -563,13 +574,23 @@ struct DecisionDetailSheet: View {
 
     private var item: ActivityItem { ActivityFeed.stopItem(event, workspace: workspace) }
     private var allow: NarrowAllow.Eligibility { NarrowAllow.eligibility(event) }
+    /// The `kai why` record: fetched when the sheet opens, else the cached one.
+    private var whyRec: WhyRecord? { why ?? event.decision_id.flatMap { records.why[$0] } }
+    @State private var notRight: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(item.title).font(.system(size: 20, weight: .semibold))
+            // 0.5.1: what was stopped, with Kai as the subject.
+            Text(StopWords.line(event)).font(.system(size: 20, weight: .semibold))
+                .fixedSize(horizontal: false, vertical: true)
+            // Why.
             Text(event.detail.sentenceEnded).font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
-            if let r = why?.retryLine {
+            if let r = whyRec?.retryLine {
                 Text(r.sentenceEnded).font(.system(size: 13)).foregroundStyle(Theme.muted)
+            }
+            if let rec = whyRec?.recovery, !rec.isEmpty {
+                Text("What you can do: \(rec)").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if event.isNetwork {
                 DecisionSheet(event: event, grants: GrantManager.shared).environmentObject(model)
@@ -577,12 +598,12 @@ struct DecisionDetailSheet: View {
             DisclosureGroup("Technical details", isExpanded: $showDetails) {
                 Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
                     detail("Agent", event.agentName)
-                    detail("Checked by", why?.component ?? (event.isNetwork ? "network wall" : "agent hook"))
+                    detail("Checked by", whyRec?.component ?? (event.isNetwork ? "network wall" : "agent hook"))
                     detail("Rule", event.rule)
                     detail("Tool", event.tool ?? "—")
                     // A command shows only its program name, never the command line.
                     detail("Target", event.excerpt.map { event.actionLabel == "Command" ? ActivityFeed.program($0) : $0 } ?? "—")
-                    detail("Session", why?.attribution ?? event.session ?? "—")
+                    detail("Session", whyRec?.attribution ?? event.session ?? "—")
                     detail("Decision", event.decision_id ?? "—")
                     detail("Time", event.date?.formatted(date: .abbreviated, time: .standard) ?? event.ts)
                 }
@@ -598,6 +619,20 @@ struct DecisionDetailSheet: View {
                         .fixedSize(horizontal: false, vertical: true)
                 case .notApplicable:
                     EmptyView()
+                }
+                // "Not right": this stop was a false positive (recorded on this Mac).
+                if let id = event.decision_id, !id.isEmpty {
+                    if let n = notRight {
+                        Text(n).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    } else {
+                        Button("Not right") {
+                            Task {
+                                let r = await KaiCLI.run(["not-right", id])
+                                notRight = r.ok ? "Marked. Thanks." : "Couldn't mark it: \(r.message)"
+                            }
+                        }
+                        .help("Tell Kai this stop was wrong. It's recorded on this Mac as a false positive.")
+                    }
                 }
                 Spacer()
                 Button("Ask about this →") { dismiss(); nav.ask(about: item); nav.page = .ask }
@@ -695,3 +730,12 @@ enum NarrowAllow {
         return "Allowed for 5 minutes: \(e.agentName) may read this file with its file tool. Ask it to retry."
     }
 }
+
+#if DEBUG
+extension KaiRecords {
+    func loadFixture(groups: ActivityGroups?, why: [String: WhyRecord]) {
+        self.groups = groups
+        self.why = why
+    }
+}
+#endif

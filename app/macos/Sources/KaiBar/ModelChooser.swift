@@ -28,6 +28,9 @@ final class ModelController: ObservableObject {
 
     /// The state from what's chosen and on disk (a download in progress wins).
     func sync() {
+        #if DEBUG
+        if ScreenshotFixture.active { return }
+        #endif
         if case .failed = state, ModelDownloads.shared.progress == nil { return }
         state = ModelChip.state(chosen: AskController.shared.kind, localInstalled: localInstalled,
                                 appleAvailable: appleAvailable, progress: ModelDownloads.shared.progress)
@@ -185,3 +188,9 @@ struct ModelFirstRunCard: View {
         }
     }
 }
+
+#if DEBUG
+extension ModelController {
+    func loadFixture(_ s: ModelChip.State) { state = s }
+}
+#endif

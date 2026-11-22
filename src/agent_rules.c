@@ -274,6 +274,86 @@ int kai_agent_rule_for(const char *agent, const char *host, long long now) {
     return found;
 }
 
+/* 0.5.1: the block rules, cached on the rules file's identity (dev, inode,
+ * size, mtime) so the network extension's per-flow check doesn't re-read and
+ * re-parse the file for every connection. Callers serialize (the extension
+ * holds its engine lock; the CLI is one thread). */
+static struct {
+    int loaded;
+    struct stat st;
+    cJSON *rules;
+} reach_cache;
+
+static cJSON *cached_rules(void) {
+    struct stat st;
+    int have = stat(rules_path(), &st) == 0;
+    if (reach_cache.loaded) {
+        int same = have ? (st.st_dev == reach_cache.st.st_dev && st.st_ino == reach_cache.st.st_ino &&
+                           st.st_size == reach_cache.st.st_size &&
+                           st.st_mtime == reach_cache.st.st_mtime)
+                        : reach_cache.st.st_ino == 0;
+        if (same) return reach_cache.rules;
+        cJSON_Delete(reach_cache.rules);
+    }
+    reach_cache.rules = load_rules();
+    memset(&reach_cache.st, 0, sizeof reach_cache.st);
+    if (have) reach_cache.st = st;
+    reach_cache.loaded = 1;
+    return reach_cache.rules;
+}
+
+int kai_agent_reach_blocked(const char *agent, const char *host, char *why, size_t whylen) {
+    if (!agent || !host || !*host) return 0;
+    long long now = (long long)time(NULL);
+    cJSON *r;
+    cJSON_ArrayForEach(r, cached_rules()) {
+        if (strcmp(jstr(r, "kind"), "block") || strcmp(jstr(r, "op"), "reach") || !live(r, now)) continue;
+        const char *ra = jstr(r, "agent");
+        if (strcmp(ra, "*") && strcmp(ra, agent)) continue;
+        if (host_covers(jstr(r, "target"), host, 1)) {
+            if (why && whylen) kai_strlcpy(why, jstr(r, "target"), whylen);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int kai_agent_block_at(int i, const char **agent, const char **host) {
+    long long now = (long long)time(NULL);
+    int k = 0;
+    cJSON *r;
+    cJSON_ArrayForEach(r, cached_rules()) {
+        if (strcmp(jstr(r, "kind"), "block") || strcmp(jstr(r, "op"), "reach") || !live(r, now)) continue;
+        if (k++ == i) {
+            if (agent) *agent = jstr(r, "agent");
+            if (host) *host = jstr(r, "target");
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int kai_agent_block_remove(const char *agent, const char *host) {
+    if (!agent || !host || !*host) return -1;
+    char t[256];
+    kai_strlcpy(t, host, sizeof t);
+    lower(t);
+    cJSON *a = load_rules();
+    int removed = 0;
+    for (int i = cJSON_GetArraySize(a) - 1; i >= 0; i--) {
+        cJSON *r = cJSON_GetArrayItem(a, i);
+        if (!strcmp(jstr(r, "kind"), "block") && !strcmp(jstr(r, "op"), "reach") &&
+            !strcmp(jstr(r, "agent"), agent) && !strcmp(jstr(r, "target"), t)) {
+            cJSON_DeleteItemFromArray(a, i);
+            removed = 1;
+        }
+    }
+    int rc = -1;
+    if (removed) { push_history(); rc = save_rules(a); }
+    cJSON_Delete(a);
+    return rc;
+}
+
 int kai_cli_grant_allows(const char *op, const char *agent, const char *target, const char *to,
                          const char *cwd, long long now) {
     if (!op || !agent || !target || !*target) return 0;
@@ -991,7 +1071,8 @@ int kai_cmd_block(int argc, char **argv) {
     snprintf(d, sizeof d, "kai block %s for %s", a.target, agent);
     kai_audit("kai", "block", "note", "terminal_rule", d);
     printf("Kai now stops %s's checked actions that reach %s (and its subdomains): shell commands that name it "
-           "and web fetches. Until you remove it.\nUndo: kai undo · See all: kai rules\n%s\n",
+           "and web fetches. With Internet set to Watch + block my list, Kai also refuses the agent's direct "
+           "connections to it. Until you remove it.\nUndo: kai undo · See all: kai rules\n%s\n",
            agent_title(agent), a.target, LIMIT_LINE);
     return 0;
 }

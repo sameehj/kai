@@ -685,6 +685,7 @@ static kai_policy *parse(const char *text, const char *source, char *err,
         } else if (strcmp(d, "egress") == 0) {
             char *v; if (!next_tok(&cur, &v)) continue;
             if (strcmp(v, "block") == 0) p->egress_mode = KAI_EGRESS_BLOCK;
+            else if (strcmp(v, "blocklist") == 0) p->egress_mode = KAI_EGRESS_BLOCKLIST;
             else if (strcmp(v, "off") == 0) p->egress_mode = KAI_EGRESS_OFF;
             else p->egress_mode = KAI_EGRESS_LOG;
         } else if (strcmp(d, "storage") == 0) {
@@ -692,11 +693,14 @@ static kai_policy *parse(const char *text, const char *source, char *err,
             if (strcmp(v, "block") == 0) p->storage_mode = KAI_STORAGE_BLOCK;
             else if (strcmp(v, "log") == 0) p->storage_mode = KAI_STORAGE_LOG;
             else p->storage_mode = KAI_STORAGE_OFF;
-        } else if (strcmp(d, "egress_allow") == 0) {
+        } else if (strcmp(d, "egress_allow") == 0 || strcmp(d, "egress_block") == 0) {
+            /* one parser for both lists; entries are checked by net.c's parse_entry */
+            int blk = d[7] == 'b';
             char *v;
             while (next_tok(&cur, &v) && v[0] != '#') {
                 if (strncmp(v, "*.", 2) == 0) v += 2;
-                if (p->negress < KAI_MAX_LIST) p->egress_allow[p->negress++] = strdup(v);
+                if (blk) { if (p->negress_block < KAI_MAX_LIST) p->egress_block[p->negress_block++] = strdup(v); }
+                else if (p->negress < KAI_MAX_LIST) p->egress_allow[p->negress++] = strdup(v);
             }
         } else if (strcmp(d, "agent") == 0) {
             char *nm, *kind, *pat;
@@ -1015,6 +1019,7 @@ void kai_policy_free(kai_policy *p) {
     for (int i = 0; i < p->nprotect; i++) free(p->protect[i]);
     for (int i = 0; i < p->nallow; i++) free(p->allow[i]);
     for (int i = 0; i < p->negress; i++) free(p->egress_allow[i]);
+    for (int i = 0; i < p->negress_block; i++) free(p->egress_block[i]);
     for (int i = 0; i < p->nagents; i++) free(p->agents[i].pattern);
     for (int i = 0; i < p->nexempt; i++) free(p->exempt[i].pattern);
     free(p);
@@ -1056,10 +1061,16 @@ kai_egress_mode kai_policy_egress_requested(const kai_policy *p) {
     return p ? p->egress_mode : KAI_EGRESS_OFF;
 }
 
+/* 0.5.1: "Watch + block my list" (KAI_EGRESS_BLOCKLIST) is effective in
+ * release builds; only strict BLOCK (only allowed hosts) is clamped to Watch. */
 kai_egress_mode kai_policy_egress_mode(const kai_policy *p) {
     kai_egress_mode m = kai_policy_egress_requested(p);
     if (m == KAI_EGRESS_BLOCK && !kai_internet_protect_available()) return KAI_EGRESS_LOG;
     return m;
+}
+
+const char *kai_policy_egress_block_entry(const kai_policy *p, int i) {
+    return p && i >= 0 && i < p->negress_block ? p->egress_block[i] : NULL;
 }
 
 kai_storage_mode kai_policy_storage_mode(const kai_policy *p) {

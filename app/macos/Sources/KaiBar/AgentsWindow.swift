@@ -64,6 +64,9 @@ final class AgentsModel: ObservableObject {
     }
 
     init() {
+        #if DEBUG
+        if ScreenshotFixture.active { return }
+        #endif
         Task { await refresh() }
         // The session scan is cheap now, but this model is always alive behind
         // the menu bar; poll infrequently so it costs almost nothing at rest.
@@ -83,6 +86,9 @@ final class AgentsModel: ObservableObject {
     /// One CLI call for both (kai snapshot --json); overlapping refreshes skip.
     /// Decoded row by row (SessionSnapshot): one bad row never empties the list.
     func refresh() async {
+        #if DEBUG
+        if ScreenshotFixture.active { return }
+        #endif
         guard !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
@@ -341,3 +347,14 @@ struct SessionDetail: View {
         }
     }
 }
+
+#if DEBUG
+extension AgentsModel {
+    func loadFixture(agents: [AgentRow], sessions: [SessionRow]) {
+        self.agents = agents
+        self.sessions = sessions
+        self.loaded = true
+        self.sourceError = nil
+    }
+}
+#endif

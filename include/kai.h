@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define KAI_VERSION "0.5.0-preview.1"
+#define KAI_VERSION "0.5.1-preview.1"
 
 /* Where the package installs Kai (Nov 15). The program lives in a root-owned
  * folder: /usr/local/bin is often owned by the user (Homebrew), so any program
@@ -138,7 +138,12 @@ kai_action kai_policy_upload_action(const kai_policy *p);      /* block | ask(=w
 typedef enum {
     KAI_EGRESS_OFF = 0,  /* no egress control                              */
     KAI_EGRESS_LOG = 1,  /* allow everything, log non-allowlisted hosts    */
-    KAI_EGRESS_BLOCK = 2 /* drop agent traffic to non-allowlisted hosts    */
+    KAI_EGRESS_BLOCK = 2, /* drop agent traffic to non-allowlisted hosts   */
+    /* 0.5.1 "Watch + block my list": log like Watch, and refuse new agent
+     * connections to a site on the block list (kai block hosts and
+     * `egress_block` entries). Effective in release builds; only strict
+     * BLOCK waits for Guard (kai_internet_protect_available). */
+    KAI_EGRESS_BLOCKLIST = 3
 } kai_egress_mode;
 
 kai_egress_mode kai_policy_egress_mode(const kai_policy *p);   /* effective: release builds never block */
@@ -159,6 +164,25 @@ int kai_egress_endpoint_allowed(const kai_policy *p, const char *host, const cha
                                 char *why, size_t whylen);
 /* Is entry a valid egress_allow value (one of the forms above)? */
 int kai_egress_entry_valid(const char *entry);
+
+/* 0.5.1 block list ("Blocked sites"). One list: the hosts the user blocked
+ * with `kai block` / Settings -> Internet (reach rules in agent-rules.json,
+ * for every agent or one), plus the policy's `egress_block` entries (same
+ * forms as egress_allow: host with subdomains, IP, CIDR, optional :port).
+ * 1 if the destination is on it, with the matching entry in why. Loopback is
+ * never on it. egress_allow never overrides it. */
+int kai_egress_blocked(const kai_policy *p, const char *agent, const char *host, const char *ip, int port,
+                       char *why, size_t whylen);
+/* The network extension's verdict for one new connection: 1 = refuse it
+ * (drop immediately, no card) because the mode is KAI_EGRESS_BLOCKLIST, the
+ * flow comes from an agent (agent non-NULL) and the destination is on the
+ * block list; else 0 (Watch behaviour). Non-agent flows are never refused. */
+int kai_egress_blocklist_drop(const kai_policy *p, const char *agent, const char *host, const char *ip, int port,
+                              char *why, size_t whylen);
+/* How many sites the block list holds (live kai block hosts + egress_block). */
+int kai_blocked_sites_count(const kai_policy *p);
+/* The policy's own egress_block entries (i from 0); NULL past the end. */
+const char *kai_policy_egress_block_entry(const kai_policy *p, int i);
 
 /* Is this protected-path rule one of Kai's built-in self-protection rules
  * (its own ~/.kai, the agents' hook settings) rather than a user secret rule?
@@ -704,6 +728,12 @@ enum { KAI_AGENT_RULE_ALLOW = 1, KAI_AGENT_RULE_BLOCK = 2 };
 int kai_agent_rule_add(int kind, const char *agent, const char *host, long long until);
 int kai_agent_rule_for(const char *agent, const char *host, long long now);
 int kai_agent_rule_undo(void);                 /* 0 ok, -1 nothing to undo */
+/* 0.5.1: remove a block (kai block / Blocked sites) for agent ("*" = every
+ * agent) and host. 0 removed, -1 none matched. */
+int kai_agent_block_remove(const char *agent, const char *host);
+/* The live block rules, i from 0: 1 and fills agent and host, 0 past the end.
+ * Pointers stay valid until the next call. */
+int kai_agent_block_at(int i, const char **agent, const char **host);
 /* The hosts a shell command reaches (URLs, scp/rsync/ssh user@host:, nc host),
  * lowercased, without ports. Returns how many (at most max). */
 int kai_command_hosts(const char *cmd, char hosts[][256], int max);
@@ -971,6 +1001,7 @@ int kai_daily_top_in(const char *log, char *top, size_t tn, int *count);
  * rule pattern goes in `match` ONLY when a rule actually matched. So a
  * not-on-allowlist drop no longer reads "rule: <host>" as if a rule matched. */
 #define KAI_REASON_NOT_ALLOWLISTED "not_on_allowlist"   /* egress: absent from the allowlist */
+#define KAI_REASON_BLOCKED_SITE    "blocked_site"       /* egress: on the user's block list (0.5.1) */
 #define KAI_REASON_RULE_DENIED     "rule_denied"        /* a configured rule matched (see match) */
 #define KAI_REASON_PROTECTED       "protected_resource" /* storage: a protected path (see match) */
 #define KAI_REASON_UNATTRIBUTED    "unattributed_process" /* identity could not be established */

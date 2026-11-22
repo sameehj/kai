@@ -121,6 +121,15 @@ enum LastAction {
         return "\(s / 86400) d ago"
     }
 
+    /// "1h", "6 min", "now": the popover's short age.
+    static func short(_ seconds: Double) -> String {
+        let s = max(0, Int(seconds))
+        if s < 60 { return "now" }
+        if s < 3600 { return "\(s / 60) min" }
+        if s < 86400 { return "\(s / 3600)h" }
+        return "\(s / 86400)d"
+    }
+
     /// A file name, never the full path; a program name, never a command line.
     static func object(_ e: SessionActivity.Event) -> String? {
         guard let n = e.name, !n.isEmpty else { return nil }
@@ -131,15 +140,27 @@ enum LastAction {
     }
 
     /// "Editing Pricing.tsx · now", "Read package.json · 2 min ago",
-    /// "Ran npm · 5 min ago", "Stopped a read of .env · now".
-    static func line(_ e: SessionActivity.Event, now: Date) -> String {
+    /// "Ran npm · 5 min ago", "Kai stopped Claude Code reading .env · now".
+    /// 0.5.1: a stop always has Kai as its subject.
+    static func line(_ e: SessionActivity.Event, now: Date, agent: String? = nil) -> String {
+        line(e, now: now, agent: agent, withAgo: true)
+    }
+    static func what(_ e: SessionActivity.Event, now: Date, agent: String? = nil) -> String {
+        line(e, now: now, agent: agent, withAgo: false)
+    }
+    private static func line(_ e: SessionActivity.Event, now: Date, agent: String?, withAgo: Bool) -> String {
         let fresh = now.timeIntervalSince1970 - e.ts < 60
         let obj = object(e)
         let what: String
         if e.isStop {
-            let noun = e.op == "read" ? "a read" : e.op == "command" ? "a command" : e.op == "mcp" ? "an MCP call"
-                : (e.op == "edit" || e.op == "write") ? "a change" : "a request"
-            what = "Stopped \(noun)" + (obj.map { " of \($0)" } ?? "")
+            let k = StopWords.kind(op: e.op)
+            if let a = agent {
+                what = StopWords.line(agent: a, kind: k, object: k == .read || k == .change ? obj : nil)
+            } else {
+                let noun = e.op == "read" ? "a read" : e.op == "command" ? "a command" : e.op == "mcp" ? "an MCP call"
+                    : (e.op == "edit" || e.op == "write") ? "a change" : "a request"
+                what = "Kai stopped \(noun)" + (obj.map { " of \($0)" } ?? "")
+            }
         } else {
             switch e.op {
             case "read": what = (fresh ? "Reading " : "Read ") + (obj ?? "a file")
@@ -150,7 +171,7 @@ enum LastAction {
             default: what = "Used a tool"
             }
         }
-        return what + " · " + ago(now.timeIntervalSince1970 - e.ts)
+        return withAgo ? what + " · " + ago(now.timeIntervalSince1970 - e.ts) : what
     }
 }
 
@@ -210,7 +231,7 @@ struct NowCard: Identifiable, Equatable {
     /// The card's most important line (nil when nothing was recorded yet).
     func lastLine(now: Date) -> String? {
         guard let e = activity?.events.first else { return nil }
-        return LastAction.line(e, now: now)
+        return LastAction.line(e, now: now, agent: session.displayAgent)
     }
 }
 
@@ -281,10 +302,19 @@ enum NowBuilder {
 
     /// Kai's recorded stops for a session: same agent, inside its project
     /// (or any project for an IDE app), since it started.
-    static func stops(for s: SessionRow, _ events: [AuditEvent]) -> [AuditEvent] {
+    static func stops(for s: SessionRow, _ events: [AuditEvent], among all: [SessionRow] = []) -> [AuditEvent] {
         events.filter { e in
-            guard e.isBlock, !e.isNote, !e.isSilent, !e.isGrant, !e.isNetwork, e.agentKey == s.agent else { return false }
+            guard e.isBlock, !e.isNote, !e.isSilent, !e.isGrant, e.agentKey == s.agent else { return false }
             if s.startedUtc > 0, let d = e.date, d.timeIntervalSince1970 < Double(s.startedUtc) { return false }
+            // 0.5.1: a connection Kai refused (blocked site) belongs to the
+            // session the network extension named, else to the agent's only
+            // live session (connections carry no folder).
+            if e.isNetwork {
+                guard e.blockedSite != nil else { return false }
+                if let sid = e.session, !sid.isEmpty { return sid == s.id || s.activityKeys.contains(sid) }
+                let peers = all.filter { $0.isActive && $0.isSession && $0.agent == s.agent }
+                return s.isIDE || peers.count <= 1
+            }
             if s.isIDE { return true }
             return !s.project.isEmpty && ActivityFeed.inWorkspace(e.cwd, s.project)
         }
@@ -299,7 +329,7 @@ enum NowBuilder {
         let parents = live.filter(\.isSession)
         let extras = live.filter { !$0.isSession }
         var cards: [NowCard] = parents.map { s in
-            let st = stops(for: s, events)
+            let st = stops(for: s, events, among: live)
             var c = NowCard(session: s, activity: activity(for: s, among: sessions, records: records),
                             latestStop: st.first, stopCount: st.count)
             if let n = connections?[s.agent] { c.connections = n }
@@ -355,12 +385,23 @@ struct TimelineEvent: Identifiable, Equatable {
     var what: String
     /// Stops: the audit record (opens DecisionDetailSheet).
     var stopEventID: String? = nil
+    /// 0.5.1: the evidence level behind the plain label (shown in the sheet).
+    var evidenceLevel: String = ""
+    /// The full path, for the detail sheet only (rows show it relative).
+    var fullPath: String = ""
+    /// A connection's site (Seen or Stopped): Block site / Unblock.
+    var site: String? = nil
+    var isConnection: Bool { kind == .connection || site != nil }
 }
 
 /// The kind segments: All · Files · Commands · Connections · Stops.
 enum TimelineFilter: String, CaseIterable, Identifiable {
     case all = "All", files = "Files", commands = "Commands", connections = "Connections", stops = "Stops"
     var id: String { rawValue }
+    func matches(_ e: TimelineEvent) -> Bool {
+        if self == .connections { return e.isConnection }
+        return matches(e.kind)
+    }
     func matches(_ k: TimelineEvent.Kind) -> Bool {
         switch self {
         case .all: return true
@@ -382,6 +423,16 @@ struct TimelineGroup: Identifiable, Equatable {
     var start: Double
     var end: Double?
     var events: [TimelineEvent]
+    /// 0.5.1: the recorded counts of the records in this group (the same
+    /// sums the session's Now card shows), and when they begin.
+    var counts = SessionActivity.Counts()
+    var firstRecord: Double = 0
+    var recorded: RecordedSummary? {
+        guard firstRecord > 0 else { return nil }
+        var a = SessionActivity(key: id, agent: agent)
+        a.counts = counts; a.first = firstRecord
+        return RecordedSummary.of(a)
+    }
     func header(now: Date) -> String {
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let a = f.string(from: Date(timeIntervalSince1970: start))
@@ -392,33 +443,57 @@ struct TimelineGroup: Identifiable, Equatable {
 
 enum Timeline {
     static func event(_ e: SessionActivity.Event, agent: String, key: String, index: Int, workspace: String?) -> TimelineEvent {
-        let name = e.name.map { e.op == "command" || e.op == "mcp" ? $0 : ActivityFeed.shown($0, workspace: workspace) } ?? ""
+        let raw = e.name ?? ""
+        let isFile = e.op != "command" && e.op != "mcp"
+        // 0.5.1: paths relative to the session's project; outside it, "outside
+        // project" and the file name; the full path only in the sheet.
+        let name = isFile ? (raw.isEmpty ? "" : PathWords.text(raw, project: workspace)) : raw
+        let file = raw.isEmpty ? "" : (raw as NSString).lastPathComponent
         let who = ActivityFeed.agentTitle(agent)
         let base = "\(who) asked for this through its hook, before the tool ran."
         let kind: TimelineEvent.Kind
         let title: String, what: String
         switch e.op {
         case "read":
-            kind = .file; title = "Read " + (name.isEmpty ? "a file" : (name as NSString).lastPathComponent)
+            kind = .file; title = "Read " + (file.isEmpty ? "a file" : file)
             what = base + " Commands and scripts can read other files that this list doesn't show."
         case "edit", "write":
-            kind = .file; title = (e.op == "edit" ? "Edited " : "Wrote ") + (name.isEmpty ? "a file" : (name as NSString).lastPathComponent)
+            kind = .file; title = (e.op == "edit" ? "Edited " : "Wrote ") + (file.isEmpty ? "a file" : file)
             what = base + " It doesn't confirm the final file content."
         case "command":
-            kind = .command; title = name.isEmpty ? "Ran a command" : "Ran \(name)"
+            kind = .command; title = raw.isEmpty ? "Ran a command" : "Ran \(raw)"
             what = base + " Kai keeps only the program's name, never the full command line, and doesn't know if it succeeded."
         case "mcp":
-            kind = .tool; title = name.isEmpty ? "Used an MCP tool" : "Used the \(name) MCP tool"
+            kind = .tool; title = raw.isEmpty ? "Used an MCP tool" : "Used the \(raw) MCP tool"
             what = base + " What the tool did on its service isn't confirmed by Kai."
         default:
             kind = .tool; title = "Used a tool"; what = base
         }
         let stopped = e.isStop
-        return TimelineEvent(id: "\(key)-\(Int(e.ts))-\(index)", kind: stopped ? .stop : kind, ts: e.ts, agent: agent,
-                             title: stopped ? LastAction.line(e, now: Date(timeIntervalSince1970: e.ts)).components(separatedBy: " · ")[0] : title,
-                             object: name, outcome: stopped ? "Stopped" : "Requested",
+        let k: TimelineEvent.Kind = stopped ? .stop : kind
+        return TimelineEvent(id: "\(key)-\(Int(e.ts))-\(index)", kind: k, ts: e.ts, agent: agent,
+                             title: stopped ? LastAction.what(e, now: Date(timeIntervalSince1970: e.ts), agent: who) : title,
+                             object: name, outcome: EventWords.label(k, op: e.op),
                              evidence: "\(who) hook (activity recording)",
-                             what: stopped ? "Kai stopped this request at the agent's tool boundary." : what)
+                             what: stopped ? "Kai stopped this request at the agent's tool boundary." : what,
+                             evidenceLevel: EventWords.evidenceLevel(k),
+                             fullPath: isFile ? ActivityFeed.shown(raw, workspace: nil) : "")
+    }
+
+    /// 0.5.1: temp and scratchpad files in one row per group ("tmp · 3 files").
+    static func groupTemp(_ events: [TimelineEvent]) -> [TimelineEvent] {
+        let temp = events.filter { $0.kind == .file && $0.object.hasPrefix("tmp · ") }
+        guard temp.count > 1, let newest = temp.max(by: { $0.ts < $1.ts }) else { return events }
+        let files = Set(temp.map(\.fullPath)).count
+        let anyWrite = temp.contains { $0.outcome == EventWords.label(.file, op: "write") }
+        var row = newest
+        row.id = "tmp-" + newest.id
+        row.title = "Temporary files"
+        row.object = "tmp · " + ActivityFeed.n(files, "file")
+        row.outcome = EventWords.label(.file, op: anyWrite ? "write" : "read")
+        row.fullPath = temp.map(\.fullPath).filter { !$0.isEmpty }.prefix(5).joined(separator: "\n")
+        row.what = "\(ActivityFeed.n(temp.count, "request")) for files in temporary folders, grouped. " + newest.what
+        return events.filter { !temp.contains($0) } + [row]
     }
 }
 
@@ -448,16 +523,9 @@ extension NowCard {
                      recording: recording)
     }
 
-    /// "stopped a read of .env" (one line on the card; the sheet has the rest).
-    static func stopLine(_ e: AuditEvent) -> String {
-        let obj = e.excerpt.map { ($0 as NSString).lastPathComponent }
-        switch e.actionLabel {
-        case "File read": return "stopped a read" + (obj.map { " of \($0)" } ?? "")
-        case "File edit": return "stopped a change" + (obj.map { " to \($0)" } ?? "")
-        case "Command": return "stopped a command"
-        default: return e.isPrompt ? "stopped a prompt" : "stopped a request"
-        }
-    }
+    /// "Kai stopped Claude Code reading .env" (one line on the card; the
+    /// sheet has the rest). 0.5.1: Kai is always the subject.
+    static func stopLine(_ e: AuditEvent) -> String { StopWords.line(e) }
 }
 
 extension Timeline {
@@ -501,6 +569,8 @@ extension Timeline {
                 g.events.append(t)
             }
             g.start = min(g.start, r.first)
+            g.counts = g.counts + r.counts
+            g.firstRecord = g.firstRecord == 0 ? r.first : min(g.firstRecord, r.first)
             out[gid] = g
         }
         // Stops Kai recorded that no activity line covers (recording off, or older records).
@@ -516,23 +586,45 @@ extension Timeline {
                                               start: s.map { Double($0.startedUtc) } ?? ts, end: s?.isActive == true ? nil : ts,
                                               events: [])
             let item = ActivityFeed.stopItem(e, workspace: g.projectPath.isEmpty ? nil : g.projectPath)
+            let shownObj = e.actionLabel == "Command" ? item.detail
+                : (e.excerpt.map { PathWords.text($0, project: g.projectPath.isEmpty ? nil : g.projectPath) } ?? item.detail)
             g.events.append(TimelineEvent(id: "stop-" + e.id, kind: .stop, ts: ts, agent: e.agentKey,
-                                          title: item.title, object: item.detail, outcome: "Stopped",
-                                          evidence: item.source, what: item.explanation, stopEventID: e.id))
+                                          title: StopWords.line(e), object: shownObj, outcome: "Stopped",
+                                          evidence: item.source, what: item.explanation, stopEventID: e.id,
+                                          evidenceLevel: EventWords.evidenceLevel(.stop),
+                                          fullPath: e.actionLabel == "Command" ? "" : (e.excerpt ?? "")))
             if g.start == 0 || ts < g.start { g.start = ts }
             out[gid] = g
         }
         if internetWatching {
+            let mode = InternetMode.current
+            // Seen connections, and (0.5.1) the ones Kai refused because the
+            // site is on the block list: "Stopped", with Unblock.
             let seen = events.filter { e in
-                e.isNetwork && !e.isBlock && !e.isSilent && (e.date.map { cal.isDate($0, inSameDayAs: now) } ?? false)
+                e.isNetwork && (!e.isBlock || e.blockedSite != nil) && !e.isSilent
+                    && (e.date.map { cal.isDate($0, inSameDayAs: now) } ?? false)
             }.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }.prefix(60)
             if !seen.isEmpty {
-                let evs = seen.map { e in
-                    TimelineEvent(id: "net-" + e.id, kind: .connection, ts: e.date?.timeIntervalSince1970 ?? 0,
-                                  agent: e.agentKey, title: "Connected to " + (e.target ?? "an unknown host"),
-                                  object: e.target ?? "", outcome: "Observed", evidence: "Network wall (Watch only)",
-                                  what: "Kai observed this connection. It doesn't show what data was sent, and "
-                                    + "Internet is Watch-only: nothing was blocked.")
+                let evs = seen.map { e -> TimelineEvent in
+                    let host = e.target.map { $0.hasPrefix("[") || !$0.contains(":") ? $0 : String($0.split(separator: ":")[0]) }
+                    if let site = e.blockedSite {
+                        return TimelineEvent(id: "net-" + e.id, kind: .stop, ts: e.date?.timeIntervalSince1970 ?? 0,
+                                             agent: e.agentKey, title: StopWords.line(e), object: site, outcome: "Stopped",
+                                             evidence: "Network wall (Watch + block my list)",
+                                             what: "Kai refused this connection because \(site) is on your block list. "
+                                                + "It doesn't show that the agent didn't reach the site another way.",
+                                             stopEventID: nil, evidenceLevel: EventWords.evidenceLevel(.stop),
+                                             site: host ?? site)
+                    }
+                    return TimelineEvent(id: "net-" + e.id, kind: .connection, ts: e.date?.timeIntervalSince1970 ?? 0,
+                                         agent: e.agentKey, title: "Connected to " + (e.target ?? "an unknown host"),
+                                         object: e.target ?? "", outcome: EventWords.label(.connection),
+                                         evidence: mode.evidence,
+                                         what: "Kai observed this connection. It doesn't show what data was sent. "
+                                            + (mode == .blocklist ? "The site isn't on your block list, so it was only recorded."
+                                                                  : "Internet is Watch only: nothing was blocked."),
+                                         evidenceLevel: EventWords.evidenceLevel(.connection),
+                                         site: (e.isUnknownHost ? nil : host))
                 }
                 out["net"] = TimelineGroup(id: "net", agent: "", project: "Connections", sessionID: nil,
                                            start: evs.map(\.ts).min() ?? 0, end: nil, events: Array(evs))
@@ -540,6 +632,7 @@ extension Timeline {
         }
         return out.values.map { g in
             var g = g
+            g.events = groupTemp(g.events)
             g.events.sort { $0.ts > $1.ts }
             return g
         }.sorted { ($0.events.first?.ts ?? $0.start) > ($1.events.first?.ts ?? $1.start) }

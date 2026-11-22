@@ -39,9 +39,9 @@ cp "$ROOT/policy/default.policy" "$H5/.kai/policy"
 sed -i '' 's/^egress  *log$/egress block/' "$H5/.kai/policy" 2>/dev/null || sed -i 's/^egress  *log$/egress block/' "$H5/.kai/policy"
 grep -q '^egress block' "$H5/.kai/policy" && pass "test policy asks for Protect (egress block)" || fail "couldn't set egress block in the test policy"
 st=$(HOME="$H5" KAI_NO_APP=1 "$REL" status 2>&1)
-case "$st" in *"records the connections it observes; blocks nothing in this release"*) pass "release status: Internet watching, blocks nothing in this release" ;;
+case "$st" in *"records the connections it observes; blocks nothing)"*) pass "release status: Internet watching, blocks nothing" ;;
      *) fail "release status doesn't say Internet blocks nothing: $(printf '%s' "$st" | grep -i internet)" ;; esac
-case "$st" in *"your policy asks for Protect; this release only watches"*) pass "...and says the policy's Protect is ignored" ;;
+case "$st" in *"your policy asks for only allowed hosts; this release watches"*) pass "...and says the policy's strict mode is ignored" ;;
      *) fail "release status doesn't say the policy's Protect is ignored" ;; esac
 case "$st" in *"upcoming release"*) fail "release status still promises OS protection in an upcoming release" ;;
      *) pass "...no 'upcoming release' promise" ;; esac
@@ -49,6 +49,21 @@ mode=$(HOME="$H5" KAI_NO_APP=1 "$REL" policy egress-mode 2>&1)
 [ "$mode" = "log" ] && pass "release: the effective Internet mode is watch (log) despite egress block" || fail "release effective mode: $mode"
 mode=$(HOME="$H5" KAI_HOME="$H5/.kai" KAI_NO_APP=1 "$DEV" policy egress-mode 2>&1)
 [ "$mode" = "block" ] && pass "dev build: Protect is still honoured (developer flag territory)" || fail "dev effective mode: $mode"
+
+# 0.5.1: "Watch + block my list" is effective in a release build, and status
+# says it refuses only the listed sites.
+sed -i '' 's/^egress block$/egress blocklist/' "$H5/.kai/policy" 2>/dev/null || sed -i 's/^egress block$/egress blocklist/' "$H5/.kai/policy"
+printf 'egress_block paste.example.org\n' >> "$H5/.kai/policy"
+mode=$(HOME="$H5" KAI_NO_APP=1 "$REL" policy egress-mode 2>&1)
+[ "$mode" = "blocklist" ] && pass "release: egress blocklist is effective" || fail "release blocklist mode: $mode"
+st=$(HOME="$H5" KAI_NO_APP=1 "$REL" status 2>&1)
+case "$st" in *"Watch + block my list: refuses agents' direct connections to 1 listed site; records the rest"*)
+     pass "release status: blocklist refuses only the listed sites" ;;
+     *) fail "release status blocklist wording: $(printf '%s' "$st" | grep -i internet)" ;; esac
+js=$(HOME="$H5" KAI_NO_APP=1 "$REL" status --json 2>&1 | tr -d ' \t\n')
+case "$js" in *'"internet":{"mode":"blocklist","enforcing":true,"blocked_sites":1'*) pass "release status --json: mode blocklist, enforcing, 1 blocked site" ;;
+     *) fail "release status --json internet: $(printf '%s' "$js" | grep -o '"internet":{[^}]*}')" ;; esac
+sed -i '' 's/^egress blocklist$/egress block/' "$H5/.kai/policy" 2>/dev/null || sed -i 's/^egress blocklist$/egress block/' "$H5/.kai/policy"
 
 snap=$(HOME="$H5" KAI_NO_APP=1 "$REL" snapshot --json 2>&1)
 case "$snap" in *Enforced*) fail "release snapshot says Enforced: $snap" ;; *) pass "release build: the session list never says Enforced" ;; esac

@@ -51,7 +51,12 @@ enum KaiInstance {
     /// The release instance: /Applications/Kai.app with the release signature.
     /// Any other copy is a DEV copy (badge; the storage wall lets only the
     /// installed app write policy and permissions).
-    static let isRelease: Bool = kai_app_is_release(Bundle.main.bundlePath, ownTeamID()) == 1
+    static let isRelease: Bool = {
+        #if DEBUG
+        if ScreenshotFixture.active { return true }   // no DEV badge in README pictures
+        #endif
+        return kai_app_is_release(Bundle.main.bundlePath, ownTeamID()) == 1
+    }()
 
     static func ownTeamID() -> String {
         var code: SecCode?
@@ -88,6 +93,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         if Snapshot.requestedDir != nil { return }   // rendering only: no lock
+        #if DEBUG
+        if ScreenshotFixture.active { return }      // make screenshots: fixture only, no lock
+        #endif
         // One menu-bar Kai: an exclusive lock in Kai's home, held for the app's
         // life. A second copy that can't take it activates the running one and
         // quits.
@@ -108,6 +116,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Menu-bar only: no Dock icon even when run outside a bundle.
         NSApp.setActivationPolicy(.accessory)
         LocalModelChoice.register()
+        #if DEBUG
+        if let dir = ScreenshotFixture.outDir { Task { @MainActor in await ScreenshotRenderer.run(to: dir) }; return }
+        #endif
         if Snapshot.requestedDir == nil && Bundle.main.bundleIdentifier != nil {
             UNUserNotificationCenter.current().delegate = self
             Notifier.registerCategories()

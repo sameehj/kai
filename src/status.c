@@ -199,7 +199,7 @@ int kai_cmd_status_text(void) {
                      : any_on ? "Partly checking" : "Not checking";
     printf("Kai%s %s · %s\n", app ? "" : " Preview", KAI_VERSION, head);
     if (!app) printf("%s\nKai Preview checks inside your agents. The Kai app adds the Internet wall, which "
-                     "records the connections it observes and blocks nothing in this release.\n", CONTRACT);
+                     "records the connections it observes and can refuse agents' connections to sites you block.\n", CONTRACT);
     printf("Agents\n%s", buf ? buf : "");
     free(buf);
 
@@ -208,15 +208,24 @@ int kai_cmd_status_text(void) {
     (void)files;   /* Files protection is not included in this release */
     char pstate[16] = "";
     kai_heartbeat_field("network", "policy_state", pstate, sizeof pstate);
-    /* Nov 1 corrective change: release builds watch, never block */
+    /* Nov 1 corrective change: release builds never run strict "only allowed
+     * hosts". 0.5.1: Watch + block my list refuses agents' direct connections
+     * to the listed sites, and only those. */
+    char watch_buf[160];
     const char *watch_only = kai_internet_protect_available() ? ""
-        : " (records the connections it observes; blocks nothing in this release)";
+        : " (records the connections it observes; blocks nothing)";
     char asked[96] = "";
     {
         char perr[256];
         kai_policy *sp = kai_policy_load(NULL, perr, sizeof perr);
         if (!kai_internet_protect_available() && kai_policy_egress_requested(sp) == KAI_EGRESS_BLOCK)
-            snprintf(asked, sizeof asked, " (your policy asks for Protect; this release only watches)");
+            snprintf(asked, sizeof asked, " (your policy asks for only allowed hosts; this release watches)");
+        if (sp && kai_policy_egress_mode(sp) == KAI_EGRESS_BLOCKLIST) {
+            int n = kai_blocked_sites_count(sp);
+            snprintf(watch_buf, sizeof watch_buf, " (Watch + block my list: refuses agents' direct connections to "
+                     "%d listed site%s; records the rest)", n, n == 1 ? "" : "s");
+            watch_only = watch_buf;
+        }
         kai_policy_free(sp);
     }
     if (!app)

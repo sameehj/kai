@@ -80,6 +80,8 @@ tests/cli/kai-test: $(CORE) $(APP) include/kai.h src/internal.h src/kai_commit.h
 test: kai tests/cli/kai-test
 	$(CC) $(CFLAGS) -o tests/run_tests tests/run_tests.c $(CORE) $(LDLIBS)
 	./tests/run_tests
+	$(CC) $(CFLAGS) -DKAI_RELEASE -o tests/network/release_egress tests/network/release_egress.c $(CORE) $(LDLIBS)
+	./tests/network/release_egress
 	$(CC) $(CFLAGS) -o tests/storage/run_storage_tests tests/storage/run_storage_tests.c $(STORAGE_TEST_SRC) $(LDLIBS)
 	./tests/storage/run_storage_tests
 	sh tests/hooks/run_hook_tests.sh ./kai
@@ -170,6 +172,12 @@ try-app: app-dev
 	$(MAKE) install-app
 	open /Applications/Kai.app
 
+# README pictures from the real views and a fixture data set (never live data).
+# SCREENSHOT_INTERNET=watch when network blocking wasn't verified for the release.
+SCREENSHOT_INTERNET ?= blocklist
+screenshots: kai
+	sh scripts/screenshots.sh $(SCREENSHOT_INTERNET)
+
 install-app:
 	@test -d build/Kai.app || { echo "build it first: make app or make app-dev"; exit 1; }
 	rm -rf /Applications/Kai.app
@@ -183,7 +191,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/kai
 
 clean:
-	rm -f $(OBJ) kai libkai.a tests/run_tests tests/storage/run_storage_tests tests/cli/kai-test
+	rm -f $(OBJ) kai libkai.a tests/run_tests tests/network/release_egress tests/storage/run_storage_tests tests/cli/kai-test
 	rm -rf build app/macos/Kai.xcodeproj
 
 # A release kai: ignores KAI_HOME / KAI_POLICY. Built from the sources into its
@@ -214,4 +222,4 @@ release:
 release-test:
 	sh scripts/release/build-preview-pkg.sh $(KAI_VERSION_STR) --test
 
-.PHONY: FORCE kai-universal kai-release release release-test all asan fuzz test escape validation app app-dev app-storage try-app-storage try-app install-app install uninstall clean
+.PHONY: screenshots FORCE kai-universal kai-release release release-test all asan fuzz test escape validation app app-dev app-storage try-app-storage try-app install-app install uninstall clean

@@ -74,6 +74,7 @@ struct AskAction: Equatable, Codable, Hashable {
     enum Kind: String, Codable {
         case openDecision, allowForSession, reconnect, openActivity, turnOnRecording, turnOnInternet
         case openSettings   // 0.4.1: ref = "general", "internet", "advanced:agents", ...
+        case blockSite      // 0.5.1: ref = the host (adds it to Blocked sites)
     }
     var kind: Kind
     var title: String
@@ -410,7 +411,8 @@ enum AskEngine {
 
     static func internetWords(_ c: AskContext) -> String {
         switch c.internetState {
-        case .on: return "Internet watching is on (Watch only)"
+        case .on: return InternetMode.current == .blocklist ? "Internet is on: Watch + block my list"
+                                                            : "Internet watching is on (Watch only)"
         case .off: return "Internet watching is off"
         case .needsApproval: return "Internet watching is waiting for your OK in System Settings"
         case .failed(let why): return "Internet watching isn't on: \(why.sentenceEnded.dropLast())"
@@ -506,9 +508,13 @@ enum AskEngine {
                              limits: ["No stop doesn't mean every action was checked."])
         }
         let lines = s.prefix(3).map { e -> String in
-            var l = "\(e.agentName): \(ActivityFeed.stopItem(e, workspace: c.workspace).title.lowercased()) "
-                + "(\(PhrasePrompts.data(ActivityFeed.stopItem(e, workspace: c.workspace).detail))), "
-                + "because \(e.detail.trimmingCharacters(in: CharacterSet(charactersIn: ". ")))"
+            // 0.5.1: Kai is the subject of every stop.
+            let k = StopWords.kind(e)
+            let obj = PhrasePrompts.data(ActivityFeed.stopItem(e, workspace: c.workspace).detail)
+            let head = (k == .read || k == .change || k == .connection)
+                ? StopWords.line(agent: e.agentName, kind: k, object: obj)
+                : StopWords.line(agent: e.agentName, kind: k) + " (\(obj))"
+            var l = head + ", because \(e.detail.trimmingCharacters(in: CharacterSet(charactersIn: ". ")))"
             if let id = e.decision_id, let r = c.why[id]?.retryLine { l += "; \(r.lowercased())" }
             return l + "."
         }
@@ -572,14 +578,19 @@ enum AskEngine {
         guard let g = n.first else {
             return AskAnswer(intent: .destinations,
                              text: "No matching record: Kai observed no connections today.",
-                             basedOn: "Network wall (Watch only), today")
+                             basedOn: InternetMode.current.evidence + ", today")
         }
+        // 0.5.1: Block site for the top destinations (Kai adds it to your list; never on its own).
+        let hosts = g.examples.filter { !$0.hasPrefix("+ ") }.map { String($0.split(separator: " ").first ?? "") }
+            .filter { !$0.isEmpty && $0 != "unknown" }
+        let blocks = InternetMode.blocklistOffered
+            ? hosts.prefix(3).map { AskAction(kind: .blockSite, title: "Block \($0)", ref: $0) } : []
         return AskAnswer(intent: .destinations,
-                         text: "Kai observed \(g.countText) to \(g.detail.replacingOccurrences(of: " · watching only", with: "")): "
+                         text: "Kai observed \(g.countText) to \(g.detail.replacingOccurrences(of: " · watching only", with: "").replacingOccurrences(of: " · watching", with: "")): "
                             + g.examples.map(PhrasePrompts.data).joined(separator: ", ") + ".",
-                         basedOn: "Network wall (Watch only), today",
-                         actions: [AskAction(kind: .openActivity, title: "Open Activity", ref: "connections")],
-                         limits: ["Internet is Watch-only: nothing was blocked, and a connection doesn't show what was sent."])
+                         basedOn: InternetMode.current.evidence + ", today",
+                         actions: [AskAction(kind: .openActivity, title: "Open Activity", ref: "connections")] + blocks,
+                         limits: [InternetMode.current.connectionLimit])
     }
 
     static func agentWords(_ a: AskAgent) -> String {
@@ -623,7 +634,9 @@ enum AskEngine {
             s.append("Claude Code reports reads, edits and writes; Cursor reports reads but not its editor's writes; "
                      + "Codex reports commands and MCP calls but no file events.")
         }
-        s.append("Internet is Watch-only: Kai can list destinations when watching is on, never what was sent.")
+        s.append(InternetMode.current == .blocklist
+                 ? "Internet: Kai refuses agents' direct connections to the sites on your block list and only records the rest; never what was sent."
+                 : "Internet is Watch only: Kai can list destinations when watching is on, never what was sent.")
         if !c.recording { s.append("Activity recording is off, so Kai keeps only its stops.") }
         if !c.internetWatching { s.append("Internet watching is off.") }
         // The first sentence is the answer; the rest are limits Kai renders itself.

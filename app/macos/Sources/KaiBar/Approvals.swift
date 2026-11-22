@@ -317,6 +317,9 @@ final class GrantManager: ObservableObject {
     }
 
     func refresh() {
+        #if DEBUG
+        if ScreenshotFixture.active { return }
+        #endif
         cleanupGrants()
         pausedUntil = wallPausedUntil()
         pending = loadJSON(dir: pendingDir).compactMap { try? JSONDecoder().decode(PendingRequest.self, from: $0) }

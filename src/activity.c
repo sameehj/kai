@@ -174,7 +174,8 @@ typedef struct {
     sev_t *ev; int nev, capev;
 } sess_t;
 static const char *const OPS[6] = {"read", "edit", "write", "command", "mcp", "tool"};
-typedef struct { sess_t s[KAI_ACTIVITY_MAX_SESSIONS]; int n; double first_record; } sessions_t;
+typedef struct { sess_t s[KAI_ACTIVITY_MAX_SESSIONS]; int n; double first_record;
+                 double midnight; long today; } sessions_t;   /* 0.5.1: records since local midnight */
 
 static int op_index(const char *op) {
     for (int i = 0; i < 6; i++) if (!strcmp(OPS[i], op)) return i;
@@ -184,6 +185,7 @@ static int op_index(const char *op) {
 static void session_add(sessions_t *ss, const char *key, const char *agent, const char *ws, double ts,
                         const char *op, const char *name, const char *dec) {
     if (ss->first_record == 0 || ts < ss->first_record) ss->first_record = ts;
+    if (ss->midnight > 0 && ts >= ss->midnight) ss->today++;
     sess_t *s = NULL;
     for (int i = 0; i < ss->n; i++) if (!strcmp(ss->s[i].key, key)) { s = &ss->s[i]; break; }
     if (!s) {
@@ -345,6 +347,13 @@ int kai_cmd_activity(int argc, char **argv) {
     group_t *gs = NULL;
     int ng = 0, cap = 0;
     sessions_t *ss = calloc(1, sizeof *ss);
+    if (ss) {   /* local midnight, for "Today: N actions" (the popover) */
+        time_t t = (time_t)now;
+        struct tm lt;
+        localtime_r(&t, &lt);
+        lt.tm_hour = 0; lt.tm_min = 0; lt.tm_sec = 0; lt.tm_isdst = -1;
+        ss->midnight = (double)mktime(&lt);
+    }
     DIR *d = opendir(kai_home());
     if (d) {
         struct dirent *de;
@@ -404,6 +413,7 @@ int kai_cmd_activity(int argc, char **argv) {
     cJSON_AddNumberToObject(o, "total", (double)total);
     if (ss) {
         cJSON_AddNumberToObject(o, "first_record", ss->first_record);
+        cJSON_AddNumberToObject(o, "today", (double)ss->today);
         cJSON *sa = cJSON_AddArrayToObject(o, "sessions");
         for (int i = 0; i < ss->n; i++) {
             sess_t *s = &ss->s[i];

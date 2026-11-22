@@ -166,16 +166,24 @@ struct SessionCardView: View {
                 StatePill(text: card.statePill(now: now), working: card.working)
             }
             if recording {
-                HStack(spacing: 6) {
-                    ForEach(card.counts.filter { $0.notReportedBy == nil && !($0.kind == .stops && ($0.value ?? 0) == 0) },
-                            id: \.kind) { c in CountChip(text: c.text, stop: c.kind == .stops) }
+                // 0.5.1: zero counts are hidden.
+                let chips = card.counts.filter { $0.notReportedBy == nil && ($0.value ?? 0) > 0 }
+                if !chips.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(chips, id: \.kind) { c in CountChip(text: c.text, stop: c.kind == .stops) }
+                    }
+                }
+                // The card counts the whole session (Kai's decisions since it
+                // started); Activity holds what was recorded. Say so when they differ.
+                if RecordedSummary.needsLine(card: card), let r = RecordedSummary.of(card.activity) {
+                    Text(r.line).font(.system(size: 11)).foregroundStyle(Theme.muted)
                 }
             }
             if let e = card.latestStop {
                 Button { nav.openDecision = e } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "hand.raised.fill").font(.system(size: 10.5)).foregroundStyle(Theme.amber)
-                        Text("Kai " + NowCard.stopLine(e)).font(.system(size: 12)).foregroundStyle(Theme.text)
+                        Text(NowCard.stopLine(e)).font(.system(size: 12)).foregroundStyle(Theme.text)
                         if let d = e.date { Text("· " + LastAction.ago(now.timeIntervalSince(d))).font(.system(size: 11.5)).foregroundStyle(Theme.muted) }
                         Spacer()
                         Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(Theme.muted)
@@ -190,6 +198,10 @@ struct SessionCardView: View {
                         Text("↳ " + (c.kind == "nested" ? "Nested session" : "Background service")
                              + (c.isWorking ? " · working" : " · idle"))
                             .font(.system(size: 11)).foregroundStyle(Theme.muted)
+                            .padding(.leading, 40)   // under its parent's name, not the card edge
+                            .help(c.kind == "nested"
+                                  ? "A session \(s.displayAgent) started inside this one. Its actions count here."
+                                  : "A helper process \(s.displayAgent) runs for this session (for example an MCP server). Kai attributes it to this session.")
                     }
                 }
             }
@@ -227,8 +239,7 @@ struct SessionCardView: View {
         } else if let l = card.lastLine(now: now) {
             Text(l).font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.text).lineLimit(1)
         } else {
-            Text(card.agentKey == "codex" ? "No command recorded yet" : "Nothing recorded yet in this session")
-                .font(.system(size: 12.5)).foregroundStyle(Theme.muted)
+            Text("Just started").font(.system(size: 12.5)).foregroundStyle(Theme.muted)
         }
     }
 }
@@ -324,7 +335,7 @@ struct ActivityTimelineView: View {
             var g = g
             let q = nav.search.trimmingCharacters(in: .whitespaces).lowercased()
             g.events = g.events.filter { e in
-                nav.filter.matches(e.kind) && (q.isEmpty || e.title.lowercased().contains(q) || e.object.lowercased().contains(q))
+                nav.filter.matches(e) && (q.isEmpty || e.title.lowercased().contains(q) || e.object.lowercased().contains(q))
             }
             return g.events.isEmpty ? nil : g
         }
@@ -353,13 +364,16 @@ struct ActivityTimelineView: View {
                         Text(g.agent.isEmpty ? "Connections · Internet watching · today" : g.header(now: Date()))
                             .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.muted)
                         Spacer()
-                        if g.events.count > 1 { Text(ActivityFeed.n(g.events.count, "event")).font(.system(size: 11)).foregroundStyle(Theme.muted) }
+                        // 0.5.1: the same numbers as the session's Now card.
+                        if let r = g.recorded { Text(r.countsText).font(.system(size: 11)).foregroundStyle(Theme.muted) }
+                        else if g.events.count > 1 { Text(ActivityFeed.n(g.events.count, "event")).font(.system(size: 11)).foregroundStyle(Theme.muted) }
                     }
                     .padding(.top, 12).padding(.bottom, 7)
                     RecordList {
                         ForEach(Array(g.events.prefix(60).enumerated()), id: \.element.id) { i, e in
                             if i > 0 { Divider() }
-                            TimelineRow(event: e) { open(e) }
+                            TimelineRow(event: e, block: e.site.map { site in { blockSite(site) } },
+                                        unblock: e.kind == .stop && e.site != nil ? { BlockList.shared.unblock(e.site!, model: model) } : nil) { open(e) }
                         }
                     }
                 }
@@ -369,7 +383,21 @@ struct ActivityTimelineView: View {
                     .font(.system(size: 12)).foregroundStyle(Theme.muted).padding(.top, 10)
             }
         }
+        .confirmationDialog("Turn on blocking for your list?", isPresented: $askTurnOn) {
+            Button("Turn on Watch + block my list") { model.setSwitch("egress", InternetMode.blocklist.egress) }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            Text("The site is on your block list. In Watch, Kai only records connections; with Watch + block my list it also refuses agents' direct connections to the sites on your list.")
+        }
     }
+
+    /// Block site, from a Seen connection: on the list, then (in Watch) asked
+    /// once whether to turn on blocking for the list.
+    private func blockSite(_ site: String) {
+        BlockList.shared.add(site, model: model)
+        if BlockList.shared.offerTurnOn { askTurnOn = true; BlockList.shared.offerTurnOn = false }
+    }
+    @State private var askTurnOn = false
 
     private func open(_ e: TimelineEvent) {
         if let id = e.stopEventID, let a = model.events.first(where: { $0.id == id }) { nav.openDecision = a; return }
@@ -447,6 +475,9 @@ struct ActivityTimelineView: View {
 
 struct TimelineRow: View {
     let event: TimelineEvent
+    /// 0.5.1: Block site (a Seen connection) / Unblock (a Stopped one).
+    var block: (() -> Void)? = nil
+    var unblock: (() -> Void)? = nil
     let open: () -> Void
     @State private var hover = false
     var body: some View {
@@ -463,6 +494,13 @@ struct TimelineRow: View {
                     }
                 }
                 Spacer(minLength: 8)
+                if let u = unblock {
+                    Button("Unblock", action: u).buttonStyle(.plain).font(.system(size: 11.5, weight: .medium)).foregroundStyle(Theme.teal)
+                } else if let b = block, event.kind == .connection, InternetMode.blocklistOffered,
+                          let site = event.site, !BlockList.shared.contains(site) {
+                    Button("Block site", action: b).buttonStyle(.plain).font(.system(size: 11.5, weight: .medium)).foregroundStyle(Theme.teal)
+                        .help("Add \(site) to Blocked sites (Settings → Internet).")
+                }
                 Text(event.outcome).font(.system(size: 11)).foregroundStyle(event.kind == .stop ? Theme.amber : Theme.muted)
                 Text(clock).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(Theme.muted)
                 Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(Theme.muted)
@@ -509,11 +547,24 @@ struct TimelineEventSheet: View {
             Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 9) {
                 row("Evidence", event.evidence)
                 row("Outcome", event.outcome)
+                if !event.evidenceLevel.isEmpty { row("Evidence level", event.evidenceLevel) }
                 row("Session", session)
-                if !event.object.isEmpty { row(event.kind == .command ? "Program" : "Path", event.object) }
+                if !event.object.isEmpty {
+                    row(event.kind == .command ? "Program" : event.isConnection ? "Site" : "Path",
+                        event.fullPath.isEmpty ? event.object : event.fullPath)
+                }
                 row("Time", Date(timeIntervalSince1970: event.ts).formatted(date: .abbreviated, time: .standard))
             }
             HStack {
+                if let site = event.site, InternetMode.blocklistOffered {
+                    if event.kind == .stop {
+                        Button("Unblock \(site)") { BlockList.shared.unblock(site, model: model); dismiss() }
+                            .buttonStyle(GhostButtonStyle())
+                    } else if !BlockList.shared.contains(site) {
+                        Button("Block site") { BlockList.shared.add(site, model: model); dismiss() }
+                            .buttonStyle(GhostButtonStyle())
+                    }
+                }
                 Spacer()
                 Button("Ask about this →") {
                     dismiss()

@@ -33,6 +33,8 @@ struct ActivityGroups: Decodable, Equatable {
     var sessions: [SessionActivity]? = nil
     /// 0.5: the oldest record read (when recording began, within the window).
     var first_record: Double? = nil
+    /// 0.5.1: records since local midnight (the popover's "Today: N actions").
+    var today: Int? = nil
 
     static func parse(_ json: String) -> ActivityGroups? {
         guard let d = json.data(using: .utf8) else { return nil }
@@ -217,7 +219,7 @@ enum ActivityFeed {
             ?? (e.actionLabel ?? "an action")
         let title: String
         if e.isPrompt { title = "Prompt stopped" }
-        else if e.isNetwork { title = "Connection stopped" }
+        else if e.isNetwork { title = e.blockedSite.map { "Connection to \($0) stopped (your block list)" } ?? "Connection stopped" }
         else if e.actionLabel == "File read" { title = "Sensitive file read stopped" }
         else if e.actionLabel == "File edit" { title = "File change stopped" }
         else if e.actionLabel == "Command" { title = "Command stopped" }
@@ -246,14 +248,17 @@ enum ActivityFeed {
         let top = hosts.sorted { $0.value > $1.value }
         var ex = top.prefix(3).map { "\($0.key) · \($0.value.formatted())×" }
         if top.count > 3 { ex.append("+ \((top.count - 3).formatted()) more") }
+        let mode = InternetMode.current
         return [ActivityItem(id: "net-observed", kind: .connection, agentKey: "", agent: "Attribution partial",
-                             title: "Network destinations", detail: "\(n(top.count, "destination")) · watching only",
-                             count: seen.count, countText: n(seen.count, "connection"), outcome: "Observed",
-                             source: "Network wall (Watch only)", session: "Network watch",
+                             title: "Network destinations",
+                             detail: "\(n(top.count, "destination")) · " + (mode == .blocklist ? "watching" : "watching only"),
+                             count: seen.count, countText: n(seen.count, "connection"), outcome: "Seen",
+                             source: mode.evidence, session: "Network watch",
                              scope: "\(n(seen.count, "observed connection")) grouped by destination",
                              examples: ex,
-                             explanation: "Connections alone don't show what data was sent. Internet is Watch-only "
-                                + "in this release: nothing here was blocked by it.")]
+                             explanation: "Connections alone don't show what data was sent. "
+                                + (mode == .blocklist ? "None of these sites is on your block list, so they were only recorded."
+                                                      : "Internet is Watch only: nothing here was blocked by it."))]
     }
 
     static func build(groups: ActivityGroups?, events: [AuditEvent], workspace: String?,

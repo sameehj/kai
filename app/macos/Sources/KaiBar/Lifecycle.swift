@@ -30,6 +30,9 @@ enum Lifecycle {
     /// program it runs is gone. (No launcher at all is a different install:
     /// `kai snapshot` reports those hooks as failing when they can't run.)
     static var programMissing: Bool {
+        #if DEBUG
+        if ScreenshotFixture.active { return false }   // the fixture describes a healthy install
+        #endif
         let fm = FileManager.default
         if fm.fileExists(atPath: launcherPath) { return !fm.isExecutableFile(atPath: programPath) }
         // No launcher, but the hooks still call it: every hook fails (C1 lets

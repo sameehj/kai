@@ -28,15 +28,15 @@ settings:
     # it in the developer portal: that needs a live login and makes Xcode
     # report "profile doesn't support the App Groups capability" when it can't.
     REGISTER_APP_GROUPS: NO
-    MARKETING_VERSION: "0.5.0"   # the release without its pre-release suffix (checked by make release)
+    MARKETING_VERSION: "0.5.1"   # the release without its pre-release suffix (checked by make release)
     # The app's build number. Bump freely for app changes (menu bar, signing);
     # this does NOT touch the network extension, so app updates never replace
     # it and never drop agents' live connections.
-    CURRENT_PROJECT_VERSION: "12"
+    CURRENT_PROJECT_VERSION: "13"
     # The network extension's own build number. Bump ONLY when the extension's
     # code (app/macos/Network) changes: macOS replaces an activated extension
     # when this differs, which tears down the content filter.
-    KAI_EXT_VERSION: "32"
+    KAI_EXT_VERSION: "33"
     SWIFT_VERSION: "5.9"
 
 targets:

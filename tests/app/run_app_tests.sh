@@ -35,15 +35,22 @@ swiftc -O -o "$OUT/cardtext/run" "$S/AuditLog.swift" "$S/CardText.swift" "$OUT/c
 mkdir -p "$OUT/ask"
 cp "$ROOT/tests/app/ask_main.swift" "$OUT/ask/main.swift"
 swiftc -O -o "$OUT/ask/run" "$S/AuditLog.swift" "$S/ActivityFeed.swift" "$S/AskPhraser.swift" "$S/AskEngine.swift" "$S/AutoConnect.swift" \
-    "$S/Sessions.swift" "$S/NowModel.swift" "$OUT/ask/main.swift" || exit 1
+    "$S/Sessions.swift" "$S/NowModel.swift" "$S/KaiWords.swift" "$OUT/ask/main.swift" || exit 1
 "$OUT/ask/run" || rc=1
 # 0.5 Now, Activity timeline, model chip, icon fallback, footer, deep links.
 mkdir -p "$OUT/now"
 cp "$ROOT/tests/app/now_main.swift" "$OUT/now/main.swift"
 swiftc -O -o "$OUT/now/run" "$S/AuditLog.swift" "$S/ActivityFeed.swift" "$S/AskPhraser.swift" "$S/AskEngine.swift" \
     "$S/AutoConnect.swift" "$S/Sessions.swift" "$S/NowModel.swift" "$S/ModelChip.swift" "$S/Routes.swift" \
-    "$S/AgentIconSource.swift" "$OUT/now/main.swift" || exit 1
+    "$S/AgentIconSource.swift" "$S/KaiWords.swift" "$OUT/now/main.swift" || exit 1
 "$OUT/now/run" || rc=1
+# 0.5.1: who stopped it, card = Activity counts, Internet words, Blocked sites, paths, logos.
+mkdir -p "$OUT/v051"
+cp "$ROOT/tests/app/v051_main.swift" "$OUT/v051/main.swift"
+swiftc -O -o "$OUT/v051/run" "$S/AuditLog.swift" "$S/ActivityFeed.swift" "$S/AskPhraser.swift" "$S/AskEngine.swift" \
+    "$S/AutoConnect.swift" "$S/Sessions.swift" "$S/NowModel.swift" "$S/AgentIconSource.swift" "$S/KaiWords.swift" \
+    "$OUT/v051/main.swift" || exit 1
+"$OUT/v051/run" "$ROOT/app/macos/Sources/Assets.xcassets" || rc=1
 rm -rf "$OUT"
 # The app decodes the built kai's real `kai snapshot --json` with its own
 # types, so app and CLI can't drift apart.

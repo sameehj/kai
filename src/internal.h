@@ -152,6 +152,8 @@ struct kai_policy {
     int failsafe;        /* G5: built-in defaults because no policy could be loaded */
     char *egress_allow[KAI_MAX_LIST];
     int negress;
+    char *egress_block[KAI_MAX_LIST];   /* 0.5.1 block list entries (egress_block lines) */
+    int negress_block;
     /* storage wall */
     kai_storage_mode storage_mode;
     /* agent identities: "exe", "arg" or "team" patterns */
@@ -218,5 +220,10 @@ int kai_cmd_stats(int argc, char **argv);
 
 /* S7: blank Kai's canonical fake test tokens in a file's text (scan.c). */
 void kai_blank_test_fakes(char *t);
+
+/* 0.5.1: is host (or a parent domain) blocked for agent by a live reach rule
+ * (kai block, agent "*" or this agent)? Cached on the rules file's identity,
+ * for the network extension's per-flow checks. Fills why with the rule's host. */
+int kai_agent_reach_blocked(const char *agent, const char *host, char *why, size_t whylen);
 
 #endif

@@ -6,8 +6,11 @@
 //   1. Not from an agent process tree  -> allow, never look at it again.
 //   2. From an agent: find the hostname (flow metadata, else the TLS SNI or
 //      HTTP Host header in the first outbound bytes).
-//   3. Hostname on the egress allowlist -> allow. Otherwise log it, or drop
-//      it when the policy says `egress block`.
+//   3. 0.5.1 "Watch + block my list" (`egress blocklist`): a site on the
+//      block list (kai block hosts, `egress_block` entries) -> drop at once,
+//      no card. The block list wins over the allowlist.
+//   4. Hostname on the egress allowlist -> allow. Otherwise log it, or drop
+//      it when the policy says `egress block` (developer builds only).
 //
 // All decisions come from libkai (the same engine as the hooks), so one
 // policy file drives everything. This process runs as root; it reads the
@@ -79,7 +82,8 @@ final class FilterDataProvider: NEFilterDataProvider {
     private func writeHealth() {
         let m = engine.mode
         // the effective mode, as this extension applies it (Watch only in release)
-        let mode = m == KAI_EGRESS_BLOCK && !Engine.watchOnly ? "block" : (m == KAI_EGRESS_OFF ? "off" : "log")
+        let mode = m == KAI_EGRESS_BLOCK && !Engine.watchOnly ? "block"
+            : m == KAI_EGRESS_BLOCKLIST ? "blocklist" : (m == KAI_EGRESS_OFF ? "off" : "log")
         // What the wall actually did, not just its mode: outbound flows seen,
         // how many were an agent's, blocked; paused; can it write the audit log.
         // ("Enforcing" with zero agent flows is a claim, not a measurement.)
@@ -87,7 +91,7 @@ final class FilterDataProvider: NEFilterDataProvider {
         // B4: which policy this wall runs, so status can tell current from stale.
         var fp = [CChar](repeating: 0, count: 16)
         kai_policy_fingerprint(&fp, fp.count)
-        let json = "{\"wall\":\"network\",\"mode\":\"\(mode)\",\"enforcing\":\(mode == "block"),"
+        let json = "{\"wall\":\"network\",\"mode\":\"\(mode)\",\"enforcing\":\(mode == "block" || mode == "blocklist"),"
                  + "\"watch_only\":\(Engine.watchOnly),"
                  + "\"policy\":\"\(String(cString: fp))\",\"policy_state\":\"\(engine.policyState)\","
                  + "\"flows\":\(st.flows),\"agent_flows\":\(st.agentFlows),\"blocked\":\(st.blocked),"
@@ -156,13 +160,15 @@ final class FilterDataProvider: NEFilterDataProvider {
         let (ip, port) = Engine.endpoint(sf)
         let proto = sf.socketProtocol
         // This Mac (loopback) and allowed addresses or ranges need no name.
-        if engine.isAllowed(host: nil, ip: ip, port: port) { return .allow() }
+        if engine.isAllowed(host: nil, ip: ip, port: port, agent: agent) { return .allow() }
         // The flow's own name can be a CDN alias (api3.cursor.sh.cdn.cloudflare.net
         // for api3.cursor.sh). Use it to allow quickly; otherwise read the name
         // the client actually asked for (TLS SNI / HTTP Host) before deciding.
         var hint: String? = nil
         if let host = sf.remoteHostname, !host.isEmpty, !Engine.isIPLiteral(host) {
-            if engine.isAllowed(host: host, ip: ip, port: port) { return .allow() }
+            // 0.5.1: in "Watch + block my list" the name the client asks for
+            // (SNI / Host) decides, so a listed site can't pass on a CDN alias.
+            if mode != KAI_EGRESS_BLOCKLIST, engine.isAllowed(host: host, ip: ip, port: port, agent: agent) { return .allow() }
             hint = host
         }
         if proto == IPPROTO_UDP && port == "443" {
@@ -206,7 +212,8 @@ final class FilterDataProvider: NEFilterDataProvider {
         case .host(let host):
             engine.forget(flow)
             // allowed if either the requested name or the flow's name is listed
-            if let h = ctx.hint, engine.isAllowed(host: h, ip: ctx.ip, port: ctx.port) { return .allow() }
+            if let h = ctx.hint, engine.isAllowed(host: h, ip: ctx.ip, port: ctx.port, agent: ctx.agent),
+               !engine.isBlocked(host: host, ip: ctx.ip, port: ctx.port, agent: ctx.agent) { return .allow() }
             let d = engine.decideHold(host: host, agent: ctx.agent, ip: ctx.ip, port: ctx.port,
                                       pid: ctx.pid, pidv: ctx.pidv)
             if d.allow { return .allow() }
@@ -390,12 +397,23 @@ final class Engine {
     }
 
     /// Is this connection on the allowlist? (No logging: used for fast paths.)
-    func isAllowed(host: String?, ip: String, port: String) -> Bool {
+    /// 0.5.1: never for a destination on the block list in "Watch + block my
+    /// list" (the block list wins); decideCore then refuses and records it.
+    func isAllowed(host: String?, ip: String, port: String, agent: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
         reloadLocked(force: false)
         guard let p = policy else { return true }
         var why = [CChar](repeating: 0, count: 256)
+        if kai_egress_blocklist_drop(p, agent, host, ip, Int32(port) ?? 0, &why, why.count) == 1 { return false }
         return kai_egress_endpoint_allowed(p, host, ip, Int32(port) ?? 0, &why, why.count) == 1
+    }
+
+    /// On the block list, in "Watch + block my list"? (No logging.)
+    func isBlocked(host: String?, ip: String, port: String, agent: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let p = policy, !paused else { return false }
+        var why = [CChar](repeating: 0, count: 256)
+        return kai_egress_blocklist_drop(p, agent, host, ip, Int32(port) ?? 0, &why, why.count) == 1
     }
 
     func context(for flow: NEFilterFlow) -> FlowContext? {
@@ -442,6 +460,17 @@ final class Engine {
         // by policy, whatever the policy object says (libkai clamps it too).
         if paused { return true }   // wall paused (time-boxed, auto-resume): allow
         var why = [CChar](repeating: 0, count: 256)
+        // 0.5.1 "Watch + block my list": a listed site (or address) is refused
+        // at once, no card, before the allowlist (the block list wins).
+        if mode == KAI_EGRESS_BLOCKLIST,
+           kai_egress_blocklist_drop(p, agent, host, ip, Int32(port) ?? 0, &why, why.count) == 1 {
+            nBlocked += 1
+            let site = host ?? ip
+            auditLocked(agent: agent, decision: "block", target: host ?? "\(ip):\(port)",
+                        detail: "blocked site \(site)", session: sessionFor(pid: pid, pidv: pidv).sid,
+                        reason: KAI_REASON_BLOCKED_SITE)
+            return false
+        }
         if kai_egress_endpoint_allowed(p, host, ip, Int32(port) ?? 0, &why, why.count) == 1 { return true }
         if let h = host, kai_agent_profile_allows(agent, h) == 1 { return true }   // e.g. Cursor's sign-in
         // git/gh -> GitHub, npm -> its registry, pip -> PyPI: the tool opening the socket, by name
@@ -533,7 +562,13 @@ final class Engine {
         lock.lock(); defer { lock.unlock() }
         // Watch only: QUIC isn't dropped either (dropping is blocking); those
         // flows' hosts go unrecorded, which status calls unverified.
-        guard !Engine.watchOnly, let p = policy, kai_policy_egress_mode(p) != KAI_EGRESS_OFF, !paused else { return false }
+        // 0.5.1: in "Watch + block my list" with a non-empty list, QUIC is
+        // dropped so the agent falls back to HTTPS, where Kai reads the site
+        // name and can refuse a listed one (QUIC hides the name).
+        guard let p = policy, !paused else { return false }
+        let m = kai_policy_egress_mode(p)
+        let listMode = m == KAI_EGRESS_BLOCKLIST && kai_blocked_sites_count(p) > 0
+        guard listMode || (!Engine.watchOnly && m != KAI_EGRESS_OFF) else { return false }
         auditLocked(agent: agent, decision: "log", target: "QUIC",
                     detail: "QUIC (UDP 443) dropped so the agent uses HTTPS, where Kai can see the site")
         return true
@@ -677,7 +712,8 @@ final class Engine {
     /// One audit record per agent+target+decision every 10 minutes, so a
     /// chatty tool can't flood the log.
     private func auditLocked(agent: String, decision: String, target: String, detail: String,
-                             session: String = "", identity: String = "") {
+                             session: String = "", identity: String = "",
+                             reason: String = KAI_REASON_NOT_ALLOWLISTED) {
         let key = "\(agent)|\(decision)|\(target)"
         if let last = recentLogs[key], Date().timeIntervalSince(last) < 600 { return }
         if recentLogs.count > 4096 { recentLogs.removeAll() }
@@ -686,7 +722,7 @@ final class Engine {
         // destination in `target`. Fixes the record that read "rule: <host>" as
         // if a rule matched -- no rule matched; the host was absent from the list.
         kai_denial_audit_ex("network", agent, decision, target, "connect",
-                            KAI_REASON_NOT_ALLOWLISTED, nil, detail,
+                            reason, nil, detail,
                             session.isEmpty ? nil : session, identity.isEmpty ? nil : identity)
         // We run as root: keep the user's audit log owned by the user.
         if let o = owner, !auditPath.isEmpty {

@@ -56,6 +56,9 @@ final class AppModel: ObservableObject {
     init() {
         notifyOnBlock = UserDefaults.standard.object(forKey: "notifyOnBlock") as? Bool ?? true
         playSounds = UserDefaults.standard.object(forKey: "playSounds") as? Bool ?? true
+        #if DEBUG
+        if ScreenshotFixture.active { return }   // make screenshots: no CLI, no timers, no side effects
+        #endif
         AppModel.ensureGroupContainer()
         Task { await refresh() }
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
@@ -199,11 +202,18 @@ final class AppModel: ObservableObject {
     // MARK: refresh
 
     func refresh() async {
+        #if DEBUG
+        if ScreenshotFixture.active { return }
+        #endif
         async let s = KaiCLI.decode(KaiStatus.self, ["status", "--json"])
         async let p = KaiCLI.decode(PolicyInfo.self, ["policy", "show", "--json"])
         let (newStatus, newPolicy) = await (s, p)
         if newStatus != status { status = newStatus }
         if newPolicy != policy { policy = newPolicy }
+        // 0.5.1: the Internet setting as the words read it (running extension + policy mode).
+        InternetMode.current = InternetMode.from(egress: newPolicy?.switches["egress"],
+                                                 extensionOn: kai_wall_observed_level("network") >= 0)
+        BlockList.shared.refresh(policy: newPolicy)
         if !correctedMigration {
             correctedMigration = true
             let fixed = GrantManager().correctEarlierMigration()
@@ -691,7 +701,7 @@ enum Notifier {
     static func post(_ e: AuditEvent, count: Int = 1, id: String? = nil, sound: KaiSound.Cue? = nil) {
         guard available else { return }
         let c = UNMutableNotificationContent()
-        c.title = "Kai stopped \(e.agentName)" + (count > 1 ? " · \(count) times" : "")
+        c.title = StopWords.line(e) + (count > 1 ? " · \(count) times" : "")
         var body = e.detail.isEmpty ? e.rule : e.detail
         if let t = e.excerpt { body += "\n" + (t.split(separator: "\n").first.map(String.init) ?? t) }
         c.body = body
@@ -703,3 +713,14 @@ enum Notifier {
         }
     }
 }
+
+#if DEBUG
+extension AppModel {
+    /// make screenshots only: the fixture's status, policy and records.
+    func loadFixture(status: KaiStatus?, policy: PolicyInfo?, events: [AuditEvent]) {
+        self.status = status
+        self.policy = policy
+        self.events = events
+    }
+}
+#endif

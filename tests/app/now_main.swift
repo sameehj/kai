@@ -73,7 +73,7 @@ check(AgentReports.footnote("codex") == "files: not reported by Codex" && AgentR
 let cmd = SessionActivity.Event(ts: Date().timeIntervalSince1970 - 300, op: "command", name: "npm", decision: "allow")
 check(LastAction.line(cmd, now: Date()) == "Ran npm · 5 min ago", "a command shows only its program name")
 let stopped = SessionActivity.Event(ts: Date().timeIntervalSince1970, op: "read", name: "/w/x/.env", decision: "block")
-check(LastAction.line(stopped, now: Date()) == "Stopped a read of .env · now", "a stopped read")
+check(LastAction.line(stopped, now: Date()) == "Kai stopped a read of .env · now", "a stopped read (0.5.1: Kai is the subject)")
 check(ActivityFeed.program("API_TOKEN=x /usr/bin/npm test --secret") == "npm", "stop rows: program name only, no VAR= or arguments")
 
 print("now: one count for the Now header, the toolbar pill and the popover")
@@ -93,7 +93,8 @@ check(g1 != nil && g1!.events.first?.title == "Edited Pricing.tsx", "group per s
 check(g1?.header(now: Date()).hasPrefix("Claude Code · acme-web · ") == true && g1?.header(now: Date()).hasSuffix("–now") == true,
       "group header (\(g1?.header(now: Date()) ?? ""))")
 check(g1?.events.contains { $0.kind == .stop && $0.outcome == "Stopped" } == true, "a blocked request is a stop")
-check(g1?.events.contains { $0.title == "Ran npm" && $0.outcome == "Requested" } == true, "commands: program name, Requested")
+check(g1?.events.contains { $0.title == "Ran npm" && $0.outcome == "Agent asked to run" && $0.evidenceLevel.hasPrefix("Requested") } == true,
+      "commands: program name, plain label, evidence level Requested")
 check(Timeline.empty(projectFilter: "/w/docs-site", working: AgentsLike.working(sessions), recording: true, anyEvents: true)
       == .elsewhere(agent: "Claude Code", project: "acme-web", filter: "docs-site"), "a filter that hides a working session says where it is")
 check(Timeline.empty(projectFilter: nil, working: [], recording: false, anyEvents: false) == .recordingOff, "recording off says so")

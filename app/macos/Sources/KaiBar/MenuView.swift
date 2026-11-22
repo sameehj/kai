@@ -156,7 +156,8 @@ struct MenuView: View {
                             AgentLogo(agent: c.agentKey, size: 16)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text("\(c.session.displayAgent) · \(c.project)").font(.system(size: 12.5, weight: .medium)).lineLimit(1)
-                                if model.recordingActivity, let l = c.lastLine(now: Date()) {
+                                // "Ran a command · 6 min ago · 261 commands · 5 stops"
+                                if model.recordingActivity, let l = SessionLine.text(c, now: Date()) {
                                     Text(l).font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(1)
                                 }
                             }
@@ -365,13 +366,17 @@ struct MenuView: View {
             Image("KaiLogo").resizable().frame(width: 26, height: 26).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Kai · \(summary.text)").font(.system(size: 13, weight: .semibold))
+                // 0.5.1: the health line. "Connected · hooks OK" at rest;
+                // "Checking hooks…" only while a check runs; repair in amber.
                 HStack(spacing: 5) {
                     Circle().fill(h.color).frame(width: 7, height: 7)
-                    Text(h.tone == .ok ? "Connected · checking" : h.text).font(.system(size: 11))
+                    Text(h.tone == .ok ? "Connected · hooks OK" : h.text).font(.system(size: 11))
                         .foregroundStyle(h.tone == .ok ? Theme.muted : h.color)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if status.status == .broken && LiveCoverage.blocked(agents: agents.loaded ? agents.agents : []).isEmpty {
+                // Today's numbers (stops amber when above 0; connections only while watching).
+                todayLine
+                if (h.needsRepair || status.status == .broken) && LiveCoverage.blocked(agents: agents.loaded ? agents.agents : []).isEmpty {
                     RepairButton { Task { await model.refresh(); await agents.refresh() } }
                 }
             }
@@ -380,6 +385,28 @@ struct MenuView: View {
             if model.busy { ProgressView().controlSize(.small) }
             if !KaiInstance.isRelease { DevBadge().fixedSize() }
         }
+    }
+
+    /// "Today: 312 actions · 5 stops · 14 connections".
+    static func today(model: AppModel, records: KaiRecords, watching: Bool) -> TodayNumbers {
+        let cal = Calendar.current
+        let stops = ActivityFeed.stops(model.events, workspace: nil).count
+        let conns = watching ? model.events.filter { e in
+            e.isNetwork && !e.isSilent && (!e.isBlock || e.blockedSite != nil)
+                && (e.date.map { cal.isDateInToday($0) } ?? false)
+        }.count : nil
+        return TodayNumbers(actions: records.groups?.today ?? 0, stops: stops, connections: conns)
+    }
+
+    private var todayLine: some View {
+        let t = Self.today(model: model, records: records, watching: wall.isOn)
+        return HStack(spacing: 0) {
+            ForEach(Array(t.parts.enumerated()), id: \.offset) { i, p in
+                if i > 0 { Text(" · ") }
+                Text(p).foregroundStyle(i == 1 && t.stops > 0 ? Theme.amber : Theme.muted)
+            }
+        }
+        .font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(1)
     }
 
     /// The latest stop, one line; it opens its decision in the Kai window.
@@ -392,10 +419,9 @@ struct MenuView: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "hand.raised").font(.system(size: 11)).foregroundStyle(Theme.amber)
-                    Text("Latest stop: \(e.agentName) " + NowCard.stopLine(e))
-                        .font(.system(size: 12)).foregroundStyle(Theme.soft).lineLimit(1)
+                    Text(NowCard.stopLine(e) + (e.date.map { " · " + LastAction.short(Date().timeIntervalSince($0)) } ?? ""))
+                        .font(.system(size: 12)).foregroundStyle(Theme.soft).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                     Spacer()
-                    if let d = e.date { Text(ago(d)).font(.system(size: 11)).foregroundStyle(Theme.muted) }
                 }
                 .contentShape(Rectangle())
             }
@@ -549,7 +575,7 @@ struct BlockNotice: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
                     Image(systemName: "hand.raised").foregroundStyle(Theme.blue)
-                    Text("\(event.agentName) was stopped").font(.system(size: 13, weight: .semibold))
+                    Text(StopWords.line(event)).font(.system(size: 13, weight: .semibold))
                     Spacer()
                     if let d = event.date { Text(ago(d)).font(.system(size: 11)).foregroundStyle(Theme.muted) }
                     // The same brief as Activity's copy icon.

@@ -40,6 +40,10 @@ struct ChatThread: Codable, Identifiable, Equatable {
     var created = Date()
     var updated = Date()
     var messages: [ChatMessage] = []
+    /// 0.5.1: the item an "Ask about this" thread started from, shown as a
+    /// quoted chip at the top (never a full command or file contents).
+    var quote: String? = nil
+    var quoteAgent: String? = nil
 }
 
 enum ChatStore {
@@ -188,6 +192,14 @@ final class AskController: ObservableObject {
     func threads(in workspace: String?) -> [ChatThread] { threads.filter { $0.workspace == workspace } }
 
     func newChat() { currentID = nil }
+    /// 0.5.1: "Ask about this" always opens a new thread, titled after the
+    /// item and starting with it as a quoted chip; never the current thread.
+    func startThread(title: String, quote: String, agent: String?) {
+        var t = ChatThread(workspace: nil, title: String(title.prefix(48)))
+        t.quote = quote
+        t.quoteAgent = agent
+        upsert(t)
+    }
     func open(_ t: ChatThread) { currentID = t.id }
     func delete(_ t: ChatThread) {
         ChatStore.delete(t)
@@ -346,7 +358,8 @@ struct AskKaiPage: View {
                     VStack(alignment: .leading, spacing: 14) {
                         header
                         ModelFirstRunCard()
-                        if let t = ask.current, !t.messages.isEmpty {
+                        if let t = ask.current, !t.messages.isEmpty || t.quote != nil {
+                            if let q = t.quote { QuoteChip(text: q, agent: t.quoteAgent) }
                             ForEach(t.messages) { m in bubble(m).id(m.id) }
                         } else {
                             hero
@@ -363,7 +376,14 @@ struct AskKaiPage: View {
             Divider()
             chats.frame(width: 210)
         }
+        .confirmationDialog("Turn on blocking for your list?", isPresented: $askTurnOn) {
+            Button("Turn on Watch + block my list") { model.setSwitch("egress", InternetMode.blocklist.egress) }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            Text("In Watch, Kai only records connections. With Watch + block my list it also refuses agents' direct connections to the sites on your list.")
+        }
     }
+    @State private var askTurnOn = false
 
     /// "Ask Kai", the model chip (where answers come from) and New chat.
     private var header: some View {
@@ -382,6 +402,7 @@ struct AskKaiPage: View {
         switch a.kind {
         case .turnOnRecording: return !model.recordingActivity
         case .turnOnInternet: return !wall.isOn
+        case .blockSite: return !BlockList.shared.contains(a.ref)
         case .reconnect: return Agent(rawValue: a.ref).map { !model.installed($0) } ?? true
         default: return true
         }
@@ -450,6 +471,9 @@ struct AskKaiPage: View {
     /// Buttons come from the record (AskAnswer.actions), never from model text.
     private func perform(_ a: AskAction) {
         switch a.kind {
+        case .blockSite:
+            BlockList.shared.add(a.ref, model: model)
+            if BlockList.shared.offerTurnOn { BlockList.shared.offerTurnOn = false; askTurnOn = true }
         case .openDecision:
             if let e = model.events.first(where: { $0.decision_id == a.ref || $0.id == a.ref }) { nav.openDecision = e }
             else { nav.showStops() }
@@ -566,3 +590,30 @@ struct KaiGeneralSettings: View {
     }
 
 }
+
+/// The item an "Ask about this" thread is about, quoted at its top.
+struct QuoteChip: View {
+    let text: String
+    let agent: String?
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Rectangle().fill(Theme.purple.opacity(0.6)).frame(width: 3)
+            if let a = agent, !a.isEmpty { AgentLogo(agent: a, size: 16) }
+            Text(text).font(.system(size: 12.5)).foregroundStyle(Theme.soft)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 8).padding(.trailing, 12)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.border))
+    }
+}
+
+#if DEBUG
+extension AskController {
+    func loadFixture(_ threads: [ChatThread]) {
+        self.threads = threads
+        currentID = threads.first?.id
+    }
+}
+#endif

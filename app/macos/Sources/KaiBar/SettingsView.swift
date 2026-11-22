@@ -393,33 +393,55 @@ private struct NetworkPage: View {
     @StateObject private var grants = GrantManager()
     @State private var telemetryNote: String?
 
-    // Release batch 11: one row per agent. Kai blocks known telemetry hosts
-    // silently; the documented switch, where the vendor has one.
+    // Release batch 11 / 0.5.1: one row per agent. The copy says what is
+    // true: Kai turned on the agent's OWN opt-out (its setting), or the
+    // agent's telemetry hosts are on the user's block list (then, in Watch +
+    // block my list, Kai refuses them). Never "Kai blocks" otherwise.
     //   Claude Code: DISABLE_TELEMETRY / DISABLE_ERROR_REPORTING (code.claude.com/docs/en/data-usage)
     //   Codex: analytics.enabled = false (learn.chatgpt.com/docs/config-file/config-reference)
     //   Cursor: no documented off switch; Privacy Mode reduces it (docs.cursor.com/account/privacy)
+    static let telemetryHosts: [String: [String]] = [
+        "Claude Code": ["statsig.com", "statsigapi.net", "datadoghq.com", "sentry.io"],
+        "Codex": ["statsig.com", "statsigapi.net"],
+        "Cursor": ["metrics.cursor.sh"],
+    ]
+
+    private var listBlocks: Bool { InternetMode.current == .blocklist }
+
+    private func blockedByList(_ agent: String) -> Bool {
+        listBlocks && (Self.telemetryHosts[agent] ?? []).contains { blocks.contains($0) }
+    }
+
     private var telemetry: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Agent telemetry").font(Theme.display(16, .semibold))
-            telemetryRow("Claude Code", blocks: "usage metrics and error reports (Statsig, Datadog, Sentry)") {
-                if kai_claude_env_is("DISABLE_TELEMETRY", "1") == 1 {
-                    Text("Turned off in Claude Code").font(.system(size: 12)).foregroundStyle(Theme.lime)
+            telemetryRow("Claude Code", sends: "usage metrics and error reports (Statsig, Datadog, Sentry)") {
+                if blockedByList("Claude Code") {
+                    TelemetryState(text: "Blocked by Kai (your list)")
+                } else if kai_claude_env_is("DISABLE_TELEMETRY", "1") == 1 {
+                    TelemetryState(text: "Kai turned on Claude Code's own telemetry opt-out.")
                 } else {
                     Button("Turn off in Claude Code") { turnOffClaudeTelemetry() }.buttonStyle(GhostButtonStyle())
                         .help("Sets DISABLE_TELEMETRY and DISABLE_ERROR_REPORTING in Claude Code's settings. Claude Code also turns off its feature flags then, which can make Remote Control unavailable.")
                 }
             }
-            telemetryRow("Codex", blocks: "usage metrics (Statsig)") {
-                if kai_codex_analytics_off(0) == 1 {
-                    Text("Turned off in Codex").font(.system(size: 12)).foregroundStyle(Theme.lime)
+            telemetryRow("Codex", sends: "usage metrics (Statsig)") {
+                if blockedByList("Codex") {
+                    TelemetryState(text: "Blocked by Kai (your list)")
+                } else if kai_codex_analytics_off(0) == 1 {
+                    TelemetryState(text: "Kai turned on Codex's own analytics opt-out.")
                 } else {
                     Button("Turn off in Codex") { turnOffCodexTelemetry() }.buttonStyle(GhostButtonStyle())
                         .help("Sets analytics.enabled = false in Codex's config.toml (a backup is kept).")
                 }
             }
-            telemetryRow("Cursor", blocks: "crash and usage counters (metrics.cursor.sh)") {
-                Text("No setting from Cursor; Kai keeps blocking it.").font(.system(size: 12)).foregroundStyle(Theme.muted)
-                    .help("Cursor's Privacy Mode (Cursor Settings → General) reduces it to crash counters.")
+            telemetryRow("Cursor", sends: "crash and usage counters (metrics.cursor.sh)") {
+                if blockedByList("Cursor") {
+                    TelemetryState(text: "Blocked by Kai (your list)")
+                } else {
+                    Text("Cursor has no off switch. Privacy Mode reduces it.").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        .help("Cursor Settings → General → Privacy Mode. Add metrics.cursor.sh to Blocked sites to refuse it.")
+                }
             }
             if let n = telemetryNote {
                 Text(n).font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
@@ -427,12 +449,12 @@ private struct NetworkPage: View {
         }
     }
 
-    private func telemetryRow<T: View>(_ agent: String, blocks: String, @ViewBuilder trailing: () -> T) -> some View {
+    private func telemetryRow<T: View>(_ agent: String, sends: String, @ViewBuilder trailing: () -> T) -> some View {
         Card(padding: 12) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(agent).font(.system(size: 13, weight: .semibold))
-                    Text("Kai blocks its \(blocks) silently.").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    Text("Sends \(sends).").font(.system(size: 12)).foregroundStyle(Theme.muted)
                 }
                 Spacer()
                 trailing()
@@ -466,103 +488,210 @@ private struct NetworkPage: View {
         }
     }
 
-    // Fix 5: hosts in one agent's profile; ones Kai added from observed traffic
-    // (not the vendor's docs) are marked for review.
-    private var profileHosts: some View {
-        var rows: [(agent: String, host: String, documented: Bool)] = []
-        var i: Int32 = 0
-        var a: UnsafePointer<CChar>? = nil, h: UnsafePointer<CChar>? = nil
-        var d: Int32 = 0
-        while kai_agent_profile_host(i, &a, &h, &d) == 1, let a, let h {
-            rows.append((String(cString: a), String(cString: h), d == 1)); i += 1
-        }
-        return VStack(alignment: .leading, spacing: 6) {
-            Text("Agent profile hosts").font(Theme.display(16, .semibold))
-            Text("Allowed for that agent only.").font(.system(size: 12)).foregroundStyle(Theme.muted)
-            ForEach(rows, id: \.host) { r in
-                HStack(spacing: 8) {
-                    Text(r.host).font(Theme.mono)
-                    Text(r.agent == "cursor" ? "Cursor" : r.agent).font(.system(size: 12)).foregroundStyle(Theme.muted)
-                    if !r.documented {
-                        Text("observed, not documented").font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Theme.amber)
-                            .help("Kai added this from traffic it saw, not from the vendor's documentation. Review it.")
-                    }
-                }
-            }
-        }
+    private var blocks: [String] { blockList.hosts }
+
+    /// The mode the user sees: what the policy asks for while the extension runs.
+    private var mode: InternetMode {
+        InternetMode.from(egress: model.policy?.switches["egress"], extensionOn: wall.isOn || wall.state == .activating)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            PageHeader(icon: "globe", title: "Internet",
-                       subtitle: "Off unless you turn it on. When on, Kai records where agents connect; nothing is blocked.",
-                       trailing: AnyView(statusPill))
-            // 0.3: opt-in. Off by default; Kai never turns the extension on by itself.
-            Card(padding: 14, stroke: Color(hex: 0x3A4420)) {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("Internet (preview): Watching — nothing is blocked").font(.system(size: 13, weight: .semibold))
-                        Spacer()
-                        Toggle("Internet (preview): Watching — nothing is blocked",
-                               isOn: Binding(get: { wall.isOn || wall.state == .activating },
-                                             set: { $0 ? wall.turnOn() : wall.turnOff() }))
-                            .toggleStyle(KaiToggleStyle()).labelsHidden()
-                            .disabled(wall.state == .activating || wall.state == .checking)
+            PageHeader(icon: "globe", title: "Internet", subtitle: (choosing ?? mode).subtitle,
+                       trailing: AnyView(InternetBadge(mode: mode, state: wall.state)))
+            // 0.5.1: one control. Off removes the filter; Watch records; Watch +
+            // block my list also refuses agents' connections to your sites.
+            Card(padding: 14) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Picker("Internet", selection: Binding(get: { choosing ?? mode }, set: choose)) {
+                        ForEach(InternetMode.offered) { m in Text(m.label).tag(m) }
                     }
-                    if wall.isOn {
-                        Text("On: Kai records the connections agents make. Turning it off removes the filter from this Mac.")
-                            .font(.system(size: 12)).foregroundStyle(Theme.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    } else {
-                        // 0.4.1: where macOS asks, step by step; turns On by itself once approved.
+                    .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 460)
+                    .disabled(model.busy || model.policy == nil || wall.state == .checking)
+                    Text((choosing ?? mode).detail).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !wall.isOn && (choosing.map { $0 != .off } ?? (wall.state != .off && wall.state != .checking)) {
+                        // 0.4.1: where macOS asks, step by step; turns on by itself once approved.
                         InternetSetupStep()
                     }
                 }
             }
-            VStack(alignment: .leading, spacing: 8) {
-                Text("When an agent connects to a host that is not on your list")
-                    .font(.system(size: 13)).foregroundStyle(Theme.muted)
-                // Nov 1 corrective change: Watch only in this release (Protect behind a developer flag).
-                let protect = DevFlags.internetProtect
-                let raw = model.policy?.switches["egress"] ?? "log"
-                ChoiceCards(options: [("log", "Watch", "Records the connections Kai observes; blocks nothing in this release.")]
-                                     + (protect ? [("block", "Protect", "Only sites on your list are reachable.")] : [])
-                                     + [("off", "Off", "Kai doesn't record agent connections.")],
-                            selected: !protect && raw == "block" ? "log" : raw) { model.setSwitch("egress", $0) }
-                    .disabled(model.busy || model.policy == nil)
-                if !protect {
-                    Text("Internet: Kai records the connections it observes.")
-                        .font(.system(size: 12)).foregroundStyle(Theme.soft).fixedSize(horizontal: false, vertical: true)
-                }
-                HStack(spacing: 10) {
-                    HStack(spacing: 3) { Text("Watch").font(.system(size: 11)).foregroundStyle(Theme.muted); InfoButton(text: InfoText.watch) }
-                    if protect {
-                        HStack(spacing: 3) { Text("Protect").font(.system(size: 11)).foregroundStyle(Theme.muted); InfoButton(text: InfoText.protect) }
-                    }
-                }
-                Text("Watch and Protect both turn off QUIC for agents, so Kai can see which sites they reach. "
-                   + "Agents fall back to normal HTTPS; in Watch nothing else is blocked.")
-                    .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
-            }
-            EditableList(kind: "egress_allow", title: "Your allowed destinations",
-                         help: "A host (also covers its subdomains), an IP address or range, optionally with :port: "
-                             + "db.yourcompany.com:5432, 10.0.0.0/8, 203.0.113.5:22. Built in: this Mac and each agent's model and sign-in hosts.",
-                         items: model.policy?.egressAllow ?? [], placeholder: "artifacts.yourcompany.com or 10.0.0.0/8")
+            if InternetMode.blocklistOffered { blockedSites }
             telemetry
-            profileHosts
-            // B2 agent profiles: what the built-in model hosts allow, and the limit.
-            Text("Built in for every agent: this Mac and the model and sign-in hosts (anthropic.com, openai.com, "
-               + "cursor.sh and others). Kai can't tell the model connection from other data sent to the same host. "
-               + "Everything else is recorded, not blocked.")
+            Text(mode == .blocklist
+                 ? "With a block list, Kai turns off QUIC (HTTP/3) for agents so it can read the site name; they fall back to normal HTTPS."
+                 : "Built in for every agent: this Mac and the model and sign-in hosts (anthropic.com, openai.com, cursor.sh and others). "
+                   + "Kai can't tell the model connection from other data sent to the same host.")
                 .font(.system(size: 12)).foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .onAppear { wall.refresh() }
+        .onAppear { wall.refresh(); blockList.refresh(policy: model.policy) }
+        .onChange(of: model.policy) { blockList.refresh(policy: $0) }
+        .onChange(of: wall.state) { st in
+            // The extension came up after the user picked a mode: apply it.
+            if st == .on, let c = choosing, c != .off {
+                model.setSwitch("egress", c.egress)
+                choosing = nil
+            } else if st == .off, choosing == .off { choosing = nil }
+        }
+        .confirmationDialog("Turn on blocking for your list?", isPresented: $blockList.offerTurnOn) {
+            Button("Turn on Watch + block my list") { choose(.blocklist) }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            Text("Kai is in Watch: it records connections and refuses none. With Watch + block my list it also refuses agents' direct connections to the sites on your list.")
+        }
     }
 
-    private var statusPill: some View { WallPill(word: wall.stateWord) }
+    @State private var choosing: InternetMode?
+    @ObservedObject private var blockList = BlockList.shared
+    @State private var newSite = ""
+    @State private var search = ""
 
+    private func choose(_ m: InternetMode) {
+        switch m {
+        case .off:
+            choosing = .off
+            wall.turnOff()
+        case .watch, .blocklist:
+            if wall.isOn {
+                choosing = nil
+                model.setSwitch("egress", m.egress)
+            } else {
+                choosing = m
+                wall.turnOn()
+            }
+        }
+    }
+
+    /// "Blocked sites": add, remove, search; the starter set once, unchecked;
+    /// the limit line under the list, verbatim.
+    private var blockedSites: some View {
+        Card(padding: 14) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Blocked sites").font(.system(size: 14, weight: .semibold))
+                        Text(mode == .blocklist
+                             ? "Kai stops agents' commands and fetches that name these sites, and refuses their connections to them."
+                             : "Kai stops agents' commands and fetches that name these sites. Choose Watch + block my list to also refuse their connections.")
+                            .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    if blockList.entries.count > 6 {
+                        TextField("Search", text: $search).textFieldStyle(.roundedBorder).frame(width: 140)
+                    }
+                }
+                let shown = blockList.entries.filter { search.isEmpty || $0.value.localizedCaseInsensitiveContains(search) }
+                if blockList.entries.isEmpty {
+                    Text("No sites yet.").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                }
+                ForEach(shown) { e in
+                    HStack(spacing: 8) {
+                        Text(e.value).font(Theme.mono)
+                        if e.agent != "*" { Text(e.agentWords).font(.system(size: 11)).foregroundStyle(Theme.muted) }
+                        if e.fromPolicy { Text("policy file").font(.system(size: 11)).foregroundStyle(Theme.muted) }
+                        Spacer()
+                        Button { blockList.remove(e, model: model) } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.plain).foregroundStyle(Theme.muted)
+                            .accessibilityLabel("Unblock \(e.value)")
+                    }
+                    .padding(.horizontal, 10).frame(height: 30)
+                    .background(Theme.ink, in: RoundedRectangle(cornerRadius: 8))
+                }
+                HStack(spacing: 8) {
+                    KaiField(placeholder: "paste.example.org, 203.0.113.0/24 or host:port", text: $newSite, onSubmit: addSite)
+                    Button("Block", action: addSite).buttonStyle(LimeButtonStyle())
+                        .disabled(newSite.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                if let err = blockList.lastError {
+                    Text(err).font(.system(size: 12)).foregroundStyle(Theme.amber)
+                }
+                if !blockList.starterOffered { StarterSites(model: model) }
+                Text(InternetMode.limitLine).font(.system(size: 12)).foregroundStyle(Theme.soft)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .disabled(model.busy || model.policy == nil)
+    }
+
+    private func addSite() {
+        if blockList.add(newSite, model: model) { newSite = "" }
+    }
+
+    private var statusPill: some View { InternetBadge(mode: mode, state: wall.state) }
+}
+
+/// The starter set, offered once, every box unchecked.
+private struct StarterSites: View {
+    let model: AppModel
+    @ObservedObject private var blockList = BlockList.shared
+    @State private var picked = Set<String>()
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Suggestions: common paste and file-sharing sites, and agents' telemetry hosts. Nothing is checked.")
+                .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), alignment: .leading)], alignment: .leading, spacing: 4) {
+                ForEach(BlockStarter.sharing + BlockStarter.telemetry, id: \.self) { h in
+                    Toggle(h, isOn: Binding(get: { picked.contains(h) },
+                                            set: { if $0 { picked.insert(h) } else { picked.remove(h) } }))
+                        .toggleStyle(.checkbox).font(.system(size: 12))
+                }
+            }
+            HStack {
+                Button("Block \(picked.count) selected") {
+                    for h in picked.sorted() { blockList.add(h, model: model) }
+                    blockList.starterOffered = true
+                }
+                .buttonStyle(LimeButtonStyle(subtle: true)).disabled(picked.isEmpty)
+                Button("Dismiss") { blockList.starterOffered = true }.buttonStyle(GhostButtonStyle())
+            }
+        }
+        .padding(10)
+        .background(Theme.ink.opacity(0.6), in: RoundedRectangle(cornerRadius: 9))
+    }
+}
+
+/// The status badge: teal when watching is fine, amber only when something
+/// needs the user, muted when off.
+struct InternetBadge: View {
+    let mode: InternetMode
+    let state: NetworkWall.State
+    private var word: String {
+        switch state {
+        case .needsApproval: return "Needs your OK"
+        case .allowFilter: return "Click Allow"
+        case .failed: return "Didn't turn on"
+        case .activating, .checking: return "Starting"
+        case .off: return "Off"
+        case .on: return mode == .blocklist ? "Watching · blocking your list" : mode == .off ? "Off" : "Watching"
+        }
+    }
+    private var color: Color {
+        switch state {
+        case .needsApproval, .allowFilter, .failed: return Theme.amber
+        case .on: return mode == .off ? Theme.muted : Theme.teal
+        default: return Theme.muted
+        }
+    }
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(color).frame(width: 8, height: 8)
+            Text(word)
+        }
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(color)
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(color.opacity(0.10), in: Capsule())
+        .overlay(Capsule().stroke(color.opacity(0.4)))
+    }
+}
+
+private struct TelemetryState: View {
+    let text: String
+    var body: some View {
+        Text(text).font(.system(size: 12)).foregroundStyle(Theme.teal).multilineTextAlignment(.trailing)
+            .frame(maxWidth: 260, alignment: .trailing).fixedSize(horizontal: false, vertical: true)
+    }
 }
 
 /// The storage wall is implemented (its decision engine is tested) but needs
@@ -734,6 +863,53 @@ private struct CompanyPage: View {
     }
 }
 
+/// 0.5.1: Advanced → Internet: "Never block these" (egress_allow, the old
+/// "allowed destinations") and the agent profile hosts. In Watch + block my
+/// list an entry here never overrides a block entry for the same host.
+private struct NeverBlockPage: View {
+    @EnvironmentObject var model: AppModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            EditableList(kind: "egress_allow", title: "Never block these",
+                         help: "A host (also covers its subdomains), an IP address or range, optionally with :port: "
+                             + "db.yourcompany.com:5432, 10.0.0.0/8, 203.0.113.5:22. Built in: this Mac and each agent's model "
+                             + "and sign-in hosts. A site on Blocked sites stays blocked: this list never overrides it.",
+                         items: model.policy?.egressAllow ?? [], placeholder: "artifacts.yourcompany.com or 10.0.0.0/8")
+            ProfileHostsList()
+        }
+    }
+}
+
+private struct ProfileHostsList: View {
+    // Fix 5: hosts in one agent's profile; ones Kai added from observed traffic
+    // (not the vendor's docs) are marked for review.
+    var body: some View {
+        var rows: [(agent: String, host: String, documented: Bool)] = []
+        var i: Int32 = 0
+        var a: UnsafePointer<CChar>? = nil, h: UnsafePointer<CChar>? = nil
+        var d: Int32 = 0
+        while kai_agent_profile_host(i, &a, &h, &d) == 1, let a, let h {
+            rows.append((String(cString: a), String(cString: h), d == 1)); i += 1
+        }
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Agent profile hosts").font(Theme.display(16, .semibold))
+            Text("Allowed for that agent only.").font(.system(size: 12)).foregroundStyle(Theme.muted)
+            ForEach(rows, id: \.host) { r in
+                HStack(spacing: 8) {
+                    Text(r.host).font(Theme.mono)
+                    Text(r.agent == "cursor" ? "Cursor" : r.agent).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    if !r.documented {
+                        Text("observed, not documented").font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.amber)
+                            .help("Kai added this from traffic it saw, not from the vendor's documentation. Review it.")
+                    }
+                }
+            }
+        }
+    }
+
+}
+
 /// Phase B item 10: everything technical, one page with sections.
 private struct AdvancedPage: View {
     // 0.5: Agents and Checks moved to their own pages (Settings → Agents, Rules).
@@ -741,16 +917,18 @@ private struct AdvancedPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             PageHeader(icon: "slider.horizontal.3", title: "Advanced",
-                       subtitle: "Company terms, permissions and the app.")
-            Picker("", selection: Binding(get: { ["company", "permissions", "app"].contains(section) ? section : "app" },
+                       subtitle: "Company terms, permissions, Internet exceptions and the app.")
+            Picker("", selection: Binding(get: { ["company", "permissions", "internet", "app"].contains(section) ? section : "app" },
                                           set: { section = $0 })) {
                 Text("Company data").tag("company")
                 Text("Permissions").tag("permissions")
+                Text("Internet").tag("internet")
                 Text("App").tag("app")
-            }.pickerStyle(.segmented).labelsHidden().frame(width: 360)
+            }.pickerStyle(.segmented).labelsHidden().frame(width: 440)
             switch section {
             case "company": CompanyPage()
             case "permissions": PermissionsPage()
+            case "internet": NeverBlockPage()
             default: GeneralPage(showAgents: false)
             }
         }
