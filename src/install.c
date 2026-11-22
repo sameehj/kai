@@ -363,7 +363,11 @@ static int install_claude(const char *exe) {
         cJSON_AddItemToObject(root, "hooks", hooks);
     }
     ensure_event(hooks, "UserPromptSubmit", NULL, exe);
-    ensure_event(hooks, "PreToolUse", "Bash|Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Glob|LS|WebFetch", exe);
+    /* Windows: Claude Code also has a PowerShell tool */
+    ensure_event(hooks, "PreToolUse",
+                 kai_plat_is_windows() ? "Bash|PowerShell|Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Glob|LS|WebFetch"
+                                       : "Bash|Read|Edit|MultiEdit|Write|NotebookEdit|Grep|Glob|LS|WebFetch",
+                 exe);
     ensure_event(hooks, "PreToolUse", "mcp__.*", exe);
     ensure_event(hooks, "PostToolUse", NULL, exe);
     ensure_event(hooks, "SessionStart", NULL, exe); /* Item 7: up-front protection/SSH hint */
