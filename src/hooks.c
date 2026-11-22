@@ -1718,7 +1718,8 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, why, sizeof rule);
                 say_protected(reason, sizeof reason, NULL, why, why, source, cwd);
-            } else if (windows_shell(tool) && kai_winshell_destructive(cmd, match, sizeof match) &&
+            } else if (kai_policy_destructive_on(p) && windows_shell(tool) &&
+                       kai_winshell_destructive(cmd, match, sizeof match) &&
                        !skip_exempt("destructive_command", &ex)) {
                 decision = KAI_ACT_BLOCK;
                 ask = can_ask;   /* Claude Code asks the user; Codex can't, so it denies */
@@ -2064,7 +2065,8 @@ static int hook_cursor(const char *json) {
         } else if (cmd && kai_command_touches_protected_as(p, "cursor", chk, cwd, why, sizeof why,
                                                            skip_exempt, &ex)) {
             deny = 1; say_protected(reason, sizeof reason, NULL, why, why, "cursor", cwd);
-        } else if (cmd && windows_shell(NULL) && kai_winshell_destructive(cmd, match, sizeof match) &&
+        } else if (cmd && kai_policy_destructive_on(p) && windows_shell(NULL) &&
+                   kai_winshell_destructive(cmd, match, sizeof match) &&
                    !skip_exempt("destructive_command", &ex)) {
             deny = 1;
             kai_strlcpy(why, "destructive_command", sizeof why);
@@ -2209,8 +2211,9 @@ int kai_cmd_hook(int argc, char **argv) {
     size_t len = 0;
     char *json = kai_read_stream(stdin, 8 * 1024 * 1024, &len);
     if (!json) { fprintf(stderr, "kai hook: input too large or unreadable\n"); return 1; }
-    /* Cursor on Windows starts the event with a UTF-8 byte-order mark (its
-     * PowerShell wrapper adds it); a JSON parser rejects that. */
+    /* A UTF-8 byte-order mark before the event (Cursor on Windows is reported
+     * to add one; any agent's shell could) is dropped for every agent: a JSON
+     * parser rejects it. */
     if ((unsigned char)json[0] == 0xEF && (unsigned char)json[1] == 0xBB && (unsigned char)json[2] == 0xBF)
         memmove(json, json + 3, strlen(json + 3) + 1);
     int rc;

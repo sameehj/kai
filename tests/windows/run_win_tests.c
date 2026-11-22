@@ -186,6 +186,26 @@ static void test_destructive(void) {
     check_destr("vssadmin list shadows", 0);
 }
 
+static void check_hookcmd(const char *exe, const char *shortp, const char *want) {
+    char got[1024], msg[2200];
+    kai_win_hook_command(got, sizeof got, exe, shortp, "codex");
+    snprintf(msg, sizeof msg, "hook command [%s | %s] = [%s] (got [%s])", exe, shortp ? shortp : "no 8.3 name", want, got);
+    CHECK(strcmp(got, want) == 0, msg);
+}
+
+static void test_hook_command(void) {
+    printf("Codex/Cursor hook command forms\n");
+    check_hookcmd("C:/Users/ann/AppData/Local/Programs/Kai/kai.exe", "C:/Users/ann/APPDAT~1/Local/Programs/Kai/kai.exe",
+                  "C:/Users/ann/AppData/Local/Programs/Kai/kai.exe hook codex");
+    check_hookcmd("C:/Users/First Last/Kai/kai.exe", "C:/Users/FIRSTL~1/Kai/kai.exe",
+                  "C:/Users/FIRSTL~1/Kai/kai.exe hook codex");
+    /* no 8.3 name on the volume (fsutil 8dot3name off, ReFS, Dev Drive): PowerShell-quoted */
+    check_hookcmd("C:/Users/First Last/Kai/kai.exe", NULL, "& 'C:/Users/First Last/Kai/kai.exe' hook codex");
+    check_hookcmd("D:/R&D O'Neil/kai.exe", NULL, "& 'D:/R&D O''Neil/kai.exe' hook codex");
+    /* an 8.3 name that still isn't one word in every shell is not used */
+    check_hookcmd("C:/A B/kai.exe", "C:/A B/kai.exe", "& 'C:/A B/kai.exe' hook codex");
+}
+
 int main(void) {
     char tmp[MAX_PATH], kh[MAX_PATH * 2];
     GetTempPathA(sizeof tmp, tmp);
@@ -203,6 +223,7 @@ int main(void) {
     test_protected_on_disk();
     test_translate();
     test_destructive();
+    test_hook_command();
     printf("\n%d checks, %d failures\n", checks, fails);
     char wh[MAX_PATH * 2], cmd[MAX_PATH * 3];
     kai_strlcpy(wh, home, sizeof wh);

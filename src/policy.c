@@ -657,6 +657,8 @@ static kai_policy *parse(const char *text, const char *source, char *err,
     for (char *line = strtok_r(copy, "\n", &save); line && !failed;
          line = strtok_r(NULL, "\n", &save)) {
         lineno++;
+        size_t ll = strlen(line);
+        if (ll && line[ll - 1] == '\r') line[ll - 1] = '\0';   /* CRLF (Notepad on Windows) */
         char *cur = line;
         char *d;
         if (!next_tok(&cur, &d)) continue;
@@ -690,6 +692,11 @@ static kai_policy *parse(const char *text, const char *source, char *err,
             char *rep;
             p->upload_action = p->upload_ask ? KAI_ACT_BLOCK : parse_action(v, &rep);
             if (!p->upload_ask) free(rep);
+        } else if (strcmp(d, "on_destructive_command") == 0) {
+            /* Windows shells only (Remove-Item -Recurse -Force, del /s /q, format...).
+             * Off by default so Windows and macOS behave the same. */
+            char *v; if (!next_tok(&cur, &v)) continue;
+            p->destructive_on = strcmp(v, "ask") == 0 || strcmp(v, "block") == 0;
         } else if (strcmp(d, "injection") == 0) {
             char *v; if (!next_tok(&cur, &v)) continue;
             p->injection_on = strcmp(v, "off") != 0;
@@ -1058,6 +1065,7 @@ kai_action kai_policy_upload_action(const kai_policy *p) { return p->upload_acti
 int kai_policy_file_secret_ask(const kai_policy *p) { return p ? p->file_secret_ask : 0; }
 int kai_policy_upload_ask(const kai_policy *p) { return p ? p->upload_ask : 0; }
 int kai_policy_fetch_block(const kai_policy *p) { return p ? p->fetch_block : 0; }
+int kai_policy_destructive_on(const kai_policy *p) { return p ? p->destructive_on : 0; }
 int kai_policy_audit_context(const kai_policy *p) { return p && p->audit_context; }
 int kai_policy_record_activity(const kai_policy *p) { return p && p->record_activity; }
 

@@ -105,13 +105,36 @@ check(stopped(hook("cursor", cursor_shell("type .env"), raw_prefix=b"\xef\xbb\xb
 rc, out = hook("cursor", cursor_shell("git status"), raw_prefix=b"\xef\xbb\xbf")
 check(rc == 0 and not stopped(out), "BOM + normal command allowed")
 
-print("destructive commands")
-for c in ("Remove-Item -Recurse -Force " + os.path.join(home, "scratch"), "rd /s /q scratch", "del /s /q *.log"):
+print("UTF-8 BOM on stdin, every agent")
+BOM = b"\xef\xbb\xbf"
+check(stopped(hook("claude", claude("Read", {"file_path": key}), raw_prefix=BOM)[1]), "claude: BOM + protected read")
+check(stopped(hook("codex", codex({"command": "type .env"}), raw_prefix=BOM)[1]), "codex: BOM + protected read")
+rc, out = hook("codex", codex({"command": "git status"}), raw_prefix=BOM)
+check(rc == 0 and not stopped(out), "codex: BOM + normal command allowed")
+
+DESTRUCTIVE = ("Remove-Item -Recurse -Force " + os.path.join(home, "scratch"), "rd /s /q scratch", "del /s /q *.log")
+print("destructive commands: off by default (as on macOS)")
+for c in DESTRUCTIVE:
+    for agent, ev in (("claude", claude("PowerShell", {"command": c})), ("codex", codex({"command": c})),
+                      ("cursor", cursor_shell(c))):
+        rc, out = hook(agent, ev)
+        check(rc == 0 and not stopped(out), agent + " default allows: " + c)
+
+print("destructive commands: on_destructive_command ask")
+pol = os.path.join(root, "policy-destructive")
+with open(pol, "w") as f:
+    f.write("on_destructive_command ask\n")
+env_default = env
+env = dict(env, KAI_POLICY=pol)
+for c in DESTRUCTIVE:
     check(stopped(hook("claude", claude("PowerShell", {"command": c}))[1]), "claude: " + c)
     check(stopped(hook("codex", codex({"command": c}))[1]), "codex: " + c)
     check(stopped(hook("cursor", cursor_shell(c))[1]), "cursor: " + c)
 out = hook("codex", codex({"command": "Remove-Item -Recurse -Force scratch"}))[1]
 check('"deny"' in out, "codex gets deny, not ask (Codex can't ask)")
+out = hook("claude", claude("PowerShell", {"command": "Remove-Item -Recurse -Force scratch"}))[1]
+check('"ask"' in out, "claude gets ask")
+env = env_default
 
 print("normal work goes through quietly")
 for c in ("git status", "npm test", "Get-ChildItem -Recurse src", "dotnet build", "python -m pytest",

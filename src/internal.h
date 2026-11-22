@@ -111,6 +111,9 @@ int kai_upload_match(const kai_policy *p, const char *cmd, char *why, size_t why
 void kai_audit_suppress(int on);
 int kai_policy_file_secret_ask(const kai_policy *p);
 int kai_policy_upload_ask(const kai_policy *p);
+int kai_policy_destructive_on(const kai_policy *p);
+/* install.c: the Codex/Cursor hook command on Windows (exposed for tests) */
+void kai_win_hook_command(char *cmd, size_t n, const char *exe, const char *shortp, const char *agent);
 
 /* Live health of an integration (src/health.c). ok=1: protection works now.
  * ok=0 with problem "": not installed. ok=0 with problem: installed, broken. */
@@ -158,6 +161,7 @@ struct kai_policy {
     int file_secret_ask; /* "ask": the agent asks the user (Claude Code), else block */
     int upload_ask;
     int fetch_block;     /* on_fetch block: the fetch tool needs a kai allow-fetch */
+    int destructive_on;  /* on_destructive_command ask|block: Windows shells only; off by default */
     int injection_on;
     size_t max_scan;
     /* network wall */

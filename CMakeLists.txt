@@ -112,7 +112,7 @@ set_target_properties(kai_unit_tests PROPERTIES OUTPUT_NAME run_tests)   # its a
 add_test(NAME unit COMMAND kai_unit_tests)
 
 if(WIN32)
-  add_executable(kai_win_tests tests/windows/run_win_tests.c)
+  add_executable(kai_win_tests tests/windows/run_win_tests.c src/install.c src/health.c)
   kai_target_setup(kai_win_tests)
   target_link_libraries(kai_win_tests PRIVATE libkai)
   target_sources(kai_win_tests PRIVATE compat/win/kai.rc)

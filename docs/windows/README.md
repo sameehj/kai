@@ -58,10 +58,13 @@ cmake --install build --config Release --prefix "$env:LOCALAPPDATA\Programs\Kai"
 removes them; `kai doctor` runs each installed hook the way its agent runs it
 and checks that it denies a test request.
 
-`kai install` refuses a `kai.exe` that sits inside a git checkout (it walks up
-the folders looking for `.git`). A machine with a repository at the root of a
-drive (`C:\.git`) trips this for every path on that drive; a dev build can
-override it with `KAI_TEST_ALLOW_DEV_HOOK=1`.
+`kai install` refuses a `kai.exe` that sits inside a git checkout: it walks
+up the folders looking for `.git`, stopping below your home folder and never
+looking at a drive root (`C:\.git`). A dev build can override it with
+`KAI_TEST_ALLOW_DEV_HOOK=1`.
+
+Kai reads its policy file with either line ending, so saving it from Notepad
+(CRLF) is fine.
 
 ### Where Kai keeps its settings
 
@@ -157,12 +160,14 @@ shell checks the same work as bash: `Get-Content`/`gc`/`cat`/`type`/`more`/
 `iwr ... | iex` run downloaded code. Kai's `reach` rules (`kai block <host>`)
 apply to their URLs.
 
-**Destructive commands (Windows only).** `Remove-Item -Recurse -Force` (and
-`ri`/`rm`/`del`/`rd` with those parameters), `del /s /q`, `rd /s` / `rmdir /s`,
-`format <drive>`, `diskpart`, `vssadmin`/`wmic` shadow-copy deletion,
-`cipher /w`, `Format-Volume`, `Clear-Disk` and `Remove-Partition` are stopped.
-Claude Code asks you; Codex and Cursor deny. Bash's `rm -rf` is not stopped,
-on Windows or macOS (no destructive-command rule there yet).
+**Destructive commands (Windows shells, off by default).** Kai can stop
+`Remove-Item -Recurse -Force` (and `ri`/`rm`/`del`/`rd` with those parameters),
+`del /s /q`, `rd /s` / `rmdir /s`, `format <drive>`, `diskpart`,
+`vssadmin`/`wmic` shadow-copy deletion, `cipher /w`, `Format-Volume`,
+`Clear-Disk` and `Remove-Partition`, but only when the policy says
+`on_destructive_command ask` (or `block`). It is off by default so Windows
+and macOS behave the same. When on, Claude Code asks you; Codex and Cursor
+deny. Bash's `rm -rf` is not stopped, on Windows or macOS.
 
 Which shell a command is for isn't always known (Codex and Cursor don't say),
 so on Windows every shell command is read as bash, PowerShell and cmd.exe, and

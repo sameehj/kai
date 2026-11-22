@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <time.h>
 
@@ -135,10 +136,20 @@ static int dev_path(const char *exe) {
     if (strstr(exe, "/build/") || strstr(exe, "/DerivedData/") || strstr(exe, "/.build/") ||
         strstr(exe, "/.claude/worktrees/"))
         return 1;
-    char dir[PATH_MAX];
+    /* Look for .git in the folders above the program, up to but not including
+     * the user's home folder (a dotfiles repo in ~ isn't a build folder), and
+     * never at a drive or filesystem root (C:\.git, /.git). */
+    char dir[PATH_MAX], home[PATH_MAX];
     kai_strlcpy(dir, exe, sizeof dir);
+    const char *h = kai_plat_home();
+    kai_strlcpy(home, h ? h : "", sizeof home);
+    size_t hl = strlen(home);
+    while (hl > 1 && home[hl - 1] == '/') home[--hl] = '\0';
     for (char *s = strrchr(dir, '/'); s && s != dir; s = strrchr(dir, '/')) {
         *s = '\0';
+        size_t dl = strlen(dir);
+        if (kai_plat_root_len(dir) >= dl || (dl == 2 && dir[1] == ':')) break;   /* a root */
+        if (hl && strcasecmp(dir, home) == 0) break;
         char g[PATH_MAX + 8];
         snprintf(g, sizeof g, "%s/.git", dir);
         struct stat st;
@@ -172,7 +183,7 @@ static const char *hook_target(void) {
                         "again.\n", exe);
         return NULL;
     }
-    if (kai_plat_is_windows()) {   /* quoted per agent and shell by win_hook_command */
+    if (kai_plat_is_windows()) {   /* quoted per agent and shell by kai_win_hook_command */
         kai_strlcpy(out, t, sizeof out);
         return out;
     }
@@ -202,10 +213,11 @@ static int bare_safe(const char *p) {
     return 1;
 }
 
-static void win_hook_command(char *cmd, size_t n, const char *exe, const char *agent) {
-    char shortp[PATH_MAX];
+/* shortp: the program's 8.3 name, or NULL when the volume has none (8.3
+ * names can be off per volume, and are on new ReFS/Dev Drive volumes). */
+void kai_win_hook_command(char *cmd, size_t n, const char *exe, const char *shortp, const char *agent) {
     if (bare_safe(exe)) { snprintf(cmd, n, "%s hook %s", exe, agent); return; }
-    if (kai_plat_short_path(exe, shortp, sizeof shortp) == 0 && bare_safe(shortp)) {
+    if (shortp && bare_safe(shortp)) {
         snprintf(cmd, n, "%s hook %s", shortp, agent);
         return;
     }
@@ -232,8 +244,10 @@ static void win_hook_command(char *cmd, size_t n, const char *exe, const char *a
  * quoted path already relies on that). The command still starts with
  * "<program> hook <agent>", which kai doctor and the app parse. */
 static void hook_command(char *cmd, size_t n, const char *exe, const char *agent) {
-    if (kai_plat_is_windows()) {   /* no sh wrapper: see win_hook_command */
-        win_hook_command(cmd, n, exe, agent);
+    if (kai_plat_is_windows()) {   /* no sh wrapper: see kai_win_hook_command */
+        char shortp[PATH_MAX];
+        int have = kai_plat_short_path(exe, shortp, sizeof shortp) == 0;
+        kai_win_hook_command(cmd, n, exe, have ? shortp : NULL, agent);
         return;
     }
     const char *say =
