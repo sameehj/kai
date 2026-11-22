@@ -8,12 +8,12 @@
  */
 #include "cJSON.h"
 #include "internal.h"
+#include "platform.h"
 
 #include <errno.h>
 #include <limits.h>
 #include <pwd.h>
 #include <fcntl.h>
-#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -104,65 +104,11 @@ int kai_install_trusted(char *bad, size_t n) {
     return kai_path_root_only(prog, bad, n);
 }
 
-/* Run cmd with /bin/sh, input on stdin; collect stdout. Returns the exit
- * status (or -1 on timeout / failure to run). */
+/* Run cmd (POSIX: /bin/sh -c; Windows: as a command line), input on stdin;
+ * collect stdout. Returns the exit status (or -1 on timeout / failure to run). */
 static int run_probe(const char *cmd, const char *input, size_t inlen, char *out, size_t outlen,
                      size_t *outgot) {
-    if (outlen) out[0] = '\0';
-    if (outgot) *outgot = 0;
-    int in[2], o[2];
-    if (pipe(in) != 0) return -1;
-    if (pipe(o) != 0) { close(in[0]); close(in[1]); return -1; }
-    pid_t pid = fork();
-    if (pid < 0) { close(in[0]); close(in[1]); close(o[0]); close(o[1]); return -1; }
-    if (pid == 0) {
-        dup2(in[0], 0);
-        dup2(o[1], 1);
-        int devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0) dup2(devnull, 2);
-        close(in[0]); close(in[1]); close(o[0]); close(o[1]);
-        execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
-        _exit(127);
-    }
-    close(in[0]);
-    close(o[1]);
-    signal(SIGPIPE, SIG_IGN);
-    ssize_t w = write(in[1], input, inlen);
-    (void)w;
-    close(in[1]);
-    size_t got = 0;
-    struct timespec t0;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
-    for (;;) {
-        struct timespec t;
-        clock_gettime(CLOCK_MONOTONIC, &t);
-        long left = PROBE_TIMEOUT_MS - ((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000);
-        if (left <= 0) break;
-        struct pollfd pf = {o[0], POLLIN, 0};
-        int r = poll(&pf, 1, (int)left);
-        if (r < 0 && errno == EINTR) continue;
-        if (r <= 0) break;
-        char buf[1024];
-        ssize_t n = read(o[0], buf, sizeof buf);
-        if (n <= 0) break;
-        if (got + 1 < outlen) {
-            size_t take = (size_t)n < outlen - 1 - got ? (size_t)n : outlen - 1 - got;
-            memcpy(out + got, buf, take);
-            got += take;
-            out[got] = '\0';
-        }
-    }
-    close(o[0]);
-    if (outgot) *outgot = got;
-    int status = 0;
-    for (int i = 0; i < 50; i++) { /* give it up to 0.5 s to exit after closing stdout */
-        pid_t r = waitpid(pid, &status, WNOHANG);
-        if (r == pid) return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-        usleep(10000);
-    }
-    kill(pid, SIGKILL);
-    waitpid(pid, &status, 0);
-    return -1;
+    return kai_plat_run(cmd, input, inlen, out, outlen, outgot, PROBE_TIMEOUT_MS);
 }
 
 /* The program a hook command runs: the text before " hook ". */

@@ -133,10 +133,10 @@ static void ago_str(long long t, char *out, size_t n) {
 
 /* A.3: per agent, each item measured on its own. Returns 2 checking,
  * 1 partly, 0 not checking, -1 not installed. */
-static int agent_report(agent_state *a) {
+static int agent_report(agent_state *a, sb_t *o) {
     agent_measure(a);
     if (!a->installed) {
-        printf("  %-12s %s\n", a->name, a->detected ? "Not checking: Kai isn't installed for it (kai install)" : "Not detected");
+        sb_addf(o, "  %-12s %s\n", a->name, a->detected ? "Not checking: Kai isn't installed for it (kai install)" : "Not detected");
         return -1;
     }
     int disabled = hooks_disabled(a), current = configured_current(a);
@@ -146,16 +146,16 @@ static int agent_report(agent_state *a) {
     long long st = kai_selftest_last(a->key);
     int word = (!a->ok || disabled || trusted == 0) ? 0 : !current ? 1 : 2;
     const char *w = word == 2 ? "Checking" : word == 1 ? "Partly checking" : "Not checking";
-    printf("  %-12s %s\n", a->name, w);
+    sb_addf(o, "  %-12s %s\n", a->name, w);
     char sts[48] = "now";
     if (st) ago_str(st, sts, sizeof sts);
-    printf("    Installed: yes · Configured: %s · Trusted: %s · Self-test: %s\n",
+    sb_addf(o, "    Installed: yes · Configured: %s · Trusted: %s · Self-test: %s\n",
            disabled ? "hooks are switched off in its settings (disableAllHooks)"
                     : current ? "yes" : "from an older Kai (kai install " "again)",
            trusted == 2 ? "not needed" : trusted == 1 ? "yes (Codex has run Kai's hook)"
                         : "unknown: Codex runs hooks only after you trust them (in Codex: /hooks)",
            a->ok ? (st ? sts : "passed now") : (a->problem[0] ? a->problem : "failed"));
-    if (a->ok && st) printf("      (self-test passed %s; checked again now: passed)\n", sts);
+    if (a->ok && st) sb_addf(o, "      (self-test passed %s; checked again now: passed)\n", sts);
     long long when = 0;
     char ver[200], cfg[65];
     if (kai_live_info(a->key, &when, ver, sizeof ver, cfg, sizeof cfg)) {
@@ -165,11 +165,11 @@ static int agent_report(agent_state *a) {
         ago_str(when, ag, sizeof ag);
         const char *since = strcmp(nowver, ver) ? "; the agent was updated since"
                           : strcmp(nowcfg, cfg) ? "; its hook settings changed since" : "; nothing changed since";
-        printf("    Live verification: verified %s (%s)%s\n", ag, ver[0] ? ver : "version unknown", since);
+        sb_addf(o, "    Live verification: verified %s (%s)%s\n", ag, ver[0] ? ver : "version unknown", since);
     } else {
-        printf("    Live verification: never. Run kai demo --live (uses the agent and its model quota)\n");
+        sb_addf(o, "    Live verification: never. Run kai demo --live (uses the agent and its model quota)\n");
     }
-    printf("    Checks: %s\n", agent_checks(a->key));
+    sb_addf(o, "    Checks: %s\n", agent_checks(a->key));
     return word;
 }
 
@@ -183,17 +183,15 @@ int kai_cmd_status_text(void) {
     };
     int words[3], installed = 0, checking = 0, any_on = 0;
     /* measure first, headline after */
-    char *buf = NULL; size_t blen = 0;
-    FILE *mem = open_memstream(&buf, &blen);
-    FILE *saved = stdout;
-    if (mem) stdout = mem;
+    sb_t rep;
+    sb_init(&rep);
     for (int i = 0; i < 3; i++) {
-        words[i] = agent_report(&agents[i]);
+        words[i] = agent_report(&agents[i], &rep);
         if (words[i] >= 0) installed++;
         if (words[i] == 2) checking++;
         if (words[i] >= 1) any_on++;
     }
-    if (mem) { fflush(mem); stdout = saved; fclose(mem); }
+    char *buf = sb_take(&rep);
     free(codex);
     const char *head = installed && checking == installed ? "Checking"
                      : any_on ? "Partly checking" : "Not checking";
