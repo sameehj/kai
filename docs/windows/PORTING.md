@@ -101,9 +101,37 @@ as the existing code already does with `realpath` (`resolved_variant`).
 
 ## 4. Settings location
 
-See `docs/windows/README.md`. Phase 1 keeps everything in `%USERPROFILE%\.kai`
-(policy, keys, grants, logs): one folder, matching macOS, so the existing
-"Kai's own settings" protection covers all of it as one tree.
+The brief recommended `%USERPROFILE%\.kai` for policy and `%LOCALAPPDATA%\Kai`
+for state and logs. Phase 1 keeps **everything** in `%USERPROFILE%\.kai`
+(policy, approval key, grants, audit log, activity), as on macOS, because:
+
+- every part of the engine finds its files through `kai_home()`; splitting
+  them is a change on every platform, not a Windows one;
+- the always-on "Kai's own settings" rule protects `kai_home()` as one tree
+  (reads and writes). A second folder would need its own rule, and the audit
+  log and grants are as sensitive as the policy.
+
+The program goes to `%LOCALAPPDATA%\Programs\Kai` (`cmake --install`), which
+the `kai_program` rule covers (run yes, delete or change no). Open question for
+the owner: move logs to `%LOCALAPPDATA%\Kai` later, with its own protection?
+
+## 6. What changed outside the Windows files
+
+Kept small; macOS and Linux behave as before:
+
+- `util.c` `kai_normalize_path` / `kai_expand_home` and `proc.c` (Linux
+  `/proc`) call the platform layer; the Linux code moved to `platform_posix.c`.
+- `health.c` (hook probe), `demo.c` (`run_capture`), `manage.c` (`open`),
+  `agent_rules.c` / `approval_store.c` (stat times): the same code, moved into
+  `platform_posix.c` behind `platform.h`.
+- `status.c` builds the agent report in a buffer instead of assigning to
+  `stdout` (not possible with MSVC).
+- `policy.c`: `protect` / `allow` accept a quoted path with spaces; the
+  built-in policy gets the platform's extra lines (none on POSIX).
+- `hooks.c`, `install.c`, `scan.c`, `status.c`: `kai_plat_is_windows()`
+  branches where the behaviour is Windows-only (the Windows command reader,
+  hook entry forms, the PowerShell tool matcher, wording about the app).
+- Fixed on every platform: a heap use-after-free in `kai_cmd_status_json`.
 
 ## 5. Windows shells
 

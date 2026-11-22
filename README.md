@@ -84,7 +84,7 @@ How this release was verified: see the [release notes](https://github.com/sameeh
 
 ## Install
 
-**macOS 13 or later; Linux and Windows aren't supported.** Works with Claude Code, Codex and Cursor.
+**macOS 13 or later; Linux isn't supported.** Works with Claude Code, Codex and Cursor. Windows 10/11 has a CLI-only, hooks-only developer preview you build yourself: [docs/windows/README.md](docs/windows/README.md).
 
 1. **Download** `Kai-Preview-<version>.pkg` from the newest release on the [Releases page](https://github.com/sameehj/kai/releases), and double-click it. It installs the Kai app and the `kai` command.
 2. **Open Kai** (Applications → Kai). It lives in the menu bar. The agent checks work without anything else. Optional: in Settings, switch on **Internet (preview): Watching — nothing is blocked**.
