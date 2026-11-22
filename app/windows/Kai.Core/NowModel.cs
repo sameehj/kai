@@ -326,6 +326,12 @@ public sealed record TimelineGroup
     public double Start { get; set; }
     public double? End { get; init; }
     public List<TimelineEvent> Events { get; init; } = new();
+    /// The session's totals from its activity records and Kai's stops: the
+    /// same numbers its Now card shows (Events holds only the newest).
+    public SessionActivity.Counts Totals { get; set; } = new();
+    public int Stops { get; set; }
+    public int? Connections { get; set; }
+    public List<CardCount> Counts => Counting.Of(Agent, Totals, Stops, Connections);
 
     public string Header
     {
@@ -434,6 +440,7 @@ public static class Timeline
                 g.Events.Add(t);
             }
             g.Start = Math.Min(g.Start, r.First);
+            g.Totals += r.Count;
         }
         foreach (var e in auditStops)
         {
@@ -461,6 +468,15 @@ public static class Timeline
                 var evs = seen.Select(SeenEvent).ToList();
                 o["seen"] = new TimelineGroup { Id = "seen", Project = "Seen by Kai Watch", Start = evs.Min(x => x.Ts), Events = evs };
             }
+        }
+        // Stops: the same rule as the card (NowBuilder.StopsFor), else the records' own count.
+        var connections = internetWatching ? ConnectionsToday(events, now) : null;
+        foreach (var g in o.Values)
+        {
+            var s = g.SessionId is null ? null : sessions.FirstOrDefault(x => x.Id == g.SessionId);
+            int recStops = records.Where(r => SessionFor(r, sessions)?.Id is { } id && id == g.SessionId).Sum(r => r.Stops);
+            g.Stops = s is null ? g.Events.Count(e => e.Kind == TimelineKind.Stop) : Math.Max(NowBuilder.StopsFor(s, events).Count, recStops);
+            if (s is not null && connections is not null && connections.TryGetValue(s.Agent, out var n)) g.Connections = n;
         }
         foreach (var g in o.Values) g.Events.Sort((a, b) => b.Ts.CompareTo(a.Ts));
         return o.Values.OrderByDescending(g => g.Events.FirstOrDefault()?.Ts ?? g.Start).ToList();

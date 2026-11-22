@@ -126,6 +126,15 @@ if(WIN32)
   target_link_options(kai_watch_tests PRIVATE /MANIFEST:NO)
   add_test(NAME watch COMMAND kai_watch_tests)
 
+  # kaicore.dll: libkai for the Windows app, which calls the same functions
+  # in-process as the macOS app (pause, daily counts), as Kai.app links libkai.
+  add_library(kaicore SHARED ${KAI_CORE})
+  kai_target_setup(kaicore)
+  set_target_properties(kaicore PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+  target_link_libraries(kaicore PRIVATE ws2_32 advapi32 bcrypt shell32 ole32)
+  target_sources(kaicore PRIVATE compat/win/kai.rc)
+  target_link_options(kaicore PRIVATE /MANIFEST:NO)
+
   # Kai Watch: the LocalSystem service (ETW). Small on purpose: libkai's core
   # plus the watch logic, no UI, no model.
   add_executable(kaisvc service/win/kaisvc.c service/win/etw.c src/watch.c)

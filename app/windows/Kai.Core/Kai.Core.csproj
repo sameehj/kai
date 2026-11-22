@@ -10,6 +10,9 @@
     <UseWindowsForms>false</UseWindowsForms>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="Assets\*.png" LogicalName="Kai.Core.Assets.%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
     <InternalsVisibleTo Include="Kai.Tests" />
   </ItemGroup>
 </Project>
