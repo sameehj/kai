@@ -753,19 +753,138 @@ static void push_arg(kai_proc *pr, const char *s) {
     pr->argv[pr->argc++] = a;
 }
 
+/* Process ids and parents from one Toolhelp snapshot, reused for 500 ms: a
+ * session scan reads every process, and one snapshot per process was slow. */
+static struct { int pid, ppid; } *g_snap;
+static int g_nsnap;
+static ULONGLONG g_snap_at;
+static SRWLOCK g_snap_lock = SRWLOCK_INIT;
+
+static void snap_refresh(void) {
+    if (g_snap && GetTickCount64() - g_snap_at < 500) return;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return;
+    int cap = 512, n = 0;
+    void *v = malloc((size_t)cap * sizeof *g_snap);
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof pe;
+    for (BOOL ok = Process32FirstW(snap, &pe); ok && v; ok = Process32NextW(snap, &pe)) {
+        if (n == cap) {
+            void *nv = realloc(v, (size_t)(cap *= 2) * sizeof *g_snap);
+            if (!nv) break;
+            v = nv;
+        }
+        ((int *)v)[2 * n] = (int)pe.th32ProcessID;
+        ((int *)v)[2 * n + 1] = (int)pe.th32ParentProcessID;
+        n++;
+    }
+    CloseHandle(snap);
+    if (!v) return;
+    free(g_snap);
+    g_snap = v;
+    g_nsnap = n;
+    g_snap_at = GetTickCount64();
+}
+
+static int snap_parent(int pid, int *ppid) {
+    AcquireSRWLockExclusive(&g_snap_lock);
+    snap_refresh();
+    int found = 0;
+    for (int i = 0; i < g_nsnap; i++)
+        if (g_snap[i].pid == pid) { *ppid = g_snap[i].ppid; found = 1; break; }
+    ReleaseSRWLockExclusive(&g_snap_lock);
+    return found;
+}
+
+int kai_plat_list_pids(int **pids) {
+    *pids = NULL;
+    AcquireSRWLockExclusive(&g_snap_lock);
+    g_snap_at = 0;   /* a fresh list */
+    snap_refresh();
+    int n = g_nsnap;
+    int *v = n > 0 ? malloc((size_t)n * sizeof *v) : NULL;
+    for (int i = 0; v && i < n; i++) v[i] = g_snap[i].pid;
+    ReleaseSRWLockExclusive(&g_snap_lock);
+    *pids = v;
+    return v ? n : 0;
+}
+
+long long kai_plat_proc_started(int pid) {
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    if (!h) return 0;
+    FILETIME c, x, k, u;
+    long long t = 0;
+    if (GetProcessTimes(h, &c, &x, &k, &u)) {
+        ULONGLONG ft = ((ULONGLONG)c.dwHighDateTime << 32) | c.dwLowDateTime;
+        t = (long long)((ft - 116444736000000000ULL) / 10000000ULL);
+    }
+    CloseHandle(h);
+    return t;
+}
+
+/* The working folder from the process' PEB (x64 layout: PEB.ProcessParameters
+ * at 0x20, RTL_USER_PROCESS_PARAMETERS.CurrentDirectory.DosPath at 0x38).
+ * Processes of the same user only; a 32-bit process is skipped. */
+int kai_plat_proc_cwd(int pid, char *out, size_t n) {
+    if (n) out[0] = '\0';
+    typedef LONG(NTAPI * qip_fn)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+    static qip_fn q;
+    if (!q) {
+        HMODULE nt = GetModuleHandleW(L"ntdll.dll");
+        if (nt) q = (qip_fn)(void (*)(void))GetProcAddress(nt, "NtQueryInformationProcess");
+        if (!q) return -1;
+    }
+    HANDLE h = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, (DWORD)pid);
+    if (!h) return -1;
+    int rc = -1;
+    BOOL wow = FALSE;
+    struct { PVOID r1; PVOID peb; PVOID r2[2]; ULONG_PTR pid, ppid; } pbi;
+    PVOID params = NULL;
+    struct { USHORT len, max; ULONG pad; PVOID buf; } us;
+    if (IsWow64Process(h, &wow) && !wow && q(h, 0, &pbi, sizeof pbi, NULL) >= 0 && pbi.peb &&
+        ReadProcessMemory(h, (BYTE *)pbi.peb + 0x20, &params, sizeof params, NULL) && params &&
+        ReadProcessMemory(h, (BYTE *)params + 0x38, &us, sizeof us, NULL) && us.len && us.len < 2048) {
+        wchar_t buf[1025];
+        if (ReadProcessMemory(h, us.buf, buf, us.len, NULL)) {
+            buf[us.len / sizeof(wchar_t)] = 0;
+            char *s = narrow(buf);
+            if (s) {
+                slashes(s);
+                size_t l = strlen(s);
+                if (l > 3 && s[l - 1] == '/') s[l - 1] = '\0';   /* "C:/proj/" -> "C:/proj"; "C:/" stays */
+                kai_strlcpy(out, s, n);
+                free(s);
+                rc = 0;
+            }
+        }
+    }
+    CloseHandle(h);
+    return rc;
+}
+
+int kai_plat_terminal_host(const char *exe, char *out, size_t n) {
+    static const struct { const char *base, *name; int rank; } HOSTS[] = {   /* 2 a terminal app, 1 a shell */
+        {"WindowsTerminal.exe", "Windows Terminal", 2}, {"OpenConsole.exe", "Windows Terminal", 2},
+        {"Code.exe", "VS Code", 2}, {"Cursor.exe", "Cursor", 2}, {"wezterm-gui.exe", "WezTerm", 2},
+        {"alacritty.exe", "Alacritty", 2}, {"Hyper.exe", "Hyper", 2}, {"Tabby.exe", "Tabby", 2},
+        {"mintty.exe", "Git Bash", 2},
+        {"powershell.exe", "PowerShell", 1}, {"pwsh.exe", "PowerShell", 1}, {"cmd.exe", "Command Prompt", 1},
+        {"bash.exe", "Git Bash", 1}, {"nu.exe", "Nushell", 1},
+    };
+    if (n) out[0] = '\0';
+    if (!exe) return 0;
+    if (strstr(exe, "/WindowsApps/Claude_")) { kai_strlcpy(out, "Claude", n); return 2; }   /* the desktop app */
+    const char *b = strrchr(exe, '/');
+    b = b ? b + 1 : exe;
+    for (size_t i = 0; i < sizeof HOSTS / sizeof HOSTS[0]; i++)
+        if (!_stricmp(b, HOSTS[i].base)) { kai_strlcpy(out, HOSTS[i].name, n); return HOSTS[i].rank; }
+    return 0;
+}
+
 int kai_plat_proc_read(int pid, kai_proc *out) {
     memset(out, 0, sizeof *out);
     out->pid = pid;
-    int found = 0;
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snap != INVALID_HANDLE_VALUE) {
-        PROCESSENTRY32W pe;
-        pe.dwSize = sizeof pe;
-        for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe))
-            if ((int)pe.th32ProcessID == pid) { out->ppid = (int)pe.th32ParentProcessID; found = 1; break; }
-        CloseHandle(snap);
-    }
-    if (!found) return -1;
+    if (!snap_parent(pid, &out->ppid)) return -1;
     kai_plat_pid_exe(pid, out->exe, sizeof out->exe);
     HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
     if (h) {

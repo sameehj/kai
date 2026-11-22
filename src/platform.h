@@ -105,6 +105,16 @@ int kai_plat_exe_path(char *buf, size_t n);
  * POSIX: NULL (the macOS app-group container, in session.c). */
 const char *kai_plat_network_heartbeat_path(void);
 
+/* Session discovery without a Files wall (proc.c, non-Apple). All processes'
+ * ids (caller frees; Linux: none yet, so no sessions, as before); when a
+ * process started (Unix seconds, 0 unknown); its working folder ('/'-
+ * separated, 0 on success); and, for a program that is a terminal or a shell,
+ * the host app's name ("Windows Terminal": 2, a terminal app; "PowerShell": 1,\n * a shell; 0: neither). */
+int kai_plat_list_pids(int **pids);
+long long kai_plat_proc_started(int pid);
+int kai_plat_proc_cwd(int pid, char *out, size_t n);
+int kai_plat_terminal_host(const char *exe, char *out, size_t n);
+
 /* Could only Kai's privileged side have written this heartbeat? POSIX: owned
  * by `owner` and not group- or world-writable. Windows: owned by SYSTEM or
  * Administrators and writable by nobody else (the user can't forge it). */

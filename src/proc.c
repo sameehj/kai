@@ -23,6 +23,7 @@
 #include <time.h>
 #else
 #include <stdio.h>
+#include <time.h>
 #include <unistd.h>
 #endif
 
@@ -473,7 +474,98 @@ int kai_sessions_scan(const kai_policy *p, kai_session **out, int *n) {
 }
 
 #else
+/* The same scan from the platform layer's process list (Windows; Linux lists
+ * nothing yet, so it finds no sessions, as before). One pass over all
+ * processes, then ancestry walks in memory. There is no controlling terminal
+ * on Windows: a process run from a terminal or a shell (Windows Terminal,
+ * PowerShell, an editor's terminal) counts as interactive, and that program
+ * is its host app. */
+typedef struct {
+    int pid, parent, is_agent;
+    char name[64], exe[1024], cmd[256];
+} scan_ent;
+
 int kai_sessions_scan(const kai_policy *p, kai_session **out, int *n) {
-    (void)p; *out = NULL; *n = 0; return 0;
+    *out = NULL; *n = 0;
+    if (!p) return 0;
+    int *pids = NULL;
+    int np = kai_plat_list_pids(&pids);
+    if (np <= 0) { free(pids); return 0; }
+    scan_ent *tab = calloc((size_t)np, sizeof *tab);
+    if (!tab) { free(pids); return 0; }
+    int nt = 0;
+    for (int i = 0; i < np; i++) {
+        kai_proc pr;
+        if (pids[i] <= 4 || kai_proc_read_fast(pids[i], &pr) != 0) continue;
+        scan_ent *t = &tab[nt];
+        t->pid = pids[i];
+        t->parent = pr.ppid;
+        kai_strlcpy(t->exe, pr.exe, sizeof t->exe);
+        size_t off = 0;
+        for (int a = 0; a < pr.argc && off < sizeof t->cmd - 1; a++) {
+            int w = snprintf(t->cmd + off, sizeof t->cmd - off, "%s%s", a ? " " : "", pr.argv[a] ? pr.argv[a] : "");
+            if (w < 0) break;
+            off += (size_t)w;
+        }
+        t->is_agent = kai_agent_match(p, pr.exe, (const char *const *)pr.argv, pr.argc, "", t->name, sizeof t->name);
+        kai_proc_free(&pr);
+        nt++;
+    }
+    free(pids);
+    for (int i = 0; i < nt; i++) {
+        int idx = -1;
+        for (int j = 0; j < nt; j++) if (tab[j].pid == tab[i].parent && j != i) { idx = j; break; }
+        tab[i].parent = idx;
+    }
+    long long now = (long long)time(NULL);
+    kai_session *arr = NULL;
+    int count = 0, cap = 0;
+    for (int i = 0; i < nt; i++) {
+        if (!tab[i].is_agent) continue;
+        int nested = 0;
+        for (int a = tab[i].parent, d = 0; a >= 0 && d < 64; a = tab[a].parent, d++)
+            if (tab[a].is_agent && !strcmp(tab[a].name, tab[i].name)) { nested = 1; break; }
+        if (nested) continue;   /* its helpers and child copies belong to the session above */
+        char host[64] = "";   /* the terminal app above it, else the nearest shell */
+        int host_rank = 0;
+        for (int a = tab[i].parent, d = 0; a >= 0 && d < 40 && host_rank < 2; a = tab[a].parent, d++) {
+            char h[64];
+            int r = kai_plat_terminal_host(tab[a].exe, h, sizeof h);
+            if (r > host_rank) { host_rank = r; kai_strlcpy(host, h, sizeof host); }
+        }
+        long long started = kai_plat_proc_started(tab[i].pid);
+        long long age = started > 0 ? now - started : 0;
+        int is_ide = kai_agent_product_kind(tab[i].name) == KAI_AGENT_IDE;
+        kai_session s;
+        memset(&s, 0, sizeof s);
+        snprintf(s.id, sizeof s.id, "scan-%d", tab[i].pid);
+        kai_strlcpy(s.agent, tab[i].name, sizeof s.agent);
+        s.root_pid = tab[i].pid;
+        s.source = KAI_SESS_SCAN;
+        s.started_utc = started;
+        s.kind = is_ide ? KAI_KIND_SESSION : kai_classify_session(tab[i].cmd, host[0] != '\0', tab[i].parent < 0, age, 0);
+        if (is_ide) {
+            kai_strlcpy(s.host_app, tab[i].name, sizeof s.host_app);
+            if (s.host_app[0] >= 'a' && s.host_app[0] <= 'z') s.host_app[0] -= 32;   /* "cursor" -> "Cursor" */
+        } else {
+            kai_strlcpy(s.host_app, host, sizeof s.host_app);
+        }
+        kai_plat_proc_cwd(tab[i].pid, s.project, sizeof s.project);
+        for (int j = 0; j < nt; j++)
+            for (int a = tab[j].parent, d = 0; j != i && a >= 0 && d < 64; a = tab[a].parent, d++)
+                if (a == i) { s.child_count++; break; }
+        if (count == cap) {
+            int nc = cap ? cap * 2 : 8;
+            kai_session *na = realloc(arr, (size_t)nc * sizeof *na);
+            if (!na) break;
+            arr = na;
+            cap = nc;
+        }
+        arr[count++] = s;
+    }
+    free(tab);
+    *out = arr;
+    *n = count;
+    return count;
 }
 #endif

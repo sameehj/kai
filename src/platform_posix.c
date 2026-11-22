@@ -304,6 +304,12 @@ const char *kai_plat_program_dir(void) { return NULL; }
 
 const char *kai_plat_network_heartbeat_path(void) { return NULL; }
 
+/* Session discovery outside macOS (proc.c): Linux lists no processes yet. */
+int kai_plat_list_pids(int **pids) { *pids = NULL; return 0; }
+long long kai_plat_proc_started(int pid) { (void)pid; return 0; }
+int kai_plat_proc_cwd(int pid, char *out, size_t n) { (void)pid; if (n) out[0] = '\0'; return -1; }
+int kai_plat_terminal_host(const char *exe, char *out, size_t n) { (void)exe; if (n) out[0] = '\0'; return 0; }
+
 int kai_plat_heartbeat_trusted(const char *path, const struct stat *st, unsigned owner) {
     (void)path;
     return st->st_uid == (uid_t)owner && !(st->st_mode & (S_IWGRP | S_IWOTH));

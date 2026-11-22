@@ -121,6 +121,7 @@ static const struct {
     /* Windows install locations (inert elsewhere). Matching ignores case on
      * Windows; the Watch service also checks each one's Authenticode signer. */
     {"claude", "exe", "*/.local/bin/claude.exe"},
+    {"claude", "exe", "*/claude-code/*/claude.exe"},   /* Claude Code run by the Claude desktop app */
     {"codex", "exe", "*/Programs/OpenAI/Codex/bin/codex.exe"},
     {"codex", "exe", "*/@openai/codex/*"},
     {"codex", "exe", "*/WindowsApps/OpenAI.Codex_*"},
