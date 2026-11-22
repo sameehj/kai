@@ -21,6 +21,7 @@ typedef struct {
     uint64_t start, stop, root_start;   /* stop 0 = alive */
     unsigned gen;                       /* last snapshot that saw it */
     int used, next;                     /* next: same-bucket chain */
+    int orphan;                         /* parent not known when it started */
     char agent[32], identity[96], image[64];
 } kw_proc;
 
@@ -29,6 +30,20 @@ typedef struct {
     uint32_t pid, root_pid;
     uint64_t pstart, root_start, ts;
 } kw_dns;
+
+/* An event from a PID the tree doesn't know yet: ETW flushes each CPU's
+ * buffer separately, so a short-lived child's connect can arrive before its
+ * own start event. It waits here (at most KW_PENDING_KEEP) for that start. */
+#define KW_PENDING 256
+#define KW_PENDING_KEEP (5 * KAI_TICKS_PER_SEC)
+typedef struct {
+    int used, is_file;
+    uint32_t pid;
+    uint64_t ts;
+    char proto[4], ip[46];
+    int port;
+    char *path;
+} kw_pending;
 
 struct kai_watch {
     kai_watch_ops ops;
@@ -39,9 +54,14 @@ struct kai_watch {
     int dns_head, dns_count;
     unsigned gen;
     kai_watch_stats st;
+    kw_pending pend[KW_PENDING];
+    int npend;
+    uint64_t latest;   /* newest event time seen */
 };
 
 static unsigned hash_pid(uint32_t pid) { return (pid >> 2) & (KW_BUCKETS - 1); }
+static void flush_pending(kai_watch *w);
+static void note_time(kai_watch *w, uint64_t ts);
 
 static void copy(char *dst, size_t n, const char *src) {
     if (!n) return;
@@ -64,6 +84,7 @@ kai_watch *kai_watch_new(const kai_watch_ops *ops) {
 
 void kai_watch_free(kai_watch *w) {
     if (!w) return;
+    for (int i = 0; i < KW_PENDING; i++) free(w->pend[i].path);
     free(w->p);
     free(w->dns);
     free(w);
@@ -125,6 +146,33 @@ static const char *base_name(const char *path) {
     return b;
 }
 
+static void inherit(kw_proc *c, const kw_proc *par) {
+    copy(c->agent, sizeof c->agent, par->agent);
+    copy(c->identity, sizeof c->identity, par->identity);
+    c->root_pid = par->root_pid;
+    c->root_start = par->root_start;
+}
+
+/* ETW delivers each CPU's buffer on its own, so a child's start event can
+ * arrive before its parent's. When a tagged process turns up, children that
+ * started after it with its PID as parent and no parent known yet are its
+ * own: they take its tag, and so do theirs. */
+static void adopt_orphans(kai_watch *w, const kw_proc *par, int depth) {
+    if (depth > 32) return;
+    for (int i = 0; i < w->n; i++) {
+        kw_proc *c = &w->p[i];
+        /* the first level waited for this parent (orphans); below it, children
+         * found their parent but took no tag from it (it had none yet) */
+        int waiting = c->orphan || (depth > 0 && !c->agent[0]);
+        if (!c->used || !waiting || c->ppid != par->pid || c->start < par->start) continue;
+        if (par->stop && c->start > par->stop + KW_EXIT_SLACK) continue;
+        c->orphan = 0;
+        if (c->agent[0] && c->root_pid == c->pid) continue;   /* an agent itself keeps its own tag */
+        inherit(c, par);
+        adopt_orphans(w, c, depth + 1);
+    }
+}
+
 void kai_watch_process_start(kai_watch *w, uint32_t pid, uint32_t ppid, uint64_t start, const char *image) {
     if (!w) return;
     kw_proc *c = find_exact(w, pid, start);
@@ -152,14 +200,15 @@ void kai_watch_process_start(kai_watch *w, uint32_t pid, uint32_t ppid, uint64_t
         c->root_start = start;
     } else if (ppid != pid) {
         kw_proc *par = find(w, ppid, start);
-        if (par && par->start <= start && par->agent[0]) {
-            copy(c->agent, sizeof c->agent, par->agent);
-            copy(c->identity, sizeof c->identity, par->identity);
-            c->root_pid = par->root_pid;
-            c->root_start = par->root_start;
+        if (par && par->start <= start) {
+            if (par->agent[0]) inherit(c, par);
+        } else {
+            c->orphan = 1;   /* its parent's start event may still be on its way */
         }
     }
     link_proc(w, c);
+    if (c->agent[0]) adopt_orphans(w, c, 0);
+    flush_pending(w);
 }
 
 void kai_watch_process_stop(kai_watch *w, uint32_t pid, uint64_t start, uint64_t ts) {
@@ -188,11 +237,15 @@ int kai_watch_tagged(kai_watch *w, uint32_t pid, uint64_t ts, char *agent, size_
 
 int kai_watch_pid_maybe_tagged(kai_watch *w, uint32_t pid) {
     if (!w) return 0;
-    for (int i = w->bucket[hash_pid(pid)]; i >= 0; i = w->p[i].next)
-        if (w->p[i].used && w->p[i].pid == pid && w->p[i].agent[0]) return 1;
-    return 0;
+    int alive = 0;
+    for (int i = w->bucket[hash_pid(pid)]; i >= 0; i = w->p[i].next) {
+        const kw_proc *c = &w->p[i];
+        if (!c->used || c->pid != pid) continue;
+        if (c->agent[0]) return 1;
+        if (!c->stop) alive = 1;
+    }
+    return !alive;   /* not known yet: its start event may still be on its way */
 }
-
 /* ---------------------------------------------------------------- DNS */
 
 static int is_ipv4(const char *s) {
@@ -231,6 +284,7 @@ static int clean_ip(const char *in, char *out, size_t n) {
 
 void kai_watch_dns(kai_watch *w, uint32_t pid, uint64_t ts, const char *name, const char *results) {
     if (!w || !name || !*name || !results) return;
+    note_time(w, ts);
     kw_proc *c = find(w, pid, ts);
     const char *s = results;
     while (*s) {
@@ -271,7 +325,11 @@ static const char *host_for(kai_watch *w, const kw_proc *c, const char *ip, uint
         const kw_dns *d = &w->dns[(w->dns_head - 1 - k + KW_DNS) % KW_DNS];
         if (ts && d->ts + KW_DNS_KEEP < ts) continue;
         if (strcmp(d->ip, ip) != 0) continue;
-        if (d->pid == c->pid && d->pstart == c->start) { *from = "process"; return d->host; }
+        /* pstart 0: the lookup came before the process' start event did */
+        if (d->pid == c->pid && (d->pstart == c->start || (!d->pstart && d->ts >= c->start))) {
+            *from = "process";
+            return d->host;
+        }
         if (!agent_hit && c->root_pid && d->root_pid == c->root_pid && d->root_start == c->root_start)
             agent_hit = d;
         if (!any_hit) any_hit = d;
@@ -292,13 +350,35 @@ static void fill_event(kai_watch_event *e, const kw_proc *c, uint32_t pid, uint6
     e->image = c->image;
 }
 
-void kai_watch_connect(kai_watch *w, uint32_t pid, uint64_t ts, const char *proto, const char *ip, int port) {
-    if (!w || !ip) return;
-    w->st.connects++;
-    kw_proc *c = find(w, pid, ts);
-    if (!c || !c->agent[0]) return;   /* untagged: never recorded */
-    char cip[64];
-    if (!clean_ip(ip, cip, sizeof cip)) return;
+static void note_time(kai_watch *w, uint64_t ts) {
+    if (ts > w->latest) w->latest = ts;
+}
+
+static int pend(kai_watch *w, int is_file, uint32_t pid, uint64_t ts, const char *proto, const char *ip, int port,
+                const char *path) {
+    for (int i = 0; i < KW_PENDING; i++) {
+        kw_pending *q = &w->pend[i];
+        if (q->used) continue;
+        memset(q, 0, sizeof *q);
+        if (is_file && !(q->path = malloc(strlen(path) + 1))) return 0;
+        q->used = 1;
+        q->is_file = is_file;
+        q->pid = pid;
+        q->ts = ts;
+        if (is_file) memcpy(q->path, path, strlen(path) + 1);
+        else {
+            copy(q->proto, sizeof q->proto, proto ? proto : "tcp");
+            copy(q->ip, sizeof q->ip, ip);
+            q->port = port;
+        }
+        w->npend++;
+        return 1;
+    }
+    return 0;   /* full: dropped, as an untagged event would be */
+}
+
+static void deliver_connect(kai_watch *w, const kw_proc *c, uint32_t pid, uint64_t ts, const char *proto,
+                            const char *cip, int port) {
     w->st.agent_connects++;
     kai_watch_event e;
     fill_event(&e, c, pid, ts);
@@ -309,11 +389,7 @@ void kai_watch_connect(kai_watch *w, uint32_t pid, uint64_t ts, const char *prot
     if (w->ops.on_connect) w->ops.on_connect(w->ops.ctx, &e);
 }
 
-void kai_watch_file(kai_watch *w, uint32_t pid, uint64_t ts, const char *path) {
-    if (!w || !path || !*path) return;
-    w->st.file_events++;
-    kw_proc *c = find(w, pid, ts);
-    if (!c || !c->agent[0]) return;
+static void deliver_file(kai_watch *w, const kw_proc *c, uint32_t pid, uint64_t ts, const char *path) {
     char rule[160] = "";
     if (!w->ops.file_protected || !w->ops.file_protected(w->ops.ctx, c->agent, path, rule, sizeof rule)) return;
     w->st.agent_files++;
@@ -324,8 +400,59 @@ void kai_watch_file(kai_watch *w, uint32_t pid, uint64_t ts, const char *path) {
     if (w->ops.on_file) w->ops.on_file(w->ops.ctx, &e);
 }
 
+static void drop_pending(kai_watch *w, kw_pending *q) {
+    free(q->path);
+    q->path = NULL;
+    q->used = 0;
+    w->npend--;
+}
+
+/* Waiting events whose process is now known: delivered if it is tagged,
+ * dropped if not; ones that waited too long are dropped. */
+static void flush_pending(kai_watch *w) {
+    if (!w->npend) return;
+    for (int i = 0; i < KW_PENDING; i++) {
+        kw_pending *q = &w->pend[i];
+        if (!q->used) continue;
+        kw_proc *c = find(w, q->pid, q->ts);
+        if (c) {
+            if (c->agent[0]) {
+                if (q->is_file) deliver_file(w, c, q->pid, q->ts, q->path);
+                else deliver_connect(w, c, q->pid, q->ts, q->proto, q->ip, q->port);
+            }
+            drop_pending(w, q);
+        } else if (w->latest > q->ts + KW_PENDING_KEEP) {
+            drop_pending(w, q);
+        }
+    }
+}
+
+void kai_watch_connect(kai_watch *w, uint32_t pid, uint64_t ts, const char *proto, const char *ip, int port) {
+    if (!w || !ip) return;
+    w->st.connects++;
+    note_time(w, ts);
+    char cip[64];
+    if (!clean_ip(ip, cip, sizeof cip)) return;
+    kw_proc *c = find(w, pid, ts);
+    if (!c) { pend(w, 0, pid, ts, proto, cip, port, NULL); return; }   /* its start event may come next */
+    if (!c->agent[0]) return;   /* untagged: never recorded */
+    deliver_connect(w, c, pid, ts, proto, cip, port);
+}
+
+void kai_watch_file(kai_watch *w, uint32_t pid, uint64_t ts, const char *path) {
+    if (!w || !path || !*path) return;
+    w->st.file_events++;
+    note_time(w, ts);
+    kw_proc *c = find(w, pid, ts);
+    if (!c) { pend(w, 1, pid, ts, NULL, NULL, 0, path); return; }
+    if (!c->agent[0]) return;
+    deliver_file(w, c, pid, ts, path);
+}
+
 void kai_watch_gc(kai_watch *w, uint64_t now) {
     if (!w) return;
+    if (now > w->latest) w->latest = now;
+    flush_pending(w);
     for (int b = 0; b < KW_BUCKETS; b++) {
         int *link = &w->bucket[b];
         while (*link >= 0) {

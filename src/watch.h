@@ -16,6 +16,11 @@
  * answer for that address made by the same process, else by the same agent's
  * tree, else by any process on this machine ("host_from" says which). An
  * address nobody looked up stays an address.
+ *
+ * ETW delivers each CPU's buffer on its own, so events don't arrive in order:
+ * a child's start event can come before its parent's (the parent's tag is
+ * passed down when it arrives), and a connect before its own process' start
+ * event (it waits up to 5 s for it, then is dropped).
  */
 #ifndef KAI_WATCH_H
 #define KAI_WATCH_H
@@ -82,7 +87,10 @@ void kai_watch_file(kai_watch *w, uint32_t pid, uint64_t ts, const char *path);
 
 /* Is pid (as it was at ts; ts 0 = now/alive) tagged? Fills agent. */
 int kai_watch_tagged(kai_watch *w, uint32_t pid, uint64_t ts, char *agent, size_t n);
-/* A cheap pre-check for the event loop: is any live process with this pid tagged? */
+/* A cheap pre-check for the event loop: is an event from this pid worth parsing?
+ * Yes when a process with this pid is tagged, or when no live process has it
+ * (its start event may still be on its way: the event then waits, up to 5 s,
+ * for it). */
 int kai_watch_pid_maybe_tagged(kai_watch *w, uint32_t pid);
 
 /* Drop exited processes older than 60 s and DNS answers older than 10 minutes. */

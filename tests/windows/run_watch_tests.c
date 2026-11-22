@@ -134,8 +134,25 @@ static void test_tree(void) {
     CHECK(kai_watch_tagged(w, 800, 0, a, sizeof a), "resync adds a process whose start event was lost, tagged");
     CHECK(!kai_watch_tagged(w, 504, 0, a, sizeof a), "resync ends a process that is gone");
 
+    /* ETW per-CPU buffers: a child's (and grandchild's) start event delivered
+     * before the agent's own */
+    kai_watch_process_start(w, 910, 900, T0 + S(91), "C:/Windows/System32/cmd.exe");
+    kai_watch_process_start(w, 920, 910, T0 + S(92), "C:/Windows/System32/curl.exe");
+    CHECK(!kai_watch_tagged(w, 920, 0, a, sizeof a), "before the agent's start event arrives: not tagged yet");
+    kai_watch_process_start(w, 900, 1000, T0 + S(90), "C:/Users/ann/.local/bin/claude.exe");
+    CHECK(kai_watch_tagged(w, 910, 0, a, sizeof a) && !strcmp(a, "claude"), "late parent: its child takes its tag");
+    CHECK(kai_watch_tagged(w, 920, 0, a, sizeof a) && !strcmp(a, "claude"), "late parent: and the grandchild");
+    kai_watch_process_start(w, 940, 930, T0 + S(93), "C:/Windows/System32/cmd.exe");
+    kai_watch_process_start(w, 930, 1000, T0 + S(95), "C:/Users/ann/.local/bin/claude.exe");
+    CHECK(!kai_watch_tagged(w, 940, 0, a, sizeof a), "a parent PID that started after the child isn't its parent");
+    kai_watch_sync_begin(w);
+    kai_watch_process_start(w, 100, 1000, T0 + S(10), "C:/Users/ann/.local/bin/claude.exe");
+    kai_watch_process_start(w, 1000, 4, T0 + S(1), "C:/Windows/explorer.exe");
+    kai_watch_process_start(w, 800, 100, T0 + S(70), "C:/Windows/System32/whoami.exe");
+    kai_watch_sync_end(w, T0 + S(96));
+
     kai_watch_stats st;
-    kai_watch_gc(w, T0 + S(80) + S(61));
+    kai_watch_gc(w, T0 + S(96) + S(61));
     kai_watch_get_stats(w, &st);
     CHECK(st.procs == 3 && st.tagged == 2, "gc keeps the processes the snapshot saw (explorer, claude, whoami)");
     CHECK(!kai_watch_tagged(w, 300, T0 + S(29), a, sizeof a), "gc dropped exited processes");
@@ -186,6 +203,24 @@ static void test_dns(void) {
     CHECK(rec.n == 7 && rec.host[6][0] == '\0', "an answer older than 10 minutes isn't used");
     kai_watch_connect(w, 300, T0 + S(20), "tcp", "not-an-ip", 443);
     CHECK(rec.n == 7, "a malformed address is dropped");
+
+    /* ETW order: a short-lived child's lookup and connect arrive before its
+     * own start event; they wait for it */
+    kai_watch_dns(w, 330, T0 + S(700), "late.example", "192.0.2.44;");
+    kai_watch_connect(w, 330, T0 + S(700), "tcp", "192.0.2.44", 443);
+    CHECK(rec.n == 7, "a connect from a PID not known yet waits");
+    CHECK(kai_watch_pid_maybe_tagged(w, 330), "an unknown PID is worth parsing");
+    kai_watch_process_start(w, 330, 100, T0 + S(699), "C:/Windows/System32/curl.exe");
+    CHECK(rec.n == 8 && !strcmp(rec.agent[7], "claude") && !strcmp(rec.host[7], "late.example") &&
+          !strcmp(rec.from[7], "process"), "its start event arrives: recorded, with its own lookup's name");
+    CHECK(!kai_watch_pid_maybe_tagged(w, 950), "a known untagged PID is not worth parsing");
+    kai_watch_connect(w, 340, T0 + S(701), "tcp", "192.0.2.45", 443);
+    kai_watch_process_start(w, 340, 950, T0 + S(700), "C:/Windows/System32/curl.exe");
+    CHECK(rec.n == 8, "a waiting connect from a process that turns out untagged is dropped");
+    kai_watch_connect(w, 350, T0 + S(702), "tcp", "192.0.2.46", 443);
+    kai_watch_gc(w, T0 + S(708));
+    kai_watch_process_start(w, 350, 100, T0 + S(701), "C:/Windows/System32/curl.exe");
+    CHECK(rec.n == 8, "a connect that waited more than 5 s is dropped");
     kai_watch_free(w);
 }
 

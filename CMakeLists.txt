@@ -125,6 +125,22 @@ if(WIN32)
   target_sources(kai_watch_tests PRIVATE compat/win/kai.rc)
   target_link_options(kai_watch_tests PRIVATE /MANIFEST:NO)
   add_test(NAME watch COMMAND kai_watch_tests)
+
+  # Kai Watch: the LocalSystem service (ETW). Small on purpose: libkai's core
+  # plus the watch logic, no UI, no model.
+  add_executable(kaisvc service/win/kaisvc.c service/win/etw.c src/watch.c)
+  kai_target_setup(kaisvc)
+  target_include_directories(kaisvc PRIVATE src service/win)
+  target_link_libraries(kaisvc PRIVATE libkai tdh advapi32 wintrust crypt32 wtsapi32 userenv shell32 ole32 ws2_32)
+  target_sources(kaisvc PRIVATE compat/win/kai.rc)
+  target_link_options(kaisvc PRIVATE /MANIFEST:NO)
+
+  # Live ETW + service lifecycle tests: need an elevated shell (CI runners
+  # are); skipped (77) otherwise.
+  add_test(NAME watch-live
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File ${CMAKE_SOURCE_DIR}/tests/windows/run_watch_live.ps1
+            -Bin $<TARGET_FILE_DIR:kaisvc> -CpuMinutes 0)
+  set_tests_properties(watch-live PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 600)
 endif()
 
 find_package(Python3 COMPONENTS Interpreter QUIET)

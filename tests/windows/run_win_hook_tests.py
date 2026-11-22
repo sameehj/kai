@@ -174,11 +174,16 @@ for name in ("Claude Code", "Codex", "Cursor"):
     check(any(line.startswith("✓ " + name) and "denied as expected" in line for line in r.stdout.splitlines()),
           "doctor: " + name + " hook answers its probe")
 st = json.loads(subprocess.run([exe, "status", "--json"], capture_output=True, text=True, encoding="utf-8", env=ie, timeout=120).stdout)
-# No Watch service runs in this test: status must say so, and nothing else.
+# Kai Watch is the machine's (its heartbeat is in %ProgramData%): status must
+# say "Internet watching stopped" exactly when it isn't watching, and nothing
+# else may be degraded.
 deg = st.get("degraded") or []
-check(st.get("state") == "degraded" and len(deg) == 1 and deg[0].startswith("Internet watching stopped"),
-      "status --json: degraded only by the missing Watch service: " + json.dumps(deg))
-check(st["walls"]["observed"]["network"]["running"] is False, "status --json: Internet watching not running")
+watching = st["walls"]["observed"]["network"]["running"]
+if watching:
+    check(st.get("state") == "ok" and not deg, "status --json: ok while Kai Watch runs: " + json.dumps(deg))
+else:
+    check(st.get("state") == "degraded" and len(deg) == 1 and deg[0].startswith("Internet watching stopped"),
+          "status --json: degraded only by Kai Watch not running: " + json.dumps(deg))
 check(st["claude"]["installed"] and st["codex"]["installed"] and st["cursor"]["installed"], "status: all installed")
 r = subprocess.run([exe, "uninstall", "all"], capture_output=True, text=True, encoding="utf-8", env=ie, timeout=60)
 check(r.returncode == 0, "uninstall all")
