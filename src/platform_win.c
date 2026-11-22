@@ -63,6 +63,8 @@ static void slashes(char *s) {
     for (; s && *s; s++) if (*s == '\\') *s = '/';
 }
 
+static int is_drive(const char *p);
+
 static int set_errno_from_win(void) {
     DWORD e = GetLastError();
     switch (e) {
@@ -142,6 +144,18 @@ const char *kai_plat_default_policy_extra(void) {
 }
 
 void kai_plat_slashes(char *s) { slashes(s); }
+
+const char *kai_plat_program_dir(void) {
+    static char buf[PATH_MAX];
+    if (buf[0]) return buf;
+    char *l = env_utf8(L"LOCALAPPDATA");
+    if (!l || !*l) { free(l); return NULL; }
+    slashes(l);
+    if (is_drive(l)) l[0] = (char)toupper((unsigned char)l[0]);
+    snprintf(buf, sizeof buf, "%s/Programs/Kai", l);
+    free(l);
+    return buf;
+}
 
 /* ---------------------------------------------------------------- paths */
 

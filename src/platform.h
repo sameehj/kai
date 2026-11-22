@@ -91,6 +91,11 @@ const char *kai_plat_default_policy_extra(void);
 /* Windows: '\' -> '/' in place (Kai's internal path form). POSIX: nothing. */
 void kai_plat_slashes(char *s);
 
+/* Windows: the folder kai.exe is installed in (%LOCALAPPDATA%/Programs/Kai):
+ * agents may run it but not delete, move or change it (rule kai_program).
+ * POSIX: NULL (the program paths are KAI_FILES in scan.c). */
+const char *kai_plat_program_dir(void);
+
 /* This program's own path ('/'-separated on Windows); 0 on success. */
 int kai_plat_exe_path(char *buf, size_t n);
 

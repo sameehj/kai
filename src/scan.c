@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial */
 #include "internal.h"
+#include "platform.h"
 
 #include <ctype.h>
 #include <limits.h>
@@ -364,6 +365,10 @@ static const char *const AGENT_CONTROL[] = {
     "/.codex/hooks.json",
     "/.codex/config.toml",
     "/NativeMessagingHosts/io.github.sameehj.kai.json",
+    /* Windows: machine-wide agent settings (%ProgramData%, Program Files) */
+    "/OpenAI/Codex/hooks.json",
+    "/OpenAI/Codex/requirements.toml",
+    "/ClaudeCode/managed-settings.json",
 };
 
 /* ---- Kai's installed files (Nov 15) ----
@@ -382,7 +387,16 @@ static const struct { const char *path; int kind; } KAI_FILES[] = {   /* 0 file,
     {"/private/var/db/receipts/" KAI_PACKAGE_ID ".", 2},
 };
 
+/* Windows: where `cmake --install` puts kai.exe (docs/windows/README.md). */
+static int in_platform_program_dir(const char *np) {
+    const char *d = kai_plat_program_dir();
+    if (!d || !*d) return 0;
+    size_t l = strlen(d);
+    return !strncasecmp(np, d, l) && (np[l] == '\0' || np[l] == '/');
+}
+
 int kai_path_is_kai_program(const char *np) {
+    if (np && in_platform_program_dir(np)) return 1;
     if (!np || np[0] != '/') return 0;
     for (size_t i = 0; i < sizeof KAI_FILES / sizeof KAI_FILES[0]; i++) {
         const char *r = KAI_FILES[i].path;
@@ -403,6 +417,8 @@ int kai_rule_is_kai_program(const char *rule) {
 static int holds_kai_program(const char *np) {
     size_t n = strlen(np);
     while (n > 1 && np[n - 1] == '/') n--;
+    const char *pd = kai_plat_program_dir();
+    if (pd && *pd && strlen(pd) > n && !strncasecmp(pd, np, n) && pd[n] == '/') return 1;
     for (size_t i = 0; i < sizeof KAI_FILES / sizeof KAI_FILES[0]; i++) {
         const char *r = KAI_FILES[i].path;
         if (n == 1 && np[0] == '/') return 1;
@@ -713,6 +729,7 @@ static const struct { const char *agent, *root; } AGENT_STATE[] = {
     {"codex", "~/.codex"},
     {"cursor", "~/.cursor"},
     {"cursor", "~/Library/Application Support/Cursor"},
+    {"cursor", "~/AppData/Roaming/Cursor"},
     {"gemini", "~/.gemini"},
 };
 

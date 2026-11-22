@@ -150,7 +150,23 @@ int kai_cmd_status_json(void) {
     cJSON_AddStringToObject(pol, "file", kai_policy_file());
     cJSON_AddBoolToObject(pol, "file_exists", file_exists(kai_policy_file()));
     cJSON_AddStringToObject(pol, "error", p ? "" : err);
-    kai_policy_free(p);
+    /* p is used again for the walls below: freed at the end (it was freed
+     * here, and the walls read freed memory) */
+    {   /* Can another account change Kai's policy? POSIX: group/other write
+         * bits; Windows: the file's (or, before kai init, its folder's) ACL. */
+        char who[160] = "";
+        const char *f = kai_policy_file();
+        int ocw = kai_plat_others_can_write(file_exists(f) ? f : kai_home(), who, sizeof who);
+        cJSON_AddBoolToObject(pol, "others_can_write", ocw == 1);
+        cJSON_AddStringToObject(pol, "writable_by", ocw == 1 ? who : "");
+        cJSON *deg = cJSON_AddArrayToObject(o, "degraded");
+        if (ocw == 1) {
+            char msg[300];
+            snprintf(msg, sizeof msg, "the policy can be changed by %s, not only by you", who);
+            cJSON_AddItemToArray(deg, cJSON_CreateString(msg));
+        }
+        cJSON_AddStringToObject(o, "state", cJSON_GetArraySize(deg) ? "degraded" : "ok");
+    }
 
     char *codex = kai_codex_hooks_path();
     const struct { const char *name, *rel, *needle; } agents[] = {
@@ -209,6 +225,7 @@ int kai_cmd_status_json(void) {
     cJSON_AddBoolToObject(no, "verified", kai_wall_observed_level("network") >= 0);
     if (nh) cJSON_AddItemToObject(no, "health", nh);
 
+    kai_policy_free(p);
     print_json(o);
     return 0;
 }

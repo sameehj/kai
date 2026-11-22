@@ -299,3 +299,5 @@ void kai_plat_pid_exe(int pid, char *out, size_t n) {
 const char *kai_plat_default_policy_extra(void) { return ""; }
 
 void kai_plat_slashes(char *s) { (void)s; }
+
+const char *kai_plat_program_dir(void) { return NULL; }
