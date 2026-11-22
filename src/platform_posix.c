@@ -244,3 +244,54 @@ int kai_plat_short_path(const char *path, char *out, size_t n) {
     kai_strlcpy(out, path, n);
     return 0;
 }
+
+#ifndef __APPLE__   /* macOS reads processes with libproc in proc.c */
+static void push_arg(kai_proc *pr, const char *s, size_t n) {
+    char **nv = realloc(pr->argv, (size_t)(pr->argc + 1) * sizeof *nv);
+    if (!nv) return;
+    pr->argv = nv;
+    char *a = malloc(n + 1);
+    if (!a) return;
+    memcpy(a, s, n);
+    a[n] = 0;
+    pr->argv[pr->argc++] = a;
+}
+
+int kai_plat_proc_read(int pid, kai_proc *out) {
+    memset(out, 0, sizeof *out);
+    out->pid = pid;
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/stat", pid);
+    size_t n;
+    char *stat = kai_read_file(path, 65536, &n);
+    if (!stat) return -1;
+    /* comm may contain spaces and ')': ppid follows the last ") X " */
+    char *rp = strrchr(stat, ')');
+    int ppid = 0;
+    if (!rp || sscanf(rp + 1, " %*c %d", &ppid) != 1) { free(stat); return -1; }
+    free(stat);
+    out->ppid = ppid;
+    snprintf(path, sizeof path, "/proc/%d/exe", pid);
+    ssize_t l = readlink(path, out->exe, sizeof out->exe - 1);
+    out->exe[l > 0 ? l : 0] = '\0';
+    snprintf(path, sizeof path, "/proc/%d/cmdline", pid);
+    char *cl = kai_read_file(path, 1 << 20, &n);
+    if (cl) {
+        for (size_t i = 0; i < n;) {
+            size_t len = strnlen(cl + i, n - i);
+            push_arg(out, cl + i, len);
+            i += len + 1;
+        }
+        free(cl);
+    }
+    return 0;
+}
+
+void kai_plat_pid_exe(int pid, char *out, size_t n) {
+    if (n) out[0] = 0;
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/exe", pid);
+    ssize_t l = readlink(path, out, n - 1);
+    out[l > 0 ? l : 0] = 0;
+}
+#endif

@@ -547,6 +547,91 @@ int kai_plat_open_url(const char *url) {
     return -1;   /* no Kai app on Windows yet */
 }
 
+/* ------------------------------------------------------------- processes */
+
+void kai_plat_pid_exe(int pid, char *out, size_t n) {
+    if (n) out[0] = 0;
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    if (!h) return;
+    wchar_t w[32768];
+    DWORD l = (DWORD)(sizeof w / sizeof w[0]);
+    if (QueryFullProcessImageNameW(h, 0, w, &l)) {
+        char *s = narrow(w);
+        if (s) {
+            slashes(s);
+            kai_strlcpy(out, s, n);
+            free(s);
+        }
+    }
+    CloseHandle(h);
+}
+
+/* The command line of another process: ProcessCommandLineInformation (60),
+ * Windows 8.1 and later, needs only PROCESS_QUERY_LIMITED_INFORMATION. */
+typedef LONG(NTAPI *nt_query_fn)(HANDLE, int, PVOID, ULONG, PULONG);
+typedef struct { USHORT Length, MaximumLength; PWSTR Buffer; } kai_ustr;
+
+static wchar_t *process_cmdline(HANDLE h) {
+    static nt_query_fn q;
+    if (!q) {
+        HMODULE nt = GetModuleHandleW(L"ntdll.dll");
+        if (nt) q = (nt_query_fn)(void (*)(void))GetProcAddress(nt, "NtQueryInformationProcess");
+        if (!q) return NULL;
+    }
+    ULONG need = 0;
+    q(h, 60, NULL, 0, &need);
+    if (!need || need > (1u << 20)) return NULL;
+    BYTE *buf = malloc(need);
+    if (!buf) return NULL;
+    if (q(h, 60, buf, need, &need) < 0) { free(buf); return NULL; }
+    kai_ustr *u = (kai_ustr *)buf;
+    size_t chars = u->Length / sizeof(wchar_t);
+    wchar_t *r = malloc((chars + 1) * sizeof *r);
+    if (r) { memcpy(r, u->Buffer, chars * sizeof *r); r[chars] = 0; }
+    free(buf);
+    return r;
+}
+
+static void push_arg(kai_proc *pr, const char *s) {
+    char **nv = realloc(pr->argv, (size_t)(pr->argc + 1) * sizeof *nv);
+    if (!nv) return;
+    pr->argv = nv;
+    char *a = _strdup(s);
+    if (a) pr->argv[pr->argc++] = a;
+}
+
+int kai_plat_proc_read(int pid, kai_proc *out) {
+    memset(out, 0, sizeof *out);
+    out->pid = pid;
+    int found = 0;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32W pe;
+        pe.dwSize = sizeof pe;
+        for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe))
+            if ((int)pe.th32ProcessID == pid) { out->ppid = (int)pe.th32ParentProcessID; found = 1; break; }
+        CloseHandle(snap);
+    }
+    if (!found) return -1;
+    kai_plat_pid_exe(pid, out->exe, sizeof out->exe);
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    if (h) {
+        wchar_t *cl = process_cmdline(h);
+        CloseHandle(h);
+        if (cl) {
+            int argc = 0;
+            LPWSTR *wv = CommandLineToArgvW(cl, &argc);
+            for (int i = 0; wv && i < argc; i++) {
+                char *a = narrow(wv[i]);
+                if (a) { push_arg(out, a); free(a); }
+            }
+            if (wv) LocalFree(wv);
+            free(cl);
+        }
+    }
+    return 0;
+}
+
 /* ------------------------------------------------------------------ ACL */
 
 /* Rights that let someone change or replace the file. */

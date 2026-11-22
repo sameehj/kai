@@ -6,6 +6,7 @@
  * agent process trees; everything else on the machine is left alone.
  */
 #include "internal.h"
+#include "platform.h"
 
 #include <fnmatch.h>
 #include <stdlib.h>
@@ -194,46 +195,12 @@ void kai_pid_exe(int pid, char *out, size_t n) {
     if (proc_pidpath(pid, out, (uint32_t)n) <= 0 && n) out[0] = '\0';
 }
 
-#else /* Linux */
+#else /* Linux, Windows: the platform layer reads the process */
 
-int kai_proc_read(int pid, kai_proc *out) {
-    memset(out, 0, sizeof *out);
-    out->pid = pid;
-    char path[64];
-    snprintf(path, sizeof path, "/proc/%d/stat", pid);
-    size_t n;
-    char *stat = kai_read_file(path, 65536, &n);
-    if (!stat) return -1;
-    /* comm may contain spaces and ')': ppid follows the last ") X " */
-    char *rp = strrchr(stat, ')');
-    int ppid = 0;
-    if (!rp || sscanf(rp + 1, " %*c %d", &ppid) != 1) { free(stat); return -1; }
-    free(stat);
-    out->ppid = ppid;
-    snprintf(path, sizeof path, "/proc/%d/exe", pid);
-    ssize_t l = readlink(path, out->exe, sizeof out->exe - 1);
-    out->exe[l > 0 ? l : 0] = '\0';
-    snprintf(path, sizeof path, "/proc/%d/cmdline", pid);
-    char *cl = kai_read_file(path, 1 << 20, &n);
-    if (cl) {
-        for (size_t i = 0; i < n;) {
-            size_t len = strnlen(cl + i, n - i);
-            push_arg(out, cl + i, len);
-            i += len + 1;
-        }
-        free(cl);
-    }
-    return 0;
-}
+int kai_proc_read(int pid, kai_proc *out) { return kai_plat_proc_read(pid, out); }
 int kai_proc_read_fast(int pid, kai_proc *out) { return kai_proc_read(pid, out); }
 int kai_pid_code_identity(int pid, char *out, size_t n) { (void)pid; if (n) out[0] = '\0'; return 0; }
-void kai_pid_exe(int pid, char *out, size_t n) {
-    if (n) out[0] = '\0';
-    char path[64];
-    snprintf(path, sizeof path, "/proc/%d/exe", pid);
-    ssize_t l = readlink(path, out, n - 1);
-    out[l > 0 ? l : 0] = '\0';
-}
+void kai_pid_exe(int pid, char *out, size_t n) { kai_plat_pid_exe(pid, out, n); }
 /* No XPC/SecCode off macOS; the control service is macOS-only. */
 int kai_audit_token_identity(const void *tokbytes, size_t toklen, char *team, size_t tlen,
                              char *signid, size_t slen, int *pid) {

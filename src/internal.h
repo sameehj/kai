@@ -195,6 +195,9 @@ typedef struct {
 int kai_proc_read(int pid, kai_proc *out); /* 0 on success */
 int kai_proc_read_fast(int pid, kai_proc *out); /* like kai_proc_read but skips the Team ID (no code-signing lookup) */
 void kai_proc_free(kai_proc *pr);
+/* Platform layer (Linux: /proc; Windows: Toolhelp32 and the PEB command line). */
+int kai_plat_proc_read(int pid, kai_proc *out);
+void kai_plat_pid_exe(int pid, char *out, size_t n);
 
 /* Agent Control: live interactive sessions working now (a command or hook in
  * the last 15 minutes). The one count for the popover and `kai status`. */
