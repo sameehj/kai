@@ -84,6 +84,15 @@ int kai_shell_command_start(char **argv, int argc);
 /* One line per pipeline: "name args | name args" (see shell.c). Caller frees. */
 char *kai_shell_view(const char *cmd);
 
+/* Windows command lines (winshell.c): a PowerShell or cmd.exe command as the
+ * bash lines the checks above read (paths '/'-separated, %VAR% and $env:VAR
+ * expanded, nested powershell -c / -EncodedCommand / cmd /c read too). NULL
+ * if nothing was read. Caller frees. */
+char *kai_winshell_translate(const char *cmd);
+/* A destructive Windows command (Remove-Item -Recurse -Force, del /s /q,
+ * rd /s, format, diskpart, shadow-copy deletion, cipher /w): 1 and what. */
+int kai_winshell_destructive(const char *cmd, char *what, size_t n);
+
 /* A check can skip a rule the user made an exception for: return 1 to skip. */
 typedef int (*kai_skip_fn)(const char *rule, void *ud);
 /* kai_command_touches_protected / kai_command_looks_like_upload, skipping
