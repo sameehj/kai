@@ -118,6 +118,14 @@ static const struct {
     {"codex", "arg", "*/@openai/codex/*"},
     {"codex", "team", "2DC432GLL2"},
     {"gemini", "arg", "*/@google/gemini-cli/*"},
+    /* Windows install locations (inert elsewhere). Matching ignores case on
+     * Windows; the Watch service also checks each one's Authenticode signer. */
+    {"claude", "exe", "*/.local/bin/claude.exe"},
+    {"codex", "exe", "*/Programs/OpenAI/Codex/bin/codex.exe"},
+    {"codex", "exe", "*/@openai/codex/*"},
+    {"codex", "exe", "*/WindowsApps/OpenAI.Codex_*"},
+    {"cursor", "exe", "*/AppData/Local/Programs/cursor/*"},
+    {"cursor", "exe", "*/Program Files/cursor/*"},
     /* Added to the catalog (unverified against installed copies -- see
      * AGENT_CATALOG below; patterns are best-effort and may need refining). */
     {"aider", "arg", "*/bin/aider"},
@@ -805,6 +813,9 @@ static kai_policy *parse(const char *text, const char *source, char *err,
         } else if (strcmp(d, "audit_context") == 0) {
             char *v; if (!next_tok(&cur, &v)) continue;
             p->audit_context = strcmp(v, "off") != 0;
+        } else if (strcmp(d, "watch_files") == 0) {
+            char *v; if (!next_tok(&cur, &v)) continue;
+            p->watch_files = strcmp(v, "on") == 0;
         } else if (strcmp(d, "record_activity") == 0) {
             char *v; if (!next_tok(&cur, &v)) continue;
             p->record_activity = strcmp(v, "on") == 0;
@@ -1068,6 +1079,7 @@ int kai_policy_fetch_block(const kai_policy *p) { return p ? p->fetch_block : 0;
 int kai_policy_destructive_on(const kai_policy *p) { return p ? p->destructive_on : 0; }
 int kai_policy_audit_context(const kai_policy *p) { return p && p->audit_context; }
 int kai_policy_record_activity(const kai_policy *p) { return p && p->record_activity; }
+int kai_policy_watch_files(const kai_policy *p) { return p && p->watch_files; }
 
 /* '*' and '?' span anything, '/' and newlines included: the pattern is over
  * the whole command, usually the exact command with a few wildcards. */

@@ -194,6 +194,7 @@ struct kai_policy {
     } exempt[KAI_MAX_LIST];
     int nexempt;
     int audit_context;
+    int watch_files;       /* Windows Watch: record agent opens of protected files ("Seen"); off by default */
     int record_activity;   /* 0.4: activity recorder (record_activity on|off), on by default since 0.4.1 */
 };
 
@@ -226,6 +227,7 @@ int kai_cmd_why_decision(int argc, char **argv);
 /* 0.4 activity recorder (activity.c): one metadata line per hook call when
  * `record_activity on`. Never arguments, contents or full commands. */
 int kai_policy_record_activity(const kai_policy *p);
+int kai_policy_watch_files(const kai_policy *p);
 int kai_audit_suppressed(void);   /* audit.c: a health probe is running */
 /* ksession: Kai's own session key for the calling agent (its ES session id or
  * "pid-<root>"), the key `kai snapshot` lists as activity_keys; NULL if none. */

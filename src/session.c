@@ -9,6 +9,7 @@
  */
 #include "internal.h"
 #include "cJSON.h"
+#include "platform.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -407,7 +408,7 @@ const char *kai_status_sentence(int files, int internet, int agents, int paused,
 int kai_heartbeat_level(const char *path, const char *wall, uid_t owner) {
     struct stat st;
     if (!path || !wall || lstat(path, &st) != 0 || !S_ISREG(st.st_mode)) return -1;
-    if (st.st_uid != owner || (st.st_mode & (S_IWGRP | S_IWOTH))) return -1;
+    if (!kai_plat_heartbeat_trusted(path, &st, (unsigned)owner)) return -1;
     if ((long)(time(NULL) - st.st_mtime) > 30) return -1;
     size_t len = 0;
     char *txt = kai_read_file(path, 1 << 16, &len);
@@ -416,6 +417,9 @@ int kai_heartbeat_level(const char *path, const char *wall, uid_t owner) {
     const char *w = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "wall")) : NULL;
     const char *m = o ? cJSON_GetStringValue(cJSON_GetObjectItem(o, "mode")) : NULL;
     int lvl = -1;
+    /* A wall that is up but not seeing anything (Windows: its ETW session
+     * stopped) says "running": false; that is not a verified level. */
+    if (o && cJSON_IsFalse(cJSON_GetObjectItem(o, "running"))) m = NULL;
     if (w && !strcmp(w, wall) && m)
         lvl = !strcmp(m, "block") ? 2 : (!strcmp(m, "log") || !strcmp(m, "warn")) ? 1 : 0;
     cJSON_Delete(o);
@@ -513,6 +517,8 @@ int kai_pause_state(const char *sid, long long now) {
  * goes in the console user's copy of the Kai app-group container. */
 const char *kai_network_heartbeat_path(void) {
     static char path[1024];
+    const char *pp = kai_plat_network_heartbeat_path();
+    if (pp) return pp;
     char *h = kai_expand_home("~/Library/Group Containers/" KAI_APP_GROUP "/network-health.json");
     kai_strlcpy(path, h, sizeof path);
     free(h);

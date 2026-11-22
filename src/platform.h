@@ -99,4 +99,15 @@ const char *kai_plat_program_dir(void);
 /* This program's own path ('/'-separated on Windows); 0 on success. */
 int kai_plat_exe_path(char *buf, size_t n);
 
+/* Where the Internet wall's heartbeat lives when the platform puts it
+ * somewhere of its own: Windows, the Watch service's %ProgramData%/Kai/
+ * network-health.json (only SYSTEM and Administrators can write there).
+ * POSIX: NULL (the macOS app-group container, in session.c). */
+const char *kai_plat_network_heartbeat_path(void);
+
+/* Could only Kai's privileged side have written this heartbeat? POSIX: owned
+ * by `owner` and not group- or world-writable. Windows: owned by SYSTEM or
+ * Administrators and writable by nobody else (the user can't forge it). */
+int kai_plat_heartbeat_trusted(const char *path, const struct stat *st, unsigned owner);
+
 #endif

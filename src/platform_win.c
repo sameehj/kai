@@ -39,6 +39,10 @@
 #undef sleep
 #undef usleep
 
+/* Rights that let someone change or replace a file. */
+#define KAI_WRITE_RIGHTS (FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES | \
+                          DELETE | WRITE_DAC | WRITE_OWNER | GENERIC_WRITE | GENERIC_ALL)
+
 /* ---------------------------------------------------------------- UTF-8 */
 
 static wchar_t *wide(const char *s) {
@@ -155,6 +159,69 @@ const char *kai_plat_program_dir(void) {
     snprintf(buf, sizeof buf, "%s/Programs/Kai", l);
     free(l);
     return buf;
+}
+
+/* %ProgramData%/Kai: the Watch service's folder (SYSTEM and Administrators
+ * write, users read; kaisvc sets that ACL). */
+static const char *program_data_kai(void) {
+    static char buf[PATH_MAX];
+    if (buf[0]) return buf;
+    char *d = env_utf8(L"ProgramData");
+    if (!d || !*d) { free(d); d = _strdup("C:\\ProgramData"); }
+    if (!d) return "C:/ProgramData/Kai";
+    slashes(d);
+    snprintf(buf, sizeof buf, "%s/Kai", d);
+    free(d);
+    return buf;
+}
+
+const char *kai_plat_network_heartbeat_path(void) {
+    static char buf[PATH_MAX];
+    if (!buf[0]) snprintf(buf, sizeof buf, "%s/network-health.json", program_data_kai());
+    return buf;
+}
+
+/* Only SYSTEM, Administrators and TrustedInstaller own or can change it. */
+static int sid_is_admin_side(PSID sid) {
+    static const WELL_KNOWN_SID_TYPE ok[] = {WinLocalSystemSid, WinBuiltinAdministratorsSid};
+    for (size_t i = 0; i < sizeof ok / sizeof ok[0]; i++)
+        if (IsWellKnownSid(sid, ok[i])) return 1;
+    /* NT SERVICE\TrustedInstaller: S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464 */
+    static const DWORD ti[] = {80, 956008885u, 3418522649u, 1831038044u, 1853292631u, 2271478464u};
+    if (*GetSidSubAuthorityCount(sid) == 6) {
+        SID_IDENTIFIER_AUTHORITY *a = GetSidIdentifierAuthority(sid);
+        if (a->Value[5] != 5) return 0;
+        for (int i = 0; i < 6; i++)
+            if (*GetSidSubAuthority(sid, (DWORD)i) != ti[i]) return 0;
+        return 1;
+    }
+    return 0;
+}
+
+int kai_plat_heartbeat_trusted(const char *path, const struct stat *st, unsigned owner) {
+    (void)st; (void)owner;
+    wchar_t *w = wide(path);
+    if (!w) return 0;
+    PACL dacl = NULL;
+    PSID own = NULL;
+    PSECURITY_DESCRIPTOR sd = NULL;
+    DWORD r = GetNamedSecurityInfoW(w, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION,
+                                    &own, NULL, &dacl, NULL, &sd);
+    free(w);
+    if (r != ERROR_SUCCESS) return 0;
+    int ok = own && sid_is_admin_side(own) && dacl != NULL;
+    for (DWORD i = 0; ok && i < dacl->AceCount; i++) {
+        ACE_HEADER *ace;
+        if (!GetAce(dacl, i, (void **)&ace)) continue;
+        if (ace->AceType != ACCESS_ALLOWED_ACE_TYPE || (ace->AceFlags & INHERIT_ONLY_ACE)) continue;
+        ACCESS_ALLOWED_ACE *a = (ACCESS_ALLOWED_ACE *)ace;
+        if (!(a->Mask & KAI_WRITE_RIGHTS)) continue;
+        PSID sid = (PSID)&a->SidStart;
+        if (IsWellKnownSid(sid, WinCreatorOwnerRightsSid) || IsWellKnownSid(sid, WinCreatorOwnerSid)) sid = own;
+        if (!sid_is_admin_side(sid)) ok = 0;
+    }
+    LocalFree(sd);
+    return ok;
 }
 
 /* ---------------------------------------------------------------- paths */
@@ -662,7 +729,9 @@ static void push_arg(kai_proc *pr, const char *s) {
     if (!nv) return;
     pr->argv = nv;
     char *a = _strdup(s);
-    if (a) pr->argv[pr->argc++] = a;
+    if (!a) return;
+    slashes(a);   /* argv is matched against agent patterns written with '/' */
+    pr->argv[pr->argc++] = a;
 }
 
 int kai_plat_proc_read(int pid, kai_proc *out) {
@@ -699,9 +768,7 @@ int kai_plat_proc_read(int pid, kai_proc *out) {
 
 /* ------------------------------------------------------------------ ACL */
 
-/* Rights that let someone change or replace the file. */
-#define KAI_WRITE_RIGHTS (FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES | \
-                          DELETE | WRITE_DAC | WRITE_OWNER | GENERIC_WRITE | GENERIC_ALL)
+/* KAI_WRITE_RIGHTS: at the top of the file. */
 
 static int sid_is_trusted(PSID sid, PSID me) {
     if (me && EqualSid(sid, me)) return 1;
@@ -1029,7 +1096,8 @@ int flock(int fd, int op) {
 static int fold(int c, int cf) { return cf ? tolower(c) : c; }
 
 int fnmatch(const char *p, const char *s, int flags) {
-    int cf = flags & FNM_CASEFOLD, pn = flags & FNM_PATHNAME, ne = flags & FNM_NOESCAPE;
+    /* Windows names ignore case, so every match does (paths, agent patterns). */
+    int cf = 1, pn = flags & FNM_PATHNAME, ne = flags & FNM_NOESCAPE;
     const char *start = s;
     while (*p) {
         if ((flags & FNM_PERIOD) && *s == '.' && (s == start || (pn && s[-1] == '/')) && *p != '.')

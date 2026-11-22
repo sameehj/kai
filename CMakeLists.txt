@@ -118,6 +118,13 @@ if(WIN32)
   target_sources(kai_win_tests PRIVATE compat/win/kai.rc)
   target_link_options(kai_win_tests PRIVATE /MANIFEST:NO)
   add_test(NAME windows COMMAND kai_win_tests)
+
+  add_executable(kai_watch_tests tests/windows/run_watch_tests.c src/watch.c)
+  kai_target_setup(kai_watch_tests)
+  target_link_libraries(kai_watch_tests PRIVATE libkai)
+  target_sources(kai_watch_tests PRIVATE compat/win/kai.rc)
+  target_link_options(kai_watch_tests PRIVATE /MANIFEST:NO)
+  add_test(NAME watch COMMAND kai_watch_tests)
 endif()
 
 find_package(Python3 COMPONENTS Interpreter QUIET)

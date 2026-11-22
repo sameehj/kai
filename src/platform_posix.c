@@ -301,3 +301,10 @@ const char *kai_plat_default_policy_extra(void) { return ""; }
 void kai_plat_slashes(char *s) { (void)s; }
 
 const char *kai_plat_program_dir(void) { return NULL; }
+
+const char *kai_plat_network_heartbeat_path(void) { return NULL; }
+
+int kai_plat_heartbeat_trusted(const char *path, const struct stat *st, unsigned owner) {
+    (void)path;
+    return st->st_uid == (uid_t)owner && !(st->st_mode & (S_IWGRP | S_IWOTH));
+}
