@@ -96,23 +96,31 @@ char *kai_read_file(const char *path, size_t max, size_t *outlen) {
 
 static const char *home_dir(void) { return kai_plat_home(); }
 
+/* ~ and $HOME; on Windows also %USERPROFILE%, %APPDATA%, %LOCALAPPDATA%
+ * (any %VAR%), $env:VAR and ~\, with '\' turned into '/'. */
 char *kai_expand_home(const char *path) {
+    char *env = kai_plat_expand_env(path);   /* POSIX: NULL */
+    if (env) path = env;
+    int win = kai_plat_is_windows();
     sb_t b;
     sb_init(&b);
     const char *h = home_dir();
-    if (path[0] == '~' && (path[1] == '/' || path[1] == '\0')) {
+    if (path[0] == '~' && (path[1] == '/' || path[1] == '\0' || (win && path[1] == '\\'))) {
         sb_adds(&b, h);
         path++;
     } else if (strncmp(path, "${HOME}", 7) == 0) {
         sb_adds(&b, h);
         path += 7;
     } else if (strncmp(path, "$HOME", 5) == 0 &&
-               (path[5] == '/' || path[5] == '\0')) {
+               (path[5] == '/' || path[5] == '\0' || (win && path[5] == '\\'))) {
         sb_adds(&b, h);
         path += 5;
     }
     sb_adds(&b, path);
-    return sb_take(&b);
+    free(env);
+    char *r = sb_take(&b);
+    kai_plat_slashes(r);
+    return r;
 }
 
 /* Make an absolute path and collapse "." and ".." without touching disk.

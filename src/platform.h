@@ -85,6 +85,12 @@ void kai_plat_file_birth(const char *path, const struct stat *st, long long *sec
 /* Modification time in nanoseconds. */
 long long kai_plat_mtime_ns(const struct stat *st);
 
+/* Extra lines for the built-in policy on this platform ("" = none). */
+const char *kai_plat_default_policy_extra(void);
+
+/* Windows: '\' -> '/' in place (Kai's internal path form). POSIX: nothing. */
+void kai_plat_slashes(char *s);
+
 /* This program's own path ('/'-separated on Windows); 0 on success. */
 int kai_plat_exe_path(char *buf, size_t n);
 

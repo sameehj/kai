@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial */
 #include "internal.h"
+#include "platform.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -608,6 +609,20 @@ static int next_tok(char **cur, char **tok) {
     return 1;
 }
 
+/* A protect/allow value: one word, or "a path with spaces" in double quotes
+ * (Windows profiles: ".../Chrome/User Data"; macOS: "Application Support"). */
+static int next_path_tok(char **cur, char **tok) {
+    char *s = *cur;
+    while (*s == ' ' || *s == '\t') s++;
+    if (*s != '"') return next_tok(cur, tok);
+    char *e = strchr(s + 1, '"');
+    if (!e) return next_tok(cur, tok);
+    *tok = s + 1;
+    *e = '\0';
+    *cur = e + 1;
+    return 1;
+}
+
 /* Read an action token, honoring replace:"..." which may contain spaces.
  * Leaves *cur pointing just past the action. */
 static int next_action_tok(char **cur, char **tok) {
@@ -648,10 +663,10 @@ static kai_policy *parse(const char *text, const char *source, char *err,
         if (d[0] == '#') continue;
 
         if (strcmp(d, "protect") == 0) {
-            char *v; if (!next_tok(&cur, &v)) continue;
+            char *v; if (!next_path_tok(&cur, &v)) continue;
             add_list(p->protect, &p->nprotect, v);
         } else if (strcmp(d, "allow") == 0) {
-            char *v; if (!next_tok(&cur, &v)) continue;
+            char *v; if (!next_path_tok(&cur, &v)) continue;
             add_list(p->allow, &p->nallow, v);
         } else if (strcmp(d, "secrets") == 0) {
             char *v; if (!next_tok(&cur, &v)) continue;
@@ -835,7 +850,21 @@ static kai_policy *parse(const char *text, const char *source, char *err,
     return p;
 }
 
-const char *kai_default_policy(void) { return DEFAULT_POLICY; }
+/* The built-in policy, plus the platform's own secret folders (Windows:
+ * %APPDATA% and %LOCALAPPDATA% stores, browser profiles; see platform.h). */
+const char *kai_default_policy(void) {
+    static char *full;
+    const char *extra = kai_plat_default_policy_extra();
+    if (!extra || !*extra) return DEFAULT_POLICY;
+    if (!full) {
+        size_t a = strlen(DEFAULT_POLICY), b = strlen(extra);
+        full = malloc(a + b + 1);
+        if (!full) return DEFAULT_POLICY;
+        memcpy(full, DEFAULT_POLICY, a);
+        memcpy(full + a, extra, b + 1);
+    }
+    return full;
+}
 
 /* $KAI_POLICY, else <kai home>/policy. */
 const char *kai_policy_file(void) {
@@ -908,7 +937,7 @@ kai_policy *kai_policy_from_string(const char *text, char *err, size_t errlen) {
  * unknown hosts are denied; known hosts only on web ports. */
 kai_policy *kai_policy_builtin_failsafe(void) {
     char err[128];
-    kai_policy *p = parse(DEFAULT_POLICY, "built-in (no loadable policy)", err, sizeof err);
+    kai_policy *p = parse(kai_default_policy(), "built-in (no loadable policy)", err, sizeof err);
     if (p) { p->egress_mode = KAI_EGRESS_BLOCK; p->failsafe = 1; }
     return p;
 }
@@ -985,7 +1014,7 @@ kai_policy *kai_policy_load(const char *path, char *err, size_t errlen) {
             return NULL;
         }
     }
-    if (!chosen) return parse(DEFAULT_POLICY, "built-in", err, errlen);
+    if (!chosen) return parse(kai_default_policy(), "built-in", err, errlen);
 
     size_t len = 0;
     char *txt = kai_read_file(chosen, 4000000, &len);

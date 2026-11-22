@@ -124,6 +124,25 @@ const char *kai_plat_home(void) {
     return buf;
 }
 
+/* Windows' own secret stores, on top of the built-in list (which already has
+ * ~/.ssh, ~/.aws, ~/.kube, ~/.docker/config.json, ~/.npmrc, .env, keys...). */
+const char *kai_plat_default_policy_extra(void) {
+    return "protect ~/.azure\n"
+           "protect ~/.git-credentials\n"
+           "protect %APPDATA%/gcloud\n"
+           "protect %APPDATA%/npm/etc/npmrc\n"
+           "protect %APPDATA%/Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt\n"
+           "protect %APPDATA%/Microsoft/Credentials\n"
+           "protect %LOCALAPPDATA%/Microsoft/Credentials\n"
+           "protect %APPDATA%/Microsoft/Protect\n"
+           "protect \"%LOCALAPPDATA%/Google/Chrome/User Data\"\n"
+           "protect \"%LOCALAPPDATA%/Microsoft/Edge/User Data\"\n"
+           "protect \"%LOCALAPPDATA%/BraveSoftware/Brave-Browser/User Data\"\n"
+           "protect %APPDATA%/Mozilla/Firefox/Profiles\n";
+}
+
+void kai_plat_slashes(char *s) { slashes(s); }
+
 /* ---------------------------------------------------------------- paths */
 
 static int is_drive(const char *p) {
