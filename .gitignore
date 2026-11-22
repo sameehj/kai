@@ -30,3 +30,5 @@ src/kai_commit.h
 /build/
 /build-*/
 /dist/
+bin/
+obj/

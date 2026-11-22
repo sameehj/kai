@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial -->
+  <!-- Kai for Windows, everything but the UI: kai.exe's JSON, the Now and
+       Activity models, the copy rules, Ask Kai's engine, the model store, the
+       agent icon resolver. Unit-tested by Kai.Tests. -->
+  <PropertyGroup>
+    <TargetFramework>$(WinTfm)</TargetFramework>
+    <RootNamespace>Kai.Core</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <UseWindowsForms>false</UseWindowsForms>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Kai.Tests" />
+  </ItemGroup>
+</Project>
