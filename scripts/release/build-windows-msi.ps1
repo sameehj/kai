@@ -94,9 +94,13 @@ if ($haveApp) {
                  "-o", "$stage\app")
     # libkai for the app's in-process calls (pause, daily counts), as Kai.app links it
     Copy-Item "$bld\Release\kaicore.dll" "$stage\app"
+    if (Test-Path "$stage\app\bin") { throw "the app publish brought its own bin\ folder: a developer kai.exe must never ship" }
 } elseif (-not $SkipApp) {
     throw "$appProj not found (use -SkipApp for a CLI-and-service MSI)"
 }
+# The shipped kai.exe must be this commit's release build.
+$kv = & "$stage\bin\kai.exe" version
+if ($kv -match "dev build" -or $kv -notmatch [regex]::Escape($commit.Split("-")[0])) { throw "staged kai.exe is not this commit's release build: $kv" }
 
 # ---------------------------------------------------------------- sign the binaries
 # Ours, and anything that isn't signed yet; files Microsoft already signed

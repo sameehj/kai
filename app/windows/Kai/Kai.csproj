@@ -30,7 +30,7 @@
   </ItemGroup>
   <!-- Developer runs: the C build's kaicore.dll and kai.exe next to Kai.exe
        (the release script stages them for the MSI). -->
-  <ItemGroup Condition="'$(KaiBuildDir)' != '' Or Exists('$(MSBuildThisFileDirectory)..\..\..\build\Release\kaicore.dll')">
+  <ItemGroup Condition="'$(Configuration)' == 'Debug'">
     <None Include="$(MSBuildThisFileDirectory)..\..\..\build\Release\kaicore.dll" CopyToOutputDirectory="PreserveNewest" Link="kaicore.dll" Condition="Exists('$(MSBuildThisFileDirectory)..\..\..\build\Release\kaicore.dll')" />
     <None Include="$(MSBuildThisFileDirectory)..\..\..\build\Release\kai.exe" CopyToOutputDirectory="PreserveNewest" Link="bin\kai.exe" Condition="Exists('$(MSBuildThisFileDirectory)..\..\..\build\Release\kai.exe')" />
   </ItemGroup>
