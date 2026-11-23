@@ -46,6 +46,7 @@ targets:
     type: library.static
     platform: macOS
     sources:
+      - path: ../../src/platform_posix.c
       - path: ../../src/util.c
       - path: ../../src/policy.c
       - path: ../../src/scan.c
