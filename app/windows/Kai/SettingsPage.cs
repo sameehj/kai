@@ -24,7 +24,13 @@ public sealed class SettingsPage
             var i = new SelectorBarItem { Text = text, Tag = tag, IsSelected = tag == Section };
             tabs.Items.Add(i);
         }
-        tabs.SelectionChanged += (s, _) => { Section = (string)s.SelectedItem.Tag; App.Me.Main?.Go("settings"); };
+        // the bar reports a selection when it first appears too: redraw only on a real switch
+        tabs.SelectionChanged += (s, _) =>
+        {
+            if (s.SelectedItem?.Tag is not string tag || tag == Section) return;
+            Section = tag;
+            App.Me.Main?.Go("settings");
+        };
         UIElement body = Section switch
         {
             "internet" => Internet(d),

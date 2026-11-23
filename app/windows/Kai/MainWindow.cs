@@ -91,13 +91,22 @@ public sealed class MainWindow : Window
     void Render()
     {
         var d = App.Me.Records.Data;
-        _content.Content = _page switch
+        try
         {
-            "activity" => Activity.Build(d),
-            "ask" => Ask.Build(d),
-            "settings" => Settings.Build(d),
-            _ => Now.Build(d),
-        };
+            _content.Content = _page switch
+            {
+                "activity" => Activity.Build(d),
+                "ask" => Ask.Build(d),
+                "settings" => Settings.Build(d),
+                _ => Now.Build(d),
+            };
+        }
+        catch (Exception e)
+        {
+            // never a blank page: say what failed
+            App.Log($"page {_page}: {e}");
+            _content.Content = Ui.Page(_page, "Kai couldn't draw this page.", Ui.T(e.GetType().Name + ": " + e.Message, 12.5, Ui.Amber));
+        }
     }
 
     public void ShowActivity(string? session = null, string? agent = null, TimelineFilter filter = TimelineFilter.All)

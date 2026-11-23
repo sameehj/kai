@@ -32,7 +32,8 @@ public partial class App : Application
     {
         Me = this;
         // One Kai per user: a second start asks the first to show its window.
-        _single = new Mutex(true, @"Local\Kai.App", out bool first);
+        bool snapshot = Environment.GetCommandLineArgs().Contains("--snapshot");   // read-only: may run beside Kai
+        _single = new Mutex(true, snapshot ? @"Local\Kai.App.Snapshot" + Environment.ProcessId : @"Local\Kai.App", out bool first);
         _show = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\Kai.App.Show");
         if (!first)
         {
@@ -40,6 +41,15 @@ public partial class App : Application
             Environment.Exit(0);
         }
         InitializeComponent();
+        UnhandledException += (_, e) => { Log("unhandled: " + e.Exception); e.Handled = true; };
+    }
+
+    /// %LOCALAPPDATA%\Kai\app.log: errors only, never records or paths from them.
+    public static void Log(string text)
+    {
+        var p = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Kai", "app.log");
+        Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+        File.AppendAllText(p, $"{DateTimeOffset.Now:u} {text}\n");
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)

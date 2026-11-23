@@ -182,7 +182,8 @@ public static class AgentIcons
     public static byte[] Png(string agent, bool dark = false, string? home = null, string? localAppData = null)
     {
         var exe = InstalledExe(agent, home, localAppData);
-        if (exe is not null && IconPng.FromFile(exe) is { Length: > 0 } png) return png;
+        // a program with no icon of its own (codex.exe) would show Windows' generic one
+        if (exe is not null && IconPng.HasOwnIcon(exe) && IconPng.FromFile(exe) is { Length: > 0 } png) return png;
         return Bundled(agent, dark);
     }
 
@@ -234,6 +235,12 @@ internal static partial class IconPng
     [DllImport("gdi32.dll")] static extern int GetDIBits(IntPtr dc, IntPtr bmp, uint start, uint lines, byte[]? bits, ref BITMAPINFOHEADER bi, uint usage);
 
     const uint SHGFI_ICON = 0x100, SHGFI_LARGEICON = 0x0;
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    static extern uint ExtractIconExW(string file, int index, IntPtr[]? large, IntPtr[]? small, uint n);
+
+    /// Does the file carry an icon resource (not just Windows' default one)?
+    public static bool HasOwnIcon(string path) => ExtractIconExW(path, -1, null, null, 0) > 0;
 
     public static byte[]? FromFile(string path)
     {
