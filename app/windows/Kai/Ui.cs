@@ -135,8 +135,12 @@ public static class Ui
         var p = V(14, Title(title), T(subtitle, 12, Muted));
         foreach (var c in content) p.Children.Add(c);
         p.Padding = new Thickness(28, 20, 28, 28);
-        p.MaxWidth = 900;
-        p.HorizontalAlignment = HorizontalAlignment.Stretch;
-        return Scroll(p);
+        // One column, full width up to 900 px, anchored beside the menu.
+        // (A centred column landed off-screen when the menu collapsed.)
+        var g = new Grid();
+        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MaxWidth = 900 });
+        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0, GridUnitType.Star) });
+        g.Children.Add(p);
+        return Scroll(g);
     }
 }

@@ -32,11 +32,10 @@ public sealed class NowPage
             foreach (var c in s.Cards) body.Add(Card(c, d));
             if (AgentReports.Footnote(s.Agent) is { } f) body.Add(Ui.T(char.ToUpperInvariant(f[0]) + f[1..] + ".", 11.5, Ui.Muted));
         }
-        var head = Ui.Page("Now", "Your agent sessions, across all projects.", body.ToArray());
         var pill = Ui.Pill(summary.Text, summary.Working > 0 ? Ui.Teal : Ui.Muted);
         pill.HorizontalAlignment = HorizontalAlignment.Left;
-        ((StackPanel)head.Content).Children.Insert(2, pill);
-        return head;
+        body.Insert(0, pill);
+        return Ui.Page("Now", "Your agent sessions, across all projects.", body.ToArray());
     }
 
     static UIElement Card(NowCard c, Snapshot0 d)
