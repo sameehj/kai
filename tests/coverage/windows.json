@@ -1,6 +1,6 @@
 {
-  "generated": "2026-11-22",
-  "kai": "kai 0.5.0-preview.1 (dev build: honours KAI_HOME and KAI_POLICY) \u00c2\u00b7 commit 2b770f938993",
+  "generated": "2026-11-23",
+  "kai": "kai 0.5.0-preview.1 (dev build: honours KAI_HOME and KAI_POLICY) \u00b7 commit 1759dcecf1b1",
   "results": {
     "claude": {
       "file_tool": "stopped",

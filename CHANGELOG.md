@@ -1,5 +1,16 @@
 # Changelog
 
+## Kai for Windows (preview)
+
+The same version as the macOS release (0.5.0-preview.1); `kai version` prints the commit. Details: [docs/windows/README.md](docs/windows/README.md), test results: [docs/windows/TEST-RESULTS.md](docs/windows/TEST-RESULTS.md).
+
+- **Kai runs on Windows 10 and 11**, natively: the agent hooks for Claude Code, Codex and Cursor, the `kai` command, and a Kai app with the tray icon, Now, Activity, Ask Kai and Settings, as on macOS.
+- **Hooks stop things**, with Windows paths understood (either slash, any case, 8.3 names, `\\?\`, admin shares, alternate data streams, `%VAR%` and `$env:`), Windows' secret stores protected by default, and PowerShell and cmd.exe commands read the way those shells read them.
+- **Kai Watch** (a Windows service) lists the hosts agents connect to, with their host names, and can note when a program an agent runs opens one of your protected files. It only watches: nothing is blocked at the system level on Windows. When it stops, Kai says "Internet watching stopped" and offers Restart.
+- **One installer** (MSI, one administrator prompt) with everything included; uninstalling removes the service and your agents' Kai hooks.
+- **Fixes on every platform:** `kai status --json` read freed memory; a policy file saved with Windows line endings wasn't read correctly.
+- Not yet: blocking at the system level, a signed release.
+
 ## 0.5.0-preview.1 (2026-11-21)
 
 Notes: [docs/release/0.5.0-preview.1.md](docs/release/0.5.0-preview.1.md).

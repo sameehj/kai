@@ -144,3 +144,30 @@ aliases, `$env:VAR`, `-EncodedCommand` base64 UTF-16LE decoding,
 README: Claude Code's Bash tool is Git Bash, its PowerShell tool and Codex/Cursor
 use PowerShell); when it isn't known, every reader runs and any hit stops the
 command.
+
+## 7. Phase 2: Kai Watch, the app, the installer
+
+- **Kai Watch** (`service/win/kaisvc.c`, `etw.c`): one real-time ETW session
+  (Kernel-Process, Kernel-Network, DNS-Client, and Kernel-File only with
+  `watch_files on`), event-ID filters in the kernel and a PID pre-check before
+  any parsing. The logic is portable C in `src/watch.c` (process tree keyed by
+  PID + start time, DNS attribution, protected-file filter), unit-tested
+  without ETW. Records go through libkai's audit writer in the macOS Internet
+  wall's format. Heartbeat in `%ProgramData%\Kai`, trusted by
+  `kai_plat_heartbeat_trusted` only when SYSTEM/Administrators own it and
+  nobody else can write it; a heartbeat with `"running": false` is never a
+  verified level.
+- **Sessions without a Files wall:** `kai_sessions_scan`'s non-Apple branch is
+  the same scan on four platform calls (process list, start time, working
+  folder from the PEB, terminal/shell host). Linux lists no processes yet, so
+  it is unchanged there.
+- **The app** (`app/windows`): `Kai.Core` (models, copy rules, Ask Kai, model
+  store; xUnit-tested) and `Kai` (WinUI 3, built in code). It reads through
+  `kai.exe` and calls `kaicore.dll` (libkai, exported) in-process for what the
+  macOS app does in-process (pause, daily counts, audit), so `pause` still has
+  no CLI command an agent could run.
+- **The installer** (`installer/windows/Kai.wxs`, WiX 5) and
+  `scripts/release/build-windows-msi.ps1` (signing from the environment only;
+  unsigned builds are named so and never published).
+- New policy keys: `on_destructive_command off|ask|block` (Windows shells;
+  off by default) and `watch_files off|on`.
