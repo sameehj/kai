@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial -->
+  <!-- Kai.exe: the Windows app (WinUI 3, unpackaged, self-contained). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>$(WinTfm)</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <RootNamespace>Kai</RootNamespace>
+    <AssemblyName>Kai</AssemblyName>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\Kai.ico</ApplicationIcon>
+    <!-- Needed even unpackaged: without it `dotnet publish` leaves out the
+         app's own Kai.pri and App.xbf, and the app crashes at start
+         (0xC000027B in Microsoft.UI.Xaml.dll). -->
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <!-- Program.cs: the one-instance check runs before WinUI starts -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.6.5" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705" />
+    <PackageReference Include="H.NotifyIcon.WinUI" Version="2.4.1" />
+    <PackageReference Include="LLamaSharp" Version="0.30.0" />
+    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.30.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Kai.Core\Kai.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Assets\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <!-- Developer runs: the C build's kaicore.dll and kai.exe next to Kai.exe
+       (the release script stages them for the MSI). -->
+  <ItemGroup Condition="'$(Configuration)' == 'Debug'">
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\build\Release\kaicore.dll" CopyToOutputDirectory="PreserveNewest" Link="kaicore.dll" Condition="Exists('$(MSBuildThisFileDirectory)..\..\..\build\Release\kaicore.dll')" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\build\Release\kai.exe" CopyToOutputDirectory="PreserveNewest" Link="bin\kai.exe" Condition="Exists('$(MSBuildThisFileDirectory)..\..\..\build\Release\kai.exe')" />
+  </ItemGroup>
+</Project>

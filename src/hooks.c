@@ -12,6 +12,7 @@
  */
 #include "cJSON.h"
 #include "internal.h"
+#include "platform.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -645,6 +646,31 @@ static const char *command_drives_terminal(const char *cmd, const char *cwd) {
     if (!t.app && t.osascript) t.app = names_terminal_app(cmd);
     return t.app;
 }
+
+/* Windows: what winshell.c reads a PowerShell or cmd.exe command as, then the
+ * command as written, so every shell check sees Windows commands too. The
+ * translation goes first: its words are always quoted, so odd quoting in the
+ * original can't hide it from the bash reader. Elsewhere (and for a Bash tool
+ * off Windows): the command unchanged. Caller frees. */
+static int windows_shell(const char *tool) {
+    return kai_plat_is_windows() || (tool && !strcmp(tool, "PowerShell"));
+}
+
+static char *checked_command(const char *cmd, const char *tool) {
+    if (!cmd) return NULL;
+    char *t = windows_shell(tool) ? kai_winshell_translate(cmd) : NULL;
+    if (!t) return strdup(cmd);
+    sb_t b;
+    sb_init(&b);
+    sb_adds(&b, t);
+    sb_adds(&b, "\n");
+    sb_adds(&b, cmd);
+    free(t);
+    return sb_take(&b);
+}
+
+#define DESTRUCTIVE_REASON "Kai stopped a command that permanently deletes or wipes data (%s). Ask the user " \
+    "if this is needed; they can run it in their own terminal."
 
 /* A shell command from tool_input: "command" or "cmd", as a string or as an
  * argv array (Codex sends both shapes). Returns a newly allocated string or
@@ -1505,6 +1531,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             }
         }
         char *cmd = command_text(ti);
+        char *chk = checked_command(cmd, tool);
         hint_key = kai_hint_key_for_command(cmd);   /* Item 7: git/ssh/gh/... for a hint */
         int is_patch = tool && !strcmp(tool, "apply_patch");
         sb_t all;
@@ -1652,20 +1679,20 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                      first_path, why);
             subject = strdup(first_path);
         } else if (cmd && !is_patch) {
-            if (command_controls_kai(cmd)) {
+            if (command_controls_kai(chk)) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, "kai_self_protect", sizeof rule);
                 snprintf(reason, sizeof reason,
                          "Kai never allows agents to change its settings through its checks. " KAI_NOT_A_BOUNDARY);
-            } else if (kai_command_tampers_kai(cmd, cwd)) {
+            } else if (kai_command_tampers_kai(chk, cwd)) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, "kai_self_protect", sizeof rule);
                 snprintf(reason, sizeof reason, "%s", KAI_TAMPER_REASON);
-            } else if (command_prints_credential(cmd)) {
+            } else if (command_prints_credential(chk)) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, "credential_print", sizeof rule);
-                snprintf(reason, sizeof reason, CRED_PRINT_REASON, command_prints_credential(cmd));
-            } else if (rules_decide(cmd, source, rhost, sizeof rhost) == 2) {
+                snprintf(reason, sizeof reason, CRED_PRINT_REASON, command_prints_credential(chk));
+            } else if (rules_decide(chk, source, rhost, sizeof rhost) == 2) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, "terminal_rule", sizeof rule);
                 snprintf(reason, sizeof reason, "Kai stopped a command that reaches %s: the user chose to stop "
@@ -1673,25 +1700,32 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             } else if (upload_granted(cmd, source, cwd)) {
                 decision = KAI_ACT_NONE;   /* the user's kai allow-upload for exactly this */
                 kai_strlcpy(rule, "terminal_grant", sizeof rule);
-            } else if ((app = command_drives_terminal(cmd, cwd)) &&
+            } else if ((app = command_drives_terminal(chk, cwd)) &&
                        terminal_stopped(cmd, app, source, cwd, reason, sizeof reason, capapp, sizeof capapp) &&
                        !kai_cli_command_granted(source, "terminal_control", cmd, KAI_TERMINAL_ALLOW_MAX, (long long)time(NULL)) &&
                        !skip_exempt("terminal_control", &ex)) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, "terminal_control", sizeof rule);
                 kai_strlcpy(match, capapp, sizeof match);
-            } else if (kai_capture_match(cmd, capwhat, sizeof capwhat, capapp, sizeof capapp) &&
+            } else if (kai_capture_match(chk, capwhat, sizeof capwhat, capapp, sizeof capapp) &&
                        capture_stopped(capwhat, capapp, NULL, source, cwd, reason, sizeof reason) &&
                        !skip_exempt("screen_app_control", &ex)) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, "screen_app_control", sizeof rule);
                 kai_strlcpy(match, capapp, sizeof match);
-            } else if (kai_command_touches_protected_as(p, source, cmd, cwd, why, sizeof why,
+            } else if (kai_command_touches_protected_as(p, source, chk, cwd, why, sizeof why,
                                                         skip_exempt, &ex)) {
                 decision = KAI_ACT_BLOCK;
                 kai_strlcpy(rule, why, sizeof rule);
                 say_protected(reason, sizeof reason, NULL, why, why, source, cwd);
-            } else if ((strength = command_reads_sensitive(p, cmd, cwd, match, sizeof match, why, sizeof why)) &&
+            } else if (kai_policy_destructive_on(p) && windows_shell(tool) &&
+                       kai_winshell_destructive(cmd, match, sizeof match) &&
+                       !skip_exempt("destructive_command", &ex)) {
+                decision = KAI_ACT_BLOCK;
+                ask = can_ask;   /* Claude Code asks the user; Codex can't, so it denies */
+                kai_strlcpy(rule, "destructive_command", sizeof rule);
+                snprintf(reason, sizeof reason, DESTRUCTIVE_REASON, match);
+            } else if ((strength = command_reads_sensitive(p, chk, cwd, match, sizeof match, why, sizeof why)) &&
                        !skip_exempt("file_contents", &ex)) {
                 decision = strength == 2 || kai_policy_file_secret_action(p) >= KAI_ACT_BLOCK
                                ? KAI_ACT_BLOCK : KAI_ACT_WARN;
@@ -1700,7 +1734,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
                 snprintf(reason, sizeof reason,
                          "Kai stopped sending `%s` to the model: it holds %s. Ask the user to share only the "
                          "part you need.", match, why);
-            } else if (kai_upload_match(p, cmd, why, sizeof why, match, sizeof match,
+            } else if (kai_upload_match(p, chk, why, sizeof why, match, sizeof match,
                                         skip_exempt, &ex) &&
                        1) {
                 decision = kai_policy_upload_action(p) >= KAI_ACT_BLOCK
@@ -1739,6 +1773,7 @@ static int hook_claude(const char *json, const char *cwd_arg, const char *source
             kai_strlcpy(act_mcp, mcp_server, sizeof act_mcp);
         }
         free(cmd);
+        free(chk);
         free(alltext);
     } else if (ev && strcmp(ev, "PostToolUse") == 0) {
         note_activity(p, 0);   /* the call finished */
@@ -1990,45 +2025,53 @@ static int hook_cursor(const char *json) {
     } else if (ev && strcmp(ev, "beforeShellExecution") == 0) {
         tool = "Shell";
         const char *cmd = cjstr(root, "command");
+        char *chk_owned = checked_command(cmd, NULL);
+        const char *chk = chk_owned ? chk_owned : cmd;
         subject = cmd;
         ex.cmd = cmd;
-        if (cmd && command_controls_kai(cmd)) {
+        if (cmd && command_controls_kai(chk)) {
             deny = 1;
             kai_strlcpy(why, "kai_self_protect", sizeof why);
             snprintf(reason, sizeof reason,
                      "Kai never allows agents to change its settings through its checks. " KAI_NOT_A_BOUNDARY);
-        } else if (cmd && kai_command_tampers_kai(cmd, cwd)) {
+        } else if (cmd && kai_command_tampers_kai(chk, cwd)) {
             deny = 1;
             kai_strlcpy(why, "kai_self_protect", sizeof why);
             snprintf(reason, sizeof reason, "%s", KAI_TAMPER_REASON);
-        } else if (cmd && command_prints_credential(cmd)) {
+        } else if (cmd && command_prints_credential(chk)) {
             deny = 1;
             kai_strlcpy(why, "credential_print", sizeof why);
-            snprintf(reason, sizeof reason, CRED_PRINT_REASON, command_prints_credential(cmd));
-        } else if (cmd && rules_decide(cmd, "cursor", rhost, sizeof rhost) == 2) {
+            snprintf(reason, sizeof reason, CRED_PRINT_REASON, command_prints_credential(chk));
+        } else if (cmd && rules_decide(chk, "cursor", rhost, sizeof rhost) == 2) {
             deny = 1;
             kai_strlcpy(why, "terminal_rule", sizeof why);
             snprintf(reason, sizeof reason, "Kai stopped a command that reaches %s: the user chose to stop this "
                      "(kai rules).", rhost);
         } else if (cmd && upload_granted(cmd, "cursor", cwd)) {
             /* the user's kai allow-upload for exactly this command */
-        } else if (cmd && (app = command_drives_terminal(cmd, cwd)) &&
+        } else if (cmd && (app = command_drives_terminal(chk, cwd)) &&
                    terminal_stopped(cmd, app, "cursor", cwd, reason, sizeof reason, capapp, sizeof capapp) &&
                    !kai_cli_command_granted("cursor", "terminal_control", cmd, KAI_TERMINAL_ALLOW_MAX, (long long)time(NULL)) &&
                    !skip_exempt("terminal_control", &ex)) {
             deny = 1;
             kai_strlcpy(why, "terminal_control", sizeof why);
             kai_strlcpy(match, capapp, sizeof match);
-        } else if (cmd && kai_capture_match(cmd, capwhat, sizeof capwhat, capapp, sizeof capapp) &&
+        } else if (cmd && kai_capture_match(chk, capwhat, sizeof capwhat, capapp, sizeof capapp) &&
                    capture_stopped(capwhat, capapp, NULL, "cursor", cwd, reason, sizeof reason) &&
                    !skip_exempt("screen_app_control", &ex)) {
             deny = 1;
             kai_strlcpy(why, "screen_app_control", sizeof why);
             kai_strlcpy(match, capapp, sizeof match);
-        } else if (cmd && kai_command_touches_protected_as(p, "cursor", cmd, cwd, why, sizeof why,
+        } else if (cmd && kai_command_touches_protected_as(p, "cursor", chk, cwd, why, sizeof why,
                                                            skip_exempt, &ex)) {
             deny = 1; say_protected(reason, sizeof reason, NULL, why, why, "cursor", cwd);
-        } else if (cmd && (strength = command_reads_sensitive(p, cmd, cwd, match, sizeof match,
+        } else if (cmd && kai_policy_destructive_on(p) && windows_shell(NULL) &&
+                   kai_winshell_destructive(cmd, match, sizeof match) &&
+                   !skip_exempt("destructive_command", &ex)) {
+            deny = 1;
+            kai_strlcpy(why, "destructive_command", sizeof why);
+            snprintf(reason, sizeof reason, DESTRUCTIVE_REASON, match);
+        } else if (cmd && (strength = command_reads_sensitive(p, chk, cwd, match, sizeof match,
                                                               held, sizeof held)) &&
                    (strength == 2 || kai_policy_file_secret_action(p) >= KAI_ACT_BLOCK) &&
                    !skip_exempt("file_contents", &ex)) {
@@ -2037,13 +2080,14 @@ static int hook_cursor(const char *json) {
             kai_strlcpy(why, "file_contents", sizeof why);
             snprintf(reason, sizeof reason, "Kai stopped sending `%s` to the model: it holds %s. "
                      "Ask the user to share only the part you need.", match, held);
-        } else if (cmd && kai_upload_match(p, cmd, why, sizeof why, match, sizeof match,
+        } else if (cmd && kai_upload_match(p, chk, why, sizeof why, match, sizeof match,
                                            skip_exempt, &ex) &&
                    1) {
             deny = kai_policy_upload_action(p) >= KAI_ACT_BLOCK;
             cursor_ask = deny && kai_policy_upload_ask(p);
             say_upload(reason, sizeof reason, cmd, "cursor", why, cwd);
         }
+        free(chk_owned);
     } else if (ev && strcmp(ev, "beforeMCPExecution") == 0) {
         tool = "MCP";
         const char *ti = cjstr(root, "tool_input");
@@ -2167,6 +2211,11 @@ int kai_cmd_hook(int argc, char **argv) {
     size_t len = 0;
     char *json = kai_read_stream(stdin, 8 * 1024 * 1024, &len);
     if (!json) { fprintf(stderr, "kai hook: input too large or unreadable\n"); return 1; }
+    /* A UTF-8 byte-order mark before the event (Cursor on Windows is reported
+     * to add one; any agent's shell could) is dropped for every agent: a JSON
+     * parser rejects it. */
+    if ((unsigned char)json[0] == 0xEF && (unsigned char)json[1] == 0xBB && (unsigned char)json[2] == 0xBF)
+        memmove(json, json + 3, strlen(json + 3) + 1);
     int rc;
     if (strcmp(agent, "claude") == 0) rc = hook_claude(json, NULL, "claude");
     else if (strcmp(agent, "codex") == 0) rc = hook_claude(json, NULL, "codex");

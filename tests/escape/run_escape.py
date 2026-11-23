@@ -50,11 +50,50 @@ suite = json.load(open(cases_path, encoding="utf-8"))
 cases = suite["cases"]
 real_home = os.path.realpath(os.path.expanduser("~"))
 
+WINDOWS = sys.platform == "win32"
 home = tempfile.mkdtemp()
-proj = os.path.join(home, "proj")
+if WINDOWS:  # kai.exe resolves ~ from USERPROFILE; '/' keeps {HOME} valid inside JSON
+    home = os.path.realpath(home).replace(os.sep, "/")
+proj = os.path.join(home, "proj").replace(os.sep, "/")
 os.makedirs(proj)
 env = dict(os.environ, KAI_HOME=tempfile.mkdtemp(), HOME=home)
+if WINDOWS:
+    env["USERPROFILE"] = home
 env.pop("KAI_POLICY", None)
+
+
+# Cases marked "platform": "windows" run only on Windows, "posix" ones only on
+# macOS and Linux; elsewhere their last recorded result is shown, not measured.
+def applies(case):
+    plat = case.get("platform")
+    return not plat or (plat == "windows") == WINDOWS
+
+
+def short_path(p):
+    """Windows 8.3 form of an existing path ('/'-separated), else p."""
+    if not WINDOWS:
+        return p
+    import ctypes
+    buf = ctypes.create_unicode_buffer(32768)
+    n = ctypes.windll.kernel32.GetShortPathNameW(p.replace("/", os.sep), buf, 32768)
+    return buf.value.replace(os.sep, "/") if 0 < n < 32768 else p
+
+
+if WINDOWS:
+    # The Windows cases need real files: 8.3 names, junctions and letter case
+    # resolve only on disk. Fake secrets, in the throwaway home only.
+    for rel, text in {".ssh/id_ed25519": "KAI-FAKE-SSH-KEY\n", ".ssh/id_rsa": "KAI-FAKE-SSH-KEY\n",
+                      ".aws/credentials": "[default]\naws_secret_access_key = KAI-FAKE\n",
+                      "proj/.env": "KAI_FAKE=1\n", "proj/notes.txt": "KAI-FAKE-NOTES\n",
+                      "scratch/a.txt": "x\n"}.items():
+        os.makedirs(os.path.dirname(os.path.join(home, rel)), exist_ok=True)
+        with open(os.path.join(home, rel), "w") as fh:
+            fh.write(text)
+    subprocess.run(["cmd", "/c", "mklink", "/J", os.path.join(home, "keys").replace("/", os.sep),
+                    os.path.join(home, ".ssh").replace("/", os.sep)], capture_output=True)
+HOME_BACKSLASH = home.replace("/", "\\\\")          # one '\' inside the JSON text
+SHORT_HOME = short_path(home)
+ADMIN_SHARE = home[0] + "$" + home[2:].replace("/", "\\\\") if WINDOWS else home   # C$\Users\...
 
 
 def steps_of(case):
@@ -67,7 +106,8 @@ def outcome(event):
     event = dict(event)
     event.setdefault("hook_event_name", "PreToolUse")
     event.setdefault("cwd", proj)
-    text = json.dumps(event).replace("{HOME}", home)
+    text = (json.dumps(event).replace("{HOMEW}", HOME_BACKSLASH).replace("{SHORTHOME}", SHORT_HOME)
+            .replace("{ADMINSHARE}", ADMIN_SHARE).replace("{HOME}", home))
     out = subprocess.run([kai, "hook", "claude"], input=text, capture_output=True,
                          text=True, env=env, timeout=30).stdout
     # "ask": the call waits for the user in the agent's own prompt (Nov 1 step 3;
@@ -88,19 +128,30 @@ def missing_binary():
     fail-closed setting, so this is expected to get through, by design."""
     h = tempfile.mkdtemp()
     os.makedirs(os.path.join(h, ".claude"))
-    exe = os.path.join(h, "bin", "kai")
+    exe = os.path.join(h, "bin", "kai.exe" if WINDOWS else "kai")
     os.makedirs(os.path.dirname(exe))
     shutil.copy(kai, exe)
     e = dict(env, HOME=h, KAI_HOME=os.path.join(h, ".kai"))
+    if WINDOWS:  # the temp folder may sit under a git checkout (a repository at C:\)
+        e.update(USERPROFILE=h, KAI_TEST_ALLOW_DEV_HOOK="1")
     subprocess.run([exe, "install", "claude"], capture_output=True, env=e, timeout=30)
     settings = json.load(open(os.path.join(h, ".claude", "settings.json")))
+
+    def line(x):  # the command plus exec-form args (Claude Code on Windows)
+        return " ".join([x.get("command", "")] + x.get("args", []))
     entry = next(x for g in settings["hooks"].get("PreToolUse", [])
-                 for x in g.get("hooks", []) if " hook claude" in x.get("command", ""))
+                 for x in g.get("hooks", []) if " hook claude" in line(x))
     cmd = entry["command"]
     os.remove(exe)
     event = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Read",
                         "tool_input": {"file_path": "~/.ssh/id_rsa"}, "cwd": h})
-    r = subprocess.run(["/bin/sh", "-c", cmd], input=event, capture_output=True, text=True, env=e, timeout=30)
+    if "args" in entry:  # exec form: Claude Code starts the program itself
+        try:
+            r = subprocess.run([cmd] + entry["args"], input=event, capture_output=True, text=True, env=e, timeout=30)
+        except OSError:
+            r = subprocess.CompletedProcess([cmd], 127, "", "")
+    else:
+        r = subprocess.run(["/bin/sh", "-c", cmd], input=event, capture_output=True, text=True, env=e, timeout=30)
     shutil.rmtree(h, ignore_errors=True)
     blocks = r.returncode == 2 or '"deny"' in r.stdout or (r.returncode != 0 and entry.get("onFailure") == "block")
     return "stopped" if blocks else "gets through"
@@ -114,6 +165,8 @@ def cursor_fail_closed():
     os.makedirs(os.path.join(h, ".cursor"))
     # a dev build in the checkout on purpose (STEP 2c's guard refuses that otherwise)
     e = dict(env, HOME=h, KAI_HOME=os.path.join(h, ".kai"), KAI_TEST_ALLOW_DEV_HOOK="1")
+    if WINDOWS:
+        e["USERPROFILE"] = h
     subprocess.run([kai, "install", "cursor"], capture_output=True, env=e, timeout=30)
     try:
         cfg = json.load(open(os.path.join(h, ".cursor", "hooks.json")))
@@ -169,6 +222,8 @@ def replay(case, control=False):
     the check must say nothing happened: that proves the check can tell."""
     spec = case["replay"]
     if spec.get("os") and spec["os"] != sys.platform:
+        return "skipped"
+    if WINDOWS:  # replays are bash scripts against a POSIX home
         return "skipped"
     for tool in spec.get("needs", []):
         if not shutil.which(tool):
@@ -240,6 +295,10 @@ def replay(case, control=False):
 mismatches = 0
 rows = []
 for c in cases:
+    if not applies(c):  # another platform's case: shown with its recorded result
+        rows.append((c, c["hooks"], None))
+        print(f"  skip {c['hooks']:12} {'(measured on ' + c['platform'] + ')':28} {c['id']}")
+        continue
     got = run(c)
     rep = replay(c) if c.get("replay") else None
     bad = []
@@ -261,13 +320,21 @@ for c in cases:
     print(f"  {'ok  ' if not (bad and (broken or not record)) else 'FAIL'} {got:12} {('without Kai: ' + rep) if rep else '':28} {c['id']}"
           + ("" if not (bad and (broken or not record)) else "  (" + "; ".join(bad) + ")"))
 
-total = len(rows)
-stopped = sum(got == "stopped" for _, got, _ in rows)
+# The headline counts the cases every platform shares (and the POSIX ones);
+# the Windows cases have their own line.
+win_rows = [r for r in rows if r[0].get("platform") == "windows"]
+total = len(rows) - len(win_rows)
+stopped = sum(got == "stopped" for c, got, _ in rows if c.get("platform") != "windows")
+win_total = len(win_rows)
+win_stopped = sum(got == "stopped" for _, got, _ in win_rows)
 replayed = sum(1 for _, _, rep in rows if rep and rep != "skipped")
 print(f"\n{stopped}/{total} stopped by hooks today, {replayed} replayed without Kai, {mismatches} mismatch(es)")
+if win_total:
+    print(f"Windows (dev preview): {win_stopped}/{win_total} stopped"
+          + ("" if WINDOWS else " (recorded on Windows, not measured here)"))
 
 if record and not mismatches:
-    with open(cases_path, "w", encoding="utf-8") as f:
+    with open(cases_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(suite, f, indent=2, ensure_ascii=False)
         f.write("\n")
     print("recorded results in", cases_path)
@@ -298,6 +365,13 @@ if md_out:
         "",
         f"**Today the hooks stop {stopped} of {total} attempts.**",
         "",
+    ] + ([
+        f"**Windows (dev preview): the hooks stop {win_stopped} of {win_total} Windows-specific attempts** "
+        "(paths, PowerShell and cmd.exe: the *Windows* sections below, measured with `kai.exe` on Windows; "
+        "see [windows/README.md](windows/README.md)). The shared rows were also measured on Windows, as "
+        "Claude Code's Bash tool (Git Bash) sends them, except the one marked as macOS and Linux only.",
+        "",
+    ] if win_total else []) + [
         "How to read it:",
         "",
         "- **Hooks (measured)** is what `kai hook claude` answers on every run, with the default policy. "
@@ -315,7 +389,7 @@ if md_out:
                       "| Attempt | Without Kai (replayed) | Hooks (measured) | Meant to be closed by |",
                       "|---|---|---|---|"]
         lines.append(f"| {c['attempt']} | {without_kai(c, rep)} | {ICON[got]} | {c['closed_by']} |")
-    with open(md_out, "w", encoding="utf-8") as f:
+    with open(md_out, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
 
 
@@ -361,6 +435,8 @@ if val_out:
     ]
     by = {}
     for c, got, rep in rows:
+        if c.get("platform") == "windows":  # Windows has its own sections in ESCAPES.md
+            continue
         by.setdefault(c["scenario"], []).append((c, got, rep))
     for s in suite["scenarios"]:
         items = by.get(s["id"], [])
@@ -437,7 +513,7 @@ if val_out:
         "Replays run in a temporary home folder with fake keys (`KAI-FAKE-…`), have no network "
         "access in their steps, and never touch your real home folder.",
     ]
-    with open(val_out, "w", encoding="utf-8") as f:
+    with open(val_out, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
 
 sys.exit(1 if mismatches else 0)

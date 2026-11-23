@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial */
 #include "internal.h"
+#include "platform.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -117,6 +118,15 @@ static const struct {
     {"codex", "arg", "*/@openai/codex/*"},
     {"codex", "team", "2DC432GLL2"},
     {"gemini", "arg", "*/@google/gemini-cli/*"},
+    /* Windows install locations (inert elsewhere). Matching ignores case on
+     * Windows; the Watch service also checks each one's Authenticode signer. */
+    {"claude", "exe", "*/.local/bin/claude.exe"},
+    {"claude", "exe", "*/claude-code/*/claude.exe"},   /* Claude Code run by the Claude desktop app */
+    {"codex", "exe", "*/Programs/OpenAI/Codex/bin/codex.exe"},
+    {"codex", "exe", "*/@openai/codex/*"},
+    {"codex", "exe", "*/WindowsApps/OpenAI.Codex_*"},
+    {"cursor", "exe", "*/AppData/Local/Programs/cursor/*"},
+    {"cursor", "exe", "*/Program Files/cursor/*"},
     /* Added to the catalog (unverified against installed copies -- see
      * AGENT_CATALOG below; patterns are best-effort and may need refining). */
     {"aider", "arg", "*/bin/aider"},
@@ -608,6 +618,20 @@ static int next_tok(char **cur, char **tok) {
     return 1;
 }
 
+/* A protect/allow value: one word, or "a path with spaces" in double quotes
+ * (Windows profiles: ".../Chrome/User Data"; macOS: "Application Support"). */
+static int next_path_tok(char **cur, char **tok) {
+    char *s = *cur;
+    while (*s == ' ' || *s == '\t') s++;
+    if (*s != '"') return next_tok(cur, tok);
+    char *e = strchr(s + 1, '"');
+    if (!e) return next_tok(cur, tok);
+    *tok = s + 1;
+    *e = '\0';
+    *cur = e + 1;
+    return 1;
+}
+
 /* Read an action token, honoring replace:"..." which may contain spaces.
  * Leaves *cur pointing just past the action. */
 static int next_action_tok(char **cur, char **tok) {
@@ -642,16 +666,18 @@ static kai_policy *parse(const char *text, const char *source, char *err,
     for (char *line = strtok_r(copy, "\n", &save); line && !failed;
          line = strtok_r(NULL, "\n", &save)) {
         lineno++;
+        size_t ll = strlen(line);
+        if (ll && line[ll - 1] == '\r') line[ll - 1] = '\0';   /* CRLF (Notepad on Windows) */
         char *cur = line;
         char *d;
         if (!next_tok(&cur, &d)) continue;
         if (d[0] == '#') continue;
 
         if (strcmp(d, "protect") == 0) {
-            char *v; if (!next_tok(&cur, &v)) continue;
+            char *v; if (!next_path_tok(&cur, &v)) continue;
             add_list(p->protect, &p->nprotect, v);
         } else if (strcmp(d, "allow") == 0) {
-            char *v; if (!next_tok(&cur, &v)) continue;
+            char *v; if (!next_path_tok(&cur, &v)) continue;
             add_list(p->allow, &p->nallow, v);
         } else if (strcmp(d, "secrets") == 0) {
             char *v; if (!next_tok(&cur, &v)) continue;
@@ -675,6 +701,11 @@ static kai_policy *parse(const char *text, const char *source, char *err,
             char *rep;
             p->upload_action = p->upload_ask ? KAI_ACT_BLOCK : parse_action(v, &rep);
             if (!p->upload_ask) free(rep);
+        } else if (strcmp(d, "on_destructive_command") == 0) {
+            /* Windows shells only (Remove-Item -Recurse -Force, del /s /q, format...).
+             * Off by default so Windows and macOS behave the same. */
+            char *v; if (!next_tok(&cur, &v)) continue;
+            p->destructive_on = strcmp(v, "ask") == 0 || strcmp(v, "block") == 0;
         } else if (strcmp(d, "injection") == 0) {
             char *v; if (!next_tok(&cur, &v)) continue;
             p->injection_on = strcmp(v, "off") != 0;
@@ -783,6 +814,9 @@ static kai_policy *parse(const char *text, const char *source, char *err,
         } else if (strcmp(d, "audit_context") == 0) {
             char *v; if (!next_tok(&cur, &v)) continue;
             p->audit_context = strcmp(v, "off") != 0;
+        } else if (strcmp(d, "watch_files") == 0) {
+            char *v; if (!next_tok(&cur, &v)) continue;
+            p->watch_files = strcmp(v, "on") == 0;
         } else if (strcmp(d, "record_activity") == 0) {
             char *v; if (!next_tok(&cur, &v)) continue;
             p->record_activity = strcmp(v, "on") == 0;
@@ -835,7 +869,21 @@ static kai_policy *parse(const char *text, const char *source, char *err,
     return p;
 }
 
-const char *kai_default_policy(void) { return DEFAULT_POLICY; }
+/* The built-in policy, plus the platform's own secret folders (Windows:
+ * %APPDATA% and %LOCALAPPDATA% stores, browser profiles; see platform.h). */
+const char *kai_default_policy(void) {
+    static char *full;
+    const char *extra = kai_plat_default_policy_extra();
+    if (!extra || !*extra) return DEFAULT_POLICY;
+    if (!full) {
+        size_t a = strlen(DEFAULT_POLICY), b = strlen(extra);
+        full = malloc(a + b + 1);
+        if (!full) return DEFAULT_POLICY;
+        memcpy(full, DEFAULT_POLICY, a);
+        memcpy(full + a, extra, b + 1);
+    }
+    return full;
+}
 
 /* $KAI_POLICY, else <kai home>/policy. */
 const char *kai_policy_file(void) {
@@ -908,7 +956,7 @@ kai_policy *kai_policy_from_string(const char *text, char *err, size_t errlen) {
  * unknown hosts are denied; known hosts only on web ports. */
 kai_policy *kai_policy_builtin_failsafe(void) {
     char err[128];
-    kai_policy *p = parse(DEFAULT_POLICY, "built-in (no loadable policy)", err, sizeof err);
+    kai_policy *p = parse(kai_default_policy(), "built-in (no loadable policy)", err, sizeof err);
     if (p) { p->egress_mode = KAI_EGRESS_BLOCK; p->failsafe = 1; }
     return p;
 }
@@ -985,7 +1033,7 @@ kai_policy *kai_policy_load(const char *path, char *err, size_t errlen) {
             return NULL;
         }
     }
-    if (!chosen) return parse(DEFAULT_POLICY, "built-in", err, errlen);
+    if (!chosen) return parse(kai_default_policy(), "built-in", err, errlen);
 
     size_t len = 0;
     char *txt = kai_read_file(chosen, 4000000, &len);
@@ -1029,8 +1077,10 @@ kai_action kai_policy_upload_action(const kai_policy *p) { return p->upload_acti
 int kai_policy_file_secret_ask(const kai_policy *p) { return p ? p->file_secret_ask : 0; }
 int kai_policy_upload_ask(const kai_policy *p) { return p ? p->upload_ask : 0; }
 int kai_policy_fetch_block(const kai_policy *p) { return p ? p->fetch_block : 0; }
+int kai_policy_destructive_on(const kai_policy *p) { return p ? p->destructive_on : 0; }
 int kai_policy_audit_context(const kai_policy *p) { return p && p->audit_context; }
 int kai_policy_record_activity(const kai_policy *p) { return p && p->record_activity; }
+int kai_policy_watch_files(const kai_policy *p) { return p && p->watch_files; }
 
 /* '*' and '?' span anything, '/' and newlines included: the pattern is over
  * the whole command, usually the exact command with a few wildcards. */

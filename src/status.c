@@ -9,6 +9,7 @@
  * its hooks) is never reported as Active.
  */
 #include "internal.h"
+#include "platform.h"
 #include "cJSON.h"
 
 #include <stdio.h>
@@ -133,10 +134,10 @@ static void ago_str(long long t, char *out, size_t n) {
 
 /* A.3: per agent, each item measured on its own. Returns 2 checking,
  * 1 partly, 0 not checking, -1 not installed. */
-static int agent_report(agent_state *a) {
+static int agent_report(agent_state *a, sb_t *o) {
     agent_measure(a);
     if (!a->installed) {
-        printf("  %-12s %s\n", a->name, a->detected ? "Not checking: Kai isn't installed for it (kai install)" : "Not detected");
+        sb_addf(o, "  %-12s %s\n", a->name, a->detected ? "Not checking: Kai isn't installed for it (kai install)" : "Not detected");
         return -1;
     }
     int disabled = hooks_disabled(a), current = configured_current(a);
@@ -146,16 +147,16 @@ static int agent_report(agent_state *a) {
     long long st = kai_selftest_last(a->key);
     int word = (!a->ok || disabled || trusted == 0) ? 0 : !current ? 1 : 2;
     const char *w = word == 2 ? "Checking" : word == 1 ? "Partly checking" : "Not checking";
-    printf("  %-12s %s\n", a->name, w);
+    sb_addf(o, "  %-12s %s\n", a->name, w);
     char sts[48] = "now";
     if (st) ago_str(st, sts, sizeof sts);
-    printf("    Installed: yes · Configured: %s · Trusted: %s · Self-test: %s\n",
+    sb_addf(o, "    Installed: yes · Configured: %s · Trusted: %s · Self-test: %s\n",
            disabled ? "hooks are switched off in its settings (disableAllHooks)"
                     : current ? "yes" : "from an older Kai (kai install " "again)",
            trusted == 2 ? "not needed" : trusted == 1 ? "yes (Codex has run Kai's hook)"
                         : "unknown: Codex runs hooks only after you trust them (in Codex: /hooks)",
            a->ok ? (st ? sts : "passed now") : (a->problem[0] ? a->problem : "failed"));
-    if (a->ok && st) printf("      (self-test passed %s; checked again now: passed)\n", sts);
+    if (a->ok && st) sb_addf(o, "      (self-test passed %s; checked again now: passed)\n", sts);
     long long when = 0;
     char ver[200], cfg[65];
     if (kai_live_info(a->key, &when, ver, sizeof ver, cfg, sizeof cfg)) {
@@ -165,11 +166,11 @@ static int agent_report(agent_state *a) {
         ago_str(when, ag, sizeof ag);
         const char *since = strcmp(nowver, ver) ? "; the agent was updated since"
                           : strcmp(nowcfg, cfg) ? "; its hook settings changed since" : "; nothing changed since";
-        printf("    Live verification: verified %s (%s)%s\n", ag, ver[0] ? ver : "version unknown", since);
+        sb_addf(o, "    Live verification: verified %s (%s)%s\n", ag, ver[0] ? ver : "version unknown", since);
     } else {
-        printf("    Live verification: never. Run kai demo --live (uses the agent and its model quota)\n");
+        sb_addf(o, "    Live verification: never. Run kai demo --live (uses the agent and its model quota)\n");
     }
-    printf("    Checks: %s\n", agent_checks(a->key));
+    sb_addf(o, "    Checks: %s\n", agent_checks(a->key));
     return word;
 }
 
@@ -183,22 +184,23 @@ int kai_cmd_status_text(void) {
     };
     int words[3], installed = 0, checking = 0, any_on = 0;
     /* measure first, headline after */
-    char *buf = NULL; size_t blen = 0;
-    FILE *mem = open_memstream(&buf, &blen);
-    FILE *saved = stdout;
-    if (mem) stdout = mem;
+    sb_t rep;
+    sb_init(&rep);
     for (int i = 0; i < 3; i++) {
-        words[i] = agent_report(&agents[i]);
+        words[i] = agent_report(&agents[i], &rep);
         if (words[i] >= 0) installed++;
         if (words[i] == 2) checking++;
         if (words[i] >= 1) any_on++;
     }
-    if (mem) { fflush(mem); stdout = saved; fclose(mem); }
+    char *buf = sb_take(&rep);
     free(codex);
     const char *head = installed && checking == installed ? "Checking"
                      : any_on ? "Partly checking" : "Not checking";
     printf("Kai%s %s · %s\n", app ? "" : " Preview", KAI_VERSION, head);
-    if (!app) printf("%s\nKai Preview checks inside your agents. The Kai app adds the Internet wall, which "
+    if (kai_plat_is_windows())
+        printf("%s\nWindows dev preview: Kai checks inside your agents only. There is no Kai app, Internet wall or "
+               "Files wall on Windows yet.\n", CONTRACT);
+    else if (!app) printf("%s\nKai Preview checks inside your agents. The Kai app adds the Internet wall, which "
                      "records the connections it observes and blocks nothing in this release.\n", CONTRACT);
     printf("Agents\n%s", buf ? buf : "");
     free(buf);
@@ -219,7 +221,9 @@ int kai_cmd_status_text(void) {
             snprintf(asked, sizeof asked, " (your policy asks for Protect; this release only watches)");
         kai_policy_free(sp);
     }
-    if (!app)
+    if (kai_plat_is_windows())   /* no app and no walls on Windows (dev preview) */
+        printf("%-16s none on Windows: hooks only, no Internet or Files wall\n", "OS enforcement");
+    else if (!app)
         printf("%-16s Internet: not installed (comes with the Kai app)%s%s · Files: not included in this release\n",
                "OS enforcement", watch_only, asked);
     else
@@ -432,8 +436,10 @@ int kai_cmd_doctor(void) {
     int files_in = files_included();
     int inet_lvl = kai_wall_observed_level("network");
     int inet_on = internet_opted_in() || inet_lvl >= 0;
-    if (!files_in) printf("· Files: not included in this release\n");
-    if (!inet_on) printf("· Internet: off (opt-in in Settings)\n");
+    if (kai_plat_is_windows()) printf("· Files and Internet walls: not on Windows (dev preview: hooks only)\n");
+    else if (!files_in) printf("· Files: not included in this release\n");
+    if (kai_plat_is_windows()) inet_on = 1;   /* nothing to opt into */
+    else if (!inet_on) printf("· Internet: off (opt-in in Settings)\n");
     else if (inet_lvl < 0) {
         printf("✗ Internet: turned on in Settings but not running (no verified heartbeat). Open Kai and check "
                "Settings > Internet, or turn it off there.\n");
@@ -497,8 +503,10 @@ int kai_cmd_doctor(void) {
         printf("  · Known gaps: while an extension restarts or after it crashes, its checks stop until it is "
                "back (fail-open). See docs/RUNTIME.md.\n");
     }
-    privacy_report();
-    printf("  · With Accessibility, an agent's host app could also click Kai's buttons.\n");
+    if (!kai_plat_is_windows()) {   /* macOS privacy permissions (TCC) */
+        privacy_report();
+        printf("  · With Accessibility, an agent's host app could also click Kai's buttons.\n");
+    }
 
     printf("%s\n", problems ? "Problems found." : "No problems found.");
     return problems ? 1 : 0;

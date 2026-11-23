@@ -19,6 +19,7 @@
  * silently widening access. This file performs no live-wall actions.
  */
 #include "internal.h"
+#include "platform.h"
 #include "kai.h"
 
 #include <dirent.h>
@@ -65,13 +66,7 @@ struct kai_approval_store {
  * must change when ANY grant file goes, not only the newest - the app revokes
  * by deleting a file, and the extensions' stores reload only when this moves.
  * So: the folder's own mtime, every entry's mtime (ns) and the entry count. */
-static long long ts_ns(const struct stat *st) {
-#ifdef __APPLE__
-    return (long long)st->st_mtimespec.tv_sec * 1000000000LL + st->st_mtimespec.tv_nsec;
-#else
-    return (long long)st->st_mtim.tv_sec * 1000000000LL + st->st_mtim.tv_nsec;
-#endif
-}
+static long long ts_ns(const struct stat *st) { return kai_plat_mtime_ns(st); }
 
 static long long grants_dir_mtime(const char *dir) {
     struct stat dst;

@@ -16,13 +16,13 @@
  * credentials, and is deleted afterwards.
  */
 #include "internal.h"
+#include "platform.h"
 #include "kai.h"
 #include "cJSON.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,43 +51,7 @@ static void agents_init(demo_agent a[3]) {
 /* Run argv in cwd with stdin from /dev/null, capturing stdout+stderr, killed
  * after timeout_s. Returns the exit status, or -1 (couldn't run / timed out). */
 static int run_capture(char *const argv[], const char *cwd, int timeout_s, char *out, size_t n) {
-    if (n) out[0] = '\0';
-    int p[2];
-    if (pipe(p) != 0) return -1;
-    pid_t pid = fork();
-    if (pid < 0) { close(p[0]); close(p[1]); return -1; }
-    if (pid == 0) {
-        if (cwd && chdir(cwd) != 0) _exit(127);
-        int dn = open("/dev/null", O_RDONLY);
-        if (dn >= 0) { dup2(dn, 0); close(dn); }
-        dup2(p[1], 1); dup2(p[1], 2);
-        close(p[0]); close(p[1]);
-        execvp(argv[0], argv);
-        _exit(127);
-    }
-    close(p[1]);
-    size_t got = 0;
-    time_t end = time(NULL) + timeout_s;
-    int timed_out = 0;
-    for (;;) {
-        int left = (int)(end - time(NULL));
-        if (left <= 0) { timed_out = 1; break; }
-        struct pollfd pf = {p[0], POLLIN, 0};
-        int r = poll(&pf, 1, left * 1000);
-        if (r <= 0) { if (r == 0) timed_out = 1; if (r < 0 && errno == EINTR) continue; break; }
-        char buf[4096];
-        ssize_t k = read(p[0], buf, sizeof buf);
-        if (k <= 0) break;
-        if (n && got < n - 1) {
-            size_t c = (size_t)k < n - 1 - got ? (size_t)k : n - 1 - got;
-            memcpy(out + got, buf, c); got += c; out[got] = '\0';
-        }
-    }
-    close(p[0]);
-    int st = 0;
-    if (timed_out) { kill(pid, SIGTERM); sleep(1); kill(pid, SIGKILL); waitpid(pid, &st, 0); return -1; }
-    waitpid(pid, &st, 0);
-    return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+    return kai_plat_run_argv(argv, cwd, timeout_s, out, n);
 }
 
 /* An agent's command-line program, or "" (searched on PATH, plus Claude Code's

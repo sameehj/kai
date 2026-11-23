@@ -22,6 +22,7 @@
  * keeps the rules ("Change this in Kai").
  */
 #include "internal.h"
+#include "platform.h"
 #include "kai.h"
 #include "cJSON.h"
 
@@ -115,20 +116,7 @@ static double jnum(const cJSON *o, const char *k) { return cJSON_GetNumberValue(
  * rarely). macOS: st_birthtimespec. Linux: statx btime. Neither: ctime, which
  * is stricter (an edit also ends the grant). */
 static void file_birth(const char *path, const struct stat *st, long long *sec, long long *nsec) {
-#if defined(__APPLE__)
-    (void)path;
-    *sec = (long long)st->st_birthtimespec.tv_sec; *nsec = (long long)st->st_birthtimespec.tv_nsec;
-#else
-#if defined(__linux__) && defined(STATX_BTIME)
-    struct statx sx;
-    if (statx(AT_FDCWD, path, 0, STATX_BTIME, &sx) == 0 && (sx.stx_mask & STATX_BTIME)) {
-        *sec = (long long)sx.stx_btime.tv_sec; *nsec = (long long)sx.stx_btime.tv_nsec; return;
-    }
-#else
-    (void)path;
-#endif
-    *sec = (long long)st->st_ctim.tv_sec; *nsec = (long long)st->st_ctim.tv_nsec;
-#endif
+    kai_plat_file_birth(path, st, sec, nsec);
 }
 
 static int canonical(const char *path, const char *base, char *out, size_t n) {

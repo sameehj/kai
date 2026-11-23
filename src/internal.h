@@ -84,6 +84,15 @@ int kai_shell_command_start(char **argv, int argc);
 /* One line per pipeline: "name args | name args" (see shell.c). Caller frees. */
 char *kai_shell_view(const char *cmd);
 
+/* Windows command lines (winshell.c): a PowerShell or cmd.exe command as the
+ * bash lines the checks above read (paths '/'-separated, %VAR% and $env:VAR
+ * expanded, nested powershell -c / -EncodedCommand / cmd /c read too). NULL
+ * if nothing was read. Caller frees. */
+char *kai_winshell_translate(const char *cmd);
+/* A destructive Windows command (Remove-Item -Recurse -Force, del /s /q,
+ * rd /s, format, diskpart, shadow-copy deletion, cipher /w): 1 and what. */
+int kai_winshell_destructive(const char *cmd, char *what, size_t n);
+
 /* A check can skip a rule the user made an exception for: return 1 to skip. */
 typedef int (*kai_skip_fn)(const char *rule, void *ud);
 /* kai_command_touches_protected / kai_command_looks_like_upload, skipping
@@ -102,6 +111,9 @@ int kai_upload_match(const kai_policy *p, const char *cmd, char *why, size_t why
 void kai_audit_suppress(int on);
 int kai_policy_file_secret_ask(const kai_policy *p);
 int kai_policy_upload_ask(const kai_policy *p);
+int kai_policy_destructive_on(const kai_policy *p);
+/* install.c: the Codex/Cursor hook command on Windows (exposed for tests) */
+void kai_win_hook_command(char *cmd, size_t n, const char *exe, const char *shortp, const char *agent);
 
 /* Live health of an integration (src/health.c). ok=1: protection works now.
  * ok=0 with problem "": not installed. ok=0 with problem: installed, broken. */
@@ -110,6 +122,10 @@ typedef struct {
     char problem[300];
 } kai_health;
 void kai_health_agent(const char *agent, const char *config, kai_health *h);
+/* A hook entry's command as one line: "command" plus any exec-form "args"
+ * (Claude Code on Windows), so " hook <agent>" finds both forms. */
+struct cJSON;
+void kai_hook_entry_text(const struct cJSON *e, char *out, size_t n);
 char *kai_redact_for_log(const kai_policy *p, const char *text);
 /* Kai's own protection (its settings, the agents' hook files): never exempt. */
 int kai_rule_is_builtin(const char *rule);
@@ -145,6 +161,7 @@ struct kai_policy {
     int file_secret_ask; /* "ask": the agent asks the user (Claude Code), else block */
     int upload_ask;
     int fetch_block;     /* on_fetch block: the fetch tool needs a kai allow-fetch */
+    int destructive_on;  /* on_destructive_command ask|block: Windows shells only; off by default */
     int injection_on;
     size_t max_scan;
     /* network wall */
@@ -177,6 +194,7 @@ struct kai_policy {
     } exempt[KAI_MAX_LIST];
     int nexempt;
     int audit_context;
+    int watch_files;       /* Windows Watch: record agent opens of protected files ("Seen"); off by default */
     int record_activity;   /* 0.4: activity recorder (record_activity on|off), on by default since 0.4.1 */
 };
 
@@ -191,6 +209,9 @@ typedef struct {
 int kai_proc_read(int pid, kai_proc *out); /* 0 on success */
 int kai_proc_read_fast(int pid, kai_proc *out); /* like kai_proc_read but skips the Team ID (no code-signing lookup) */
 void kai_proc_free(kai_proc *pr);
+/* Platform layer (Linux: /proc; Windows: Toolhelp32 and the PEB command line). */
+int kai_plat_proc_read(int pid, kai_proc *out);
+void kai_plat_pid_exe(int pid, char *out, size_t n);
 
 /* Agent Control: live interactive sessions working now (a command or hook in
  * the last 15 minutes). The one count for the popover and `kai status`. */
@@ -206,6 +227,7 @@ int kai_cmd_why_decision(int argc, char **argv);
 /* 0.4 activity recorder (activity.c): one metadata line per hook call when
  * `record_activity on`. Never arguments, contents or full commands. */
 int kai_policy_record_activity(const kai_policy *p);
+int kai_policy_watch_files(const kai_policy *p);
 int kai_audit_suppressed(void);   /* audit.c: a health probe is running */
 /* ksession: Kai's own session key for the calling agent (its ES session id or
  * "pid-<root>"), the key `kai snapshot` lists as activity_keys; NULL if none. */

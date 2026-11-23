@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Kai-Commercial */
 #include "internal.h"
+#include "platform.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -93,61 +94,61 @@ char *kai_read_file(const char *path, size_t max, size_t *outlen) {
     return r;
 }
 
-static const char *home_dir(void) {
-    const char *h = getenv("HOME");
-    return (h && *h) ? h : "/";
-}
+static const char *home_dir(void) { return kai_plat_home(); }
 
+/* ~ and $HOME; on Windows also %USERPROFILE%, %APPDATA%, %LOCALAPPDATA%
+ * (any %VAR%), $env:VAR and ~\, with '\' turned into '/'. */
 char *kai_expand_home(const char *path) {
+    char *env = kai_plat_expand_env(path);   /* POSIX: NULL */
+    if (env) path = env;
+    int win = kai_plat_is_windows();
     sb_t b;
     sb_init(&b);
     const char *h = home_dir();
-    if (path[0] == '~' && (path[1] == '/' || path[1] == '\0')) {
+    if (path[0] == '~' && (path[1] == '/' || path[1] == '\0' || (win && path[1] == '\\'))) {
         sb_adds(&b, h);
         path++;
     } else if (strncmp(path, "${HOME}", 7) == 0) {
         sb_adds(&b, h);
         path += 7;
     } else if (strncmp(path, "$HOME", 5) == 0 &&
-               (path[5] == '/' || path[5] == '\0')) {
+               (path[5] == '/' || path[5] == '\0' || (win && path[5] == '\\'))) {
         sb_adds(&b, h);
         path += 5;
     }
     sb_adds(&b, path);
-    return sb_take(&b);
+    free(env);
+    char *r = sb_take(&b);
+    kai_plat_slashes(r);
+    return r;
 }
 
-/* Make an absolute path and collapse "." and ".." without touching disk. */
+/* Make an absolute path and collapse "." and ".." without touching disk.
+ * The platform layer makes it absolute (on Windows also: drive letters, UNC,
+ * '\' separators, %VAR% / $env:VAR) and cleans each component the way the OS
+ * opens it (Windows: alternate data streams, trailing dots and spaces). */
 char *kai_normalize_path(const char *path, const char *cwd) {
-    char *exp = kai_expand_home(path);
-    sb_t raw;
-    sb_init(&raw);
-    if (exp[0] != '/') {
-        if (cwd && *cwd) sb_adds(&raw, cwd);
-        else {
-            char buf[PATH_MAX];
-            if (getcwd(buf, sizeof buf)) sb_adds(&raw, buf);
-        }
-        sb_adds(&raw, "/");
-    }
-    sb_adds(&raw, exp);
-    free(exp);
-    char *in = sb_take(&raw);
-
+    char *in = kai_plat_absolute(path, cwd);
+    if (!in) return NULL;
+    size_t root = kai_plat_root_len(in);
     /* split into components, apply . and .. */
     size_t n = strlen(in);
     char **parts = calloc(n / 2 + 2, sizeof *parts);
+    if (!parts) { free(in); return NULL; }
     int np = 0;
     char *save = NULL;
-    for (char *tok = strtok_r(in, "/", &save); tok; tok = strtok_r(NULL, "/", &save)) {
-        if (strcmp(tok, ".") == 0) continue;
+    for (char *tok = strtok_r(in + root, "/", &save); tok; tok = strtok_r(NULL, "/", &save)) {
+        kai_plat_fix_component(tok);
+        if (!*tok || strcmp(tok, ".") == 0) continue;
         if (strcmp(tok, "..") == 0) { if (np) np--; continue; }
         parts[np++] = tok;
     }
     sb_t out;
     sb_init(&out);
-    if (!np) sb_adds(&out, "/");
-    for (int i = 0; i < np; i++) { sb_adds(&out, "/"); sb_adds(&out, parts[i]); }
+    /* a relative cwd still gives a '/'-rooted result, as it always has */
+    if (root) sb_add(&out, in, root);
+    else sb_adds(&out, "/");
+    for (int i = 0; i < np; i++) { if (i) sb_adds(&out, "/"); sb_adds(&out, parts[i]); }
     free(parts);
     free(in);
     return sb_take(&out);
@@ -161,8 +162,7 @@ const char *kai_exe_path(void) {
     uint32_t size = sizeof tmp;
     if (_NSGetExecutablePath(tmp, &size) == 0 && realpath(tmp, buf)) return buf;
 #else
-    ssize_t n = readlink("/proc/self/exe", buf, sizeof buf - 1);
-    if (n > 0) { buf[n] = '\0'; return buf; }
+    if (kai_plat_exe_path(buf, sizeof buf) == 0) return buf;
 #endif
     kai_strlcpy(buf, "kai", sizeof buf);
     return buf;

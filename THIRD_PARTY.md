@@ -31,6 +31,21 @@ shasum -a 256 /tmp/cjson/cJSON.[ch] third_party/cjson/cJSON.[ch]
 diff -u /tmp/cjson/cJSON.c third_party/cjson/cJSON.c    # = kai-patches.diff
 ```
 
+## musl regex (Windows build only)
+
+| | |
+|---|---|
+| What | POSIX regular expressions (TRE-based `regcomp`/`regexec`), `third_party/musl-regex/` (MIT, `third_party/musl-regex/COPYRIGHT`). MSVC has no `<regex.h>`; macOS and Linux use their system's. Compiled only by the CMake build on Windows. |
+| Upstream | https://git.musl-libc.org/cgit/musl, tag `v1.2.5`, files `src/regex/regcomp.c`, `regexec.c`, `tre-mem.c`, `tre.h` |
+| `regcomp.c` SHA-256 | `56b0a765e084a5cd3ed7113a893b50d259265ba76b6bea98889c45d7aec302a0`, identical to upstream |
+| `regexec.c` SHA-256 | `bd8acb924bd3168a30a46a1f7ec2c4956df98c46488a898d73eb23546642c0d5` (Kai's copy) |
+| Upstream `regexec.c` SHA-256 | `072e8a1092c98830b48e784fb74ce486f7c39e27207f79f1dd161e2c5d86ba77` |
+| `tre-mem.c` SHA-256 | `4721979ce365a395fd7644335c847a8a97913e87f14348641f7f199b57b93e28`, identical to upstream |
+| `tre.h` SHA-256 | `e734e68decc33b5ee983db12cabcbdd2589c2d16088677228087b0e5dc365cf3`, identical to upstream |
+| Local changes | One line for MSVC (`regmatch_t pmatch[restrict]` -> `regmatch_t *restrict pmatch`), the exact diff in [`third_party/musl-regex/kai-patches.diff`](third_party/musl-regex/kai-patches.diff). musl's own headers are replaced by `compat/win/regex.h` (same struct layout) and `compat/win/musl_regex_prelude.h`; `regerror` messages are in `src/platform_win.c`. |
+
+Downloaded on 2026-11-22 from the URLs above.
+
 ## Apple frameworks (linked, not vendored)
 
 CoreFoundation, Security, libcurl (the macOS SDK's), and in the app: SwiftUI, AppKit, NetworkExtension,

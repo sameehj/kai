@@ -21,7 +21,7 @@ LDLIBS   = -lcurl -lpthread -lm
 CFLAGS  += -D_GNU_SOURCE
 endif
 
-CORE = src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
+CORE = src/platform_posix.c src/winshell.c src/util.c src/policy.c src/scan.c src/sha256.c src/audit.c \
        src/net.c src/storage.c src/storage_prof.c src/grant.c src/approval_store.c src/proc.c src/shell.c src/gateway.c src/session.c src/agent_rules.c third_party/cjson/cJSON.c
 APP  = src/main.c src/hooks.c src/install.c src/manage.c src/report.c src/health.c src/storaged.c src/grant_cli.c src/status.c src/demo.c src/stats.c src/activity.c
 

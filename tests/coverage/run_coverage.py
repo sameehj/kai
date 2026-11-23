@@ -23,13 +23,20 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 POLICY = os.path.join(ROOT, "policy", "default.policy")
 OUT = os.path.join(ROOT, "docs", "COVERAGE.md")
 
+WINDOWS = sys.platform == "win32"
+# The Windows column (dev preview): measured by running this script on Windows
+# (it writes WIN_RESULTS and fills the column in COVERAGE.md); a macOS run
+# shows the recorded results.
+WIN_RESULTS = os.path.join(ROOT, "tests", "coverage", "windows.json")
+WIN_HEADER = "Windows (dev preview)"
+
 # A fake credential, built at run time so the literal isn't in the source.
 FAKE_KEY = "AKIA" + "IOSFODNN7" + "EXAMPLE"
 
 
 def version(cmd):
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout.strip().splitlines()[0]
+        return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=10).stdout.strip().splitlines()[0]
     except Exception:
         return "not installed"
 
@@ -60,6 +67,8 @@ class Sandbox:
 
     def hook(self, agent, event):
         env = dict(os.environ, HOME=self.home, KAI_HOME=self.kai_home, KAI_POLICY=POLICY)
+        if WINDOWS:   # kai.exe resolves ~ from USERPROFILE
+            env["USERPROFILE"] = self.home
         before = self.records()
         r = subprocess.run([KAI, "hook", agent], input=json.dumps(event), capture_output=True,
                            text=True, env=env, timeout=30)
@@ -302,11 +311,83 @@ def cell(r, op):
     return (obs, den, BYPASS.get(op, ""))
 
 
+def win_cell(win, key, op):
+    """The Windows column's cell for one row, from WIN_RESULTS."""
+    if not win:
+        return "not measured"
+    v = win["results"].get(key, {}).get(op)
+    if v is None:
+        return "not measured"
+    if v == "n/a":
+        return "not applicable"
+    cell = {"stopped": "Yes", "held": "Asks the user", "allowed": "No"}[v] + " (synthetic " + win["generated"] + ")"
+    if op == "script_read" and v == "allowed":
+        # Kai Watch (ETW) sees it, with watch_files on; it never stops it
+        cell += "; seen by Kai Watch when protected-file watching is on (not stopped)"
+    return cell
+
+
+def windows_main(agents):
+    """On Windows: measure every row with kai.exe, record it, and fill the
+    Windows column of the existing COVERAGE.md (the macOS rows are left as a
+    macOS run measured them)."""
+    win = {"generated": datetime.date.today().isoformat(),
+           "kai": version([KAI, "version"]), "results": {}}
+    for name, key, ver in agents:
+        win["results"][key] = {}
+        for op, _ in OPS:
+            sb = Sandbox()
+            try:
+                r = (claude_like(sb, key, op, cmd_as_argv=(key == "codex")) if key != "cursor" else cursor(sb, op))
+            finally:
+                sb.close()
+            win["results"][key][op] = ("n/a" if r is None else "stopped" if r["denied"]
+                                       else "held" if r["held"] else "allowed")
+    with open(WIN_RESULTS, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(win, f, indent=2)
+        f.write("\n")
+    labels = dict(OPS)
+    by_label = {label: op for op, label in OPS}
+    out, key = [], None
+    names = {name: k for name, k, _ in agents}
+    for line in open(OUT, encoding="utf-8").read().split("\n"):
+        if line.startswith("## "):
+            key = next((k for n, k in names.items() if line.startswith("## " + n + " (")), None)
+        if key and line.startswith("| Action |"):
+            line = line if WIN_HEADER in line else line + " " + WIN_HEADER + " |"
+        elif key and line.startswith("|---|") and line.count("|") == 8:
+            line += "---|"
+        elif key and line.startswith("| ") and line.split(" | ")[0][2:] in by_label:
+            cells = line.split(" | ")
+            cell = win_cell(win, key, by_label[cells[0][2:]])
+            if len(cells) == 7:   # not yet with the Windows column
+                line += " " + cell + " |"
+            elif len(cells) == 8:  # refresh the Windows column with this run
+                line = " | ".join(cells[:7]) + " | " + cell + " |"
+        out.append(line)
+    with open(OUT, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(out))
+    print("wrote", os.path.relpath(WIN_RESULTS, ROOT), "and the Windows column of", os.path.relpath(OUT, ROOT))
+    bad = [k + ": " + op for k, ops in win["results"].items() for op, v in ops.items()
+           if op in ("shell_read", "prompt_secret", "upload", "case_variant", "folder_rename", "file_tool")
+           and v not in ("stopped", "n/a")]
+    for k, ops in win["results"].items():
+        print(" ", k, ops)
+    if bad:
+        print("coverage (Windows): a row that must hold doesn't:", ", ".join(bad))
+        return 1
+    print("coverage (Windows): all required rows hold")
+    return 0
+
+
 def main():
     claude_bin = shutil.which("claude") or os.path.expanduser("~/.claude/local/claude")
     agents = [("Claude Code", "claude", version([claude_bin, "--version"])),
               ("Codex", "codex", version(["codex", "--version"])),
               ("Cursor", "cursor", cursor_version())]
+    if WINDOWS:
+        return windows_main(agents)
+    win = json.load(open(WIN_RESULTS, encoding="utf-8")) if os.path.exists(WIN_RESULTS) else None
     # A fresh sandbox per operation: otherwise a follow-up note about the
     # previous block ("after the block, the agent ...") would count as the next
     # operation being observed.
@@ -338,19 +419,22 @@ def main():
     today = datetime.date.today().isoformat()
     for name, key, ver in agents:
         lines += ["## " + name + " (" + ver + ")", "",
-                  "| Action | Event or hook | Input available | Stage | Can block? | Known bypasses and limits | Evidence |",
-                  "|---|---|---|---|---|---|---|"]
+                  "| Action | Event or hook | Input available | Stage | Can block? | Known bypasses and limits | Evidence | "
+                  + WIN_HEADER + " |",
+                  "|---|---|---|---|---|---|---|---|"]
         for op, label in OPS:
             r = results[key].get(op)
             ev, inp, stage = META[key][op]
+            wc = win_cell(win, key, op)
             if r is None:
-                lines.append("| %s | %s | n/a | n/a | No | %s | not applicable |" % (label, ev, BYPASS.get(op, "")))
+                lines.append("| %s | %s | n/a | n/a | No | %s | not applicable | %s |" % (label, ev, BYPASS.get(op, ""), wc))
                 continue
             can = "Yes" if r["denied"] else "Asks the user" if r["held"] else "No"
             evid = "synthetic %s: %s" % (today, "stopped" if r["denied"] else "held" if r["held"] else "allowed")
             if live.get(key, {}).get(op):
                 evid = "live " + live[key][op] + "; " + evid
-            lines.append("| %s | %s | %s | %s | %s | %s | %s |" % (label, ev, inp, stage, can, BYPASS.get(op, ""), evid))
+            lines.append("| %s | %s | %s | %s | %s | %s | %s | %s |" % (label, ev, inp, stage, can, BYPASS.get(op, ""),
+                                                                    evid, wc))
         lines.append("")
     lines += ["## Enforcement and attribution (Preview 1, configuration A)", "",
               "What enforces each decision, and how Kai knows who is acting. Preview 1 is **configuration A** of the "

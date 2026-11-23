@@ -1,0 +1,11 @@
+--- a/regexec.c
++++ b/regexec.c
+@@ -994,7 +994,7 @@
+ 
+ int
+ regexec(const regex_t *restrict preg, const char *restrict string,
+-	  size_t nmatch, regmatch_t pmatch[restrict], int eflags)
++	  size_t nmatch, regmatch_t *restrict pmatch, int eflags)
+ {
+   tre_tnfa_t *tnfa = (void *)preg->TRE_REGEX_T_FIELD;
+   reg_errcode_t status;
