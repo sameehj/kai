@@ -77,7 +77,7 @@ function Verify([string[]]$files) {
 $bld = "build-release"
 Step "C build (release: ignores KAI_HOME / KAI_POLICY)"
 Run cmake @("-S", ".", "-B", $bld, "-G", "Visual Studio 17 2022", "-A", "x64", "-DKAI_RELEASE=ON")
-Run cmake @("--build", $bld, "--config", "Release", "--target", "kai", "kaisvc")
+Run cmake @("--build", $bld, "--config", "Release", "--target", "kai", "kaisvc", "kaicore")
 
 $stage = Join-Path $root "build-release\stage"
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
@@ -92,6 +92,8 @@ if ($haveApp) {
     Run dotnet @("publish", $appProj, "-c", "Release", "-r", "win-x64", "--self-contained", "true",
                  "-p:WindowsAppSDKSelfContained=true", "-p:Version=$msiVersion", "-p:InformationalVersion=$version+$commit",
                  "-o", "$stage\app")
+    # libkai for the app's in-process calls (pause, daily counts), as Kai.app links it
+    Copy-Item "$bld\Release\kaicore.dll" "$stage\app"
 } elseif (-not $SkipApp) {
     throw "$appProj not found (use -SkipApp for a CLI-and-service MSI)"
 }

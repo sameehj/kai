@@ -14,5 +14,6 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Kai.Tests" />
+    <InternalsVisibleTo Include="Kai" />
   </ItemGroup>
 </Project>

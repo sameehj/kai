@@ -40,8 +40,32 @@ jobs:
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
       - name: build
         run: cmake --build build --config Release
-      - name: unit, Windows, escape and hook tests
+      - name: unit, Windows, Watch, escape and hook tests (Watch live tests run too: runners are elevated)
         run: ctest --test-dir build -C Release --output-on-failure
+
+  windows-app:
+    name: app + MSI, unsigned (windows-latest, preview)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: install WiX 5
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.Util.wixext/5.0.2
+      - name: app view-model tests
+        run: |
+          dotnet build app/windows/Kai.Tests/Kai.Tests.csproj -c Release
+          app/windows/Kai.Tests/bin/x64/Release/net10.0-windows10.0.19041.0/win-x64/Kai.Tests.exe
+        shell: pwsh
+      - name: MSI (no signing in CI)
+        run: powershell -ExecutionPolicy Bypass -File scripts/release/build-windows-msi.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kai-windows-unsigned
+          path: dist/windows/
 
   linux-build:
     name: build (ubuntu-latest)

@@ -231,9 +231,9 @@ int kai_cmd_status_json(void) {
         const char *why = nh ? cJSON_GetStringValue(cJSON_GetObjectItem(nh, "problem")) : NULL;
         char msg[400];
         snprintf(msg, sizeof msg, "Internet watching stopped: %s",
-                 why && *why ? why : "the Kai Watch service isn't running");
+                 why && *why ? why : "Kai Watch isn't running");
         cJSON_AddItemToArray(deg, cJSON_CreateString(msg));
-        cJSON_AddStringToObject(no, "problem", why && *why ? why : "service not running");
+        cJSON_AddStringToObject(no, "problem", why && *why ? why : "Kai Watch isn't running");
     }
     if (nh) cJSON_AddItemToObject(no, "health", nh);
     cJSON_AddStringToObject(o, "state", cJSON_GetArraySize(deg) ? "degraded" : "ok");

@@ -36,7 +36,7 @@ FAKE_KEY = "AKIA" + "IOSFODNN7" + "EXAMPLE"
 
 def version(cmd):
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout.strip().splitlines()[0]
+        return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=10).stdout.strip().splitlines()[0]
     except Exception:
         return "not installed"
 
@@ -320,7 +320,11 @@ def win_cell(win, key, op):
         return "not measured"
     if v == "n/a":
         return "not applicable"
-    return {"stopped": "Yes", "held": "Asks the user", "allowed": "No"}[v] + " (synthetic " + win["generated"] + ")"
+    cell = {"stopped": "Yes", "held": "Asks the user", "allowed": "No"}[v] + " (synthetic " + win["generated"] + ")"
+    if op == "script_read" and v == "allowed":
+        # Kai Watch (ETW) sees it, with watch_files on; it never stops it
+        cell += "; seen by Kai Watch when protected-file watching is on (not stopped)"
+    return cell
 
 
 def windows_main(agents):
@@ -355,8 +359,11 @@ def windows_main(agents):
             line += "---|"
         elif key and line.startswith("| ") and line.split(" | ")[0][2:] in by_label:
             cells = line.split(" | ")
+            cell = win_cell(win, key, by_label[cells[0][2:]])
             if len(cells) == 7:   # not yet with the Windows column
-                line += " " + win_cell(win, key, by_label[cells[0][2:]]) + " |"
+                line += " " + cell + " |"
+            elif len(cells) == 8:  # refresh the Windows column with this run
+                line = " | ".join(cells[:7]) + " | " + cell + " |"
         out.append(line)
     with open(OUT, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(out))

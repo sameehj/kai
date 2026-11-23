@@ -19,11 +19,19 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.6.5" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705" />
     <PackageReference Include="H.NotifyIcon.WinUI" Version="2.4.1" />
+    <PackageReference Include="LLamaSharp" Version="0.30.0" />
+    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.30.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Kai.Core\Kai.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Assets\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <!-- Developer runs: the C build's kaicore.dll and kai.exe next to Kai.exe
+       (the release script stages them for the MSI). -->
+  <ItemGroup Condition="'$(KaiBuildDir)' != '' Or Exists('$(MSBuildThisFileDirectory)..\..\..\build\Release\kaicore.dll')">
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\build\Release\kaicore.dll" CopyToOutputDirectory="PreserveNewest" Link="kaicore.dll" Condition="Exists('$(MSBuildThisFileDirectory)..\..\..\build\Release\kaicore.dll')" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\build\Release\kai.exe" CopyToOutputDirectory="PreserveNewest" Link="bin\kai.exe" Condition="Exists('$(MSBuildThisFileDirectory)..\..\..\build\Release\kai.exe')" />
   </ItemGroup>
 </Project>
