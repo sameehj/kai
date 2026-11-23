@@ -36,6 +36,12 @@ Check ((Get-CimInstance Win32_Service -Filter "Name='KaiWatch'").StartName -eq "
 $v = & "$dir\bin\kai.exe" version
 Check ($v -match "commit [0-9a-f]{7,}") "kai version prints the commit: $v"
 Check ($v -notmatch "dev build") "kai.exe is a release build"
+$snap = Join-Path $env:TEMP ("kai-msi-snap-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+$sp = Start-Process "$dir\Kai.exe" -ArgumentList "--snapshot", $snap -PassThru   # renders the pages, connects nothing
+$started = $sp.WaitForExit(120000) -and $sp.ExitCode -eq 0 -and (Test-Path "$snap\window-now.png")
+if (-not $sp.HasExited) { $sp.Kill() }
+Check $started ("the installed app starts and draws its window (exit 0x{0:X8})" -f $sp.ExitCode)
+Remove-Item -Recurse -Force $snap -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 6
 $hb = Join-Path $env:ProgramData "Kai\network-health.json"
 Check (Test-Path $hb) "Kai Watch wrote its heartbeat"

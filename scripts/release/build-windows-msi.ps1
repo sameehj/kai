@@ -95,6 +95,15 @@ if ($haveApp) {
     # libkai for the app's in-process calls (pause, daily counts), as Kai.app links it
     Copy-Item "$bld\Release\kaicore.dll" "$stage\app"
     if (Test-Path "$stage\app\bin") { throw "the app publish brought its own bin\ folder: a developer kai.exe must never ship" }
+    # Without its own resources the app crashes at start (0xC000027B): check
+    # they're there, then start it once (snapshot mode: renders, connects nothing).
+    if (-not (Test-Path "$stage\app\Kai.pri")) { throw "the app publish has no Kai.pri: the app wouldn't start" }
+    $smoke = Join-Path $env:TEMP ("kai-smoke-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    $sp = Start-Process "$stage\app\Kai.exe" -ArgumentList "--snapshot", $smoke -PassThru
+    if (-not $sp.WaitForExit(120000)) { $sp.Kill(); throw "the app didn't finish starting within 2 minutes" }
+    if ($sp.ExitCode -ne 0 -or -not (Test-Path "$smoke\window-now.png")) { throw ("the app doesn't start: exit 0x{0:X8}" -f $sp.ExitCode) }
+    Remove-Item -Recurse -Force $smoke
+    Step "app starts (snapshot rendered)"
 } elseif (-not $SkipApp) {
     throw "$appProj not found (use -SkipApp for a CLI-and-service MSI)"
 }
