@@ -53,20 +53,23 @@ in `src/watch.c` and covered by the unit tests above.
 
 ## The MSI (`tests/windows/run_msi_roundtrip.ps1`, elevated)
 
-18 checks, 0 failures, on 2026-11-23, with the unsigned 83 MB MSI from
-`scripts/release/build-windows-msi.ps1` (commit 1759dce): installed with one
+19 checks, 0 failures, on 2026-11-23, with the unsigned MSI from
+`scripts/release/build-windows-msi.ps1` (commit b95fc56): installed with one
 prompt; `Kai.exe`, `bin\kai.exe`, `bin\kaisvc.exe` and `kaicore.dll` in
 `Program Files\Kai`; `bin` on the system PATH; the Start menu shortcut; Kai
 Watch running as LocalSystem, automatic start, heartbeat written; `kai
-version` a release build with the commit. Uninstalled: no service, no
+version` a release build with the commit; the installed app starts and draws its
+window. Uninstalled: no service, no
 `Program Files\Kai`, no PATH entry, no shortcut, no Kai hooks in the agents'
 settings. The first run of this test caught a developer `kai.exe` inside the
-MSI; the release script now refuses to build one.
+MSI; the release script now refuses to build one. The first MSI you installed
+by hand had an app that crashed at start (its `Kai.pri` was left out of the
+release publish); the release script and this test now start the app.
 
 **Not signed.** No code-signing certificate is available yet (the owner's
 task), so the MSI is `Kai-0.5.0-preview.1-x64-UNSIGNED.msi` and must not be
 published. SHA-256 of the tested build:
-`c84314435bf6530459039870a4d93f51a3e31c6d5c436d9b963ca16adc0e9731`.
+`9699330744a1695c1a4bd039f39c350192acfa19867f4f6cda60b48649f5fff1`.
 
 ## The app
 
