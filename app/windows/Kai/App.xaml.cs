@@ -24,22 +24,11 @@ public partial class App : Application
     FlyoutWindow? _flyout;
     TaskbarIcon? _tray;
     DispatcherQueueTimer? _timer;
-    static Mutex? _single;
-    static EventWaitHandle? _show;
     bool _connecting;
 
     public App()
     {
         Me = this;
-        // One Kai per user: a second start asks the first to show its window.
-        bool snapshot = Environment.GetCommandLineArgs().Contains("--snapshot");   // read-only: may run beside Kai
-        _single = new Mutex(true, snapshot ? @"Local\Kai.App.Snapshot" + Environment.ProcessId : @"Local\Kai.App", out bool first);
-        _show = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\Kai.App.Show");
-        if (!first)
-        {
-            _show.Set();
-            Environment.Exit(0);
-        }
         InitializeComponent();
         UnhandledException += (_, e) => { Log("unhandled: " + e.Exception); e.Handled = true; };
     }
@@ -60,7 +49,7 @@ public partial class App : Application
         if (si > 0 && si + 1 < argv.Length) { _ = Snapshot.RunAsync(argv[si + 1]); return; }
         bool background = argv.Contains("--background");
         CreateTray();
-        new Thread(() => { while (_show!.WaitOne()) UI.TryEnqueue(() => ShowMain()); }) { IsBackground = true }.Start();
+        if (Program.ShowSignal is { } show) new Thread(() => { while (show.WaitOne()) UI.TryEnqueue(() => ShowMain()); }) { IsBackground = true }.Start();
         Records.Changed += () => UI.TryEnqueue(UpdateTray);
         _timer = UI.CreateTimer();
         _timer.Interval = TimeSpan.FromSeconds(5);

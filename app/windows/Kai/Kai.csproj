@@ -17,6 +17,8 @@
          app's own Kai.pri and App.xbf, and the app crashes at start
          (0xC000027B in Microsoft.UI.Xaml.dll). -->
     <EnableMsixTooling>true</EnableMsixTooling>
+    <!-- Program.cs: the one-instance check runs before WinUI starts -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.6.5" />
