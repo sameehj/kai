@@ -151,7 +151,6 @@ int kai_cmd_status_json(void) {
     cJSON_AddStringToObject(pol, "file", kai_policy_file());
     cJSON_AddBoolToObject(pol, "file_exists", file_exists(kai_policy_file()));
     cJSON_AddStringToObject(pol, "error", p ? "" : err);
-    kai_policy_free(p);
 
     char *codex = kai_codex_hooks_path();
     const struct { const char *name, *rel, *needle; } agents[] = {
@@ -219,6 +218,7 @@ int kai_cmd_status_json(void) {
     cJSON_AddBoolToObject(no, "running", nh != NULL);
     cJSON_AddBoolToObject(no, "verified", kai_wall_observed_level("network") >= 0);
     if (nh) cJSON_AddItemToObject(no, "health", nh);
+    kai_policy_free(p);   /* read above for the walls: freeing it earlier was a use-after-free */
 
     print_json(o);
     return 0;
