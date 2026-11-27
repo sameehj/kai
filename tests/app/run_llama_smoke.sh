@@ -109,6 +109,6 @@ sema.wait()
 EOF
 swiftc -O -D DEBUG -F "$fw" -framework llama -Xlinker -rpath -Xlinker "$fw" -o "$OUT/run" \
     "$S/AskPhraser.swift" "$S/AskEngine.swift" "$S/ActivityFeed.swift" "$S/AuditLog.swift" \
-    "$S/ModelStore.swift" "$S/LlamaPhraser.swift" "$S/Sessions.swift" "$S/NowModel.swift" "$S/AutoConnect.swift" "$OUT/main.swift" \
+    "$S/ModelStore.swift" "$S/LlamaPhraser.swift" "$S/Sessions.swift" "$S/NowModel.swift" "$S/AutoConnect.swift" "$S/KaiWords.swift" "$OUT/main.swift" \
     2>"$OUT/build.log" || { cat "$OUT/build.log"; echo "  FAIL llama smoke: build"; exit 1; }
 "$OUT/run"
